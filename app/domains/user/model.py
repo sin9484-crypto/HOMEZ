@@ -1,41 +1,43 @@
 """
 HOMEZ AI Commerce OS
 
-Product Model
+User Model
 """
 
 from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import DateTime
-from sqlalchemy import Float
+from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+
 from sqlalchemy.sql import func
 
 from app.database.database import Base
 
 
-class Product(Base):
+class User(Base):
 
-    __tablename__ = "products"
+    __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    name = Column(String(200), nullable=False, index=True)
+    username = Column(String, unique=True, nullable=False)
 
-    brand = Column(String(100), nullable=True)
+    display_name = Column(String, nullable=False)
 
-    category = Column(String(100), nullable=True)
+    role = Column(String, nullable=False)
 
-    supplier = Column(String(100), nullable=True)
+    company_id = Column(
+        Integer,
+        ForeignKey("companies.id"),
+        nullable=True,
+    )
 
-    purchase_price = Column(Float, default=0)
-
-    selling_price = Column(Float, default=0)
-
-    margin_rate = Column(Float, default=0)
-
-    is_active = Column(Boolean, default=True)
+    is_active = Column(
+        Boolean,
+        default=True,
+    )
 
     created_at = Column(
         DateTime(timezone=True),
