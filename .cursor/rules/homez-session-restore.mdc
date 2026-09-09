@@ -1,0 +1,79 @@
+---
+description: HOMEZ 재시동어「홈즈」복원 — 최종 OS 헌장·역할·현재 판정·다음 Gate
+alwaysApply: true
+---
+
+# HOMEZ 세션 복원
+
+## 재시동어
+
+사용자가 **「홈즈」**라고 하면 이 규칙과 SoT 문서를 읽고 상태를 복원한다.
+
+복원 순서:
+1. 이 규칙
+2. `CLAUDE.md`
+3. `.cursor/rules/homez-*.mdc`
+4. `docs/HOMEZ_PROJECT_STATE.md`
+5. `docs/HOMEZ_DECISIONS.md`
+6. `git status` + 관련 코드·Migration·테스트 (실측)
+
+대화 기억과 저장소가 충돌하면 **실코드·실DB·git**을 우선하고 불일치를 보고한다. 임의로 맞추지 않는다.
+
+## 역할
+
+| 역할 | 담당 |
+|------|------|
+| 사용자 | 제품 소유자·최종 사업 결정 |
+| ChatGPT | 최종 CTO·출시/Migration/실운영 승인 Gate |
+| Cursor | 분석·영향·Whitelist 제안·구현 검토 (승인 전 수정 금지가 기본) |
+| Claude Code | 승인된 명세·Whitelist만 구현·테스트 |
+
+## 최종 제품 (단편 기능 금지)
+
+HOMEZ = 쇼핑몰/셀러툴이 아님.
+**Windows Desktop AI Commerce OS (EVERY HOMEZ)**:
+목표·예산·위험 한도 설정 → 탐색·Candidate·Decision 추천 → 운영자 승인 → 채널 등록 → 주문·재고·배송 → 정산 대조 → Funding → 공급 지급.
+AI는 추천·근거, 위험 실행은 승인·Emergency Stop·Safety·권한 뒤.
+
+UX: 아이콘 더블클릭 → Desktop 창(주소창 없음) → 로그인 → 대시보드 → 업무 언어 UI.
+
+Domain 경계 유지:
+Customer Payment ≠ Marketplace Settlement ≠ Funding ≠ Hold ≠ Supplier Payment ≠ Refund
+
+## 출시 판정
+
+- `NOT_READY` — Critical/High, 미검증, 보안·Migration 불확실
+- `READY_WITH_LIMITATIONS` — 구조·테스트는 되나 실 API·운영 E2E·복구 부족
+- `HOMEZ_PRODUCTION_READY` — Desktop E2E·공식 API·운영 Migration·상품/주문/정산·백업·보안 감사 전부 증거 있을 때만
+
+테스트 통과만으로 출시 완료 금지. 실행하지 않은 작업은 완료 금지.
+
+## 스냅샷 (2026-07-30 Cursor RO 감사)
+
+- `version.py` = **2.1.0** (문서 Phase는 V3~V4·Desktop·Fulfillment 서술)
+- `homez.db` RO: 테이블 **17**, V2.3 funding/settlement + **auth_sessions** 있음, settlement 부분 UNIQUE 있음
+- **미적용 스키마:** V2.4/V3 · Coupang · Decision · Fulfillment 테이블 없음
+- `users_count` = **1** (문서의 “0건”과 불일치 가능 — 실측 우선)
+- `import app.main` OK, routes **209**
+- 전체 회귀(문서 443/443)는 해당 감사에서 **미재실행 → 현재 통과로 인정 불가**
+- Settlement/Funding 금액은 아직 **Float** (Decimal 원칙과 불일치)
+- 최종 출시 판정: **`NOT_READY`**
+- 다음 1순위 Gate: **실 DB V2.4/V3 Migration (사용자+CTO 승인 후)** + 회귀 재실행
+- 무단 잔존 가능: `scripts/_ro_audit_probe.py` → 삭제 승인 대기
+
+## 필수 금지
+
+- 승인 없는 파일 수정·실 DB 쓰기·외부 상품 등록·commit/push/deploy
+- WIP reset/clean/revert
+- `.env`/Secret/개인정보 출력
+- 비공식 스크래핑·쿠키 복제·CAPTCHA 우회
+- 금융 자동 보정, 승인/Safety 우회
+
+## 「홈즈」복원 시 첫 응답
+
+한국어로 짧게:
+1. 재시동 확인
+2. 현재 판정(`NOT_READY` 등)과 다음 Gate
+3. 문서 vs 실측 불일치 요지
+4. 승인 대기 중인 항목(있으면)
+5. 무엇을 할지 사용자/CTO 지시 대기

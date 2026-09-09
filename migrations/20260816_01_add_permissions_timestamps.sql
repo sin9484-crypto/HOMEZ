@@ -1,0 +1,108 @@
+-- Purpose: V7 Live Gate 4 재작업 결함 2 후속 — permissions 테이블에
+-- created_at/updated_at 컬럼 추가(ORM ↔ 실제 DB 드리프트 해소).
+-- Source of Truth: app/domains/permission/model.py 28-87행(Permission
+-- ORM 모델).
+--
+-- 배경: `Permission` ORM 모델은 `created_at`(DateTime, Python-side
+-- default=datetime.utcnow, nullable=False — server_default 없음)과
+-- `updated_at`(DateTime, nullable=True, onupdate=datetime.utcnow만
+-- 있고 default 없음)을 선언하지만, `permissions` 테이블에는 이
+-- 두 컬럼이 처음부터 없었다(2026-08-16 실제 운영 homez.db 읽기
+-- 전용 재확인:
+-- `CREATE TABLE permissions (id INTEGER NOT NULL, company_id INTEGER,
+-- name VARCHAR(100) NOT NULL, code VARCHAR(100) NOT NULL, description
+-- VARCHAR(255), active BOOLEAN NOT NULL, PRIMARY KEY (id), FOREIGN
+-- KEY(company_id) REFERENCES companies (id))` — created_at/updated_at
+-- 부재, migrations/20260816_00_create_v7_gate9_core_foundation_
+-- schema.sql은 이 실제 운영 스키마를 있는 그대로 옮긴 것이므로 같은
+-- 드리프트를 그대로 물려받았다). 그 결과 완전 신규 설치에서
+-- `seed_permissions()`가 ORM으로 permissions를 조회/삽입할 때
+-- `sqlite3.OperationalError: no such column: permissions.created_at`
+-- 로 실패한다.
+--
+-- 참고(이번 Migration 범위 아님, 손대지 않음): 실제 운영
+-- `permissions` 테이블에는 ORM 모델에 전혀 선언되지 않은
+-- `company_id INTEGER FOREIGN KEY REFERENCES companies(id)`도 있다
+-- — 별개의 기존 드리프트이며 이 Migration은 그 컬럼을 추가/변경/
+-- 삭제하지 않는다.
+--
+-- 컬럼 타입·nullable 계약(ORM 그대로): created_at DATETIME NOT NULL,
+-- updated_at DATETIME(nullable, 인덱스 없음 — Permission 모델에
+-- created_at/updated_at 어느 쪽도 index=True가 없다).
+--
+-- SQLite ALTER TABLE ADD COLUMN 제약과 이 스크립트의 기법:
+--   실측 확인(2026-08-16, 이 저장소가 실제로 사용하는 SQLite
+--   3.50.4, Python sqlite3 모듈로 임시 DB에 직접 재현): SQLite는
+--   `ALTER TABLE ... ADD COLUMN`의 DEFAULT에 CURRENT_TIMESTAMP 같은
+--   비상수 표현식을 NOT NULL 여부와 무관하게 전면 거부한다
+--   (`OperationalError: Cannot add a column with non-constant
+--   default`) — 즉 "SQLite가 CURRENT_TIMESTAMP를 상수 표현식 제약의
+--   예외로 명시적으로 허용한다"는 사전 가정은 이 버전에서 사실이
+--   아님을 직접 재현해 반증했다. 따라서 이 저장소가 지금까지
+--   써온 확립된 패턴(예: 20260814_01_add_tenant_isolation_
+--   company_id.sql의 `company_id INTEGER NOT NULL DEFAULT 0` —
+--   문법을 만족시키기 위한 상수 placeholder DEFAULT + 별도 수단으로
+--   실제 값 채움)을 그대로 따르되, 이번엔 placeholder 대상이
+--   타임스탬프이므로 서비스 레이어가 아니라 이 Migration 자신이
+--   같은 Transaction 안에서 UPDATE로 backfill한다:
+--     1) ALTER TABLE permissions ADD COLUMN created_at DATETIME NOT
+--        NULL DEFAULT '1970-01-01 00:00:00' — 상수 리터럴로 DDL
+--        문법 제약만 만족시키는 placeholder(회사·시간대와 무관하게
+--        항상 유효한 SQLite DATETIME 리터럴).
+--     2) ALTER TABLE permissions ADD COLUMN updated_at DATETIME —
+--        nullable이므로 DEFAULT 불필요.
+--     3) UPDATE permissions SET created_at = CURRENT_TIMESTAMP —
+--        ALTER 직후, 같은 Transaction·같은 파일 안에서 방금 추가된
+--        컬럼 전체(이 시점의 모든 기존 행 = 이 두 ALTER 이전부터
+--        있던 행 전부, 이후 신규 INSERT는 이 UPDATE보다 항상 나중에
+--        일어나므로 영향받지 않음)를 실제 적용 시각으로 backfill한다.
+--        WHERE절 없이 무조건 전체 UPDATE하는 이유: 이 컬럼은 이번
+--        Migration이 방금 만들었으므로 이 시점의 모든 행이 예외
+--        없이 placeholder 값이다(0행이어도 안전 — no-op UPDATE).
+--        이후 실제 서비스 레이어(app/database/seed.py:
+--        seed_permissions() 등)가 신규 INSERT마다 SQLAlchemy
+--        Python-side default=datetime.utcnow로 항상 명시적으로
+--        채우므로, 이 UPDATE는 오직 "Migration 적용 이전부터 있던
+--        기존 행"의 backfill 값으로만 의미가 있다(정확한 값 자체가
+--        업무적으로 중요하지 않다 — 기존 행이 "언제 생성됐는가"를
+--        사후에 알 방법이 애초에 없었으므로, Migration 적용 시각을
+--        근사값으로 채우는 것이 유일하게 합리적인 선택이다).
+--   updated_at은 nullable이고 ORM도 default 없이 onupdate만 선언하므로
+--   기존 행은 NULL로 남긴다(추측성 backfill 금지 원칙 — 실제로 언제
+--   마지막 수정됐는지 알 수 없다).
+--
+-- 멱등성: 이 파일은 CREATE TABLE/INDEX를 전혀 포함하지 않는(ALTER
+-- TABLE + UPDATE만 있는) Migration이다. 이 저장소의 MigrationRunner
+-- (app/database/migration_runner.py)는 CREATE TABLE/INDEX 대상만
+-- 사전 충돌 검사 대상으로 삼으므로(diagnose()의 _extract_target_
+-- objects), 이런 ALTER 전용 파일은 항상 "pending"으로 분류되고
+-- 멱등성은 전적으로 schema_migrations 이력 테이블(정확히 1회
+-- APPLIED)로 보장된다 — 20260814_01/20260815_00 등 기존 ALTER 기반
+-- Migration과 동일한 계약이며, 이 파일은 그 계약을 우회하는 별도
+-- 로직(예: 컬럼 존재 여부를 직접 검사하는 조건문)을 추가하지 않는다.
+--
+-- 실행 전 필수 확인(2026-08-16 실제 homez.db 읽기 전용 재확인):
+-- permissions 행 수=38, integrity_check=ok, foreign_key_check=0건.
+-- 이 스크립트는 실제 homez.db에는 적용하지 않는다(사용자 승인 범위
+-- 밖 — 승인 범위는 임시 DB 검증까지).
+
+BEGIN;
+
+ALTER TABLE permissions ADD COLUMN created_at DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00';
+ALTER TABLE permissions ADD COLUMN updated_at DATETIME;
+
+UPDATE permissions SET created_at = CURRENT_TIMESTAMP;
+
+COMMIT;
+
+-- Rollback 계획(자동 실행되지 않음 — 참고용 주석):
+--   SQLite는 ALTER TABLE DROP COLUMN을 3.35.0+에서 지원하지만 이
+--   저장소는 rollback을 코드로 자동화하지 않는 기존 정책을 따른다.
+--   수동 rollback이 필요하면:
+--     BEGIN;
+--     ALTER TABLE permissions DROP COLUMN updated_at;
+--     ALTER TABLE permissions DROP COLUMN created_at;
+--     COMMIT;
+--   (DROP COLUMN도 대상 컬럼에 UNIQUE/CHECK/생성 컬럼/인덱스가
+--   얽혀 있지 않아야 하는데, 이 두 컬럼은 어느 쪽도 아니므로 안전
+--   하다 — 단, 실행 전 반드시 백업을 만들고 별도 승인을 받는다.)

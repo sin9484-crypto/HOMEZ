@@ -1,49 +1,201 @@
-"""
-HOMEZ AI Commerce OS
+from __future__ import annotations
 
-Product Model
-"""
+from datetime import datetime
 
 from sqlalchemy import Boolean
-from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import Float
+from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
-from sqlalchemy.sql import func
+from sqlalchemy import Text
 
-from app.database.database import Base
+from sqlalchemy.orm import Mapped
+from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import relationship
+
+from app.database.base import Base
 
 
 class Product(Base):
 
     __tablename__ = "products"
 
-    id = Column(Integer, primary_key=True, index=True)
-
-    name = Column(String(200), nullable=False, index=True)
-
-    brand = Column(String(100), nullable=True)
-
-    category = Column(String(100), nullable=True)
-
-    supplier = Column(String(100), nullable=True)
-
-    purchase_price = Column(Float, default=0)
-
-    selling_price = Column(Float, default=0)
-
-    margin_rate = Column(Float, default=0)
-
-    is_active = Column(Boolean, default=True)
-
-    created_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
     )
 
-    updated_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
     )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    sku: Mapped[str | None] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
+
+    brand_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "brands.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+
+    category_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "categories.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+
+    supplier_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "suppliers.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    price: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0,
+    )
+
+    sale_price: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    cost_price: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    stock_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(50),
+        default="ACTIVE",
+        nullable=False,
+        index=True,
+    )
+    ai_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    view_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    sales_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    return_rate: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    search_keywords: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    image_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    supplier_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    metadata_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        onupdate=datetime.utcnow,
+    )
+
+    brand = relationship(
+        "Brand",
+        back_populates="products",
+    )
+
+    category = relationship(
+        "Category",
+        back_populates="products",
+    )
+
+    supplier = relationship(
+        "Supplier",
+        back_populates="products",
+    )
+
+    inventories = relationship(
+        "Inventory",
+        back_populates="product",
+    )
+
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+            f"Product("
+            f"id={self.id}, "
+            f"name='{self.name}', "
+            f"status='{self.status}'"
+            f")"
+        )
+
+
+__all__ = [
+    "Product",
+]

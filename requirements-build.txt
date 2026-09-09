@@ -1,0 +1,14 @@
+# =========================================================
+# Homez OS — 패키징 전용 의존성
+#
+# Gate Y-6(2026-08-12). requirements.txt(런타임)에는 절대 넣지 않는다
+# — PyInstaller는 실행 중인 앱이 import하는 모듈이 아니라, 빌드
+# 시점에만 필요한 도구다(app/domains/product/의 icon 생성 스크립트가
+# Pillow를 이 방식으로 분리했던 것과 동일한 원칙, docs/
+# V6_EXECUTION_LEDGER.md "Gate F-10A" 절 참고).
+#
+# 설치: pip install -r requirements-build.txt
+# 사용: pyinstaller homez.spec --noconfirm
+# =========================================================
+
+pyinstaller==6.16.0

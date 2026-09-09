@@ -1,0 +1,31 @@
+1
+00:00:00,000 --> 00:00:10,000
+HOMEZ V6.5 mobile usage guide.
+
+2
+00:00:10,000 --> 00:00:30,000
+The login screen keeps the same layout on mobile.
+
+3
+00:00:30,000 --> 00:01:00,000
+After login the left menu hides and
+a hamburger icon appears instead.
+
+4
+00:01:00,000 --> 00:01:30,000
+Tapping it slides in the exact same
+menu used on desktop.
+
+5
+00:01:30,000 --> 00:02:20,000
+Checked at 430, 390, and 360px wide —
+no clipping at any of them.
+
+6
+00:02:20,000 --> 00:03:00,000
+The Manager role is blocked identically
+on mobile and desktop.
+
+7
+00:03:00,000 --> 00:03:20,000
+Next: Guide 5, troubleshooting and safe use.

@@ -1,0 +1,37 @@
+1
+00:00:00,000 --> 00:00:10,000
+HOMEZ V6.5 Admin Initial Setup guide.
+
+2
+00:00:10,000 --> 00:00:40,000
+New teammates request access via Sign up.
+Passwords must meet the policy checklist.
+
+3
+00:00:40,000 --> 00:01:10,000
+Admins approve or reject requests from the
+pending sign-up approvals list.
+
+4
+00:01:10,000 --> 00:01:50,000
+Invite codes can be issued here.
+Sensitive — masked on screen.
+
+5
+00:01:50,000 --> 00:02:40,000
+The user list supports role change, deactivate,
+starting a password reset, and adding new users.
+
+6
+00:02:40,000 --> 00:03:20,000
+Store Connection screen. The procedure is an example;
+no real account info is entered in this video.
+
+7
+00:03:20,000 --> 00:04:20,000
+Settings combines language, password change,
+session management, and recovery codes.
+
+8
+00:04:20,000 --> 00:04:40,000
+Next: Guide 3, full product registration.

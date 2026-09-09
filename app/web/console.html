@@ -1,0 +1,2517 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title id="page-title">HOMEZ 운영자 Console</title>
+<link rel="icon" href="/console/static/assets/homez-logo.png">
+<link rel="stylesheet" href="/console/static/console.css">
+</head>
+<body>
+
+<div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+<!-- ============ 로그인 화면 ============ -->
+<div id="login-gate" class="login-gate">
+  <form id="login-form" class="login-card" novalidate>
+    <div class="lang-switch lang-switch-corner" role="group" data-i18n-attr="aria-label:lang.selector.label">
+      <button type="button" class="link-btn lang-switch-btn" id="login-lang-ko" data-lang="ko-KR" data-i18n="lang.selector.ko">한국어</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="link-btn lang-switch-btn" id="login-lang-en" data-lang="en-US" data-i18n="lang.selector.en">English</button>
+    </div>
+    <img src="/console/static/assets/homez-logo.png" class="login-logo" data-i18n-attr="alt:common.homez_logo_alt" alt="HOMEZ 로고" width="56" height="56">
+    <h1 class="login-title" data-i18n="app.title">HOMEZ 운영자 Console</h1>
+    <p class="login-sub" data-i18n="auth.login.subtitle">AI Commerce OS — 운영자 인증이 필요합니다.</p>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.login.username_label">아이디</span>
+      <input id="login-username" name="username" type="text" autocomplete="username" required>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.login.password_label">비밀번호</span>
+      <div class="password-field">
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <button type="button" id="login-password-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+      </div>
+    </label>
+
+    <button type="submit" id="login-submit" class="btn btn-primary btn-block" data-i18n="auth.login.submit">로그인</button>
+    <p id="login-error" class="field-error" role="alert" aria-live="assertive"></p>
+
+    <div class="login-links">
+      <button type="button" id="login-forgot-id-link" class="link-btn" data-i18n="auth.login.forgot_id">아이디 찾기</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" id="login-reset-password-link" class="link-btn" data-i18n="auth.login.reset_password">비밀번호 재설정</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" id="login-register-link" class="link-btn" data-i18n="auth.login.register">회원가입</button>
+    </div>
+  </form>
+</div>
+
+<!-- ============ 회원가입 화면 ============ -->
+<div id="register-gate" class="login-gate" hidden>
+  <form id="register-form" class="login-card" novalidate>
+    <img src="/console/static/assets/homez-logo.png" class="login-logo" data-i18n-attr="alt:common.homez_logo_alt" alt="HOMEZ 로고" width="56" height="56">
+    <h1 class="login-title" data-i18n="auth.register.title">회원가입</h1>
+    <p class="login-sub" data-i18n="auth.register.subtitle">가입 신청 후 관리자 승인이 필요합니다.</p>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.register.email_label">로그인 이메일</span>
+      <input id="register-email" type="text" autocomplete="email" required>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.register.display_name_label">표시 이름</span>
+      <input id="register-display-name" type="text" autocomplete="name" maxlength="100" required>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.login.password_label">비밀번호</span>
+      <div class="password-field">
+        <input id="register-password" type="password" autocomplete="new-password" required>
+        <button type="button" id="register-password-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+      </div>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="common.password_confirm_label">비밀번호 확인</span>
+      <div class="password-field">
+        <input id="register-password-confirm" type="password" autocomplete="new-password" required>
+        <button type="button" id="register-password-confirm-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+      </div>
+    </label>
+
+    <ul id="register-policy-checklist" class="policy-checklist"></ul>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.register.invitation_code_label">회사 초대 코드 (선택)</span>
+      <input id="register-invitation-code" type="text" autocomplete="off">
+    </label>
+    <p class="field-hint" data-i18n="auth.register.invitation_code_hint">초대 코드가 없어도 가입을 신청할 수 있습니다. 관리자 승인 후 이용할 수 있습니다.</p>
+
+    <button type="submit" id="register-submit" class="btn btn-primary btn-block" data-i18n="auth.register.submit">가입 신청</button>
+    <p id="register-error" class="field-error" role="alert" aria-live="assertive"></p>
+    <p id="register-result" class="field-hint" role="status" aria-live="polite"></p>
+
+    <button type="button" id="register-back-to-login" class="btn btn-secondary btn-block" data-i18n="auth.back_to_login">로그인으로 돌아가기</button>
+  </form>
+</div>
+
+<!-- ============ 최초 관리자 설정 화면 ============ -->
+<div id="setup-gate" class="login-gate" hidden>
+  <form id="setup-form" class="login-card" novalidate>
+    <img src="/console/static/assets/homez-logo.png" class="login-logo" data-i18n-attr="alt:common.homez_logo_alt" alt="HOMEZ 로고" width="56" height="56">
+    <h1 class="login-title" data-i18n="auth.setup.title">최초 관리자 설정</h1>
+    <p class="login-sub" data-i18n="auth.setup.subtitle">HOMEZ를 처음 시작합니다 — 관리자 비밀번호를 설정하세요.</p>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.setup.email_label">로그인 이메일</span>
+      <input id="setup-email" type="text" readonly>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.setup.company_name_label">회사명</span>
+      <input id="setup-company-name" type="text" autocomplete="organization" maxlength="100" required>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="common.new_password_label">새 비밀번호</span>
+      <div class="password-field">
+        <input id="setup-password" type="password" autocomplete="new-password" required>
+        <button type="button" id="setup-password-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+      </div>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="common.new_password_confirm_label">새 비밀번호 확인</span>
+      <div class="password-field">
+        <input id="setup-password-confirm" type="password" autocomplete="new-password" required>
+        <button type="button" id="setup-password-confirm-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+      </div>
+    </label>
+
+    <ul id="setup-policy-checklist" class="policy-checklist"></ul>
+
+    <button type="submit" id="setup-submit" class="btn btn-primary btn-block" data-i18n="auth.setup.submit">관리자 계정 생성</button>
+    <p id="setup-error" class="field-error" role="alert" aria-live="assertive"></p>
+  </form>
+</div>
+
+<!-- ============ 회사 초기 설정(기존 관리자 복구) 화면 ============ -->
+<div id="company-recovery-gate" class="login-gate" hidden>
+  <form id="company-recovery-form" class="login-card" novalidate>
+    <img src="/console/static/assets/homez-logo.png" class="login-logo" data-i18n-attr="alt:common.homez_logo_alt" alt="HOMEZ 로고" width="56" height="56">
+    <h1 class="login-title" data-i18n="auth.company_recovery.title">회사 초기 설정</h1>
+    <p class="login-sub" data-i18n="auth.company_recovery.subtitle">이 관리자 계정에 아직 연결된 회사가 없습니다 — 회사명을 입력해 완료하세요.</p>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.company_recovery.admin_email_label">관리자 이메일</span>
+      <input id="company-recovery-admin-email" type="text" readonly>
+    </label>
+
+    <label class="field">
+      <span class="field-label" data-i18n="auth.company_recovery.company_name_label">회사명</span>
+      <input id="company-recovery-name" type="text" autocomplete="organization" maxlength="100" required>
+    </label>
+
+    <button type="submit" id="company-recovery-submit" class="btn btn-primary btn-block" data-i18n="auth.company_recovery.submit">회사 설정 완료</button>
+    <p id="company-recovery-error" class="field-error" role="alert" aria-live="assertive"></p>
+  </form>
+</div>
+
+<!-- ============ 계정 복구(아이디 찾기 / 비밀번호 재설정) ============ -->
+<div id="account-recovery-gate" class="login-gate" hidden>
+  <div class="login-card">
+    <img src="/console/static/assets/homez-logo.png" class="login-logo" data-i18n-attr="alt:common.homez_logo_alt" alt="HOMEZ 로고" width="56" height="56">
+    <h1 class="login-title" data-i18n="auth.recovery.title">계정 복구</h1>
+    <p class="login-sub" data-i18n="auth.recovery.subtitle">계정 존재 여부와 무관하게 항상 같은 안내가 표시됩니다.</p>
+
+    <div class="recovery-tabs" role="tablist">
+      <button type="button" id="recovery-tab-forgot-id" class="recovery-tab" role="tab" aria-selected="true" data-i18n="auth.recovery.tab_forgot_id">아이디 찾기</button>
+      <button type="button" id="recovery-tab-code" class="recovery-tab" role="tab" aria-selected="false" data-i18n="auth.recovery.tab_code">복구 코드 재설정</button>
+      <button type="button" id="recovery-tab-email" class="recovery-tab" role="tab" aria-selected="false" data-i18n="auth.recovery.tab_email">이메일 링크 재설정</button>
+    </div>
+
+    <!-- 아이디 찾기 -->
+    <form id="recovery-forgot-id-form" class="recovery-panel" novalidate>
+      <label class="field">
+        <span class="field-label" data-i18n="auth.recovery.signup_email_label">가입 이메일</span>
+        <input id="recovery-forgot-id-email" type="text" autocomplete="email" required>
+      </label>
+      <button type="submit" id="recovery-forgot-id-submit" class="btn btn-primary btn-block" data-i18n="auth.recovery.forgot_id_submit">안내 받기</button>
+      <p id="recovery-forgot-id-result" class="field-hint" role="status" aria-live="polite"></p>
+    </form>
+
+    <!-- 복구 코드로 비밀번호 재설정 -->
+    <form id="recovery-code-form" class="recovery-panel" hidden novalidate>
+      <label class="field">
+        <span class="field-label" data-i18n="auth.recovery.signup_email_label">가입 이메일</span>
+        <input id="recovery-code-email" type="text" autocomplete="email" required>
+      </label>
+      <label class="field">
+        <span class="field-label" data-i18n="auth.recovery.code_label">복구 코드</span>
+        <input id="recovery-code-value" type="text" autocomplete="one-time-code" required>
+      </label>
+      <label class="field">
+        <span class="field-label" data-i18n="common.new_password_label">새 비밀번호</span>
+        <div class="password-field">
+          <input id="recovery-code-new-password" type="password" autocomplete="new-password" required>
+          <button type="button" id="recovery-code-password-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+          </button>
+        </div>
+      </label>
+      <label class="field">
+        <span class="field-label" data-i18n="common.new_password_confirm_label">새 비밀번호 확인</span>
+        <div class="password-field">
+          <input id="recovery-code-new-password-confirm" type="password" autocomplete="new-password" required>
+          <button type="button" id="recovery-code-password-confirm-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+          </button>
+        </div>
+      </label>
+      <ul id="recovery-code-policy-checklist" class="policy-checklist"></ul>
+      <button type="submit" id="recovery-code-submit" class="btn btn-primary btn-block" data-i18n="auth.recovery.code_submit">비밀번호 재설정</button>
+      <p id="recovery-code-result" class="field-hint" role="status" aria-live="polite"></p>
+    </form>
+
+    <!-- 이메일 링크로 비밀번호 재설정 -->
+    <form id="recovery-email-request-form" class="recovery-panel" hidden novalidate>
+      <p id="recovery-email-status-banner" class="field-hint"></p>
+      <label class="field">
+        <span class="field-label" data-i18n="auth.recovery.signup_email_label">가입 이메일</span>
+        <input id="recovery-email-request-email" type="text" autocomplete="email" required>
+      </label>
+      <button type="submit" id="recovery-email-request-submit" class="btn btn-primary btn-block" data-i18n="auth.recovery.email_request_submit">재설정 링크 요청</button>
+      <p id="recovery-email-request-result" class="field-hint" role="status" aria-live="polite"></p>
+
+      <details class="recovery-token-confirm">
+        <summary data-i18n="auth.recovery.already_have_token">이미 재설정 토큰을 받으셨나요?</summary>
+        <div id="recovery-email-confirm-body">
+          <label class="field">
+            <span class="field-label" data-i18n="auth.recovery.token_label">재설정 토큰</span>
+            <input id="recovery-email-confirm-token" type="text" autocomplete="off">
+          </label>
+          <label class="field">
+            <span class="field-label" data-i18n="common.new_password_label">새 비밀번호</span>
+            <div class="password-field">
+              <input id="recovery-email-confirm-new-password" type="password" autocomplete="new-password">
+              <button type="button" id="recovery-email-confirm-password-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </button>
+            </div>
+          </label>
+          <label class="field">
+            <span class="field-label" data-i18n="common.new_password_confirm_label">새 비밀번호 확인</span>
+            <div class="password-field">
+              <input id="recovery-email-confirm-new-password-confirm" type="password" autocomplete="new-password">
+              <button type="button" id="recovery-email-confirm-password-confirm-toggle" class="icon-btn password-toggle-btn" aria-pressed="false" data-i18n-attr="aria-label:common.password_show">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </button>
+            </div>
+          </label>
+          <ul id="recovery-email-confirm-policy-checklist" class="policy-checklist"></ul>
+          <button type="button" id="recovery-email-confirm-submit" class="btn btn-primary btn-block" data-i18n="auth.recovery.token_submit">토큰으로 비밀번호 재설정</button>
+          <p id="recovery-email-confirm-result" class="field-hint" role="status" aria-live="polite"></p>
+        </div>
+      </details>
+    </form>
+
+    <button type="button" id="recovery-back-to-login" class="btn btn-secondary btn-block" data-i18n="auth.back_to_login">로그인으로 돌아가기</button>
+  </div>
+</div>
+
+<!-- ============ 메인 셸 ============ -->
+<div id="shell" class="shell" hidden>
+
+  <nav class="sidenav" data-i18n-attr="aria-label:nav.aria_label">
+    <div class="sidenav-brand">
+      <img src="/console/static/assets/homez-logo.png" alt="" width="28" height="28">
+      <span class="sidenav-brand-text">
+        <span data-i18n="app.brand_short">HOMEZ</span>
+        <span class="sidenav-brand-sub" data-i18n="app.brand_sub">AI Commerce OS</span>
+      </span>
+    </div>
+
+    <div class="nav-group">
+      <button class="nav-item" data-view="overview" data-permission="__admin_only__" aria-current="page" data-guide-id="nav-dashboard">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 10.5 12 4l9 6.5M5 9.5V20h14V9.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.dashboard">대시보드</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <!-- Gate AI-F3(2026-08-22) — AI 업무 제안 통합 UI. 백엔드 전 엔드포인트가
+           admin_guard(ADMIN/SUPER_ADMIN)라 __admin_only__로 그대로 맞춘다
+           (표시 여부와 실제 서버 허용 범위를 일치시켜 "보이는데 막히는"
+           상태를 만들지 않는다). -->
+      <div class="nav-group-label" data-i18n="nav.group_ai_work">AI 업무</div>
+      <button class="nav-item" data-view="ai-proposals" data-permission="__admin_only__" data-guide-id="nav-ai-proposals">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.ai_proposals">AI 업무 제안</span>
+      </button>
+      <button class="nav-item" data-view="operations-priorities" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 20V10M12 20V4M20 20v-7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.operations_priorities">운영 우선순위</span>
+      </button>
+      <button class="nav-item" data-view="order-exceptions" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L14.7 3.86a2 2 0 00-3.4 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.order_exceptions">주문 예외 검토</span>
+      </button>
+      <button class="nav-item" data-view="settlement-differences" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2" y="6" width="20" height="13" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M2 10h20" stroke="currentColor" stroke-width="2"/></svg>
+        <span data-i18n="nav.settlement_differences">정산 차이 검토</span>
+      </button>
+      <button class="nav-item" data-view="retail-purchase" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6h15l-1.5 9h-12L4 3H2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="20" r="1.4" fill="currentColor"/><circle cx="17" cy="20" r="1.4" fill="currentColor"/></svg>
+        <span data-i18n="nav.retail_purchase">구매 실행 연결</span>
+      </button>
+      <button class="nav-item" data-view="purchase-task" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 4h16v4H4zM4 10h16v10H4z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/><path d="M9 14h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.purchase_task">매입·발주 관리</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-label" data-i18n="nav.group_product">상품 관리</div>
+      <button class="nav-item" data-view="candidates" data-permission="__admin_only__" data-guide-id="nav-products">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <span data-i18n="nav.candidates">상품 후보</span>
+      </button>
+      <button class="nav-item" data-view="listing-package" data-permission="__admin_only__" data-guide-id="nav-ai-listing">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.listing_package">AI 상품 등록</span>
+      </button>
+      <button class="nav-item" data-view="listing-wizard" data-permission="listing_wizard.view">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.listing_wizard">상품 등록</span>
+      </button>
+      <button class="nav-item" data-view="inventory" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <span data-i18n="nav.product_list">상품 목록</span>
+      </button>
+      <button class="nav-item" data-view="listing-status-sync" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 4v16h16M8 15l3-4 3 3 4-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.listing_status_sync">등록 현황</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-label" data-i18n="nav.group_channel">채널 관리</div>
+      <button class="nav-item" data-view="store-connection" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 12a4 4 0 004 4h3a4 4 0 000-8h-1M15 12a4 4 0 00-4-4H8a4 4 0 000 8h1" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.store_connection">판매채널 연동</span>
+      </button>
+      <button class="nav-item" data-view="marketplace-listing" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 9l9-6 9 6-9 6-9-6zM3 9v6l9 6 9-6V9" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.marketplace_listing">채널별 판매 방식</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-label" data-i18n="nav.group_order">주문 관리</div>
+      <button class="nav-item" data-view="order-fulfillment" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6h15l-1.5 9h-12L4 3H2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="20" r="1.4" fill="currentColor"/><circle cx="17" cy="20" r="1.4" fill="currentColor"/></svg>
+        <span data-i18n="nav.order_status">주문 현황</span>
+      </button>
+      <button class="nav-item" data-view="supplier-sourcing" data-permission="SUPPLIER_VIEW">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 7l2-4h14l2 4M3 7v12a1 1 0 001 1h16a1 1 0 001-1V7M3 7h18M8 11v3M16 11v3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.supplier_sourcing">공급처·발주</span>
+      </button>
+      <button class="nav-item" data-view="shipment" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2" y="8" width="13" height="9" rx="1" stroke="currentColor" stroke-width="2" fill="none"/><path d="M15 11h3l3 3v3h-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/><circle cx="7" cy="19" r="1.5" fill="currentColor"/><circle cx="18" cy="19" r="1.5" fill="currentColor"/></svg>
+        <span data-i18n="nav.shipment">배송</span>
+      </button>
+      <button class="nav-item" data-view="return-order" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 12a9 9 0 109-9M3 3v6h6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.return_exchange">반품·교환</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-label" data-i18n="nav.group_analytics">분석</div>
+      <button class="nav-item" data-view="decision" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2a5 5 0 015 5c0 2-1 3-2 4v2H9v-2c-1-1-2-2-2-4a5 5 0 015-5zM9 19h6M10 22h4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.decision">Decision AI</span>
+      </button>
+      <button class="nav-item" data-view="trend" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.trend">트렌드 탐색</span>
+      </button>
+      <button class="nav-item" data-view="new-product" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.new_product">신제품 탐색</span>
+      </button>
+      <button class="nav-item nav-item-placeholder" data-placeholder="keyword-analysis">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="M21 21l-5.5-5.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.keyword_analysis">키워드 분석</span>
+        <span class="nav-item-soon" data-i18n="nav.soon">준비 중</span>
+      </button>
+      <button class="nav-item" data-view="margin-analysis" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 20V10M12 20V4M20 20v-7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.margin_analysis">마진·수익 분석</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-label" data-i18n="nav.group_settlement">정산</div>
+      <button class="nav-item" data-view="finance" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2" y="6" width="20" height="13" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M2 10h20" stroke="currentColor" stroke-width="2"/></svg>
+        <span data-i18n="nav.finance">자금·정산</span>
+      </button>
+      <button class="nav-item" data-view="channel-settlement" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2v20M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.channel_settlement">채널 정산</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-label" data-i18n="nav.group_system">시스템</div>
+      <button class="nav-item" data-view="safety" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-4z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.safety">자동화 안전</span>
+      </button>
+      <button class="nav-item" data-view="account-security" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.user_permission">사용자·권한</span>
+      </button>
+      <button class="nav-item" data-view="system" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 8v4l3 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.system">시스템 상태</span>
+      </button>
+      <button class="nav-item" data-view="account-security" data-permission="__admin_only__" data-guide-id="nav-settings">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.account_security">설정 · 계정 및 보안</span>
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <!-- 2026-08-13 — 가이드 메뉴. data-permission=""(빈 문자열)은
+           "Permission 요구 없음(항상 표시)"의 기존 규약이다
+           (applyPermissionGatedNav() 참고) — Manager/Staff/Viewer를
+           포함한 모든 로그인 사용자가 볼 수 있어야 한다는 요구사항을
+           기존 메커니즘 그대로 재사용해서 충족한다(새 Permission 코드
+           없음). -->
+      <button class="nav-item" data-view="guides" data-permission="" data-guide-id="nav-guides">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 5.5C4 4.67 4.67 4 5.5 4H11a2 2 0 012 2v14a1.5 1.5 0 00-1.5-1.5H5.5A1.5 1.5 0 004 17V5.5z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/><path d="M20 5.5c0-.83-.67-1.5-1.5-1.5H13a2 2 0 00-2 2v14a1.5 1.5 0 011.5-1.5h5.5a1.5 1.5 0 011.5 1.5V5.5z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.guides">가이드</span>
+      </button>
+    </div>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <button id="mobile-nav-toggle" class="icon-btn topbar-menu-btn" aria-expanded="false" aria-controls="shell" data-i18n-attr="aria-label:topbar.mobile_nav_toggle">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      </button>
+
+      <label class="topbar-search">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <input type="search" id="topbar-search-input" data-i18n-attr="placeholder:topbar.search_placeholder" placeholder="상품명, 브랜드, 키워드를 입력하세요">
+      </label>
+
+      <div class="topbar-status" id="topbar-status" data-guide-id="topbar-status">
+        <span class="pill" id="badge-version" data-i18n-attr="title:topbar.badge_version_title">V…</span>
+        <span class="pill" id="badge-conn" data-i18n-attr="title:topbar.badge_conn_title" data-i18n="topbar.badge_conn_loading">연결 확인 중</span>
+        <span class="pill" id="badge-schema" data-i18n-attr="title:topbar.badge_schema_title" data-i18n="topbar.badge_schema_loading">스키마 확인 중</span>
+        <span class="pill" id="badge-mode" data-i18n-attr="title:topbar.badge_mode_title" data-i18n="topbar.badge_mode_loading">모드 확인 중</span>
+        <span class="pill" id="badge-estop" data-i18n-attr="title:topbar.badge_estop_title" data-i18n="topbar.badge_estop_loading">EStop 확인 중</span>
+      </div>
+
+      <div class="topbar-notif-wrap">
+        <button type="button" id="topbar-notifications-btn" class="topbar-icon-btn" aria-haspopup="true" aria-expanded="false" data-i18n-attr="aria-label:topbar.notifications_label" title="알림">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="topbar-notif-badge" class="badge-count" hidden>0</span>
+        </button>
+        <div id="topbar-notifications-dropdown" class="dropdown topbar-notif-dropdown" hidden role="menu">
+          <div class="topbar-notif-head">
+            <span data-i18n="topbar.notifications_label">알림</span>
+            <button type="button" id="topbar-notif-mark-all-read" class="btn btn-ghost btn-sm" data-i18n="topbar.mark_all_read">모두 읽음</button>
+          </div>
+          <div id="topbar-notif-list"><p class="loading-text" data-i18n="common.loading">불러오는 중…</p></div>
+        </div>
+      </div>
+      <button type="button" id="topbar-messages-btn" class="topbar-icon-btn" data-i18n-attr="aria-label:topbar.messages_label" title="메시지">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+      </button>
+
+      <div class="operator-menu">
+        <button id="operator-menu-btn" class="btn btn-ghost" aria-haspopup="true" aria-expanded="false">
+          <span id="operator-username" data-i18n="operator.default_name">운영자</span>
+          <span id="operator-role" class="pill operator-role-pill"></span>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="operator-menu-dropdown" class="dropdown" hidden role="menu">
+          <button id="logout-btn" class="dropdown-item" role="menuitem" data-i18n="operator.logout">로그아웃</button>
+        </div>
+      </div>
+    </header>
+
+    <div id="limited-mode-banner" class="banner banner-info" hidden role="alert">
+      <strong data-i18n="ma.limited_banner_title">제한 모드</strong> <span data-i18n="ma.limited_banner_desc">— 대기 중인 데이터 구조 업데이트를 적용하기 전까지
+      저장·등록·연동 등 쓰기 작업이 제한됩니다.</span>
+      <button type="button" id="limited-mode-apply-btn" class="btn btn-ghost" data-i18n="ma.approve_btn">지금 적용</button>
+    </div>
+
+    <main id="view-root" class="view-root">
+
+      <!-- 대시보드 -->
+      <section id="view-overview" class="view">
+        <div class="dash-greeting">
+          <div>
+            <h1 id="dash-greeting-title" data-i18n="dashboard.greeting_title">안녕하세요, 운영자님!</h1>
+            <p data-i18n="dashboard.greeting_sub">HOMEZ 운영 현황을 한눈에 확인하세요.</p>
+          </div>
+          <div class="dash-period-wrap">
+            <label class="dash-period-field">
+              <span data-i18n="dashboard.period_label">기간 설정</span>
+              <select id="dash-period-select" disabled aria-disabled="true" data-i18n-attr="title:dashboard.period_disabled_hint">
+                <option value="7" data-i18n="dashboard.period_7d">최근 7일</option>
+                <option value="30" data-i18n="dashboard.period_30d">최근 30일</option>
+                <option value="90" data-i18n="dashboard.period_90d">최근 90일</option>
+              </select>
+            </label>
+            <p class="field-hint dash-period-hint" data-i18n="dashboard.period_disabled_hint">기간별 집계 기능은 아직 준비 중입니다 — 현재 KPI는 실제 집계 데이터가 연동되기 전까지 빈 상태로 표시됩니다.</p>
+          </div>
+        </div>
+
+        <div id="dash-schema-warning-slot"></div>
+
+        <div class="kpi-grid" id="dash-kpi-grid" data-guide-id="dashboard-kpi" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+
+        <div class="dash-charts-row">
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.sales_trend_title">매출 현황</h2>
+            </div>
+            <div class="dash-empty-state" id="dash-sales-trend-empty">
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <strong data-i18n="dashboard.no_data_title">연동된 매출 데이터가 없습니다</strong>
+              <span data-i18n="dashboard.sales_trend_empty_sub">정산·주문 데이터 연동 후 표시됩니다.</span>
+            </div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.channel_share_title">채널별 매출 비중</h2>
+            </div>
+            <div class="dash-empty-state" id="dash-channel-share-empty">
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 3v9l7 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+              <strong data-i18n="dashboard.no_data_title">연동된 매출 데이터가 없습니다</strong>
+              <span data-i18n="dashboard.channel_share_empty_sub">채널 정산 연동 후 표시됩니다.</span>
+            </div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.ai_recommend_title">AI 추천 상품</h2>
+              <button type="button" class="link-btn" data-view="decision" data-i18n="dashboard.view_more">더보기</button>
+            </div>
+            <ul class="dash-list" id="dash-ai-recommend-list" aria-live="polite">
+              <li class="loading-text" data-i18n="common.loading">불러오는 중…</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="dash-mid-row">
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.order_status_title">실시간 주문 현황</h2>
+            </div>
+            <div class="dash-empty-state" id="dash-order-status-empty">
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M6 6h15l-1.5 9h-12L4 3H2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <strong data-i18n="dashboard.no_data_title">연동된 매출 데이터가 없습니다</strong>
+              <span data-i18n="dashboard.order_status_empty_sub">주문 도메인 연동 후 표시됩니다.</span>
+            </div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.keyword_title">인기 검색 키워드</h2>
+            </div>
+            <div class="dash-empty-state" id="dash-keyword-empty">
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="10" cy="10" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="M21 21l-5.5-5.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+              <strong data-i18n="dashboard.no_data_title">연동된 매출 데이터가 없습니다</strong>
+              <span data-i18n="dashboard.keyword_empty_sub">키워드 분석 연동 후 표시됩니다.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-bottom-row">
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.profit_title">수익 분석</h2>
+            </div>
+            <div class="dash-empty-state" id="dash-profit-empty">
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M4 20V10M12 20V4M20 20v-7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+              <strong data-i18n="dashboard.no_data_title">연동된 매출 데이터가 없습니다</strong>
+              <span data-i18n="dashboard.profit_empty_sub">매출·원가·수수료 데이터 연동 후 표시됩니다.</span>
+            </div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-head">
+              <h2 data-i18n="dashboard.notice_title">공지사항</h2>
+            </div>
+            <div class="dash-empty-state" id="dash-notice-empty">
+              <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3v5h5M6 3h8l5 5v13H6z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+              <strong data-i18n="dashboard.notice_empty_title">등록된 공지사항이 없습니다</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-card" style="margin-top: 14px;">
+          <div class="dash-card-head">
+            <h2 data-i18n="dashboard.todo_title">처리할 작업</h2>
+          </div>
+          <ul class="dash-todo-list" id="dash-todo-list" aria-live="polite">
+            <li class="loading-text" data-i18n="common.loading">불러오는 중…</li>
+          </ul>
+        </div>
+
+        <div class="dash-card" style="margin-top: 14px;">
+          <div class="dash-card-head">
+            <h2 data-i18n="dashboard.v7ops_title">V7 운영 현황</h2>
+            <button class="btn btn-ghost btn-sm" id="dash-v7ops-refresh" data-i18n="common.refresh">새로고침</button>
+          </div>
+          <ul class="dash-todo-list" id="dash-v7ops-list" aria-live="polite">
+            <li class="loading-text" data-i18n="common.loading">불러오는 중…</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ============ Gate AI-F3(2026-08-22) — AI 업무 제안 통합 화면 ============ -->
+      <section id="view-ai-proposals" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.ai_proposals">AI 업무 제안</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="ai-proposals" data-i18n="common.refresh">새로고침</button>
+        </div>
+
+        <div id="aip-estop-banner-slot"></div>
+
+        <div class="toolbar" id="aip-filter-tabs" role="tablist">
+          <button type="button" class="btn btn-sm aip-tab active" data-status="" data-i18n="ai_proposals.tab_all">전체</button>
+          <button type="button" class="btn btn-sm aip-tab" data-status="REVIEW_REQUIRED" data-i18n="ai_proposals.tab_review_required">검토 필요</button>
+          <button type="button" class="btn btn-sm aip-tab" data-status="APPROVED" data-i18n="ai_proposals.tab_approved">승인됨</button>
+          <button type="button" class="btn btn-sm aip-tab" data-status="REJECTED" data-i18n="ai_proposals.tab_rejected">거절됨</button>
+          <button type="button" class="btn btn-sm aip-tab" data-status="EXPIRED" data-i18n="ai_proposals.tab_expired">만료됨</button>
+          <button type="button" class="btn btn-sm aip-tab" data-status="EXECUTED" data-i18n="ai_proposals.tab_executed">실행 완료</button>
+        </div>
+
+        <div id="aip-table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- AI 업무 제안 상세 -->
+      <section id="view-ai-proposal-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="aip-detail-back-btn" data-i18n="ai_proposals.back_to_list">← 목록으로</button>
+        </div>
+        <div id="aip-detail-body">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 운영 우선순위 -->
+      <section id="view-operations-priorities" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.operations_priorities">운영 우선순위</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="operations-priorities" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="field-hint" data-i18n="operations_priorities.hint">여러 도메인의 실제 상태를 모아 긴급도순으로 보여줍니다 — 새 판단 로직 없이 기존 집계와 분석 결과만 재사용합니다.</p>
+        <div id="aip-priorities-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 주문 예외 검토 -->
+      <section id="view-order-exceptions" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.order_exceptions">주문 예외 검토</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="order-exceptions" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="oex-estop-banner-slot"></div>
+        <p class="field-hint" data-i18n="order_exceptions.hint">지연·재고부족·수집실패 등 실제 주문·배송·반품 상태를 읽기 전용으로 분석합니다 — 임계값은 공식 SLA가 아니라 운영 기본값입니다.</p>
+        <div id="oex-table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 정산 차이 검토 -->
+      <section id="view-settlement-differences" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.settlement_differences">정산 차이 검토</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="settlement-differences" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="sdf-estop-banner-slot"></div>
+        <p class="field-hint" data-i18n="settlement_differences.hint">주문 총액 대비 정산 금액 차이, 방치된 정산 건을 읽기 전용으로 분석합니다 — 채널 원본 정산 명세서 대사는 아직 연동되지 않았습니다.</p>
+        <div id="sdf-table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- ============ Gate RP-1(2026-08-22) — 구매 실행 연결 ============ -->
+      <section id="view-retail-purchase" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.retail_purchase">구매 실행 연결</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="retail-purchase" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="rp-estop-banner-slot"></div>
+        <p class="field-hint" data-i18n="retail_purchase.hint">쿠팡 주문에 대해 대형 쇼핑몰에서 동일상품을 찾아 정책·예산을 검사합니다 — 실제 구매 실행은 공식 API/서면 계약된 구매대행 Provider로만 연결되며, 실 계약 전에는 항상 차단됩니다.</p>
+
+        <div class="dash-card" id="rp-notifications-card">
+          <div class="dash-card-head">
+            <h2 data-i18n="retail_purchase.notifications_title">알림</h2>
+          </div>
+          <div id="rp-notifications-wrap">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <h2 data-i18n="retail_purchase.providers_title">구매처 연결 상태</h2>
+          </div>
+          <div id="rp-providers-wrap">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <h2 data-i18n="retail_purchase.policy_title">자동구매 정책</h2>
+            <button type="button" class="btn btn-ghost btn-sm" id="rp-policy-edit-btn" data-i18n="retail_purchase.policy_edit_btn">정책 수정</button>
+          </div>
+          <div id="rp-policy-wrap">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <button type="button" class="btn btn-primary btn-sm" id="rp-new-request-btn" data-i18n="retail_purchase.new_request_btn">새 구매 요청</button>
+        </div>
+        <div class="toolbar" id="rp-filter-tabs" role="tablist">
+          <button type="button" class="btn btn-sm rp-tab active" data-status="" data-i18n="ai_proposals.tab_all">전체</button>
+          <button type="button" class="btn btn-sm rp-tab" data-status="PROPOSED" data-i18n="retail_purchase.tab_proposed">대기</button>
+          <button type="button" class="btn btn-sm rp-tab" data-status="BLOCKED" data-i18n="retail_purchase.tab_blocked">차단됨</button>
+          <button type="button" class="btn btn-sm rp-tab" data-status="ORDERED" data-i18n="retail_purchase.tab_ordered">성공</button>
+          <button type="button" class="btn btn-sm rp-tab" data-status="FAILED" data-i18n="retail_purchase.tab_failed">실패</button>
+          <button type="button" class="btn btn-sm rp-tab" data-status="UNCERTAIN" data-i18n="retail_purchase.tab_uncertain">결과 불명확</button>
+        </div>
+        <div id="rp-orders-table-wrap" class="table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 구매 실행 상세 -->
+      <section id="view-retail-purchase-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="rp-detail-back-btn" data-i18n="ai_proposals.back_to_list">← 목록으로</button>
+        </div>
+        <div id="rp-detail-estop-banner-slot"></div>
+        <div id="rp-detail-body">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- ============ Gate PT-1(2026-08-22) — 매입·발주 관리(A+E+F) ============ -->
+      <section id="view-purchase-task" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.purchase_task">매입·발주 관리</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="purchase-task" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="pt-estop-banner-slot"></div>
+        <p class="field-hint" data-i18n="purchase_task.hint">쿠팡 주문을 처리하기 위해 대형 쇼핑몰에서 동일상품을 찾아 매입하는 작업 큐입니다. 실제 로그인·결제는 항상 사용자가 직접 쇼핑몰에서 수행합니다 — HOMEZ는 검색·비교·마진 계산·예산 관리만 담당합니다.</p>
+
+        <div class="dash-card" id="pt-notifications-card">
+          <div class="dash-card-head"><h2 data-i18n="purchase_task.notifications_title">알림</h2></div>
+          <div id="pt-notifications-wrap"><p class="loading-text" data-i18n="common.loading">불러오는 중…</p></div>
+        </div>
+
+        <div class="toolbar">
+          <button type="button" class="btn btn-primary btn-sm" id="pt-new-task-btn" data-i18n="purchase_task.new_task_btn">새 구매 작업</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="pt-operating-settings-btn" data-i18n="purchase_task.operating_settings_btn">매입 운영 설정</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="pt-policy-btn" data-i18n="purchase_task.policy_btn">매입예산·정책</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="pt-email-pref-btn" data-i18n="purchase_task.email_pref_btn">이메일 알림 설정</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="pt-csv-import-btn" data-i18n="purchase_task.csv_import_btn">CSV로 주문정보 가져오기</button>
+        </div>
+
+        <div class="toolbar" id="pt-filter-tabs" role="tablist">
+          <button type="button" class="btn btn-sm pt-tab active" data-status="" data-i18n="ai_proposals.tab_all">전체</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="SEARCH_REQUIRED" data-i18n="purchase_task.tab_search_required">구매 필요</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="REVIEW_REQUIRED" data-i18n="purchase_task.tab_review_required">확인 필요</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="USER_PAYMENT_PENDING" data-i18n="purchase_task.tab_payment_pending">결제 대기</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="TRACKING_REQUIRED" data-i18n="purchase_task.tab_tracking_required">송장 필요</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="SHIPPED" data-i18n="purchase_task.tab_shipped">배송 중</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="BLOCKED" data-i18n="purchase_task.tab_problem">문제 발생</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="SKIPPED_INVENTORY_AVAILABLE" data-i18n="purchase_task.tab_skipped">생략됨</button>
+          <button type="button" class="btn btn-sm pt-tab" data-status="COMPLETED" data-i18n="purchase_task.tab_completed">완료</button>
+        </div>
+        <div id="pt-source-order-filter-banner" class="field-hint" hidden></div>
+        <div id="pt-task-table-wrap" class="table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 매입·발주 상세 -->
+      <section id="view-purchase-task-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="pt-detail-back-btn" data-i18n="ai_proposals.back_to_list">← 목록으로</button>
+        </div>
+        <div id="pt-detail-estop-banner-slot"></div>
+        <div id="pt-detail-body">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 준비 중(미구현 기능) -->
+      <section id="view-coming-soon" class="view">
+        <div class="view-header">
+          <h1 id="coming-soon-title" data-i18n="coming_soon.title">준비 중</h1>
+        </div>
+        <div class="dash-card">
+          <div class="dash-empty-state">
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 8v4l3 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+            <strong data-i18n="coming_soon.body_title">아직 준비 중인 화면입니다</strong>
+            <span data-i18n="coming_soon.body_sub">이 기능은 실제 데이터·API가 연결되지 않아 동작하는 것처럼 보이지 않도록 비활성화되어 있습니다.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 상품 후보 목록 -->
+      <section id="view-candidates" class="view">
+        <div class="view-header" data-guide-id="products-area">
+          <h1 data-i18n="candidates.title">상품 후보</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="candidates" data-i18n="common.refresh">새로고침</button>
+          <button type="button" class="btn btn-primary" id="candidates-create-btn" data-i18n="candidates.create_btn">직접 상품 추가</button>
+        </div>
+
+        <div class="toolbar">
+          <label class="field field-inline">
+            <span class="field-label" data-i18n="candidates.search_label">검색</span>
+            <input type="search" id="candidates-search" data-i18n-attr="placeholder:candidates.search_placeholder" placeholder="상품명, 출처 참조">
+          </label>
+          <label class="field field-inline">
+            <span class="field-label" data-i18n="candidates.status_label">상태</span>
+            <select id="candidates-filter-status">
+              <option value="" data-i18n="common.all">전체</option>
+              <option value="DISCOVERED" data-i18n="candidates.status.discovered">검토 대기</option>
+              <option value="ANALYZED" data-i18n="candidates.status.analyzed">검토 완료</option>
+              <option value="RECOMMENDED" data-i18n="candidates.status.recommended">추천됨</option>
+              <option value="APPROVED" data-i18n="candidates.status.approved">승인됨</option>
+              <option value="HELD" data-i18n="candidates.status.held">보류됨</option>
+              <option value="REJECTED" data-i18n="candidates.status.rejected">거절됨</option>
+            </select>
+          </label>
+          <label class="field field-inline">
+            <span class="field-label" data-i18n="candidates.source_label">출처</span>
+            <select id="candidates-filter-source">
+              <option value="" data-i18n="common.all">전체</option>
+            </select>
+          </label>
+          <label class="field field-inline">
+            <span class="field-label" data-i18n="common.sort_label">정렬</span>
+            <select id="candidates-sort">
+              <option value="discovered_desc" data-i18n="candidates.sort_recent">최근 발견순</option>
+              <option value="trend_desc" data-i18n="candidates.sort_trend">트렌드 점수순</option>
+              <option value="margin_desc" data-i18n="candidates.sort_margin">예상 마진순</option>
+              <option value="risk_desc" data-i18n="candidates.sort_risk">위험도순</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="candidates-table-wrap" class="table-wrap" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 상품 후보 상세 -->
+      <section id="view-candidate-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="candidate-detail-back" data-i18n="common.back_to_list">← 목록으로</button>
+        </div>
+        <div id="candidate-detail-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 트렌드 탐색 -->
+      <section id="view-trend" class="view">
+        <div class="view-header">
+          <h1 data-i18n="trend.title">트렌드 탐색</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="trend" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="trend.desc">트렌드 점수가 산출된 상품 후보를 점수 순으로 표시합니다(Fixture 기반 Trend AI).</p>
+        <div id="trend-table-wrap" class="table-wrap" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 신제품 탐색 -->
+      <section id="view-new-product" class="view">
+        <div class="view-header">
+          <h1 data-i18n="new_product.title">신제품 탐색</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="new-product" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="new_product.desc">신제품으로 판정된 후보(출시 0~15일, Asia/Seoul 기준)만 표시합니다.</p>
+        <div id="new-product-table-wrap" class="table-wrap" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 자동화 안전 -->
+      <section id="view-safety" class="view">
+        <div class="view-header">
+          <h1 data-i18n="safety.title">자동화 안전</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="safety" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="safety-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- Decision AI -->
+      <section id="view-decision" class="view">
+        <div class="view-header">
+          <h1>Decision AI</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="decision" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="decision.desc">V3 상품 후보를 평가·추천한다. 최종 승인/보류/거절은 운영자가 직접 결정한다 — AI가 자동으로 상태를 바꾸지 않는다.</p>
+        <div class="banner banner-info" id="decision-ai-disclosure-banner" data-i18n="decision.ai_disclosure">정직한 공개: 이 "Decision AI"는 실제 LLM/외부 AI가 아니라 가중치 기반 규칙 엔진(evaluator_kind="deterministic")입니다 — 같은 입력은 항상 같은 점수를 만듭니다. 실제 AI Provider 연동은 별도 승인 전까지 연결되지 않습니다.</div>
+        <div class="toolbar">
+          <label class="field field-inline">
+            <span class="field-label" data-i18n="decision.view_label">보기</span>
+            <select id="decision-filter-status">
+              <option value="pending" data-i18n="decision.filter_pending">평가 대기(PENDING_REVIEW)</option>
+              <option value="all" data-i18n="common.all">전체</option>
+            </select>
+          </label>
+        </div>
+        <div id="decision-table-wrap" class="table-wrap" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- Decision AI 상세 -->
+      <section id="view-decision-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="decision-detail-back" data-i18n="common.back_to_list">← 목록으로</button>
+        </div>
+        <div id="decision-detail-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 마켓 등록 (채널별 판매 방식 선택 위저드) -->
+      <section id="view-marketplace-listing" class="view">
+        <div class="view-header">
+          <h1 data-i18n="ml.title">마켓 등록</h1>
+        </div>
+        <p class="view-desc" data-i18n="ml.desc">판매 방식은 상품 전체가 아니라 채널(Marketplace 계정)마다 따로 선택한다. 선택한 모든 채널은 판매 방식이 반드시 필요하다 — 자동 선택되지 않는다.</p>
+        <div class="banner banner-info" id="ml-live-e2e-pending-banner" data-i18n="ml.live_e2e_banner">
+          ⚠ LIVE_E2E_PENDING_USER_CREDENTIAL — 이 화면의 모든 "제출"은 내부 구조 검증(필수값·Schema·Safety·승인)만 수행한다. 실제 쿠팡·네이버 서버 API를 호출하는 코드 자체가 아직 이 시스템에 없으므로, 어떤 제출도 실제로 마켓에 공개되지 않는다.
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="ml.step1_title">1단계 · 상품 후보 선택</h2>
+          <div id="ml-candidate-picker-wrap"></div>
+          <input type="hidden" id="ml-candidate-id" value="">
+          <button class="btn btn-primary" id="ml-load-candidate-btn" disabled data-i18n="ml.load_btn">불러오기</button>
+          <p class="field-error" id="ml-step1-error"></p>
+        </div>
+
+        <div class="detail-panel" id="ml-step2-panel" hidden>
+          <h2 data-i18n="ml.step2_title">2단계 · 판매채널 선택</h2>
+          <div id="ml-channel-checklist" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+          <button class="btn btn-primary" id="ml-confirm-channels-btn" data-i18n="ml.confirm_channels_btn">채널 선택 확정</button>
+          <p class="field-error" id="ml-step2-error"></p>
+        </div>
+
+        <div class="detail-panel" id="ml-step3-panel" hidden>
+          <h2 data-i18n="ml.step3_title">3단계 · 채널별 판매 방식</h2>
+          <div id="ml-fulfillment-sections" aria-live="polite"></div>
+          <p class="field-error" id="ml-step3-error"></p>
+        </div>
+
+        <div class="detail-panel" id="ml-step6-panel" hidden>
+          <h2 data-i18n="ml.final_summary_title">최종 요약</h2>
+          <div class="table-wrap" id="ml-summary-table-wrap" aria-live="polite"></div>
+          <button class="btn btn-primary" id="ml-finalize-btn" data-i18n="ml.finalize_btn">완료 확인 (모든 채널 방식 선택 검증)</button>
+          <p class="field-error" id="ml-step6-error"></p>
+          <p class="stat-sub" data-i18n="ml.finalize_note">완료 확인 이후 실제 제출은 승인·안전성 검사를 통과해야 하며, 이 화면에서는 실제 Marketplace API를 호출하지 않는다.</p>
+          <div id="ml-submissions-panel" hidden>
+            <h3 data-i18n="ml.submission_history_heading">제출 이력</h3>
+            <div class="table-wrap" id="ml-submissions-table-wrap" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Gate I(2026-08-08) — 상품등록 통합 마법사 -->
+      <section id="view-listing-wizard" class="view">
+        <div class="view-header">
+          <h1 data-i18n="lw.title">상품 등록</h1>
+          <button class="btn btn-secondary" id="lw-csv-btn" data-i18n="lw.csv_btn">CSV 내보내기</button>
+          <button class="btn btn-primary" id="lw-new-btn" data-i18n="lw.new_btn">새 상품 등록</button>
+        </div>
+        <p class="view-desc" data-i18n="lw.desc">기존 상품 후보·이미지·판매채널·판매방식·승인 도메인을 그대로 이어 붙인 상품 등록 흐름이다. 실제 등록은 8단계 승인을 통과한 뒤 9단계에서만 실행된다.</p>
+
+        <div id="lw-list-panel">
+          <div class="lw-list-toolbar">
+            <label class="lw-archived-toggle">
+              <input type="checkbox" id="lw-show-archived-toggle">
+              <span data-i18n="lw.show_archived_toggle">삭제된 대기 상품 보기</span>
+            </label>
+            <div id="lw-bulk-action-bar" class="lw-bulk-action-bar" hidden>
+              <span id="lw-bulk-selected-count"></span>
+              <input type="number" id="lw-bulk-margin-rate-input" min="0" max="100" step="0.1" style="width:5.5em" placeholder="목표 마진율 %">
+              <button class="btn btn-secondary" id="lw-bulk-margin-apply-btn" data-i18n="lw.bulk_margin_apply_btn">마진 일괄 적용</button>
+              <button class="btn btn-secondary" id="lw-bulk-submit-selected-btn" data-i18n="lw.bulk_submit_selected_btn">선택 제출</button>
+              <button class="btn btn-danger" id="lw-bulk-delete-selected-btn" data-i18n="lw.bulk_delete_selected_btn">선택 삭제</button>
+            </div>
+            <button class="btn btn-secondary" id="lw-bulk-delete-all-btn" hidden></button>
+          </div>
+          <div class="table-wrap" id="lw-list-table-wrap" aria-live="polite"></div>
+        </div>
+
+        <div id="lw-wizard-panel" class="detail-panel" hidden>
+          <div class="sc-wizard-progress-track">
+            <div class="sc-wizard-progress-fill" id="lw-progress-fill"></div>
+          </div>
+          <div class="lw-step-row">
+            <span class="sc-wizard-step-indicator" id="lw-step-indicator"></span>
+            <span class="pill" id="lw-status-pill"></span>
+            <span class="lw-save-status" id="lw-save-status" aria-live="polite"></span>
+          </div>
+
+          <div id="lw-step-content"></div>
+
+          <div class="lw-wizard-nav">
+            <button class="btn btn-secondary" id="lw-prev-btn" data-i18n="lw.prev_btn">이전</button>
+            <button class="btn btn-primary" id="lw-next-btn" data-i18n="lw.next_btn">다음</button>
+            <button class="btn" id="lw-close-btn" data-i18n="lw.close_btn">목록으로</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 채널별 등록 현황(플랫폼 상태 동기화, Phase 4) -->
+      <section id="view-listing-status-sync" class="view">
+        <div class="view-header">
+          <h1 data-i18n="ls.title">채널별 등록 현황</h1>
+        </div>
+        <p class="view-desc" data-i18n="ls.desc">각 판매채널이 실제로 보고하는 등록 상태(정규화값)를 새로고침으로 확인한다 — Fake Provider만 사용하며 실제 마켓 API는 아직 호출하지 않는다.</p>
+
+        <div class="detail-panel">
+          <div class="ls-filter-row">
+            <label class="field">
+              <span class="field-label" data-i18n="ls.channel_label">채널</span>
+              <select id="ls-filter-channel"><option value="" data-i18n="common.all">전체</option></select>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="ls.status_label">상태</span>
+              <select id="ls-filter-status">
+                <option value="" data-i18n="common.all">전체</option>
+                <option value="DRAFT" data-i18n="ls.status.draft">작성 중</option>
+                <option value="VALIDATION_FAILED" data-i18n="ls.status.validation_failed">검증 실패</option>
+                <option value="PENDING_APPROVAL" data-i18n="ls.status.pending_approval">승인 대기</option>
+                <option value="APPROVED" data-i18n="ls.status.approved">승인됨</option>
+                <option value="QUEUED" data-i18n="ls.status.queued">등록 대기 중</option>
+                <option value="SUBMITTING" data-i18n="ls.status.submitting">쿠팡 등록 중</option>
+                <option value="SUBMITTED" data-i18n="ls.status.submitted">쿠팡 전송 완료</option>
+                <option value="PROCESSING" data-i18n="ls.status.processing">처리 중</option>
+                <option value="ACTIVE" data-i18n="ls.status.active">노출 중</option>
+                <option value="REJECTED" data-i18n="ls.status.rejected">반려됨</option>
+                <option value="FAILED" data-i18n="ls.status.failed">등록 실패</option>
+                <option value="PAUSED" data-i18n="ls.status.paused">일시정지</option>
+                <option value="ENDED" data-i18n="ls.status.ended">종료됨</option>
+                <option value="UNKNOWN" data-i18n="ls.status.unknown">확인 필요</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="ls.error_type_label">오류 유형(현재 목록 내)</span>
+              <select id="ls-filter-error-type">
+                <option value="" data-i18n="common.all">전체</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="ls.updated_from_label">마지막 새로고침(부터)</span>
+              <input type="datetime-local" id="ls-filter-updated-from">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="ls.updated_to_label">마지막 새로고침(까지)</span>
+              <input type="datetime-local" id="ls-filter-updated-to">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="ls.search_label">검색(상품명·외부상품번호)</span>
+              <input type="text" id="ls-filter-search" data-i18n-attr="placeholder:ls.search_placeholder" placeholder="검색어 입력">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="common.sort_label">정렬</span>
+              <select id="ls-filter-sort">
+                <option value="updated_desc" data-i18n="ls.sort_updated_desc">최근 새로고침순</option>
+                <option value="updated_asc" data-i18n="ls.sort_updated_asc">오래된 새로고침순</option>
+                <option value="name_asc" data-i18n="ls.sort_name_asc">상품명순</option>
+                <option value="status_asc" data-i18n="ls.sort_status_asc">상태순</option>
+              </select>
+            </label>
+            <div class="ls-filter-actions">
+              <button class="btn btn-primary btn-sm" id="ls-search-btn" data-i18n="ls.search_btn">검색</button>
+              <button class="btn btn-ghost btn-sm" id="ls-csv-btn" data-i18n="ls.csv_btn">CSV 다운로드</button>
+              <button class="btn btn-ghost btn-sm" id="ls-bulk-retry-btn" data-i18n="ls.bulk_retry_btn">실패 채널만 재시도</button>
+            </div>
+          </div>
+          <p class="field-error" id="ls-filter-error"></p>
+        </div>
+
+        <div class="detail-panel" id="ls-status-counts" aria-live="polite"></div>
+
+        <div class="detail-panel">
+          <div class="table-wrap" id="ls-table-wrap" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div class="detail-panel" id="ls-history-panel" hidden>
+          <h2><span data-i18n="ls.history_heading">상태 이력</span> <span id="ls-history-listing-label"></span></h2>
+          <button class="btn btn-ghost btn-sm" id="ls-history-close-btn" data-i18n="ls.history_close_btn">닫기</button>
+          <div class="table-wrap" id="ls-history-table-wrap" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- AI 상품 등록(Listing Package) -->
+      <section id="view-listing-package" class="view">
+        <div class="view-header">
+          <h1 data-i18n="listing_package.title">AI 상품 등록</h1>
+        </div>
+        <p class="view-desc" data-i18n="listing_package.desc">AI 추천 상품을 선택하면 상품 초안과 이미지(대표·상세)를 한 번에 만든다. 이미지 생성 자체는 별도 승인이 필요 없다 — 최종 "선택 채널에 일괄 등록" 전 승인 1회만 받는다.</p>
+        <div class="banner banner-info" data-i18n="listing_package.fake_provider_banner">
+          ⚠ 이번 Phase는 실제 이미지 생성 API·쿠팡·네이버 API를 호출하지 않는다(FAKE Provider만 사용). 최종 제출 버튼은 항상 dry-run이다 — 실제로 채널에 등록되지 않는다.
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="listing_package.step1_title">1단계 · 상품 선택 및 모드</h2>
+          <div id="lp-candidate-picker-wrap"></div>
+          <input type="hidden" id="lp-candidate-id" value="">
+          <label class="field">
+            <span class="field-label" data-i18n="listing_package.mode_label">모드</span>
+            <select id="lp-mode">
+              <option value="STANDARD" data-i18n="listing_package.mode_standard">일반 모드(사용자가 선택 → 초안·이미지 생성)</option>
+              <option value="AI_AUTO_PROPOSAL" data-i18n="listing_package.mode_ai_auto">AI 오토 모드(AI가 등록 제안함 생성)</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="listing_package.step2_title">2단계 · 채널·판매방식 선택</h2>
+          <div id="lp-channel-rows"></div>
+          <button class="btn btn-ghost" id="lp-add-channel-row-btn" type="button" data-i18n="listing_package.add_channel_row_btn">+ 채널 추가</button>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="listing_package.step3_title">3단계 · 이미지 옵션</h2>
+          <label class="field">
+            <span class="field-label" data-i18n="listing_package.main_image_count_label">대표 이미지 수</span>
+            <input type="number" id="lp-main-count" value="1" min="0" max="5">
+          </label>
+          <label class="field">
+            <span class="field-label" data-i18n="listing_package.detail_image_count_label">상세 이미지 수</span>
+            <input type="number" id="lp-detail-count" value="2" min="0" max="10">
+          </label>
+        </div>
+
+        <button class="btn btn-primary" id="lp-create-btn" type="button" data-i18n="listing_package.create_btn">초안 및 이미지 생성</button>
+        <p class="field-error" id="lp-create-error"></p>
+
+        <div class="detail-panel" id="lp-result-panel" hidden>
+          <h2 id="lp-result-title" data-i18n="listing_package.result_title_review">검토</h2>
+          <div class="banner banner-info" id="lp-progress-banner" hidden></div>
+
+          <h3 data-i18n="listing_package.draft_heading">상품 초안</h3>
+          <div id="lp-draft-view"></div>
+
+          <h3 data-i18n="listing_package.images_heading">이미지</h3>
+          <div id="lp-image-gallery" class="lp-image-gallery"></div>
+          <button class="btn btn-ghost" id="lp-regenerate-btn" type="button" data-i18n="listing_package.regenerate_btn">이미지 재생성</button>
+
+          <h3 data-i18n="listing_package.readiness_heading">채널별 준비 상태</h3>
+          <div class="table-wrap" id="lp-readiness-table-wrap"></div>
+
+          <h3 data-i18n="listing_package.recommendation_heading">추천 근거</h3>
+          <div id="lp-recommendation-view"></div>
+
+          <h3 data-i18n="listing_package.final_approval_heading">최종 승인</h3>
+          <p class="stat-sub" data-i18n="listing_package.approval_fingerprint_note">현재 화면의 상태(fingerprint)를 기준으로 승인한다 — 승인 후 초안·이미지가 바뀌면 이 승인은 자동으로 무효화된다.</p>
+          <button class="btn btn-primary" id="lp-approve-btn" type="button" data-i18n="listing_package.approve_btn">최종 승인</button>
+          <button class="btn btn-ghost" id="lp-reject-btn" type="button" data-i18n="listing_package.reject_btn">거절</button>
+          <p class="field-error" id="lp-approval-error"></p>
+
+          <h3 data-i18n="listing_package.bulk_submit_heading">일괄 등록</h3>
+          <button class="btn btn-primary" id="lp-submit-btn" type="button" disabled data-i18n="listing_package.bulk_submit_btn">선택 채널에 일괄 등록(dry-run)</button>
+          <p class="stat-sub" id="lp-submit-status"></p>
+        </div>
+      </section>
+
+      <!-- 판매채널 연동 -->
+      <section id="view-store-connection" class="view">
+        <div class="view-header">
+          <h1 data-i18n="sc.title">판매채널 연동</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="store-connection" data-i18n="common.refresh">새로고침</button>
+        </div>
+
+        <div class="sc-security-banner" role="note" data-i18n="sc.security_banner">
+          HOMEZ는 쿠팡·네이버 로그인 비밀번호를 요구하지 않습니다.
+          판매자센터에서 발급한 공식 API 자격증명만 사용하세요.
+        </div>
+
+        <img src="/assets/guides/marketplace/marketplace-connection-overview.svg"
+             alt="브라우저에서 판매자센터로 이동해 API 키를 발급받고 HOMEZ에 입력하는 전체 흐름 다이어그램"
+             data-i18n-attr="alt:sc.overview_image_alt"
+             class="sc-overview-image">
+
+        <div class="sc-compare-grid">
+          <div class="detail-panel sc-compare-card">
+            <h2 data-i18n="sc.coupang.title">쿠팡</h2>
+            <dl class="sc-compare-dl">
+              <dt data-i18n="sc.coupang.required_label">필요한 값</dt><dd data-i18n="sc.coupang.required_value">업체코드, Access Key, Secret Key</dd>
+              <dt data-i18n="sc.coupang.issue_location_label">발급 위치</dt><dd data-i18n="sc.coupang.issue_location_value">쿠팡 WING OPEN API</dd>
+            </dl>
+            <button class="btn btn-primary" id="sc-start-coupang-btn" data-i18n="sc.coupang.connect_btn">쿠팡 연결하기</button>
+          </div>
+          <div class="detail-panel sc-compare-card">
+            <h2 data-i18n="sc.naver.title">네이버 스마트스토어</h2>
+            <dl class="sc-compare-dl">
+              <dt data-i18n="sc.coupang.required_label">필요한 값</dt><dd data-i18n="sc.naver.required_value">Client ID, Client Secret</dd>
+              <dt data-i18n="sc.coupang.issue_location_label">발급 위치</dt><dd data-i18n="sc.naver.issue_location_value">네이버 커머스API센터</dd>
+              <dt data-i18n="sc.naver.auth_label">인증</dt><dd data-i18n="sc.naver.auth_value">OAuth2 Client Credentials</dd>
+            </dl>
+            <button class="btn btn-primary" id="sc-start-naver-btn" data-i18n="sc.naver.connect_btn">네이버 연결하기</button>
+          </div>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="sc.connections.title">연결 목록</h2>
+          <div id="sc-connections-table-wrap" class="table-wrap" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <!-- 2026-08-29 Pre-Live 검증 — 위저드 5단계 이미지 URL 자동채움용
+             R2(Cloudflare) 공개 이미지 호스팅 Credential. 백엔드
+             (app/domains/media_asset/public_hosting.py)는 이미 있었으나
+             이 화면이 없어 자동채움이 항상 조용히 실패하던 결함 수정. -->
+        <div class="detail-panel">
+          <h2 data-i18n="r2.title">이미지 공개 호스팅(R2)</h2>
+          <p class="stat-sub" data-i18n="r2.desc">위저드에서 선택한 상품 이미지를 쿠팡이 읽을 수 있는 공개 URL로 자동 변환할 때 사용합니다. Cloudflare R2 버킷의 자격증명만 저장하며, 원문은 Windows Credential Manager에만 남습니다.</p>
+          <p id="r2-status" class="stat-sub"></p>
+          <div class="field-grid">
+            <label class="field">
+              <span class="field-label" data-i18n="r2.account_id_label">Cloudflare 계정 ID</span>
+              <input type="text" id="r2-account-id" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="r2.access_key_label">Access Key ID</span>
+              <input type="text" id="r2-access-key-id" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="r2.secret_key_label">Secret Access Key</span>
+              <input type="password" id="r2-secret-access-key" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="r2.bucket_label">버킷 이름</span>
+              <input type="text" id="r2-bucket-name" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="r2.public_url_label">공개 기본 URL(예: https://cdn.example.com)</span>
+              <input type="text" id="r2-public-base-url" autocomplete="off">
+            </label>
+          </div>
+          <button type="button" class="btn btn-primary" id="r2-save-btn" data-i18n="r2.save_btn">저장</button>
+          <p class="field-error" id="r2-save-error"></p>
+        </div>
+      </section>
+
+      <!-- 자금·정산 -->
+      <section id="view-finance" class="view">
+        <div class="view-header">
+          <h1 data-i18n="finance.title">자금·정산</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="finance" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="finance-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- V7 Gate 7(2026-08-15) — 재고 관리(Inventory, Gate 3) -->
+      <section id="view-inventory" class="view">
+        <div class="view-header">
+          <h1 data-i18n="inv.title">재고 관리</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="inventory" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="inv.desc">회사 SKU별 가용/예약/안전재고와 입출고 원장을 조회하고, 입고·수동 조정·채널 재고 동기화를 실행합니다.</p>
+        <div id="inv-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- V7 Gate 7(2026-08-15) — 주문 · 발주(Order/Purchase, Gate 4) -->
+      <section id="view-order-fulfillment" class="view">
+        <div class="view-header">
+          <h1 data-i18n="ofm.title">주문 · 발주</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="order-fulfillment" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="ofm.desc">채널에서 수집된 주문과 재고 부족 품목에 대한 공급처 발주를 조회하고 처리합니다 — 실제 채널 연동 전까지는 Fake Provider 기준 데이터입니다.</p>
+        <div class="sub-tabs" role="tablist">
+          <button type="button" id="ofm-tab-orders" class="sub-tab" role="tab" aria-selected="true" data-i18n="ofm.tab_orders">주문</button>
+          <button type="button" id="ofm-tab-purchases" class="sub-tab" role="tab" aria-selected="false" data-i18n="ofm.tab_purchases">발주</button>
+        </div>
+        <div id="ofm-orders-panel" class="sub-panel">
+          <div id="ord-content" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+        <div id="ofm-purchases-panel" class="sub-panel" hidden>
+          <div id="pur-content" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- 2026-08-21 Live Gate — 공급처·발주(Sourcing/Purchase UI) -->
+      <section id="view-supplier-sourcing" class="view">
+        <div class="view-header">
+          <h1 data-i18n="sps.title">공급처·발주</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="supplier-sourcing" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="sps.desc">공급처를 검색·연결하고, 재고 부족 주문에서 발주안을 만들어 승인·전송·입고까지 처리합니다 — 실제 공급처 연동 전까지는 시연용/수동 처리 경로만 사용합니다.</p>
+        <div class="sub-tabs" role="tablist">
+          <button type="button" id="sps-tab-search" class="sub-tab" role="tab" aria-selected="true" data-i18n="sps.tab_search">공급처 검색</button>
+          <button type="button" id="sps-tab-relations" class="sub-tab" role="tab" aria-selected="false" data-i18n="sps.tab_relations">공급처 연결</button>
+          <button type="button" id="sps-tab-links" class="sub-tab" role="tab" aria-selected="false" data-i18n="sps.tab_links">상품 연결·비교</button>
+          <button type="button" id="sps-tab-purchases" class="sub-tab" role="tab" aria-selected="false" data-i18n="sps.tab_purchases">발주</button>
+        </div>
+        <div id="sps-search-panel" class="sub-panel">
+          <div id="sps-search-content" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+        <div id="sps-relations-panel" class="sub-panel" hidden>
+          <div id="sps-relations-content" aria-live="polite"></div>
+        </div>
+        <div id="sps-links-panel" class="sub-panel" hidden>
+          <div id="sps-links-content" aria-live="polite"></div>
+        </div>
+        <div id="sps-purchases-panel" class="sub-panel" hidden>
+          <div id="sps-purchases-content" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- V7 Gate 7(2026-08-15) — 배송(Shipment, Gate 4) -->
+      <section id="view-shipment" class="view">
+        <div class="view-header">
+          <h1 data-i18n="ship.title">배송</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="shipment" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="ship.desc">생성된 송장의 배송 상태를 조회하고 갱신합니다. 송장 생성은 주문 상세 화면에서 예약된 품목을 선택해 진행합니다.</p>
+        <div id="ship-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- V7 Gate 7(2026-08-15) — 반품 · 교환(ReturnOrder, Gate 4) -->
+      <section id="view-return-order" class="view">
+        <div class="view-header">
+          <h1 data-i18n="ret.title">반품 · 교환</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="return-order" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="ret.desc">고객 반품/교환 요청을 승인·입고·완료 처리합니다 — 완료 시 재고가 자동으로 반영됩니다.</p>
+        <div id="ret-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- V7 Gate 7(2026-08-15) — 마진 · 수익 분석(Pricing, Gate 5) -->
+      <section id="view-margin-analysis" class="view">
+        <div class="view-header">
+          <h1 data-i18n="prc.title">마진 · 수익 분석</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="margin-analysis" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="prc.desc">채널별 판매가·원가 구성으로 예상 손익을 계산하고, 판매가 변경 승인과 실측 마진 괴리를 조회합니다.</p>
+        <div id="prc-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- V7 Gate 7(2026-08-15) — 채널 정산(Settlement Reconciliation, Gate 5) -->
+      <section id="view-channel-settlement" class="view">
+        <div class="view-header">
+          <h1 data-i18n="stl.title">채널 정산</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="channel-settlement" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="view-desc" data-i18n="stl.desc">주문 대비 실제 정산 입금액을 대사하고, 불일치 건을 조사·보류·해소합니다 — 금액은 자동으로 보정되지 않습니다.</p>
+        <div id="stl-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 시스템 상태 -->
+      <section id="view-system" class="view">
+        <div class="view-header">
+          <h1 data-i18n="system.title">시스템 상태</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="system" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <div id="system-content" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 설정 · 계정 및 보안 -->
+      <section id="view-account-security" class="view">
+        <div class="view-header" data-guide-id="settings-area">
+          <h1 data-i18n="settings.title">설정 · 계정 및 보안</h1>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="lang.selector.label">언어</h2>
+          <div class="lang-switch" role="group" data-i18n-attr="aria-label:lang.selector.label">
+            <button type="button" class="btn btn-ghost lang-switch-btn" id="settings-lang-ko" data-lang="ko-KR" data-i18n="lang.selector.ko">한국어</button>
+            <button type="button" class="btn btn-ghost lang-switch-btn" id="settings-lang-en" data-lang="en-US" data-i18n="lang.selector.en">English</button>
+          </div>
+        </div>
+
+        <!-- 2026-08-13 — 인터랙티브 가이드 모드 진입점. 실제 버튼
+             표시 여부(시작/이어서/다시 시작/기록 초기화)는
+             renderGuideModeSettingsPanel()이 저장된 진행 상태를
+             기준으로 매번 다시 계산한다(정적 마크업이 아님). -->
+        <div class="detail-panel">
+          <h2 data-i18n="settings.guide_mode">가이드 모드</h2>
+          <p class="stat-sub" data-i18n="settings.guide_mode_description">주요 기능을 화면 안내에 따라 직접 클릭하며 익힐 수 있습니다.</p>
+          <div id="guide-mode-settings-actions" class="guide-mode-actions"></div>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="settings.password.title">내 비밀번호 변경</h2>
+          <form id="change-password-form" novalidate>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.password.current_label">현재 비밀번호</span>
+              <input id="cp-current" type="password" autocomplete="current-password" required>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.password.new_label">새 비밀번호</span>
+              <input id="cp-new" type="password" autocomplete="new-password" required>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.password.confirm_label">새 비밀번호 확인</span>
+              <input id="cp-new-confirm" type="password" autocomplete="new-password" required>
+            </label>
+            <ul id="cp-policy-checklist" class="policy-checklist"></ul>
+            <button type="submit" id="cp-submit" class="btn btn-primary" data-i18n="settings.password.submit">비밀번호 변경</button>
+            <p id="cp-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </form>
+          <p class="stat-sub" data-i18n="settings.password.hint">비밀번호를 변경하면 이 기기를 포함한 모든 세션이 종료되어 다시 로그인해야 합니다.</p>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="settings.sessions.title">세션</h2>
+          <button class="btn btn-danger" id="btn-revoke-all-sessions" data-i18n="settings.sessions.revoke_all">다른 세션 모두 폐기</button>
+        </div>
+
+        <div class="detail-panel">
+          <h2 data-i18n="settings.recovery_codes.title">복구 코드</h2>
+          <p class="stat-sub" data-i18n="settings.recovery_codes.description">로그아웃 상태에서 비밀번호를 스스로 재설정할 때 쓰는 일회용 코드 10개를 생성합니다. 새로 생성하면 이전 코드는 전부 무효화됩니다.</p>
+          <button class="btn btn-primary" id="btn-generate-recovery-codes" data-i18n="settings.recovery_codes.generate">복구 코드 생성</button>
+          <div id="recovery-codes-reveal" hidden>
+            <p class="field-hint" data-i18n="settings.recovery_codes.reveal_hint">아래 코드는 지금만 표시됩니다 — 안전한 곳에 보관하세요.</p>
+            <pre id="recovery-codes-list" class="recovery-codes-list"></pre>
+            <div class="recovery-codes-actions">
+              <button type="button" class="btn btn-sm" id="btn-copy-recovery-codes" data-i18n="common.copy">복사</button>
+              <button type="button" class="btn btn-sm" id="btn-download-recovery-codes" data-i18n="common.download">다운로드</button>
+              <button type="button" class="btn btn-sm" id="btn-print-recovery-codes" data-i18n="common.print">인쇄</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gate PT-3(2026-08-23 17차 지시) — 중앙 운영 승인·예외
+             알림 설정. 이메일 발송 자체는 Provider 미구성이라 실제로는
+             항상 PROVIDER_NOT_CONFIGURED로만 응답한다 — UI는 그 사실을
+             숨기지 않는다. -->
+        <div class="detail-panel">
+          <h2 data-i18n="settings.notification.title">운영 알림 설정</h2>
+          <p class="stat-sub" data-i18n="settings.notification.hint">승인·예외가 필요한 업무를 앱 내부 알림과(설정 시) 이메일로 안내합니다. 이메일에서는 승인·결제를 할 수 없습니다 — 반드시 HOMEZ에 로그인해 처리해야 합니다.</p>
+          <form id="notif-pref-form" novalidate>
+            <label class="field-inline">
+              <input id="np-email-enabled" type="checkbox">
+              <span data-i18n="settings.notification.email_enabled">이메일 알림 사용</span>
+            </label>
+            <div class="field-row">
+              <label class="field">
+                <span class="field-label" data-i18n="settings.notification.quiet_start">조용한 시간 시작(0~23시)</span>
+                <input id="np-quiet-start" type="number" min="0" max="23">
+              </label>
+              <label class="field">
+                <span class="field-label" data-i18n="settings.notification.quiet_end">조용한 시간 종료(0~23시)</span>
+                <input id="np-quiet-end" type="number" min="0" max="23">
+              </label>
+            </div>
+            <p class="field-hint" data-i18n="settings.notification.quiet_hint">긴급(Critical) 알림은 조용한 시간에도 즉시 발송됩니다. 두 값을 모두 비우면 조용한 시간을 쓰지 않습니다.</p>
+            <button type="submit" id="np-submit" class="btn btn-primary" data-i18n="settings.notification.save">저장</button>
+            <p id="np-status" class="field-hint" role="status" aria-live="polite"></p>
+            <p id="np-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </form>
+
+          <div class="field-row" style="margin-top: 1rem;">
+            <label class="field" style="flex: 1;">
+              <span class="field-label" data-i18n="settings.notification.test_email_label">테스트 이메일 주소</span>
+              <input id="np-test-email" type="email" autocomplete="off">
+            </label>
+            <button type="button" id="np-send-test" class="btn btn-sm" data-i18n="settings.notification.send_test">테스트 발송</button>
+          </div>
+          <p id="np-test-status" class="field-hint" role="status" aria-live="polite"></p>
+
+          <button type="button" id="np-open-catalog" class="btn btn-ghost btn-sm" style="margin-top: 0.5rem;" data-i18n="settings.notification.view_catalog">알림 종류 보기</button>
+        </div>
+
+        <div id="company-info-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.company.title">회사 정보 (SUPER_ADMIN)</h2>
+          <p id="company-name-status" class="stat-sub" data-i18n="settings.company.name_set_status">회사명이 설정되어 있습니다.</p>
+          <form id="company-name-form" novalidate>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.password.current_label">현재 비밀번호</span>
+              <input id="company-name-current-password" type="password" autocomplete="current-password" required>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.company.new_name_label">새 회사명</span>
+              <input id="company-name-input" type="text" maxlength="100" autocomplete="off" required placeholder="새 회사명을 입력하세요" data-i18n-attr="placeholder:settings.company.new_name_placeholder">
+            </label>
+            <button type="submit" id="company-name-submit" class="btn btn-primary" data-i18n="settings.company.submit">회사명 변경</button>
+            <p id="company-name-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </form>
+        </div>
+
+        <div id="channel-policy-settings-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.channel_policy.title">채널 정책 · 수익성 기준</h2>
+          <p class="field-hint" data-i18n="settings.channel_policy.hint">여기서 정하는 값은 정책 적합성(카테고리 금지 등)과는 별개로, 상품별 예상 마진이 회사 기준을 충족하는지 판단하는 데만 쓰입니다.</p>
+          <form id="channel-policy-settings-form" novalidate>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.min_target_margin_rate">목표 마진율(0~1, 예: 0.15 = 15%)</span>
+              <input id="cps-min-target-margin-rate" type="number" step="0.0001" min="0" max="1">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.min_profit_per_order">주문당 최소 이익(원)</span>
+              <input id="cps-min-profit-per-order" type="number" step="1" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.max_initial_purchase_amount">최대 초기 매입금(원)</span>
+              <input id="cps-max-initial-purchase-amount" type="number" step="1" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.max_moq">최대 MOQ</span>
+              <input id="cps-max-moq" type="number" step="1" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.max_lead_time_days">최대 리드타임(일)</span>
+              <input id="cps-max-lead-time-days" type="number" step="1" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.max_return_shipping_cost">최대 반품 배송비(원)</span>
+              <input id="cps-max-return-shipping-cost" type="number" step="1" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.safety_stock_buffer">재고 안전 버퍼(수량)</span>
+              <input id="cps-safety-stock-buffer" type="number" step="1" min="0">
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.allowed_categories">허용 카테고리(줄바꿈으로 구분, 비우면 제한 없음)</span>
+              <textarea id="cps-allowed-categories" rows="3"></textarea>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.channel_policy.forbidden_categories">금지 카테고리(줄바꿈으로 구분)</span>
+              <textarea id="cps-forbidden-categories" rows="3"></textarea>
+            </label>
+            <button type="submit" id="channel-policy-settings-submit" class="btn btn-primary" data-i18n="settings.channel_policy.submit">저장</button>
+            <p id="channel-policy-settings-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </form>
+        </div>
+
+        <div id="registration-requests-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.registration_requests.title">가입 승인 대기</h2>
+          <div id="registration-requests-table-wrap" class="table-wrap" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div id="invitations-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.invitations.title">초대 코드</h2>
+          <form id="create-invitation-form" novalidate>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.invitations.max_role_label">부여 가능한 최대 역할</span>
+              <select id="inv-max-role">
+                <option value="VIEWER">VIEWER</option>
+                <option value="STAFF">STAFF</option>
+                <option value="MANAGER">MANAGER</option>
+                <option value="ADMIN">ADMIN</option>
+                <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+              </select>
+            </label>
+            <button type="submit" id="create-invitation-submit" class="btn btn-primary" data-i18n="settings.invitations.generate">초대 코드 생성</button>
+            <p id="create-invitation-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </form>
+          <div id="invitation-reveal" hidden>
+            <p class="field-hint" data-i18n="settings.invitations.reveal_hint">이 코드는 지금만 표시됩니다 — 안전하게 전달하세요.</p>
+            <pre id="invitation-code-value" class="recovery-codes-list"></pre>
+            <button type="button" class="btn btn-sm" id="btn-copy-invitation-code" data-i18n="common.copy">복사</button>
+          </div>
+          <div id="invitations-table-wrap" class="table-wrap" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div id="admin-users-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.admin_users.title">사용자 관리 (SUPER_ADMIN)</h2>
+          <div id="admin-users-table-wrap" class="table-wrap" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+          <div id="admin-reset-token-reveal" hidden>
+            <p class="field-hint" data-i18n="settings.admin_users.reset_token_hint">이 토큰은 지금만 표시됩니다 — 관리자는 이 값을 이용해 새 비밀번호가 무엇인지 알 수 없습니다. 대상 사용자에게 직접 전달하세요.</p>
+            <pre id="admin-reset-token-value" class="recovery-codes-list"></pre>
+            <button type="button" class="btn btn-sm" id="btn-copy-admin-reset-token" data-i18n="common.copy">복사</button>
+          </div>
+        </div>
+
+        <div id="admin-create-user-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.create_user.title">새 사용자 추가</h2>
+          <form id="create-user-form" novalidate>
+            <label class="field">
+              <span class="field-label">username</span>
+              <input id="cu-username" type="text" required>
+            </label>
+            <label class="field">
+              <span class="field-label">email</span>
+              <input id="cu-email" type="text" required>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.create_user.role_label">역할</span>
+              <select id="cu-role">
+                <option value="VIEWER">VIEWER</option>
+                <option value="STAFF">STAFF</option>
+                <option value="MANAGER">MANAGER</option>
+                <option value="ADMIN">ADMIN</option>
+                <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.create_user.temp_password_label">임시 비밀번호</span>
+              <input id="cu-password" type="password" autocomplete="new-password" required>
+            </label>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.create_user.password_confirm_label">비밀번호 확인</span>
+              <input id="cu-password-confirm" type="password" autocomplete="new-password" required>
+            </label>
+            <button type="submit" id="cu-submit" class="btn btn-primary" data-i18n="settings.create_user.submit">사용자 추가</button>
+            <p id="cu-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </form>
+        </div>
+
+        <div id="user-detail-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.user_detail.title">사용자 상세</h2>
+          <div id="user-detail-body"></div>
+        </div>
+
+        <div id="permission-editor-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.permission_editor.title">역할별 Permission 편집 (SUPER_ADMIN)</h2>
+          <p class="stat-sub" data-i18n="settings.permission_editor.description">역할에 부여할 개별 Permission을 선택합니다. Preset은 화면 편의일 뿐이며, 실제로 저장되는 값은 체크된 개별 Permission 목록입니다.</p>
+          <label class="field">
+            <span class="field-label" data-i18n="settings.permission_editor.role_label">역할 선택</span>
+            <select id="pe-role-select"></select>
+          </label>
+          <div id="pe-super-admin-note" class="field-hint" hidden data-i18n="settings.permission_editor.super_admin_note">SUPER_ADMIN은 항상 모든 Permission을 가지며 개별 편집이 불가합니다.</div>
+          <div id="pe-editable-area" hidden>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.permission_editor.preset_label">Preset (편의 기능)</span>
+              <select id="pe-preset-select">
+                <option value="" data-i18n="settings.permission_editor.preset_custom">사용자 정의</option>
+                <option value="view_only" data-i18n="settings.permission_editor.preset_view_only">조회 전용</option>
+                <option value="product_staff" data-i18n="settings.permission_editor.preset_product_staff">상품 담당자</option>
+                <option value="approval_manager" data-i18n="settings.permission_editor.preset_approval_manager">승인 관리자</option>
+                <option value="full_operator" data-i18n="settings.permission_editor.preset_full_operator">전체 운영 관리자</option>
+              </select>
+            </label>
+            <div id="pe-catalog-wrap"></div>
+            <label class="field">
+              <span class="field-label" data-i18n="settings.password.current_label">현재 비밀번호</span>
+              <input id="pe-current-password" type="password" autocomplete="current-password">
+            </label>
+            <button type="button" id="pe-submit" class="btn btn-primary" data-i18n="settings.permission_editor.submit">Permission 저장</button>
+            <p id="pe-error" class="field-error" role="alert" aria-live="assertive"></p>
+          </div>
+        </div>
+
+        <div id="audit-log-panel" class="detail-panel" hidden>
+          <h2 data-i18n="settings.audit_log.title">감사 이력 (SUPER_ADMIN)</h2>
+          <button type="button" id="audit-log-refresh" class="btn btn-ghost btn-sm" data-i18n="common.refresh">새로고침</button>
+          <div id="audit-log-table-wrap" class="table-wrap" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 가이드 (2026-08-13) ============
+           모든 콘텐츠(카드/영상/문서)는 loadGuides()가 채운다 — 정적
+           마크업은 레이아웃 뼈대와 검색/필터 컨트롤만 담는다. -->
+      <section id="view-guides" class="view">
+        <div class="view-header">
+          <h1 data-i18n="guide.title">HOMEZ 사용 가이드</h1>
+          <p class="view-desc" data-i18n="guide.description">HOMEZ의 주요 기능을 영상과 문서로 확인할 수 있습니다.</p>
+        </div>
+
+        <!-- 2026-08-13 — 설정 화면이 관리자 전용이라(nav.settings
+             data-permission="__admin_only__") Manager/Staff/Viewer는
+             거기서 가이드 모드를 실행할 수 없다. 항상 열려 있는 이
+             "가이드" 메뉴에 동일 진입점을 하나 더 둔다(요구사항:
+             "설정 화면 외에도 필요하면 기존 가이드 메뉴에서 가이드
+             모드를 실행할 수 있게 하세요"). -->
+        <div class="detail-panel">
+          <h2 data-i18n="settings.guide_mode">가이드 모드</h2>
+          <p class="stat-sub" data-i18n="settings.guide_mode_description">주요 기능을 화면 안내에 따라 직접 클릭하며 익힐 수 있습니다.</p>
+          <button type="button" id="guide-mode-launch-from-guides-btn" class="btn btn-primary" data-i18n="tour.start">가이드 시작</button>
+        </div>
+
+        <div id="guides-list-panel">
+          <div class="guides-toolbar">
+            <span id="guides-app-version-badge" class="pill" aria-hidden="true"></span>
+            <div class="guides-lang-switch" role="group" data-i18n-attr="aria-label:lang.selector.label">
+              <button type="button" class="btn btn-ghost btn-sm guides-lang-btn" id="guides-lang-ko" data-lang="ko-KR" data-i18n="lang.selector.ko">한국어</button>
+              <button type="button" class="btn btn-ghost btn-sm guides-lang-btn" id="guides-lang-en" data-lang="en-US" data-i18n="lang.selector.en">English</button>
+            </div>
+            <label class="guides-search-field">
+              <span class="sr-only" data-i18n="guide.search_placeholder">가이드 제목이나 설명을 검색하세요</span>
+              <input
+                type="search"
+                id="guides-search-input"
+                data-i18n-attr="placeholder:guide.search_placeholder,aria-label:guide.search_placeholder"
+              >
+            </label>
+          </div>
+
+          <div id="guides-filter-bar" class="guides-filter-bar" role="group" aria-label="가이드 분류 필터">
+            <button type="button" class="guide-filter-btn active" data-filter="all" aria-pressed="true" data-i18n="guide.filter_all">전체</button>
+            <button type="button" class="guide-filter-btn" data-filter="quick_start" aria-pressed="false" data-i18n="guide.filter_quick_start">시작하기</button>
+            <button type="button" class="guide-filter-btn" data-filter="admin_setup" aria-pressed="false" data-i18n="guide.filter_admin_setup">관리자</button>
+            <button type="button" class="guide-filter-btn" data-filter="product_registration" aria-pressed="false" data-i18n="guide.filter_product_registration">상품 등록</button>
+            <button type="button" class="guide-filter-btn" data-filter="mobile_usage" aria-pressed="false" data-i18n="guide.filter_mobile_usage">모바일</button>
+            <button type="button" class="guide-filter-btn" data-filter="troubleshooting" aria-pressed="false" data-i18n="guide.filter_troubleshooting">문제 해결</button>
+          </div>
+
+          <div id="guides-card-grid" class="guide-card-grid" aria-live="polite">
+            <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+          </div>
+        </div>
+
+        <div id="guides-detail-panel" hidden>
+          <button type="button" id="guide-detail-back-btn" class="btn btn-secondary btn-sm" data-i18n="guide.back_to_list">목록으로</button>
+          <div id="guide-detail-content"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ============ Migration 승인 Dialog(2026-08-05 Gate E) ============ -->
+<dialog id="migration-approval-dialog" class="confirm-dialog" aria-labelledby="ma-title">
+  <form method="dialog">
+    <h2 id="ma-title" data-i18n="ma.title">데이터베이스 업데이트 승인 필요</h2>
+    <p data-i18n="ma.description">프로그램을 최신 상태로 맞추기 위한 데이터 구조 업데이트가 준비되어 있습니다. 적용 전 자동으로 백업을 먼저 만듭니다.</p>
+    <div id="ma-plan-list" class="kv-list" aria-live="polite"></div>
+    <p class="stat-sub"><span data-i18n="ma.backup_label">백업 예정 위치: </span><span id="ma-backup-preview"></span></p>
+    <label class="field">
+      <span class="field-label" data-i18n="ma.current_password_label">SUPER_ADMIN 현재 비밀번호</span>
+      <input id="ma-current-password" type="password" autocomplete="current-password">
+    </label>
+    <p id="ma-progress" class="field-hint" hidden data-i18n="ma.progress">적용 중입니다 — 잠시만 기다려 주세요…</p>
+    <p id="ma-result" class="field-hint" hidden></p>
+    <p id="ma-error" class="field-error" role="alert" aria-live="assertive"></p>
+    <div class="dialog-actions">
+      <button type="button" id="ma-later-btn" class="btn btn-ghost" data-i18n="ma.later_btn">나중에(제한 모드로 계속)</button>
+      <button type="button" id="ma-approve-btn" class="btn btn-primary" data-i18n="ma.approve_btn">지금 적용</button>
+      <button type="button" id="ma-close-btn" class="btn btn-primary" hidden data-i18n="ma.close_btn">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 확인 Dialog ============ -->
+<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title" data-i18n="dialog.confirm.default_title">확인</h2>
+    <p id="confirm-body"></p>
+    <label class="field" id="confirm-memo-field">
+      <span class="field-label" data-i18n="dialog.confirm.memo_label">메모(선택)</span>
+      <textarea id="confirm-memo" rows="2"></textarea>
+    </label>
+    <label class="field" id="confirm-reason-field" hidden>
+      <span class="field-label" data-i18n="dialog.confirm.reason_label">사유(필수)</span>
+      <textarea id="confirm-reason" rows="2" required></textarea>
+    </label>
+    <div class="dialog-actions">
+      <button type="button" id="confirm-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="confirm-ok" class="btn btn-danger" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 재인증(recent-auth) 프롬프트 — 고위험 AI 업무 제안 승인 전용 ============ -->
+<dialog id="recent-auth-dialog" class="confirm-dialog" aria-labelledby="ra-title">
+  <form method="dialog">
+    <h2 id="ra-title" data-i18n="ai_proposals.recent_auth_title">본인 확인이 필요합니다</h2>
+    <p data-i18n="ai_proposals.recent_auth_body">고위험 작업을 승인하려면 현재 비밀번호를 다시 입력하세요.</p>
+    <label class="field">
+      <span class="field-label" data-i18n="ai_proposals.recent_auth_password_label">현재 비밀번호</span>
+      <input type="password" id="ra-password" autocomplete="current-password">
+    </label>
+    <p id="ra-error" class="field-error" role="alert"></p>
+    <p id="ra-progress" class="loading-text" data-i18n="common.loading" hidden>불러오는 중…</p>
+    <div class="dialog-actions">
+      <button type="button" id="ra-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="ra-ok" class="btn btn-danger" data-i18n="ai_proposals.recent_auth_ok">확인 후 승인</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 자동구매 정책 수정(Gate RP-1) ============ -->
+<dialog id="rp-policy-edit-dialog" class="confirm-dialog" aria-labelledby="rp-policy-edit-title">
+  <form method="dialog" id="rp-policy-edit-form">
+    <h2 id="rp-policy-edit-title" data-i18n="retail_purchase.policy_edit_btn">정책 수정</h2>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_allowed_providers">허용 구매처</span>
+      <span id="rp-policy-provider-checkboxes"></span>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_min_net_profit">최소 순이익(원)</span>
+      <input type="number" id="rp-policy-min-net-profit" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_min_margin_rate">최소 마진율(0~1)</span>
+      <input type="number" id="rp-policy-min-margin-rate" min="0" max="1" step="0.01">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_max_purchase_price">최대 매입가격(원, 비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-max-purchase-price" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_max_price_increase_rate">최대 가격 상승률(0~1)</span>
+      <input type="number" id="rp-policy-max-price-increase-rate" min="0" max="1" step="0.01">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_max_delivery_days">허용 배송기간(일, 비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-max-delivery-days" min="1" step="1">
+    </label>
+    <label class="field field-inline">
+      <input type="checkbox" id="rp-policy-require-return-allowed">
+      <span data-i18n="retail_purchase.field_require_return_allowed">반품 가능 상품만 허용</span>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_min_seller_trust">최소 판매자 신뢰도(0~1)</span>
+      <input type="number" id="rp-policy-min-seller-trust" min="0" max="1" step="0.01">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_per_order_max">1회 최대 구매금액(원, 비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-per-order-max" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_daily_limit">일일 구매한도(원, 비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-daily-limit" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_monthly_budget">월간 매입예산(원, 비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-monthly-budget" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_max_concurrent">동시 구매 건수(비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-max-concurrent" min="1" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_min_match_confidence">상품 매칭 신뢰도 하한(0.90~1)</span>
+      <input type="number" id="rp-policy-min-match-confidence" min="0.90" max="1" step="0.01">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_max_quantity_per_product">상품별 최대 구매수량(비우면 제한 없음)</span>
+      <input type="number" id="rp-policy-max-quantity-per-product" min="1" step="1">
+    </label>
+    <label class="field field-inline">
+      <input type="checkbox" id="rp-policy-auto-execute-enabled">
+      <span data-i18n="retail_purchase.field_auto_execute_enabled">정책 범위 내 자동 실행 허용</span>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_approval_required_amount_threshold">승인 필요 금액 기준(원, 비우면 미적용)</span>
+      <input type="number" id="rp-policy-approval-required-amount-threshold" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_uncertain_handling_policy">결과 불명확(UNCERTAIN) 처리정책</span>
+      <select id="rp-policy-uncertain-handling-policy">
+        <option value="HOLD_INDEFINITELY" data-i18n="retail_purchase.uncertain_policy_hold_indefinitely">사람이 확인할 때까지 예산 계속 보류</option>
+        <option value="AUTO_RELEASE_AFTER_TIMEOUT" data-i18n="retail_purchase.uncertain_policy_auto_release">지정 시간 후 예산만 자동 반환(재구매 아님)</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_uncertain_auto_release_after_hours">자동 반환까지 대기시간(시간)</span>
+      <input type="number" id="rp-policy-uncertain-auto-release-after-hours" min="1" step="1">
+    </label>
+    <p id="rp-policy-risk-warning" class="field-hint" role="alert" hidden></p>
+    <label class="field">
+      <span class="field-label" data-i18n="ai_proposals.recent_auth_password_label">현재 비밀번호</span>
+      <input type="password" id="rp-policy-current-password" autocomplete="current-password">
+    </label>
+    <p id="rp-policy-edit-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="rp-policy-edit-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="rp-policy-edit-save" class="btn btn-primary" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 새 구매 요청(장바구니형 검토, 2026-08-22 14차 지시 작업 3) ============ -->
+<dialog id="rp-new-request-dialog" class="confirm-dialog" aria-labelledby="rp-new-request-title">
+  <form method="dialog" id="rp-new-request-form">
+    <h2 id="rp-new-request-title" data-i18n="retail_purchase.new_request_btn">새 구매 요청</h2>
+
+    <p id="rp-new-demo-banner" class="field-hint" role="status"></p>
+
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_provider">구매처</span>
+      <select id="rp-new-provider"></select>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_source_order_id">원 주문 ID(쿠팡 등)</span>
+      <input type="number" id="rp-new-source-order-id" min="1" step="1">
+    </label>
+
+    <div class="dash-card">
+      <div class="dash-card-head"><h3 data-i18n="retail_purchase.step_search_title">1. 상품 후보 검색</h3></div>
+      <label class="field">
+        <span class="field-label" data-i18n="retail_purchase.field_search_keyword">검색어</span>
+        <input type="text" id="rp-new-search-keyword">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="rp-new-search-btn" class="btn btn-ghost btn-sm" data-i18n="retail_purchase.action_search">검색</button>
+      </div>
+      <div id="rp-new-search-results"></div>
+    </div>
+
+    <div class="dash-card" id="rp-new-selected-wrap" hidden>
+      <div class="dash-card-head"><h3 data-i18n="retail_purchase.step_selected_title">선택한 후보</h3></div>
+      <div id="rp-new-selected-summary"></div>
+      <label class="field">
+        <span class="field-label" data-i18n="retail_purchase.field_quantity">수량</span>
+        <input type="number" id="rp-new-quantity" min="1" step="1" value="1">
+      </label>
+    </div>
+
+    <div class="dash-card">
+      <div class="dash-card-head"><h3 data-i18n="retail_purchase.step_match_title">2. 동일상품 후보 비교</h3></div>
+      <p class="field-hint" data-i18n="retail_purchase.match_hint">원 주문(쿠팡 등) 상품의 실제 속성을 입력하면, 선택한 구매처 후보 상품과 자동 비교합니다.</p>
+      <div class="field-grid">
+        <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_brand">브랜드</span><input type="text" id="rp-new-src-brand"></label>
+        <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_manufacturer">제조사</span><input type="text" id="rp-new-src-manufacturer"></label>
+        <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_model">모델명</span><input type="text" id="rp-new-src-model"></label>
+        <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_gtin">GTIN/바코드</span><input type="text" id="rp-new-src-gtin"></label>
+        <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_capacity">용량</span><input type="text" id="rp-new-src-capacity"></label>
+        <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_color">색상·향</span><input type="text" id="rp-new-src-color"></label>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="rp-new-match-btn" class="btn btn-ghost btn-sm" disabled data-i18n="retail_purchase.action_run_match">동일상품 판정 실행</button>
+      </div>
+      <div id="rp-new-match-result"></div>
+    </div>
+
+    <div class="dash-card">
+      <div class="dash-card-head"><h3 data-i18n="retail_purchase.step_preview_title">3. 매입비·마진 미리보기</h3></div>
+      <label class="field">
+        <span class="field-label" data-i18n="retail_purchase.field_expected_sale_amount">예상 판매금액(원, 아는 경우만)</span>
+        <input type="number" id="rp-new-expected-sale-amount" min="0" step="1">
+      </label>
+      <label class="field">
+        <span class="field-label" data-i18n="retail_purchase.field_expected_sale_fee">예상 판매 수수료(원)</span>
+        <input type="number" id="rp-new-expected-sale-fee" min="0" step="1">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="rp-new-preview-btn" class="btn btn-ghost btn-sm" disabled data-i18n="retail_purchase.action_preview_checkout">견적 미리보기</button>
+      </div>
+      <div id="rp-new-preview-result"></div>
+    </div>
+
+    <p id="rp-new-request-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="rp-new-request-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="rp-new-request-create" class="btn btn-primary" disabled data-i18n="retail_purchase.action_create_request">구매 요청 생성</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 정책 검사 실제 입력 폼(2026-08-22 14차 지시 작업 2) ============ -->
+<dialog id="rp-policy-check-dialog" class="confirm-dialog" aria-labelledby="rp-policy-check-title">
+  <form method="dialog" id="rp-policy-check-form">
+    <h2 id="rp-policy-check-title" data-i18n="retail_purchase.action_policy_check">정책 검사</h2>
+    <p class="field-hint" data-i18n="retail_purchase.pc_hint">서버가 임의로 값을 추정하지 않습니다 — 실제 확인한 값만 입력하세요. 비워두면 그 항목은 "확인 불가"로 처리되어 자동구매가 차단됩니다.</p>
+    <label class="field field-inline">
+      <input type="checkbox" id="rp-pc-in-stock" checked>
+      <span data-i18n="retail_purchase.pc_in_stock">재고 있음</span>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.pc_delivery_days">예상 배송일(일)</span>
+      <input type="number" id="rp-pc-delivery-days" min="0" step="1">
+    </label>
+    <label class="field field-inline">
+      <input type="checkbox" id="rp-pc-return-allowed" checked>
+      <span data-i18n="retail_purchase.pc_return_allowed">반품 가능</span>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.pc_seller_trust">판매자 신뢰점수(0~1)</span>
+      <input type="number" id="rp-pc-seller-trust" min="0" max="1" step="0.01">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.pc_sale_amount">원 주문 실 판매금액(원)</span>
+      <input type="number" id="rp-pc-sale-amount" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.pc_actual_amount">구매처 실제 결제금액(원)</span>
+      <input type="number" id="rp-pc-actual-amount" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.pc_shipping_fee">구매처 배송비(원)</span>
+      <input type="number" id="rp-pc-shipping-fee" min="0" step="1">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.pc_fee_amount">원 주문 채널 수수료(원)</span>
+      <input type="number" id="rp-pc-fee-amount" min="0" step="1">
+    </label>
+    <p id="rp-policy-check-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="rp-policy-check-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="rp-policy-check-run" class="btn btn-primary" data-i18n="retail_purchase.action_policy_check">정책 검사 실행</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Gate PT-1(2026-08-22) — 매입·발주 관리 다이얼로그 ============ -->
+
+<dialog id="pt-create-dialog" class="confirm-dialog" aria-labelledby="pt-create-title">
+  <form method="dialog" id="pt-create-form">
+    <h2 id="pt-create-title" data-i18n="purchase_task.new_task_btn">새 구매 작업</h2>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_source_order_id">쿠팡 등 원 주문 ID</span><input type="number" id="pt-c-source-order-id" min="1" step="1"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_product_title">상품명</span><input type="text" id="pt-c-product-title"></label>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_brand">브랜드</span><input type="text" id="pt-c-brand"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_manufacturer">제조사</span><input type="text" id="pt-c-manufacturer"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_model">모델명</span><input type="text" id="pt-c-model"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_gtin">GTIN/바코드</span><input type="text" id="pt-c-gtin"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_capacity">용량</span><input type="text" id="pt-c-capacity"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_color">향·색상</span><input type="text" id="pt-c-color"></label>
+    </div>
+    <label class="field"><span class="field-label" data-i18n="retail_purchase.field_quantity">수량</span><input type="number" id="pt-c-quantity" min="1" step="1" value="1"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_shippable_region">배송 가능 지역(고객 개인정보 제외, 참고용)</span><input type="text" id="pt-c-region"></label>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_coupang_sale_amount">쿠팡 판매금액(원)</span><input type="number" id="pt-c-sale-amount" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_coupang_fee_amount">쿠팡 수수료(원)</span><input type="number" id="pt-c-fee-amount" min="0" step="1"></label>
+    </div>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_purchase_deadline">구매 기한</span><input type="datetime-local" id="pt-c-deadline"></label>
+    <p id="pt-create-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-create-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-create-submit" class="btn btn-primary" data-i18n="purchase_task.action_create">생성</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-candidate-dialog" class="confirm-dialog" aria-labelledby="pt-candidate-title">
+  <form method="dialog" id="pt-candidate-form">
+    <h2 id="pt-candidate-title" data-i18n="purchase_task.add_candidate_title">후보 상품 추가</h2>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_provider">구매처</span>
+      <select id="pt-cand-mall">
+        <option value="NAVER_SHOPPING" data-i18n="purchase_task.mall_naver_shopping">네이버쇼핑</option>
+        <option value="ELEVENST" data-i18n="purchase_task.mall_elevenst">11번가</option>
+        <option value="GMARKET" data-i18n="purchase_task.mall_gmarket">G마켓</option>
+        <option value="AUCTION" data-i18n="purchase_task.mall_auction">옥션</option>
+        <option value="OTHER" data-i18n="purchase_task.mall_other">기타</option>
+      </select>
+    </label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_candidate_url">상품 URL</span><input type="text" id="pt-cand-url" placeholder="https://..."></label>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_brand">브랜드</span><input type="text" id="pt-cand-brand"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_manufacturer">제조사</span><input type="text" id="pt-cand-manufacturer"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_model">모델명</span><input type="text" id="pt-cand-model"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_gtin">GTIN/바코드</span><input type="text" id="pt-cand-gtin"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_capacity">용량</span><input type="text" id="pt-cand-capacity"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_color">향·색상</span><input type="text" id="pt-cand-color"></label>
+    </div>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_estimated_price">예상 상품가격(원)</span><input type="number" id="pt-cand-price" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_estimated_shipping">예상 배송비(원)</span><input type="number" id="pt-cand-shipping" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_estimated_days">예상 배송기간(일)</span><input type="number" id="pt-cand-days" min="1" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_seller_trust">판매자 신뢰도(0~1)</span><input type="number" id="pt-cand-trust" min="0" max="1" step="0.01"></label>
+    </div>
+    <label class="field field-inline"><input type="checkbox" id="pt-cand-return-allowed"><span data-i18n="purchase_task.field_return_allowed">반품 가능</span></label>
+    <p id="pt-candidate-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-candidate-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-candidate-submit" class="btn btn-primary" data-i18n="purchase_task.action_add_candidate">후보 추가</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-match-evaluate-dialog" class="confirm-dialog" aria-labelledby="pt-match-evaluate-title">
+  <form method="dialog" id="pt-match-evaluate-form">
+    <h2 id="pt-match-evaluate-title" data-i18n="purchase_task.match_evaluate_title">동일상품 비교 및 후보 선정</h2>
+    <p class="field-hint" data-i18n="purchase_task.match_evaluate_hint">원 주문(쿠팡 등) 상품의 실제 속성을 입력하세요 — 상품명만으로 판정하지 않습니다.</p>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_brand">브랜드</span><input type="text" id="pt-me-brand"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_manufacturer">제조사</span><input type="text" id="pt-me-manufacturer"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_model">모델명</span><input type="text" id="pt-me-model"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_gtin">GTIN/바코드</span><input type="text" id="pt-me-gtin"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_capacity">용량</span><input type="text" id="pt-me-capacity"></label>
+      <label class="field"><span class="field-label" data-i18n="retail_purchase.attr_color">향·색상</span><input type="text" id="pt-me-color"></label>
+    </div>
+    <div id="pt-me-match-result"></div>
+    <div class="dialog-actions">
+      <button type="button" id="pt-me-run-match" class="btn btn-ghost btn-sm" data-i18n="retail_purchase.action_run_match">동일상품 판정 실행</button>
+    </div>
+    <div id="pt-me-evaluate-result"></div>
+    <p id="pt-match-evaluate-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-match-evaluate-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-me-run-evaluate" class="btn btn-primary" disabled data-i18n="purchase_task.action_select_and_evaluate">이 후보로 선정·평가</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-record-purchase-dialog" class="confirm-dialog" aria-labelledby="pt-record-purchase-title">
+  <form method="dialog" id="pt-record-purchase-form">
+    <h2 id="pt-record-purchase-title" data-i18n="purchase_task.record_purchase_title">구매 결과 등록</h2>
+    <label class="field">
+      <span class="field-label" data-i18n="retail_purchase.field_provider">구매처</span>
+      <select id="pt-rp-mall">
+        <option value="NAVER_SHOPPING" data-i18n="purchase_task.mall_naver_shopping">네이버쇼핑</option>
+        <option value="ELEVENST" data-i18n="purchase_task.mall_elevenst">11번가</option>
+        <option value="GMARKET" data-i18n="purchase_task.mall_gmarket">G마켓</option>
+        <option value="AUCTION" data-i18n="purchase_task.mall_auction">옥션</option>
+        <option value="OTHER" data-i18n="purchase_task.mall_other">기타</option>
+      </select>
+    </label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_order_number">구매처 주문번호</span><input type="text" id="pt-rp-order-number"></label>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_actual_amount">실제 결제금액(원)</span><input type="number" id="pt-rp-amount" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_actual_shipping">실제 배송비(원)</span><input type="number" id="pt-rp-shipping" min="0" step="1"></label>
+    </div>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_purchased_at">구매 완료시각</span><input type="datetime-local" id="pt-rp-purchased-at"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_selected_option">선택한 옵션</span><input type="text" id="pt-rp-option"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_memo">메모</span><input type="text" id="pt-rp-memo"></label>
+    <p id="pt-record-purchase-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-record-purchase-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-record-purchase-submit" class="btn btn-primary" data-i18n="purchase_task.action_record_purchase">등록</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-tracking-dialog" class="confirm-dialog" aria-labelledby="pt-tracking-title">
+  <form method="dialog" id="pt-tracking-form">
+    <h2 id="pt-tracking-title" data-i18n="purchase_task.tracking_title">송장 등록</h2>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_courier">배송업체</span><input type="text" id="pt-tr-courier"></label>
+    <label class="field field-inline"><input type="checkbox" id="pt-tr-courier-confirmed"><span data-i18n="purchase_task.field_courier_confirmed">배송업체를 직접 확인했습니다</span></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_tracking_number">송장번호</span><input type="text" id="pt-tr-number"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_shipped_at">발송일</span><input type="datetime-local" id="pt-tr-shipped-at"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_expected_arrival">도착 예정일</span><input type="datetime-local" id="pt-tr-arrival"></label>
+    <label class="field field-inline"><input type="checkbox" id="pt-tr-partial"><span data-i18n="purchase_task.field_partial_shipment">부분배송</span></label>
+    <p id="pt-tracking-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-tracking-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-tracking-submit" class="btn btn-primary" data-i18n="purchase_task.action_record_tracking">등록</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-cancel-return-dialog" class="confirm-dialog" aria-labelledby="pt-cancel-return-title">
+  <form method="dialog" id="pt-cancel-return-form">
+    <h2 id="pt-cancel-return-title" data-i18n="purchase_task.cancel_return_title">취소·반품 요청</h2>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_reason">사유</span><input type="text" id="pt-cr-reason"></label>
+    <p id="pt-cancel-return-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-cancel-return-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-cancel-return-submit" class="btn btn-danger" data-i18n="purchase_task.action_submit">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-refund-dialog" class="confirm-dialog" aria-labelledby="pt-refund-title">
+  <form method="dialog" id="pt-refund-form">
+    <h2 id="pt-refund-title" data-i18n="purchase_task.refund_title">환불 기록</h2>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_refund_amount">환불 금액(원)</span><input type="number" id="pt-rf-amount" min="0" step="1"></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_memo">메모</span><input type="text" id="pt-rf-memo"></label>
+    <p id="pt-refund-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-refund-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-refund-submit" class="btn btn-primary" data-i18n="purchase_task.action_submit">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-operating-settings-dialog" class="confirm-dialog" aria-labelledby="pt-operating-settings-title">
+  <form method="dialog">
+    <h2 id="pt-operating-settings-title" data-i18n="purchase_task.operating_settings_title">매입 운영 설정</h2>
+    <p class="field-hint" data-i18n="purchase_task.operating_settings_hint">매입처·구매 방식·결제수단·한도·예외 조건을 한곳에서 확인합니다. 아직 구현되지 않은 항목은 정직하게 "준비 중"으로 표시합니다 — 화면만 있고 실제로 동작하지 않는 기능은 없습니다.</p>
+    <div id="pt-operating-settings-list" class="pt-os-list"></div>
+    <div class="dialog-actions">
+      <button type="button" id="pt-operating-settings-close" class="btn btn-primary" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-channel-connections-dialog" class="confirm-dialog pt-cc-dialog" aria-labelledby="pt-channel-connections-title">
+  <form method="dialog">
+    <h2 id="pt-channel-connections-title" data-i18n="purchase_task.cc_title">매입처 연결</h2>
+    <p class="field-hint" data-i18n="purchase_task.cc_hint">매입처 계정을 추가하고 연결 상태를 확인합니다. 비밀번호는 저장하지 않습니다 — 로그인·결제는 항상 사람이 직접 합니다.</p>
+
+    <div class="pt-cc-add-form">
+      <label class="field">
+        <span class="field-label" data-i18n="purchase_task.cc_field_mall">매입처</span>
+        <select id="pt-cc-mall-select">
+          <option value="NAVER_SHOPPING">네이버쇼핑</option>
+          <option value="ELEVENST">11번가</option>
+          <option value="GMARKET">G마켓</option>
+          <option value="AUCTION">옥션</option>
+          <option value="ONCHANNEL">온채널</option>
+          <option value="OTHER">기타</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label" data-i18n="purchase_task.cc_field_label">계정 표시 이름</span>
+        <input type="text" id="pt-cc-label-input" maxlength="200" placeholder="예: 사업자 계정 A">
+      </label>
+      <button type="button" id="pt-cc-add-btn" class="btn btn-primary btn-sm" data-i18n="purchase_task.cc_add_btn">계정 추가</button>
+    </div>
+    <p id="pt-cc-add-error" class="field-error" role="alert"></p>
+
+    <div id="pt-cc-bulk-delete-bar" class="pt-cc-bulk-delete-bar" hidden>
+      <span id="pt-cc-bulk-delete-count"></span>
+      <button type="button" id="pt-cc-bulk-delete-btn" class="btn btn-danger btn-sm" data-i18n="purchase_task.cc_bulk_delete_btn">선택 삭제</button>
+    </div>
+    <div id="pt-cc-list" class="pt-cc-list"></div>
+
+    <div class="dialog-actions">
+      <button type="button" id="pt-channel-connections-close" class="btn btn-primary" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-policy-dialog" class="confirm-dialog" aria-labelledby="pt-policy-title">
+  <form method="dialog" id="pt-policy-form">
+    <h2 id="pt-policy-title" data-i18n="purchase_task.policy_btn">매입예산·정책</h2>
+    <div class="field-grid">
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_per_order_max">1회 최대 구매금액(원)</span><input type="number" id="pt-pol-per-order-max" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_daily_limit">일일 구매한도(원)</span><input type="number" id="pt-pol-daily-limit" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_monthly_budget">월간 매입예산(원)</span><input type="number" id="pt-pol-monthly-budget" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_max_quantity">상품별 최대 구매수량</span><input type="number" id="pt-pol-max-quantity" min="1" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_min_net_profit">최소 예상이익(원)</span><input type="number" id="pt-pol-min-profit" min="0" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_min_margin_rate">최소 예상마진율(0~1)</span><input type="number" id="pt-pol-min-margin" min="0" max="1" step="0.01"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_max_price_increase">최대 가격상승률(0~1)</span><input type="number" id="pt-pol-max-increase" min="0" max="1" step="0.01"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_max_delivery_days">최대 배송기한(일)</span><input type="number" id="pt-pol-max-delivery" min="1" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_min_match_confidence">동일상품 신뢰도 하한(0.90~1)</span><input type="number" id="pt-pol-min-match" min="0.9" max="1" step="0.01"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_max_concurrent">동시 진행 주문 한도</span><input type="number" id="pt-pol-max-concurrent" min="1" step="1"></label>
+      <label class="field"><span class="field-label" data-i18n="purchase_task.field_reservation_hours">예산 예약 유지시간(시간)</span><input type="number" id="pt-pol-reservation-hours" min="1" step="1"></label>
+    </div>
+    <label class="field field-inline"><input type="checkbox" id="pt-pol-require-return"><span data-i18n="retail_purchase.field_require_return_allowed">반품 가능 상품만 허용</span></label>
+    <label class="field"><span class="field-label" data-i18n="ai_proposals.recent_auth_password_label">현재 비밀번호</span><input type="password" id="pt-pol-password" autocomplete="current-password"></label>
+    <p id="pt-policy-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-policy-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-policy-submit" class="btn btn-primary" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="notif-catalog-dialog" class="confirm-dialog" aria-labelledby="notif-catalog-title">
+  <form method="dialog" id="notif-catalog-form">
+    <h2 id="notif-catalog-title" data-i18n="settings.notification.catalog_title">알림 종류</h2>
+    <p class="field-hint" data-i18n="settings.notification.catalog_hint">Critical(긴급) 알림은 끌 수 없습니다. "카탈로그만"으로 표시된 항목은 아직 실제로 발생하는 코드가 연결되지 않은 정의뿐입니다.</p>
+    <div id="notif-catalog-list" class="notif-catalog-list" style="max-height: 50vh; overflow-y: auto;"></div>
+    <p id="notif-catalog-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="notif-catalog-close" class="btn btn-primary" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-email-pref-dialog" class="confirm-dialog" aria-labelledby="pt-email-pref-title">
+  <form method="dialog" id="pt-email-pref-form">
+    <h2 id="pt-email-pref-title" data-i18n="purchase_task.email_pref_btn">이메일 알림 설정</h2>
+    <label class="field field-inline"><input type="checkbox" id="pt-ep-enabled"><span data-i18n="purchase_task.field_email_enabled">이메일 알림 받기</span></label>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_test_email">테스트 이메일 주소</span><input type="text" id="pt-ep-test-email"></label>
+    <p id="pt-email-pref-status" class="field-hint" role="status"></p>
+    <p id="pt-email-pref-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-ep-send-test" class="btn btn-ghost" data-i18n="purchase_task.action_send_test">테스트 발송</button>
+      <button type="button" id="pt-email-pref-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-email-pref-submit" class="btn btn-primary" data-i18n="dialog.confirm.ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pt-csv-dialog" class="confirm-dialog" aria-labelledby="pt-csv-title">
+  <form method="dialog" id="pt-csv-form">
+    <h2 id="pt-csv-title" data-i18n="purchase_task.csv_import_btn">CSV로 주문정보 가져오기</h2>
+    <label class="field"><span class="field-label" data-i18n="purchase_task.field_csv_file">CSV 파일</span><input type="file" id="pt-csv-file" accept=".csv"></label>
+    <div class="dialog-actions">
+      <button type="button" id="pt-csv-preview-btn" class="btn btn-ghost btn-sm" data-i18n="purchase_task.action_preview">미리보기</button>
+    </div>
+    <div id="pt-csv-preview-result"></div>
+    <div id="pt-csv-import-result"></div>
+    <p id="pt-csv-error" class="field-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="pt-csv-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="pt-csv-import-submit" class="btn btn-primary" data-i18n="purchase_task.action_import">가져오기</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 직접 상품 추가 ============ -->
+<dialog id="candidate-create-dialog" class="confirm-dialog" aria-labelledby="candidate-create-title">
+  <form method="dialog" id="candidate-create-form">
+    <h2 id="candidate-create-title" data-i18n="candidates.create_dialog_title">직접 상품 추가</h2>
+    <label class="field">
+      <span class="field-label" data-i18n="candidates.create_field_name">상품명</span>
+      <input type="text" id="cc-product-name" required>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="candidates.create_field_market">판매 시장</span>
+      <input type="text" id="cc-market" data-i18n-attr="placeholder:candidates.create_field_market_placeholder" placeholder="예: COUPANG" required>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="candidates.create_field_source_reference">구분용 참조값</span>
+      <input type="text" id="cc-source-reference" required>
+      <span class="field-hint" data-i18n="candidates.create_field_source_reference_hint">다른 등록과 구분할 값입니다(예: 사내 상품코드).</span>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="candidates.create_field_category">카테고리 힌트(선택)</span>
+      <input type="text" id="cc-category-hint">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="candidates.create_field_brand">브랜드 힌트(선택)</span>
+      <input type="text" id="cc-brand-hint">
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="candidates.create_field_release_date">출시일(선택)</span>
+      <input type="date" id="cc-release-date">
+    </label>
+    <p class="field-error" id="candidate-create-error"></p>
+    <div class="dialog-actions">
+      <button type="button" id="candidate-create-cancel" class="btn btn-ghost" data-i18n="candidates.create_cancel">취소</button>
+      <button type="submit" id="candidate-create-submit" class="btn btn-primary" data-i18n="candidates.create_submit">추가</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ 판매채널 연결 ============ -->
+<dialog id="sc-wizard-dialog" class="sc-wizard-dialog" aria-labelledby="sc-wizard-title">
+  <div class="sc-wizard-header">
+    <h2 id="sc-wizard-title">연결</h2>
+    <button type="button" id="sc-wizard-close" class="icon-btn" data-i18n-attr="aria-label:sc.wizard.close_aria">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <div class="sc-wizard-progress-track" aria-hidden="true">
+    <div class="sc-wizard-progress-fill" id="sc-wizard-progress-fill"></div>
+  </div>
+  <p class="sc-wizard-step-indicator" id="sc-wizard-step-indicator" aria-live="polite"></p>
+
+  <div class="sc-wizard-body" id="sc-wizard-body" aria-live="polite">
+  </div>
+
+  <div class="sc-wizard-actions">
+    <button type="button" id="sc-wizard-prev" class="btn btn-ghost" data-i18n="sc.wizard.prev">이전</button>
+    <a id="sc-wizard-official-link" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" data-i18n="sc.wizard.official_doc">공식 문서 열기</a>
+    <button type="button" id="sc-wizard-troubleshoot" class="btn btn-ghost" data-i18n="sc.wizard.troubleshoot">문제 해결</button>
+    <button type="button" id="sc-wizard-next" class="btn btn-primary" data-i18n="sc.wizard.next">다음</button>
+  </div>
+</dialog>
+
+<!-- 안내 이미지 확대 보기 -->
+<dialog id="sc-image-zoom-dialog" class="sc-image-zoom-dialog" data-i18n-attr="aria-label:sc.wizard.guide_zoom_aria">
+  <button type="button" id="sc-image-zoom-close" class="icon-btn" data-i18n-attr="aria-label:sc.wizard.close_aria">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+  </button>
+  <img id="sc-image-zoom-img" src="" alt="">
+</dialog>
+
+<!-- ====================================================
+     인터랙티브 가이드 모드 (2026-08-13)
+
+     이 블록의 모든 요소는 기본적으로 hidden/닫힘 상태다 —
+     HomezTour(console.js 내부 모듈)가 필요할 때만 표시를 전환한다.
+     오버레이는 4개의 "차단 영역"(위/아래/왼쪽/오른쪽)으로 강조
+     대상을 감싸 — 대상 요소 자체는 어떤 레이어도 덮지 않으므로
+     실제 클릭이 그대로 대상에 도달한다(요구사항: "강조된 요소를
+     클릭해야 하는 단계에서는 해당 요소를 가이드 UI가 가로막지
+     않아야 합니다"). 4개 차단 영역을 클릭하면 "다른 곳 클릭 시
+     진행하지 않음" 요구사항에 따라 무시된다(안내만 다시 흔들어
+     보여준다).
+     ==================================================== -->
+
+<div id="tour-overlay" class="tour-overlay" hidden aria-hidden="true">
+  <div class="tour-mask tour-mask-top" data-tour-mask></div>
+  <div class="tour-mask tour-mask-bottom" data-tour-mask></div>
+  <div class="tour-mask tour-mask-left" data-tour-mask></div>
+  <div class="tour-mask tour-mask-right" data-tour-mask></div>
+  <div id="tour-spotlight-ring" class="tour-spotlight-ring"></div>
+
+  <div id="tour-tooltip" class="tour-tooltip" role="dialog" aria-modal="false" aria-labelledby="tour-step-title" aria-describedby="tour-step-description" tabindex="-1">
+    <div class="tour-tooltip-header">
+      <span id="tour-course-name" class="tour-course-name"></span>
+      <span id="tour-step-progress" class="tour-step-progress" aria-live="polite"></span>
+    </div>
+    <span id="tour-practice-badge" class="tour-practice-badge" data-i18n="tour.practice_mode" hidden>연습 모드</span>
+    <h3 id="tour-step-title" class="tour-step-title"></h3>
+    <p id="tour-step-description" class="tour-step-description"></p>
+    <p id="tour-step-action-hint" class="tour-step-action-hint"></p>
+
+    <div id="tour-target-not-found" class="tour-target-not-found" hidden>
+      <p data-i18n="tour.target_not_found">안내할 화면 요소를 찾을 수 없습니다.</p>
+      <div class="tour-tooltip-actions">
+        <button type="button" id="tour-retry-btn" class="btn btn-ghost btn-sm" data-i18n="tour.retry">다시 시도</button>
+        <button type="button" id="tour-skip-from-error-btn" class="btn btn-ghost btn-sm" data-i18n="tour.skip">건너뛰기</button>
+      </div>
+    </div>
+
+    <div id="tour-practice-panel" class="tour-practice-panel" hidden>
+      <span class="tour-practice-panel-badge" data-i18n="tour.practice_mode">연습 모드</span>
+      <label class="field">
+        <span class="field-label" data-i18n="tour.practice.name_label">상품명(연습)</span>
+        <input type="text" id="tour-practice-name-field" data-guide-id="tour-practice-name-field" autocomplete="off" data-i18n-attr="placeholder:tour.practice.name_placeholder">
+      </label>
+      <div class="tour-practice-image-area" id="tour-practice-image-area" data-guide-id="tour-practice-image-area">
+        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M4 5.5C4 4.67 4.67 4 5.5 4h13A1.5 1.5 0 0120 5.5v13a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 18.5v-13z" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="9" cy="10" r="1.6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5 17l4.5-5 3.5 4 2.5-3L19 17" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="tour.practice.image_hint">여기에 이미지를 넣는다고 상상해 보세요(연습 — 실제로 업로드되지 않습니다)</span>
+      </div>
+      <label class="field">
+        <span class="field-label" data-i18n="tour.practice.price_label">가격(연습)</span>
+        <input type="number" id="tour-practice-price-field" data-guide-id="tour-practice-price-field" min="0" inputmode="numeric">
+      </label>
+      <label class="field">
+        <span class="field-label" data-i18n="tour.practice.stock_label">재고 수량(연습)</span>
+        <input type="number" id="tour-practice-stock-field" data-guide-id="tour-practice-stock-field" min="0" inputmode="numeric">
+      </label>
+      <button type="button" id="tour-practice-save-btn" data-guide-id="tour-practice-save-btn" class="btn btn-primary" data-i18n="tour.practice.complete_btn">연습 완료</button>
+    </div>
+
+    <div class="tour-tooltip-actions">
+      <button type="button" id="tour-review-btn" class="icon-btn" data-i18n-attr="aria-label:tour.review_again" title="다시 설명 보기">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 8v5l3 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </button>
+      <button type="button" id="tour-prev-btn" class="btn btn-ghost btn-sm" data-i18n="tour.previous">뒤로</button>
+      <button type="button" id="tour-skip-btn" class="btn btn-ghost btn-sm" data-i18n="tour.skip">건너뛰기</button>
+      <button type="button" id="tour-next-btn" class="btn btn-primary btn-sm" data-i18n="tour.next">다음</button>
+      <button type="button" id="tour-exit-btn" class="btn btn-ghost btn-sm" data-i18n="tour.exit">가이드 종료</button>
+    </div>
+  </div>
+</div>
+
+<!-- 가이드 과정 선택 -->
+<dialog id="tour-select-dialog" class="tour-select-dialog" aria-labelledby="tour-select-title">
+  <div class="tour-select-header">
+    <h2 id="tour-select-title" data-i18n="tour.select_title">가이드 과정 선택</h2>
+    <button type="button" id="tour-select-close" class="icon-btn" data-i18n-attr="aria-label:common.close">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div id="tour-select-list" class="tour-select-list"></div>
+</dialog>
+
+<!-- 실제 데이터 변경 경고 (현재 2개 시범 과정은 도달하지 않지만,
+     이후 과정 확장 시 재사용할 공용 안전장치로 미리 구현한다) -->
+<dialog id="tour-safety-warning-dialog" class="confirm-dialog" aria-labelledby="tour-safety-warning-title">
+  <h2 id="tour-safety-warning-title" data-i18n="tour.real_data_warning_title">실제 데이터 변경 안내</h2>
+  <p data-i18n="tour.real_data_warning">이 단계부터 실제 데이터가 변경될 수 있습니다. 계속하시겠습니까?</p>
+  <div class="dialog-actions tour-safety-actions">
+    <button type="button" id="tour-safety-practice-btn" class="btn btn-ghost" data-i18n="tour.safety.continue_practice">연습 화면에서 계속</button>
+    <button type="button" id="tour-safety-real-btn" class="btn btn-danger" data-i18n="tour.safety.continue_real">실제 기능으로 계속</button>
+    <button type="button" id="tour-safety-skip-btn" class="btn btn-ghost" data-i18n="tour.skip">이 단계 건너뛰기</button>
+    <button type="button" id="tour-safety-exit-btn" class="btn btn-ghost" data-i18n="tour.exit">가이드 종료</button>
+  </div>
+</dialog>
+
+<!-- 종료 확인(Escape) -->
+<dialog id="tour-exit-confirm-dialog" class="confirm-dialog" aria-labelledby="tour-exit-confirm-title">
+  <h2 id="tour-exit-confirm-title" data-i18n="tour.exit_confirm_title">가이드를 종료할까요?</h2>
+  <p data-i18n="tour.exit_confirm_body">지금까지 진행한 내용은 저장되어 나중에 이어서 할 수 있습니다.</p>
+  <div class="dialog-actions">
+    <button type="button" id="tour-exit-confirm-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+    <button type="button" id="tour-exit-confirm-ok" class="btn btn-danger" data-i18n="tour.exit">가이드 종료</button>
+  </div>
+</dialog>
+
+<!-- 종료/완료 요약 -->
+<dialog id="tour-summary-dialog" class="tour-summary-dialog" aria-labelledby="tour-summary-title">
+  <h2 id="tour-summary-title" data-i18n="tour.summary_title">가이드 요약</h2>
+  <div id="tour-summary-body"></div>
+  <div class="dialog-actions tour-summary-actions">
+    <button type="button" id="tour-summary-open-docs-btn" class="btn btn-ghost" data-i18n="tour.summary.open_docs">관련 문서 열기</button>
+    <button type="button" id="tour-summary-restart-btn" class="btn btn-ghost" data-i18n="tour.restart">처음부터 다시 시작</button>
+    <button type="button" id="tour-summary-next-btn" class="btn btn-primary" hidden data-i18n="tour.summary.next_recommended">다음 추천 가이드</button>
+    <button type="button" id="tour-summary-close-btn" class="btn btn-ghost" data-i18n="tour.exit">가이드 종료</button>
+  </div>
+</dialog>
+
+<script src="/console/static/i18n/ko-KR.js"></script>
+<script src="/console/static/i18n/en-US.js"></script>
+<script src="/console/static/i18n/i18n.js"></script>
+<script src="/console/static/console.js"></script>
+</body>
+</html>

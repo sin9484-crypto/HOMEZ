@@ -1,39 +1,144 @@
-"""
-HOMEZ AI Commerce OS
-Kernel Engine
-"""
+from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from collections.abc import Callable
+from typing import Any
 
+from fastapi import FastAPI
 
-@dataclass
-class KernelState:
-    initialized: bool = False
-    started_at: datetime | None = None
+from app.core.event_manager import EventManager
 
 
-class HomezKernel:
+class Kernel:
 
-    def __init__(self):
-        self.state = KernelState()
-        self.services = {}
+    def __init__(
+        self,
+        app: FastAPI,
+    ) -> None:
 
-    def register(self, name: str, service):
-        self.services[name] = service
+        self.app = app
+        self.events = EventManager()
+        self._startup_tasks: list[
+            Callable[..., Any]
+        ] = []
+        self._shutdown_tasks: list[
+            Callable[..., Any]
+        ] = []
 
-    def get(self, name: str):
-        return self.services.get(name)
+    def add_startup_task(
+        self,
+        task: Callable[..., Any],
+    ) -> None:
 
-    def boot(self):
-        self.state.initialized = True
-        self.state.started_at = datetime.now()
+        self._startup_tasks.append(task)
 
-        print("========================================")
-        print("HOMEZ Kernel Boot")
-        print(f"Services : {len(self.services)}")
-        print(f"Started  : {self.state.started_at}")
-        print("========================================")
+    def add_shutdown_task(
+        self,
+        task: Callable[..., Any],
+    ) -> None:
+
+        self._shutdown_tasks.append(task)
+    async def startup(
+        self,
+    ) -> None:
+
+        for task in self._startup_tasks:
+
+            result = task()
+
+            if hasattr(
+                result,
+                "__await__",
+            ):
+                await result
+
+    async def shutdown(
+        self,
+    ) -> None:
+
+        for task in self._shutdown_tasks:
+
+            result = task()
+
+            if hasattr(
+                result,
+                "__await__",
+            ):
+                await result
+
+    def publish(
+        self,
+        event,
+    ) -> None:
+
+        self.events.publish(
+            event,
+        )
+    def subscribe(
+        self,
+        subscriber,
+    ) -> None:
+
+        self.events.subscribe(
+            subscriber,
+        )
+
+    def unsubscribe(
+        self,
+        subscriber,
+    ) -> None:
+
+        self.events.unsubscribe(
+            subscriber,
+        )
+
+    def clear_events(
+        self,
+    ) -> None:
+
+        self.events.reset()
+
+    @property
+    def startup_tasks(
+        self,
+    ) -> tuple[
+        Callable[..., Any],
+        ...,
+    ]:
+
+        return tuple(
+            self._startup_tasks
+        )
+
+    @property
+    def shutdown_tasks(
+        self,
+    ) -> tuple[
+        Callable[..., Any],
+        ...,
+    ]:
+
+        return tuple(
+            self._shutdown_tasks
+        )
+    def __len__(
+        self,
+    ) -> int:
+
+        return len(
+            self.events
+        )
+
+    def __contains__(
+        self,
+        event_name: str,
+    ) -> bool:
+
+        return (
+            event_name
+            in self.events
+        )
 
 
-kernel = HomezKernel()
+__all__ = [
+    "Kernel",
+]                    

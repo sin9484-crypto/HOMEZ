@@ -1,0 +1,189 @@
+"""
+=========================================================
+Homez OS
+
+File : app/domains/backup/service.py
+
+Gate Y-1(2026-08-12) — 백업 엔진. `app/database/migration_runner.py::
+MigrationRunner.create_backup()`이 이미 쓰는 SQLite 온라인 백업 API
+패턴(`sqlite3.Connection.backup()` — 쓰기 중인 DB에도 안전, WAL/
+저널 상태와 무관하게 일관된 스냅샷을 만든다)과 백업 직후
+`PRAGMA integrity_check` 검증을 그대로 재사용한다. 차이점은
+Migration 전용이 아니라 범용(수동 백업 등)으로 쓸 수 있도록
+독립 도메인으로 분리하고, 결과를 `BackupRecord` 이력으로 남긴다는
+점이다.
+
+무결성 검증에 실패하면(예: 디스크 오류, 백업 도중 중단) 그 백업
+파일은 이력 테이블에 절대 기록하지 않는다 — 손상된 백업을 "성공"
+으로 보이게 하는 것은 복구 시점에 더 위험하다(있는 줄 알았던
+백업이 실제로는 못 쓰는 상태).
+=========================================================
+"""
+
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from sqlalchemy.orm import Session
+
+from app.domains.backup.model import BackupRecord
+from app.domains.backup.repository import BackupRepository
+
+TRIGGER_SOURCE_MANUAL = "manual"
+TRIGGER_SOURCE_PRE_MIGRATION = "pre_migration"
+TRIGGER_SOURCE_PRE_RESTORE = "pre_restore"
+
+# 2026-08-15 V7 Gate 8 — 보존 정책 기본값. 이 저장소는 스케줄러/cron
+# 도메인이 없어(HOMEZ_EMPTY_SCAFFOLD_INVENTORY.md의 "V8 이후 후보 —
+# 자동화·백그라운드 처리 인프라" 참고) 자동 주기 실행은 범위 밖이다
+# — 이 상수는 "몇 개까지는 보존 대상으로 본다"는 조회 기준선일
+# 뿐이고, 실제 삭제는 어떤 코드 경로에서도 자동 수행하지 않는다.
+DEFAULT_RETENTION_KEEP_COUNT = 30
+
+_VALID_TRIGGER_SOURCES = frozenset(
+    {
+        TRIGGER_SOURCE_MANUAL,
+        TRIGGER_SOURCE_PRE_MIGRATION,
+        TRIGGER_SOURCE_PRE_RESTORE,
+    },
+)
+
+_SHA256_CHUNK_SIZE = 1024 * 1024
+
+
+class BackupError(Exception):
+    pass
+
+
+class BackupService:
+
+    def __init__(
+        self,
+        db: Session,
+    ):
+        self.repository = BackupRepository(db)
+
+    def create_backup(
+        self,
+        *,
+        source_db_path: Path,
+        backups_dir: Path,
+        trigger_source: str,
+        triggered_by_user_id: int | None = None,
+        label: str | None = None,
+    ) -> BackupRecord:
+
+        if trigger_source not in _VALID_TRIGGER_SOURCES:
+            raise BackupError(
+                f"알 수 없는 trigger_source입니다: {trigger_source!r}",
+            )
+
+        source_db_path = Path(source_db_path)
+
+        if not source_db_path.exists():
+            raise BackupError(
+                f"원본 DB 파일이 존재하지 않습니다: {source_db_path}",
+            )
+
+        backups_dir = Path(backups_dir)
+        backups_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = backups_dir / f"homez_backup_{timestamp}.db"
+
+        if backup_path.resolve() == source_db_path.resolve():
+            raise BackupError(
+                f"백업 경로가 원본 DB 경로와 동일합니다 — 차단합니다: "
+                f"{backup_path}",
+            )
+
+        src = sqlite3.connect(
+            f"file:{source_db_path}?mode=ro",
+            uri=True,
+        )
+        dst = sqlite3.connect(str(backup_path))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+
+        verify = sqlite3.connect(
+            f"file:{backup_path}?mode=ro",
+            uri=True,
+        )
+        try:
+            verify.execute("PRAGMA query_only=ON")
+            integrity = verify.execute(
+                "PRAGMA integrity_check",
+            ).fetchone()[0]
+        finally:
+            verify.close()
+
+        if integrity != "ok":
+            raise BackupError(
+                f"백업 무결성 검증 실패: {backup_path} "
+                f"(integrity_check={integrity}) — 이 백업은 이력에 "
+                f"기록되지 않았습니다.",
+            )
+
+        file_size_bytes = backup_path.stat().st_size
+        sha256 = sha256_of_file(backup_path)
+
+        record = BackupRecord(
+            file_path=str(backup_path),
+            file_size_bytes=file_size_bytes,
+            sha256=sha256,
+            integrity_check_result=integrity,
+            trigger_source=trigger_source,
+            triggered_by_user_id=triggered_by_user_id,
+            label=label,
+        )
+
+        return self.repository.create(record)
+
+    def list_backups(
+        self,
+        limit: int = 50,
+    ) -> list[BackupRecord]:
+
+        return self.repository.list_recent(limit)
+
+    def list_backups_beyond_retention(
+        self,
+        keep_count: int = DEFAULT_RETENTION_KEEP_COUNT,
+    ) -> list[BackupRecord]:
+        """
+        읽기 전용 보존 정책 조회 — 아무것도 삭제하지 않는다(설계
+        의도는 service.py 상단 `DEFAULT_RETENTION_KEEP_COUNT` 주석
+        참고).
+        """
+
+        return self.repository.list_beyond_retention(keep_count)
+
+
+def sha256_of_file(path: Path) -> str:
+
+    digest = hashlib.sha256()
+
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(_SHA256_CHUNK_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+__all__ = [
+    "BackupService",
+    "BackupError",
+    "TRIGGER_SOURCE_MANUAL",
+    "TRIGGER_SOURCE_PRE_MIGRATION",
+    "TRIGGER_SOURCE_PRE_RESTORE",
+    "sha256_of_file",
+]

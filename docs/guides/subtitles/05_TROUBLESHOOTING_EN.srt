@@ -1,0 +1,37 @@
+1
+00:00:00,000 --> 00:00:10,000
+HOMEZ V6.5 troubleshooting and safe use guide.
+
+2
+00:00:10,000 --> 00:00:50,000
+A wrong username or password shows this screen.
+It never reveals which field was wrong.
+
+3
+00:00:50,000 --> 00:01:40,000
+Admin badges are all green; manager accounts
+show three in red. Not an error — a permission limit.
+
+4
+00:01:40,000 --> 00:02:20,000
+Seeing this on an admin-only screen? Sign in as
+admin or ask one to grant access.
+
+5
+00:02:20,000 --> 00:03:20,000
+401 login error, 403 insufficient permission,
+423 migration restricted mode, 429 API rate limit.
+
+6
+00:03:20,000 --> 00:04:10,000
+Never capture invite codes. Remember Fake Provider
+screens. Coming-soon menus are safe. Only admins approve migrations.
+
+7
+00:04:10,000 --> 00:04:40,000
+Attach the diagnostics export output when
+contacting support for faster diagnosis.
+
+8
+00:04:40,000 --> 00:05:00,000
+That concludes all five HOMEZ V6.5 guides.

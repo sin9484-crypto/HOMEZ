@@ -1,0 +1,54 @@
+<svg viewBox="0 0 1440 810" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="브라우저로 쿠팡 WING 판매자센터에 접속하는 절차 안내 다이어그램">
+  <title>쿠팡 WING 판매자센터 접속</title>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#1D1D26"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1440" height="810" fill="#F5F7FA"/>
+
+  <rect x="0" y="0" width="1440" height="56" fill="#FFD23F" opacity="0.9"/>
+  <text x="720.0" y="36" font-size="22" font-weight="800" text-anchor="middle" fill="#1D1D26">절차 안내 예시 — 판매자센터 화면은 변경될 수 있습니다</text>
+
+  
+    <g transform="translate(70,110)">
+      <circle cx="0" cy="0" r="30" fill="#6C5CE7"/>
+      <text x="0" y="10" font-size="30" font-weight="800" text-anchor="middle" fill="#FFFFFF">1</text>
+    </g>
+    
+  <text x="120" y="122" font-size="30" font-weight="800" fill="#1D1D26">쿠팡 WING 판매자센터 접속</text>
+
+  
+  
+    <g transform="translate(360,220)">
+      <rect x="0" y="0" width="300" height="190" rx="10" fill="#FFFFFF" stroke="#1D1D26" stroke-width="2"/>
+      <rect x="0" y="0" width="300" height="28" rx="10" fill="#F5F7FA" stroke="#1D1D26" stroke-width="2"/>
+      <circle cx="18" cy="14" r="5" fill="#FF6BC1"/>
+      <circle cx="36" cy="14" r="5" fill="#FFD23F"/>
+      <circle cx="54" cy="14" r="5" fill="#7ED957"/>
+      <text x="150.0" y="60" font-size="16" text-anchor="middle" fill="#1D1D26" font-weight="700">쿠팡 WING 판매자센터</text>
+      <line x1="20" y1="80" x2="280" y2="80" stroke="#F5F7FA" stroke-width="10"/>
+      <line x1="20" y1="102" x2="240" y2="102" stroke="#F5F7FA" stroke-width="10"/>
+      <line x1="20" y1="124" x2="200" y2="124" stroke="#F5F7FA" stroke-width="10"/>
+    </g>
+    
+  
+    <line x1="240" y1="230" x2="350" y2="230" stroke="#1D1D26" stroke-width="4" marker-end="url(#arrowhead)"/>
+    
+  
+    <g transform="translate(160,230) scale(1.0)">
+      <circle cx="0" cy="0" r="46" fill="#00D4C8" opacity="0.15"/>
+      <path d="M -30 6 L 0 -28 L 30 6 L 30 34 L -30 34 Z" fill="#1D1D26"/>
+      <path d="M -34 8 L 0 -34 L 34 8" stroke="#00D4C8" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="-10" y="12" width="20" height="22" rx="3" fill="#F5F7FA"/>
+      <circle cx="-14" cy="0" r="4" fill="#FF6BC1"/>
+      <circle cx="14" cy="0" r="4" fill="#FF6BC1"/>
+    </g>
+    
+  <text x="720.0" y="470" font-size="18" text-anchor="middle" fill="#1D1D26">브라우저 주소창에 WING 판매자센터 주소를 입력하고 로그인합니다.</text>
+
+
+  <rect x="0" y="760" width="1440" height="50" fill="#1D1D26"/>
+  <text x="24" y="792" font-size="16" fill="#FFFFFF" font-weight="700">HOMEZ</text>
+  <text x="1416" y="792" font-size="14" fill="#B8BEC8" text-anchor="end">공식 API 자격증명만 사용 — 로그인 비밀번호를 입력하지 않습니다</text>
+</svg>

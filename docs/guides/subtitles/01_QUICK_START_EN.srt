@@ -1,0 +1,49 @@
+1
+00:00:00,000 --> 00:00:10,000
+Hello. This is the HOMEZ V6.5 Quick Start guide.
+This video walks you from login to the first dashboard screen.
+
+2
+00:00:10,000 --> 00:00:25,000
+When you launch HOMEZ Desktop,
+this login screen appears first.
+
+3
+00:00:25,000 --> 00:00:40,000
+Clicking "English" in the top right
+instantly switches the whole screen to English.
+
+4
+00:00:40,000 --> 00:00:55,000
+Enter your username and password,
+then press the login button.
+
+5
+00:00:55,000 --> 00:01:20,000
+After a successful login you see the dashboard:
+left navigation, top search/notifications, status cards in the center.
+
+6
+00:01:20,000 --> 00:01:35,000
+The same screen in English looks like this.
+
+7
+00:01:35,000 --> 00:02:20,000
+The left menu has six groups. Items marked
+"Coming soon" are not real features yet.
+
+8
+00:02:20,000 --> 00:03:10,000
+What you see depends on your role.
+Admin-only data is blocked for other roles —
+this is intentional security, not a bug.
+
+9
+00:03:10,000 --> 00:03:30,000
+After login, language can only be changed
+inside the Settings screen.
+
+10
+00:03:30,000 --> 00:03:40,000
+Next up: Guide 2, Admin Initial Setup.
+Thanks for watching.

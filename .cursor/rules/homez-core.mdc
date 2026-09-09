@@ -1,0 +1,42 @@
+---
+description: HOMEZ 핵심 Architecture·AI 역할·승인/Whitelist·보안 원칙
+alwaysApply: true
+---
+
+# HOMEZ Core
+
+## 사업·Architecture
+
+- 프로젝트: **HOMEZ** / 사업: **EVERY HOMEZ**
+- 단순 쇼핑몰이 아님. **무재고 중개·주문대행** 기반 AI Commerce OS
+- 흐름: 상품 분석 → 판매·공급 판단 → 주문·재고·배송 자동화 → 운영자금·정산 → AI 운영
+- 기존 Architecture·Domain Flow를 임의로 바꾸지 않는다
+
+## AI 역할
+
+| 역할 | 담당 |
+|------|------|
+| ChatGPT | Architecture, Phase, Domain 설계, 구현 계획, Whitelist 최종, 완료 판단 |
+| Cursor | 저장소·영향 분석, 문제점, Whitelist 제안, 구현 검토 |
+| Claude Code | 승인 명세·Whitelist에 따른 코드 작성·테스트 (별도 설정) |
+
+모든 설명·질문·작업 보고는 **한국어**.
+
+## 승인·Whitelist
+
+- 사용자 승인 없이 파일을 수정·생성하지 않는다
+- 승인된 Whitelist 안에서만 작업한다
+- 신규 파일은 반드시 **「신규 파일 생성」**으로 표시한다
+- 예상하지 못한 기존 변경사항을 삭제·되돌리지 않는다
+- Model, Migration, 공통 설정, 의존성 추가, 파일 삭제, 대규모 리팩터링은 **별도 승인**
+- commit / push / reset / clean / 배포는 사용자 승인 없이 금지
+
+## 보안
+
+- `.env`, 비밀키, 개인정보, 운영 DB 내용을 출력·커밋·규칙에 기록하지 않는다
+
+## 상태 불일치
+
+- 사용자 설명과 코드 상태가 다르면 임의로 맞추지 말고 **불일치를 보고**한 뒤 지시를 기다린다
+- Phase 상세 스냅샷은 `homez-session-restore.mdc`와 `docs/HOMEZ_PROJECT_STATE.md`를 본다
+- 재시동어 **「홈즈」** → 세션 복원 규칙 적용

@@ -1,0 +1,46 @@
+"""
+=========================================================
+Homez OS
+
+File : app/domains/product_selection/constants.py
+
+상품 선별 통합 화면(CA-2, 2026-08-21 CTO 지시) — 고정 상수.
+=========================================================
+"""
+
+
+class SelectionItemStatus:
+
+    PASS = "PASS"
+    NEEDS_IMPROVEMENT = "NEEDS_IMPROVEMENT"
+    DATA_REQUIRED = "DATA_REQUIRED"
+    BLOCKED = "BLOCKED"
+    STALE = "STALE"
+
+    ALL = (PASS, NEEDS_IMPROVEMENT, DATA_REQUIRED, BLOCKED, STALE)
+
+
+class SelectionStepCode:
+    """9단계 — 정책 차단과 경제성 미달을 절대 같은 축으로 섞지 않는다
+    (POLICY_ELIGIBILITY와 PROFITABILITY_RISK는 서로의 결과를 참조하지
+    않는다)."""
+
+    CHANNEL_POLICY = "CHANNEL_POLICY"
+    LEGAL_CERTIFICATION_SAFETY = "LEGAL_CERTIFICATION_SAFETY"
+    RESALE_RIGHTS = "RESALE_RIGHTS"
+    IMAGE_RIGHTS = "IMAGE_RIGHTS"
+    SUPPLIER_EVIDENCE = "SUPPLIER_EVIDENCE"
+    INVENTORY_MOQ_LEAD_TIME = "INVENTORY_MOQ_LEAD_TIME"
+    SHIPPING_RETURN_FEASIBILITY = "SHIPPING_RETURN_FEASIBILITY"
+    PROFITABILITY_RISK = "PROFITABILITY_RISK"
+    USER_FINAL_APPROVAL = "USER_FINAL_APPROVAL"
+
+    ORDERED = (
+        CHANNEL_POLICY, LEGAL_CERTIFICATION_SAFETY, RESALE_RIGHTS,
+        IMAGE_RIGHTS, SUPPLIER_EVIDENCE, INVENTORY_MOQ_LEAD_TIME,
+        SHIPPING_RETURN_FEASIBILITY, PROFITABILITY_RISK,
+        USER_FINAL_APPROVAL,
+    )
+
+
+__all__ = ["SelectionItemStatus", "SelectionStepCode"]

@@ -1,7 +1,34 @@
 __pycache__/
 *.pyc
 *.db
+*.db-*
+*.sqlite
+*.sqlite3
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 .vscode/
+.claude/settings.local.json
+.claude/launch.json
+.claude/worktrees/
+
+# Local runtime data and recovery material
+backups/
+storage/
+logs/
+scratchpad/
+work/
+
+# Generated packages and installer output
+build/
+dist/
+installer-output/
+*.exe
+*.msi
+*.zip
+
+# Local diagnostics and one-off state captures
+.git_status_snapshot_*.txt
+wiz*_state.json

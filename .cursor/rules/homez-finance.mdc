@@ -1,0 +1,46 @@
+---
+description: HOMEZ 자금 Domain 분리·Settlement·Funding·금융 검토 체크리스트
+alwaysApply: true
+---
+
+# HOMEZ Finance
+
+## Domain 분리 (혼합 금지)
+
+```
+Customer Payment
+  ≠ Marketplace Settlement
+  ≠ Supplier Payment
+```
+
+## 자금 Flow
+
+```
+Marketplace Settlement
+  → Funding Add
+  → Available Funding 증가
+  → Hold
+  → Supplier Payment
+```
+
+## Settlement 고정 규칙
+
+1. `net_amount == gross_amount - fee_amount`  
+   불일치 시 **생성 차단**. **자동 보정 금지**.
+
+2. `confirm_deposit` 순서 (변경 금지):
+   Settlement 검증 → Funding 반영 → Ledger 확인 → DEPOSITED 저장
+
+3. `DEPOSITED` 재호출: **FUNDING_ADD 금지**, 기존 Settlement 반환
+
+4. `REVERSED` 재호출: **FUNDING_REMOVE 금지**, 기존 Settlement 반환
+
+## 금융 변경 시 필수 검토
+
+- DB Transaction 경계 · Rollback
+- 동시 요청 경쟁 조건
+- 멱등성 · 중복 Ledger 방지
+- 금액 자료형 · 반올림
+- 권한 검증
+- 감사(Ledger) 추적 가능성
+- 관련 테스트 누락 여부

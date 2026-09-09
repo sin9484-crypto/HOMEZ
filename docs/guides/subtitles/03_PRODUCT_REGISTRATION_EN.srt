@@ -1,0 +1,32 @@
+1
+00:00:00,000 --> 00:00:15,000
+HOMEZ V6.5 full product registration flow.
+
+2
+00:00:15,000 --> 00:01:00,000
+The candidates table shows trend, new-product, margin, funding,
+risk, and status. This demo uses one virtual product to show the layout.
+
+3
+00:01:00,000 --> 00:01:30,000
+The Listing Wizard overview screen.
+
+4
+00:01:30,000 --> 00:02:20,000
+Step 1 · Product Source — the first of ten steps,
+where you enter the approved candidate's ID.
+
+5
+00:02:20,000 --> 00:03:50,000
+Steps 2-10 were not run, to avoid a real submission.
+Draft, Media, Channels, Fulfillment, Economics, Precheck, Approval,
+Execution, Results — execution only happens at step 9, after step 8 approval.
+
+6
+00:03:50,000 --> 00:04:40,000
+The warning banner on the marketplace listing mode screen.
+No real Coupang/Naver send code exists yet.
+
+7
+00:04:40,000 --> 00:05:00,000
+Next: Guide 4, mobile usage.
