@@ -13,6 +13,7 @@ import unittest
 
 from app.core.sensitive_data import (
     mask_address,
+    mask_card_number,
     mask_phone,
     mask_secret,
     redact_dict,
@@ -47,6 +48,17 @@ class SensitiveDataMaskingTestCase(unittest.TestCase):
 
         self.assertEqual(mask_secret("sk_live_abcdef1234567890"), "***REDACTED***")
         self.assertNotIn("abcdef", mask_secret("sk_live_abcdef1234567890"))
+
+    def test_mask_card_number_keeps_only_last_four_digits(self):
+        """2026-09-10 Phase 11 — 카드정보 마스킹(이전에는 이 저장소에
+        전혀 없던 함수, 카드 저장 코드 자체가 없었기 때문)."""
+
+        self.assertEqual(
+            mask_card_number("4111 1111 1111 1234"), "************1234",
+        )
+        self.assertIsNone(mask_card_number(None))
+        self.assertEqual(mask_card_number(""), "")
+        self.assertEqual(mask_card_number("123"), "***")
 
     def test_redact_free_text_masks_phone_and_jwt_shaped_strings(self):
 

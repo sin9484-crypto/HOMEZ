@@ -276,6 +276,24 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             "20260826_00_add_marketplace_submission_live_tracking.sql",
             "20260827_00_repair_notification_audit_user_fk.sql",
             "20260827_01_add_media_asset_public_hosting.sql",
+            # 2026-09-09~10 갱신 — HOMEZ V7 개인 베타 P0~P9 연속 구현
+            # (Phase 1·3·7·8·9·10)이 추가한 8개. 전부 실제 운영 DB에
+            # 아직 미적용(임시 SQLite에서만 검증) — 로그인 잠금
+            # 컬럼(Phase 1), 기능별 자동화 모드 스키마(Phase 3), 결제/
+            # 환불/환율/공급처능력/가격재고안전 도메인 신규 테이블
+            # (Phase 7~10), 가격 인상 감지 기준선 컬럼(Phase 10).
+            "20260909_00_add_login_lockout_columns.sql",
+            "20260909_01_create_function_automation_state_schema.sql",
+            "20260910_00_create_payment_domain_schema.sql",
+            "20260910_01_create_refund_domain_schema.sql",
+            "20260910_02_create_currency_domain_schema.sql",
+            "20260910_03_create_supplier_capability_schema.sql",
+            "20260910_04_add_purchase_task_candidate_price_baseline.sql",
+            "20260910_05_create_price_stock_safety_schema.sql",
+            "20260910_06_create_ai_learning_schema.sql",
+            # 2026-09-10 Phase 3(판매신청 게이트, 온채널 공식 답변
+            # 반영) — 동일한 이유로 추가.
+            "20260910_07_create_purchase_sales_application_schema.sql",
         ]
 
         all_files = sorted(

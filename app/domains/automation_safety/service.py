@@ -35,12 +35,15 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ForbiddenException
 from app.domains.automation_safety.constants import AutomationMode
+from app.domains.automation_safety.constants import FunctionCode
+from app.domains.automation_safety.constants import FunctionMode
 from app.domains.automation_safety.constants import SafetyDecision
 from app.domains.automation_safety.constants import SafetyReason
 from app.domains.automation_safety.model import AutomationModeState
 from app.domains.automation_safety.model import EmergencyStop
 from app.domains.automation_safety.model import ExecutionLimit
 from app.domains.automation_safety.model import ExecutionUsage
+from app.domains.automation_safety.model import FunctionAutomationState
 from app.domains.automation_safety.repository import AutomationSafetyRepository
 
 # 한국 표준시(KST)는 서머타임이 없는 연중 고정 UTC+9. Windows 환경에
@@ -107,6 +110,167 @@ class SafetyService:
             raise
 
         return state
+
+    # --------------------------------------------------
+    # Function Automation State (Phase 3, 회사×기능별)
+    # --------------------------------------------------
+
+    def get_function_mode(
+        self,
+        company_id: int,
+        function_code: str,
+    ) -> str:
+        """설정된 적이 없으면 안전한 기본값(MANUAL)을 반환한다 —
+        "자동 모드라는 이유만으로 결제·발주·환불 권한이 확대되지
+        않는다"는 원칙을 이 기본값 하나로 지킨다(기능별 예외 없음)."""
+
+        state = self.repository.get_current_function_mode_state(
+            company_id, function_code,
+        )
+
+        if state is None:
+            return FunctionMode.DEFAULT
+
+        return state.mode
+
+    def get_all_function_modes(
+        self,
+        company_id: int,
+    ) -> dict[str, str]:
+        """운영 기준이 나열한 10개 기능 전체에 대해, 값이 있으면 그
+        값을, 없으면 기본값(MANUAL)을 채운 딕셔너리를 반환한다 —
+        호출자가 "이 기능은 아직 한 번도 설정 안 됐다"를 따로
+        구분하지 않아도 되게 한다(화면은 항상 10줄을 보여줘야
+        하므로)."""
+
+        latest_states = {
+            row.function_code: row.mode
+            for row in self.repository.get_latest_function_mode_states_for_company(
+                company_id,
+            )
+        }
+
+        return {
+            code: latest_states.get(code, FunctionMode.DEFAULT)
+            for code in FunctionCode.ALL
+        }
+
+    def get_all_function_states(
+        self,
+        company_id: int,
+    ) -> dict[str, FunctionAutomationState | None]:
+        """
+        2026-09-09 Phase 4(HOMEZ_USER_OPERATION_SETTINGS.md 4번 —
+        "중지 원인과 필요한 설정값을 화면에 표시한다") — `get_all_
+        function_modes()`는 문자열 모드만 반환해 "왜 이 상태가 됐는지"
+        (reason)를 화면에 보여줄 수 없었다. 이 메서드는 각 기능의
+        가장 최근 행 전체(없으면 None)를 반환한다 — 기존
+        `get_all_function_modes()`의 반환 타입(dict[str, str])을
+        바꾸지 않고 그대로 둔 채(다른 호출부·테스트 영향 없음) 화면
+        전용으로 추가한 메서드다.
+        """
+
+        latest_states = {
+            row.function_code: row
+            for row in self.repository.get_latest_function_mode_states_for_company(
+                company_id,
+            )
+        }
+
+        return {code: latest_states.get(code) for code in FunctionCode.ALL}
+
+    def set_function_mode(
+        self,
+        company_id: int,
+        function_code: str,
+        mode: str,
+        set_by: int,
+        is_admin: bool,
+        reason: str | None = None,
+    ) -> FunctionAutomationState:
+
+        if not is_admin:
+            raise ForbiddenException(
+                "기능별 자동화 모드 변경은 관리자만 가능합니다.",
+            )
+
+        if function_code not in FunctionCode.ALL:
+            raise BadRequestException(
+                f"알 수 없는 기능 코드: {function_code}",
+            )
+
+        if mode not in FunctionMode.USER_SELECTABLE:
+            # ERROR는 시스템이 스스로 전이시키는 상태다(아래
+            # `demote_function_to_error` 참고) — 사용자가 API로 직접
+            # 요청해서 만들 수 있는 상태가 아니다.
+            raise BadRequestException(
+                f"사용자가 직접 설정할 수 없는 상태입니다: {mode}",
+            )
+
+        state = FunctionAutomationState(
+            company_id=company_id,
+            function_code=function_code,
+            mode=mode,
+            set_by=set_by,
+            reason=reason,
+        )
+
+        try:
+            state = self.repository.add_function_mode_state_no_commit(state)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        return state
+
+    def demote_function_to_error(
+        self,
+        company_id: int,
+        function_code: str,
+        reason: str,
+    ) -> FunctionAutomationState:
+        """
+        가격 인상, 재고 부족, 인증 만료, API 오류, 스키마 불일치 등
+        시스템이 스스로 감지한 문제로 그 기능만 안전한 상태로 낮출 때
+        호출한다(Phase 4의 "기능별 중지"가 실제로 쓰는 진입점). 사람이
+        아니라 시스템이 거는 것이므로 `is_admin` 게이트가 없다 — 대신
+        `set_by`를 항상 0(시스템)으로 고정해, 사람이 건 것과 감사에서
+        명확히 구분되게 한다.
+        """
+
+        if function_code not in FunctionCode.ALL:
+            raise BadRequestException(
+                f"알 수 없는 기능 코드: {function_code}",
+            )
+
+        state = FunctionAutomationState(
+            company_id=company_id,
+            function_code=function_code,
+            mode=FunctionMode.ERROR,
+            set_by=0,
+            reason=reason,
+        )
+
+        try:
+            state = self.repository.add_function_mode_state_no_commit(state)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        return state
+
+    def is_function_automatic(
+        self,
+        company_id: int,
+        function_code: str,
+    ) -> bool:
+        """실행 코드가 "지금 이 기능을 자동으로 진행해도 되는가"를
+        묻는 단일 진입점 — MANUAL/SEMI_AUTOMATIC/PAUSED/ERROR는 전부
+        False다(자동 실행은 AUTOMATIC일 때만)."""
+
+        return self.get_function_mode(company_id, function_code) == FunctionMode.AUTOMATIC
 
     # --------------------------------------------------
     # Emergency Stop

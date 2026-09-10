@@ -31,10 +31,15 @@ from app.core.audit_db import write_audit_log
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
+from app.domains.automation_safety.constants import FunctionCode
+from app.domains.automation_safety.constants import FunctionMode
 from app.domains.automation_safety.service import SafetyService
 from app.domains.funding.model import FundingAccount
 from app.domains.funding.model import FundingLedger
 from app.domains.funding.service import FundingService
+from app.domains.notification_center.delivery_service import (
+    NotificationDeliveryService,
+)
 from app.domains.notification_center.service import NotificationService
 from app.domains.purchase_task.constants import BudgetReservationStatus
 from app.domains.purchase_task.constants import EmailNotificationEventType
@@ -136,6 +141,74 @@ class PurchaseTaskService:
                 detail=detail,
                 idempotency_key=f"pt:{task.id}:{event_type}:{user.id}",
             )
+
+    def _demote_price_change_on_increase(
+        self, company_id: int, task: "PurchaseTask",
+    ) -> None:
+        """
+        2026-09-09 Phase 4(HOMEZ_USER_OPERATION_SETTINGS.md 3·13번 —
+        "가격 또는 재고가 변경되면 새로운 판매와 발주를 중지하고
+        사용자에게 알린다", "가격 인상... 항목이 발생하면 관련 자동
+        기능만 중지한다") — 매입처 가격 인상이 감지돼 이번 발주가
+        BLOCK된 시점에, PRICE_CHANGE 기능을 ERROR로 낮추고 통지한다
+        (Phase 3에서 만든 `demote_function_to_error`를 실제로 호출하는
+        첫 연결 지점).
+
+        이미 ERROR 상태면 다시 낮추거나 다시 알리지 않는다(멱등) —
+        가격 인상 감지는 평가할 때마다 반복될 수 있어(같은 후보를 여러
+        번 재평가), 매번 이력을 쌓고 매번 알림을 보내면 감사 기록과
+        받은편지함이 의미 없이 불어난다. 관리자가 확인 후 다시
+        "반자동"/"자동"으로 되돌리면 그 다음 가격 인상에는 다시
+        새로 감지된다.
+        """
+
+        safety = SafetyService(self.db)
+
+        if safety.get_function_mode(company_id, FunctionCode.PRICE_CHANGE) == FunctionMode.ERROR:
+            return
+
+        try:
+            safety.demote_function_to_error(
+                company_id, FunctionCode.PRICE_CHANGE,
+                reason=(
+                    f"매입처 가격 인상 감지(purchase_task id={task.id}, "
+                    f"상품: {task.product_title})로 자동 중지됨."
+                ),
+            )
+        except Exception:  # noqa: BLE001 — 강등 실패가 발주 차단 자체를 막지 않는다
+            return
+
+        try:
+            from app.domains.user.model import User
+
+            for user in (
+                self.db.query(User)
+                .filter(User.company_id == company_id, User.is_active.is_(True))
+                .all()
+            ):
+                if (user.role or "").strip().upper() != "SUPER_ADMIN":
+                    continue
+                NotificationDeliveryService(self.db).dispatch(
+                    "FUNCTION_AUTOMATION_DEMOTED_TO_ERROR",
+                    company_id=company_id, user_id=user.id,
+                    idempotency_key=(
+                        f"func-error-{FunctionCode.PRICE_CHANGE}-"
+                        f"{company_id}-task{task.id}"
+                    ),
+                    title="가격 변경 기능이 오류 상태로 낮아졌습니다.",
+                    message=(
+                        f"[{task.product_title}] 매입처 가격 인상이 감지돼 "
+                        "가격 변경 자동화가 중지됐습니다. 확인 후 필요하면 "
+                        "설정 화면에서 다시 수동으로 전환해 주세요."
+                    ),
+                    link_path="purchase-task-detail",
+                    entity_ref=f"purchase_task:{task.id}",
+                    to_email=user.email,
+                    reason="price_increase_detected",
+                    console_url=f"/console#purchase-task-detail?id={task.id}",
+                )
+        except Exception:  # noqa: BLE001 — 알림 실패가 발주 차단 자체를 막지 않는다
+            pass
 
     # --------------------------------------------------
     # 작업 A — 구매 작업 생성 + 검색 링크
@@ -526,6 +599,16 @@ class PurchaseTaskService:
             )
             required_budget = margin_result.actual_purchase_cost + add_ship
 
+            # 2026-09-10 Phase 10 — 이 후보를 처음 평가하는 순간(컬럼이
+            # 아직 None)에만 가격 기준선을 확정한다. 이후 재평가마다는
+            # 이 최초 기준선과 비교해야 "가격이 올랐는지"를 판정할 수
+            # 있다 — 매번 다시 채우면 항상 자기 자신과 비교하게 돼
+            # 인상률이 영원히 0이 된다(Phase 4에서 이 컬럼 자체가 없어
+            # 판정이 통째로 건너뛰어지던 것과 동일한 결과를 다시
+            # 만들게 되는 실수 — 그래서 반드시 "None일 때만" 채운다).
+            if candidate.expected_amount_at_creation is None:
+                candidate.expected_amount_at_creation = float(required_budget)
+
         policy_input = PurchaseTaskPolicyCheckInput(
             match_confidence=candidate.match_confidence,
             match_tier=candidate.match_tier, quantity=task.quantity,
@@ -539,6 +622,11 @@ class PurchaseTaskService:
             required_budget_amount=required_budget,
             estimated_delivery_days=candidate.estimated_delivery_days,
             return_allowed=candidate.return_allowed,
+            expected_amount_at_creation=(
+                Decimal(str(candidate.expected_amount_at_creation))
+                if candidate.expected_amount_at_creation is not None
+                else None
+            ),
         )
         result = self.policy.evaluate(company_id, policy_input)
 
@@ -580,6 +668,9 @@ class PurchaseTaskService:
             else:
                 event = EmailNotificationEventType.PURCHASE_FAILED
             self._notify(task, event, f"차단됨: {task.block_reason}")
+
+            if "PRICE_INCREASE_RATE_EXCEEDED" in result.reasons:
+                self._demote_price_change_on_increase(company_id, task)
             return task, result
 
         if result.decision == PurchaseTaskPolicyDecision.REQUIRE_REVIEW:
@@ -1475,6 +1566,62 @@ class PurchaseTaskService:
             remaining = ", ".join(unconfirmed_onchannel_order_contract_items())
             blocked_reasons.append(f"온채널 공식 발주 계약 미확인 항목: {remaining}")
 
+        # 2026-09-10 후속(Phase 3~4 — 판매신청·포인트 잔액 게이트를
+        # 이 검토 화면에도 그대로 반영) — submit_order()가 실제로
+        # 적용하는 게이트와 이 화면의 예고가 어긋나면(예: 화면은
+        # send_blocked=False인데 실제 호출은 여전히 막히는 경우)
+        # 사용자를 오도하게 된다 — 그래서 여기서도 같은 사실을 읽기
+        # 전용으로 확인해 보여준다. `ensure_sales_application_submitted()`
+        # 처럼 실제 상태를 바꾸는 호출은 절대 하지 않는다(읽기 전용
+        # 원칙 유지) — 판매신청은 DB 조회만, 포인트는 온채널 진단
+        # 조회(check_member_point, 이미 기존에도 이 화면이 lookup_
+        # product로 실제 네트워크 조회를 하고 있어 원칙상 새로운
+        # 종류의 호출이 아니다)만 수행한다.
+        from app.domains.purchase_task.sales_application_service import (
+            PurchaseSalesApplicationService,
+        )
+
+        sales_application_service = PurchaseSalesApplicationService(self.db)
+        sales_application_confirmed = sales_application_service.is_sales_application_confirmed(
+            connection.id, company_id, external_product_id,
+        )
+        if not sales_application_confirmed:
+            blocked_reasons.append(
+                "이 상품의 판매신청이 아직 접수 확인되지 않았습니다(발주 전 필수).",
+            )
+
+        point_support = "UNKNOWN"
+        point_value = None
+        point_interpretable = False
+        point_detail = "조회하지 않았습니다."
+        try:
+            point_result = connection_service.check_member_point(
+                connection.id, company_id, triggered_by=triggered_by,
+            )
+            point_support = point_result.support
+            point_value = point_result.point
+            point_interpretable = point_result.point_interpretable
+            point_detail = point_result.detail
+            if not point_interpretable:
+                blocked_reasons.append("포인트(예치금) 응답을 해석할 수 없습니다.")
+            elif estimated_item_amount is not None and point_value < estimated_item_amount:
+                blocked_reasons.append(
+                    f"현재 포인트 잔액({point_value})이 상품가 소계"
+                    f"({estimated_item_amount})보다 적습니다.",
+                )
+        except (OnchannelApiError, PurchaseChannelAdapterError) as exc:
+            point_detail = str(exc)
+            blocked_reasons.append(f"포인트(예치금) 조회 실패: {exc}")
+
+        # Gate D(order_submission_service.py::_verify_point_balance_or_block)
+        # 와 동일한 이유로 항상 추가한다 — 온채널에 배송비 사전 확인
+        # API가 없어 배송비 포함 최종 필요 금액을 확정할 수 없다.
+        # 위 포인트 확인이 전부 정상이어도 이 사유는 빠지지 않는다.
+        blocked_reasons.append(
+            "온채널 배송비를 발주 전에 확인할 방법이 없어 실제 발주는 "
+            "현재 항상 차단됩니다(추가 온채널 공식 답변 필요).",
+        )
+
         _audit(
             self.db, company_id=company_id, user_id=triggered_by,
             action="purchase_task.order_submission_review_viewed",
@@ -1514,10 +1661,25 @@ class PurchaseTaskService:
                 "detail": product_detail,
             },
             "recipient": recipient,
+            "sales_application": {
+                "confirmed": sales_application_confirmed,
+                "detail": (
+                    "판매신청 접수가 확인됐습니다(승인 여부는 별도로 "
+                    "조회할 방법이 없습니다)." if sales_application_confirmed
+                    else "판매신청 접수 기록이 없습니다 — 발주 전 필수입니다."
+                ),
+            },
+            "point_balance": {
+                "support": point_support,
+                "point": point_value,
+                "point_interpretable": point_interpretable,
+                "detail": point_detail,
+            },
             "shipping_fee_known": False,
             "shipping_fee_detail": (
                 "온채널 공식 배송비 견적 방법이 아직 확인되지 않았습니다 "
-                "— 추정하지 않습니다."
+                "— 추정하지 않습니다. 이 때문에 실제 발주는 현재 항상 "
+                "차단됩니다."
             ),
             "product_title_mismatch_warning": title_mismatch,
             "quantity_mismatch_warning": quantity_mismatch,

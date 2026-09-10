@@ -414,6 +414,20 @@ class OrderLookupResponse(BaseModel):
     detail: str
 
 
+class TrackingLookupResponse(BaseModel):
+    """channel_adapter.TrackingLookupResult를 그대로 옮긴다.
+    `multiple_deliveries_detected=True`일 때는 courier·tracking_number
+    가 항상 null이다(단일 송장 정책 — 복수 관측 시 자동 선택 금지,
+    2026-09-10 후속)."""
+
+    support: str
+    courier: Optional[str]
+    tracking_number: Optional[str]
+    delivery_status: Optional[str]
+    detail: str
+    multiple_deliveries_detected: bool = False
+
+
 class MemberPointCheckResponse(BaseModel):
     """channel_adapter.MemberPointCheckResult를 그대로 옮긴다.
     member_id는 원문이 아니라 마스킹된 값만 담는다(서버가 이미
@@ -466,6 +480,25 @@ class OrderSubmissionReviewRecipientResponse(BaseModel):
     address: Optional[str]
 
 
+class OrderSubmissionReviewSalesApplicationResponse(BaseModel):
+    """2026-09-10 신규(Phase 3) — confirmed=True는 "온채널이 접수를
+    확인했다"는 뜻일 뿐 "승인됐다"는 뜻이 아니다(승인 상태 조회
+    API 자체가 없다고 공식 답변으로 확정됨)."""
+
+    confirmed: bool
+    detail: str
+
+
+class OrderSubmissionReviewPointBalanceResponse(BaseModel):
+    """2026-09-10 신규(Phase 4) — point는 point_interpretable이
+    True일 때만 신뢰할 수 있는 값이다."""
+
+    support: str
+    point: Optional[int]
+    point_interpretable: bool
+    detail: str
+
+
 class OrderSubmissionReviewResponse(BaseModel):
     """읽기 전용 검토 결과 — 이 응답을 만드는 과정에서 실제 발주
     API는 절대 호출되지 않는다(온채널 상품 조회만 실제 호출). 실제
@@ -481,6 +514,8 @@ class OrderSubmissionReviewResponse(BaseModel):
     connection_account_label: str
     product: OrderSubmissionReviewProductResponse
     recipient: OrderSubmissionReviewRecipientResponse
+    sales_application: OrderSubmissionReviewSalesApplicationResponse
+    point_balance: OrderSubmissionReviewPointBalanceResponse
     shipping_fee_known: bool
     shipping_fee_detail: str
     product_title_mismatch_warning: bool
@@ -503,8 +538,11 @@ __all__ = [
     "ChannelConnectionCreate", "ChannelConnectionRename",
     "ChannelConnectionResponse", "AssignChannelConnectionRequest",
     "ChannelConnectionCredentialSave", "ChannelProductOptionResponse",
-    "ProductLookupResponse", "OrderLookupResponse", "MemberPointCheckResponse",
+    "ProductLookupResponse", "OrderLookupResponse", "TrackingLookupResponse",
+    "MemberPointCheckResponse",
     "OrderSubmissionReviewOptionInput", "OrderSubmissionReviewRequest",
     "OrderSubmissionReviewProductResponse", "OrderSubmissionReviewRecipientResponse",
+    "OrderSubmissionReviewSalesApplicationResponse",
+    "OrderSubmissionReviewPointBalanceResponse",
     "OrderSubmissionReviewResponse",
 ]

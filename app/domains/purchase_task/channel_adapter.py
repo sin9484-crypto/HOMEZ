@@ -225,12 +225,18 @@ class OrderLookupResult:
 
 @dataclass(frozen=True)
 class TrackingLookupResult:
+    """2026-09-10 후속(온채널 공식 답변 — "부분배송·복수송장 미지원"
+    확정) — `multiple_deliveries_detected=True`일 때는 `courier`·
+    `tracking_number`가 항상 None이다. 온채널이 복수 송장을 반환한
+    경우 어느 것이 "그" 송장인지 자동으로 고르지 않는다 — 사람이
+    온채널 원본 화면에서 직접 확인해야 한다(단일 송장 정책)."""
 
     support: str
     courier: str | None
     tracking_number: str | None
     delivery_status: str | None
     detail: str
+    multiple_deliveries_detected: bool = False
 
 
 @dataclass(frozen=True)
@@ -238,6 +244,22 @@ class CancelSupportResult:
 
     support: str
     cancel_window_note: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class SalesApplicationResult:
+    """2026-09-10 후속(온채널 공식 답변 — "발주 전 판매신청 필수"
+    확정) — 판매신청 시도 1건의 결과. `submitted`가 True라는 것은
+    "온채널이 신청 접수를 확인했다"는 뜻일 뿐 "승인됐다"는 뜻이
+    아니다 — 승인 상태를 조회하는 API 자체가 없다는 것도 공식
+    답변으로 확정됐으므로, 이 dataclass는 애초에 승인 여부를
+    표현하는 필드를 두지 않는다(없는 사실을 있는 것처럼 필드로
+    만들지 않는다)."""
+
+    support: str
+    submitted: bool
+    applied_product_code: str | None
     detail: str
 
 
@@ -333,6 +355,20 @@ class PurchaseChannelAdapter(ABC):
         return CancelSupportResult(
             support=CapabilitySupport.UNKNOWN, cancel_window_note=None,
             detail="취소 지원 여부가 아직 확인되지 않았습니다.",
+        )
+
+    def apply_for_sale(self, external_product_id: str) -> SalesApplicationResult:
+        """2026-09-10 후속 — ChannelCapability.ALL(item 7이 지정한
+        고정 8개 항목)에는 없는 신규 메서드다(submit_order/check_
+        member_point와 같은 선례 — 온채널 공식 답변으로 새로 확정된
+        기능은 그 8개 목록을 건드리지 않고 이렇게 별도로 추가한다).
+        기본 구현은 "이 매입처가 판매신청 개념 자체를 지원하는지도
+        확인되지 않았다"는 뜻이다."""
+
+        return SalesApplicationResult(
+            support=CapabilitySupport.UNKNOWN, submitted=False,
+            applied_product_code=None,
+            detail="판매신청 기능이 아직 확인되지 않았습니다.",
         )
 
     def capability_matrix(self) -> dict[str, str]:
@@ -451,6 +487,13 @@ class FakePurchaseChannelAdapter(PurchaseChannelAdapter):
             detail="FAKE Adapter",
         )
 
+    def apply_for_sale(self, external_product_id: str) -> SalesApplicationResult:
+
+        return SalesApplicationResult(
+            support=CapabilitySupport.SUPPORTED, submitted=True,
+            applied_product_code=external_product_id, detail="FAKE Adapter",
+        )
+
     def capability_matrix(self) -> dict[str, str]:
 
         return {capability: CapabilitySupport.SUPPORTED for capability in ChannelCapability.ALL}
@@ -492,6 +535,7 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
 
     def __init__(
         self, credential_store=None, credential_reference=None, http_get=None,
+        http_post=None,
     ):
 
         if credential_store is None:
@@ -506,9 +550,11 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
             credential_reference = OnchannelSupplierOrderProvider.CREDENTIAL_REFERENCE
         self._credential_reference = credential_reference
 
-        # 테스트 전용 주입 지점 — 실제 코드 경로는 절대 이 값을 넘기지
-        # 않는다(None이면 OnchannelApiClient가 진짜 requests.get을 쓴다).
+        # 테스트 전용 주입 지점 — 실제 코드 경로는 절대 이 값들을
+        # 넘기지 않는다(None이면 OnchannelApiClient가 진짜 requests.
+        # get/post를 쓴다).
         self._http_get = http_get
+        self._http_post = http_post
 
     def _read_credential(self) -> dict | None:
 
@@ -586,6 +632,8 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
         kwargs = {}
         if self._http_get is not None:
             kwargs["http_get"] = self._http_get
+        if self._http_post is not None:
+            kwargs["http_post"] = self._http_post
         return OnchannelApiClient(auth_key=auth_key, **kwargs)
 
     def lookup_product(self, external_product_id: str) -> ProductLookupResult:
@@ -649,6 +697,27 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
 
         client = self._require_client()
         return client.register_order(request)
+
+    def apply_for_sale(self, external_product_id: str) -> SalesApplicationResult:
+        """POST /openapi/seller/product/apply — 실제 판매신청.
+        2026-09-10 온채널 공식 답변으로 "발주 전 필수"가 확정됐다.
+        `submitted=True`는 온채널이 HTTP 200으로 접수를 확인했다는
+        뜻일 뿐, 실제 승인 여부는 이 응답만으로 알 수 없다(승인 상태
+        조회 API 자체가 없다고 공식 답변으로 확정됨) — 그래서 이
+        메서드도, 이 메서드가 반환하는 결과도 "승인됨"이라는 말을
+        쓰지 않는다."""
+
+        client = self._require_client()
+        applied_code = client.apply_for_sale(external_product_id)
+
+        return SalesApplicationResult(
+            support=CapabilitySupport.SUPPORTED, submitted=True,
+            applied_product_code=applied_code,
+            detail=(
+                "온채널 실 API 판매신청 접수 확인(HTTP 200) — 승인 여부는 "
+                "별도로 조회할 방법이 없습니다(공식 답변으로 확정됨)."
+            ),
+        )
 
     def check_member_point(self) -> MemberPointCheckResult:
         """GET /openapi/common/member/point — 발주·결제 계약 조사
@@ -718,6 +787,24 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
                 support=CapabilitySupport.SUPPORTED, courier=None,
                 tracking_number=None, delivery_status=order.detail_status,
                 detail="아직 등록된 송장이 없습니다(온채널 실 API 조회 결과).",
+            )
+
+        if len(order.deliverys) > 1:
+            # 2026-09-10 후속(온채널 공식 답변 — "부분배송·복수송장
+            # 미지원" 확정) — 단일 송장 정책. 온채널이 2건 이상의
+            # 송장을 반환하면 어느 것이 "그" 송장인지 자동으로 고르지
+            # 않는다(예: 최신순으로 추정하지 않는다) — 사람이 온채널
+            # 원본에서 직접 확인해야 한다.
+            return TrackingLookupResult(
+                support=CapabilitySupport.SUPPORTED, courier=None,
+                tracking_number=None, delivery_status=order.detail_status,
+                detail=(
+                    f"송장이 {len(order.deliverys)}건 감지됐습니다 — 온채널은 "
+                    "부분배송·복수송장을 공식적으로 지원하지 않는다고 확인됐으나 "
+                    "실제 응답에 2건 이상이 왔습니다. 자동으로 하나를 선택하지 "
+                    "않습니다 — 온채널 원본 화면에서 직접 확인하세요."
+                ),
+                multiple_deliveries_detected=True,
             )
 
         latest = order.deliverys[-1]
@@ -805,6 +892,7 @@ __all__ = [
     "OrderLookupResult",
     "TrackingLookupResult",
     "CancelSupportResult",
+    "SalesApplicationResult",
     "PurchaseChannelAdapterError",
     "PurchaseChannelAdapter",
     "FakePurchaseChannelAdapter",

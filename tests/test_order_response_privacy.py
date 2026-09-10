@@ -66,18 +66,24 @@ class OrderResponsePrivacyTestCase(unittest.TestCase):
         self.assertTrue(dumped["has_normalized_snapshot"])
 
     def test_sensitive_detail_requires_recent_auth(self):
-        with self.assertRaises(UnauthorizedException):
-            get_order_sensitive_detail(
-                7, current_user=self.user, db=object(),
-                recent_auth_token=None,
-            )
+        # 2026-09-10 Phase 11 — VIEW_SENSITIVE_DATA 권한 게이트가
+        # 추가됐다(app/domains/order/router.py). 이 테스트는 그
+        # 이후의 재인증 게이트를 검증하는 것이 목적이므로 권한
+        # 체크는 통과한 것으로 가정한다(권한 자체의 동작은 별도
+        # 테스트가 검증한다 — role_permission 도메인 테스트 참고).
+        with patch("app.domains.order.router.require_permission"):
+            with self.assertRaises(UnauthorizedException):
+                get_order_sensitive_detail(
+                    7, current_user=self.user, db=object(),
+                    recent_auth_token=None,
+                )
 
     def test_sensitive_detail_returns_original_once_then_consumes_token(self):
         token, _ = issue_recent_auth_token(self.user.id)
         with patch(
             "app.domains.order.router.OrderService.get_order",
             return_value=_order(),
-        ):
+        ), patch("app.domains.order.router.require_permission"):
             result = get_order_sensitive_detail(
                 7, current_user=self.user, db=object(),
                 recent_auth_token=token,

@@ -24,6 +24,7 @@ import logging
 from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,36 @@ class SchedulerService:
         scheduler = cls.start()
         scheduler.add_job(
             func, "interval", minutes=minutes, id=job_id,
+            replace_existing=True, coalesce=True, max_instances=1,
+        )
+
+    @classmethod
+    def add_cron_job(
+        cls, func: Callable, *,
+        day_of_week: str, hour: int, minute: int, job_id: str,
+    ) -> None:
+        """
+        2026-09-10 Phase 6 — "매주"처럼 특정 요일·시각 기준 주기가
+        필요한 Job용(예: 백업 복구 리허설, HOMEZ_USER_OPERATION_
+        SETTINGS.md 11번). add_interval_job과 동일하게 같은 job_id로
+        다시 호출하면 기존 Job을 교체하고(replace_existing=True),
+        중복 실행을 막는다(coalesce=True — 프로세스가 오래 멈춰
+        있다 재기동해도 밀린 실행을 몰아서 여러 번 하지 않고 1회로
+        합친다, max_instances=1 — 이전 실행이 아직 끝나지 않았으면
+        다음 트리거를 건너뛴다).
+
+        day_of_week는 APScheduler CronTrigger 문법 그대로 받는다
+        (예: "sun", "mon-fri").
+        """
+
+        scheduler = cls.start()
+        scheduler.add_job(
+            func,
+            CronTrigger(
+                day_of_week=day_of_week, hour=hour, minute=minute,
+                timezone="Asia/Seoul",
+            ),
+            id=job_id,
             replace_existing=True, coalesce=True, max_instances=1,
         )
 

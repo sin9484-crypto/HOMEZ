@@ -329,10 +329,68 @@ class ExecutionPeriodUsage(Base):
     )
 
 
+class FunctionAutomationState(Base):
+    """
+    2026-09-09 Phase 3 — 회사×기능별 자동화 상태(migrations/20260909_01_
+    create_function_automation_state_schema.sql). `AutomationModeState`
+    (전역 단일, company_id 없음)와는 완전히 별개 테이블이다 — 기존
+    행·호출부를 건드리지 않는다.
+
+    append-only: (company_id, function_code) 조합별로 가장 최근 행이
+    현재 상태다(AutomationModeState와 동일한 감사 패턴).
+    """
+
+    __tablename__ = "function_automation_states"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    company_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    # app.domains.automation_safety.constants.FunctionCode 중 하나.
+    function_code: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        index=True,
+    )
+
+    # app.domains.automation_safety.constants.FunctionMode 중 하나.
+    mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    # 논리 참조 (users.id)
+    set_by: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    reason: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    set_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True,
+    )
+
+
 __all__ = [
     "AutomationModeState",
     "EmergencyStop",
     "ExecutionLimit",
     "ExecutionUsage",
     "ExecutionPeriodUsage",
+    "FunctionAutomationState",
 ]

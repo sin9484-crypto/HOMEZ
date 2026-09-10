@@ -33,7 +33,13 @@ from app.core.desktop_setup import router as desktop_setup_router
 from app.core.migration_approval import router as migration_approval_router
 from app.domains.account_recovery.router import router as account_recovery_router
 from app.domains.account_registration.router import router as account_registration_router
+from app.domains.ai_learning.router import router as ai_learning_router
 from app.domains.backup.router import router as backup_router
+from app.domains.currency.router import router as currency_router
+from app.domains.payment.router import router as payment_router
+from app.domains.refund.router import router as refund_router
+from app.domains.price_stock_safety.router import router as price_stock_safety_router
+from app.domains.supplier_capability.router import router as supplier_capability_router
 from app.domains.diagnostics.router import router as diagnostics_router
 from app.domains.guides.router import router as guides_router
 from app.domains.notification_center.router import (
@@ -141,10 +147,25 @@ async def lifespan(app: FastAPI):
     # 없다).
     refresh_restricted_mode_state()
 
+    # 2026-09-10 Phase 6(HOMEZ_USER_OPERATION_SETTINGS.md 11번) —
+    # 주간 백업 복구 리허설 Job 등록. 실패해도(예: 예상 밖 경로
+    # 오류) 서버 기동 자체를 막지 않는다 — refresh_restricted_mode_
+    # state()와 동일한 fail-open 원칙(백업 리허설 하나가 안 되는
+    # 것보다 서버 전체가 안 뜨는 게 더 심각한 장애다).
+    if settings.SCHEDULER_ENABLED:
+        try:
+            from app.core.scheduler_service import SchedulerService
+            from app.domains.scheduler.jobs import register_all_jobs
+
+            SchedulerService.start()
+            register_all_jobs()
+        except Exception:  # noqa: BLE001
+            logger.exception("스케줄러 Job 등록 실패 — 서버는 계속 기동합니다.")
+
     yield
 
-    # future
-    # scheduler shutdown
+    from app.core.scheduler_service import SchedulerService
+    SchedulerService.shutdown()
     # redis close
     # etc.
 
@@ -593,6 +614,61 @@ app.include_router(
 
 app.include_router(
     restore_router,
+)
+
+# 2026-09-10 Phase 7 — 결제수단·자동결제 한도(app/domains/payment).
+# 실제 homez.db에는 이 테이블들이 아직 없다(Migration은 임시
+# SQLite에서만 리허설) — order/purchase/inventory/pricing 등이 이미
+# 쓴 선례와 동일하게 마운트는 먼저 하되 실제 DB 적용은 별도 승인.
+# 이 도메인은 실제 결제 Provider를 구현하지 않는다(FakePaymentProvider
+# 뿐 — app/domains/payment/gateway.py 참고), 실제 결제 실행
+# 엔드포인트 자체가 없다.
+app.include_router(
+    payment_router,
+)
+
+# 2026-09-10 Phase 8 — 환불(app/domains/refund). return_order(물류
+# — 회수/검수)와 완전히 별개인 "돈이 돌아가는 과정" Domain. 실제
+# homez.db에는 이 테이블들이 아직 없다(Migration은 임시 SQLite에서만
+# 리허설) — payment와 동일한 선례. 실제 환불 실행 Provider는
+# 구현하지 않는다(FakeRefundExecutor뿐).
+app.include_router(
+    refund_router,
+)
+
+# 2026-09-10 Phase 9 — 환율(app/domains/currency). 실제 homez.db에는
+# 이 테이블들이 아직 없다(Migration은 임시 SQLite에서만 리허설) —
+# payment/refund와 동일한 선례. 실제 외부 환율 API 호출은 없다
+# (수동 입력만).
+app.include_router(
+    currency_router,
+)
+
+# 2026-09-10 Phase 9 — 공급처 능력 플래그
+# (app/domains/supplier_capability). 기존 4개 Adapter 계약을
+# 병합하지 않고 별도로 추가한 "능력 요약표"다(사유는
+# app/domains/supplier_capability/constants.py 상단 주석). 실제
+# homez.db에는 이 테이블들이 아직 없다(Migration은 임시 SQLite
+# 에서만 리허설).
+app.include_router(
+    supplier_capability_router,
+)
+
+# 2026-09-10 Phase 10 — 가격·재고 안전장치
+# (app/domains/price_stock_safety). 실제 homez.db에는 이
+# 테이블들이 아직 없다(Migration은 임시 SQLite에서만 리허설).
+app.include_router(
+    price_stock_safety_router,
+)
+
+# 2026-09-10 Phase 12 — AI 데이터·학습 기반(app/domains/ai_learning).
+# app/domains/decision(DecisionEvaluation/DecisionReview)은 전혀
+# 수정하지 않는다 — 결과 기록·학습셋 export·후보 모델 검증
+# 상태기계만 추가한다. 실제 모델 학습·적용 코드는 없다. 실제
+# homez.db에는 이 테이블들이 아직 없다(Migration은 임시 SQLite
+# 에서만 리허설).
+app.include_router(
+    ai_learning_router,
 )
 
 app.include_router(

@@ -35,6 +35,14 @@ from app.domains.backup.repository import BackupRepository
 TRIGGER_SOURCE_MANUAL = "manual"
 TRIGGER_SOURCE_PRE_MIGRATION = "pre_migration"
 TRIGGER_SOURCE_PRE_RESTORE = "pre_restore"
+# 2026-09-09 Phase 5(HOMEZ_USER_OPERATION_SETTINGS.md 1·11·14번 —
+# "DB 복구 가능 여부를 매주 자동 또는 안내 기반으로 시험하고 결과를
+# 기록한다") — app/domains/restore/service.py::RestoreService.
+# run_weekly_rehearsal()이 이 값으로 만든 백업을 곧바로 검증용으로
+# 쓰고 리허설이 끝나면 삭제한다(장기 보관 대상 아님 — 그래서 별도
+# retention 정책이 필요 없다). 실제 주기 실행(Phase 6, 스케줄러)이
+# 붙기 전까지는 관리자가 수동으로 트리거한다.
+TRIGGER_SOURCE_SCHEDULED_REHEARSAL = "scheduled_rehearsal"
 
 # 2026-08-15 V7 Gate 8 — 보존 정책 기본값. 이 저장소는 스케줄러/cron
 # 도메인이 없어(HOMEZ_EMPTY_SCAFFOLD_INVENTORY.md의 "V8 이후 후보 —
@@ -48,6 +56,7 @@ _VALID_TRIGGER_SOURCES = frozenset(
         TRIGGER_SOURCE_MANUAL,
         TRIGGER_SOURCE_PRE_MIGRATION,
         TRIGGER_SOURCE_PRE_RESTORE,
+        TRIGGER_SOURCE_SCHEDULED_REHEARSAL,
     },
 )
 
@@ -185,5 +194,6 @@ __all__ = [
     "TRIGGER_SOURCE_MANUAL",
     "TRIGGER_SOURCE_PRE_MIGRATION",
     "TRIGGER_SOURCE_PRE_RESTORE",
+    "TRIGGER_SOURCE_SCHEDULED_REHEARSAL",
     "sha256_of_file",
 ]

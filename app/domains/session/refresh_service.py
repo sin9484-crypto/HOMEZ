@@ -32,11 +32,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from enum import Enum
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
+
+from app.core.config import settings
 
 from app.core.security import create_access_token
 from app.core.security import sha256
@@ -57,6 +60,14 @@ class RefreshOutcome(str, Enum):
     SESSION_REVOKED = "SESSION_REVOKED"
     REUSE_DETECTED = "REUSE_DETECTED"
     SCHEMA_NOT_READY = "SCHEMA_NOT_READY"
+    # 2026-09-09 Phase 2 — 연결된 access 세션이 "마지막 사용 후 3시간"
+    # 규정을 넘겼다. 자동 갱신(scheduleAutoRefresh)이 실제 사용자
+    # 활동과 무관하게 타이머로 계속 새 Access Token을 받아가면 3시간
+    # 규정이 무의미해지므로, 이 검사가 없으면 SESSION_REVOKED와 달리
+    # 조용히 뚫린다 — SESSION_REVOKED로 뭉뚱그리지 않고 별도 값으로
+    # 둬서 원인을 감사에서 구분할 수 있게 한다(클라이언트에는 둘 다
+    # 결국 재로그인 요구로 동일하게 나간다).
+    IDLE_TIMEOUT = "IDLE_TIMEOUT"
 
 
 @dataclass(frozen=True)
@@ -179,6 +190,19 @@ def rotate(
         return RefreshRotationResult(outcome=RefreshOutcome.SESSION_REVOKED)
     if access_status == SessionStatus.EXPIRED:
         return RefreshRotationResult(outcome=RefreshOutcome.SESSION_REVOKED)
+    if access_status == SessionStatus.IDLE_TIMEOUT:
+        # 타이머 기반 자동 갱신이 "마지막 사용 후 3시간" 규정을
+        # 우회하지 못하도록, family와 access 세션을 여기서 명시적으로
+        # 폐기한다(REUSE_DETECTED와 동일하게 "의심되면 세션 전체를
+        # 막는다"는 아니지만, 재로그인 없이는 더 이상 이 family로
+        # 갱신할 수 없어야 하므로 폐기 자체는 동일하게 한다).
+        token_repo.revoke_family_no_commit(
+            family_id, "session_idle_timeout", now,
+        )
+        session_repo.revoke_by_jti(
+            family.access_session_jti, "session_idle_timeout", now,
+        )
+        return RefreshRotationResult(outcome=RefreshOutcome.IDLE_TIMEOUT)
 
     token_row = token_repo.get_token_by_jti(jti)
     if token_row is None or token_row.family_id != family_id:
@@ -223,6 +247,19 @@ def rotate(
         expires_at=datetime.fromtimestamp(
             new_payload["exp"], tz=timezone.utc,
         ).replace(tzinfo=None),
+    )
+
+    # 사전 발견 결함 수정(위 SessionRepository.extend_expiry docstring
+    # 참고) — 이 회전이 실제로 성공했으므로, 연결된 access 세션의
+    # expires_at도 함께 앞으로 민다. 이걸 하지 않으면 로그인 후
+    # ACCESS_TOKEN_EXPIRE_MINUTES가 지난 시점부터는 이후의 모든 Refresh
+    # 요청이 access_status==EXPIRED로 거부된다(30일 Refresh Token의
+    # 존재 의미가 없어짐). last_seen_at/issued_at은 건드리지 않는다 —
+    # 그 두 값은 "진짜 마지막 사용 시각" 판정(Phase 2 IDLE_TIMEOUT)
+    # 전용이고, 타이머 기반 회전 자체는 사용자 활동이 아니다.
+    session_repo.extend_expiry(
+        family.access_session_jti,
+        now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 
     return RefreshRotationResult(

@@ -160,6 +160,21 @@ DEFAULT_PERMISSIONS = [
     ("listing_wizard.export", "Listing Wizard Export"),
     ("listing_wizard.economics_view", "Listing Economics View"),
 
+    # =============================
+    # Sensitive Data (Phase 11, 2026-09-10)
+    #
+    # HOMEZ_USER_OPERATION_SETTINGS.md 11번 — "개인정보 조회 권한을
+    # 별도로 설정한다." SUPER_ADMIN은 app/core/permission_check.py::
+    # is_super_admin() 단락 평가로 이 코드가 role_permissions에 없어도
+    # 항상 통과한다 — 이 권한은 SUPER_ADMIN이 아닌 역할에게 개인정보
+    # 원문 조회를 개별적으로 허용할 때만 의미가 생긴다(현재
+    # ROLE_PERMISSION_MAP에는 어떤 비-SUPER_ADMIN 역할에도 이 코드를
+    # 매핑해두지 않았다 — 기본값은 "아무도 못 봄", 필요할 때 관리자가
+    # 화면에서 개별 부여).
+    # =============================
+
+    ("VIEW_SENSITIVE_DATA", "View Sensitive Data"),
+
 ]
 def seed_roles(db: Session) -> int:
     """

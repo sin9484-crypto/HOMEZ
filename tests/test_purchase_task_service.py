@@ -380,6 +380,149 @@ class MatchAndPolicyTestCase(PurchaseTaskServiceTestCaseBase):
         self.assertIn("EMERGENCY_STOP_ACTIVE", task.block_reason)
 
 
+class PriceIncreaseBaselineTestCase(PurchaseTaskServiceTestCaseBase):
+    """
+    2026-09-10 Phase 10 — Phase 4에서 만들었지만 기준값(expected_
+    amount_at_creation)을 채우는 호출부가 없어 절대 발동하지 않던
+    PRICE_INCREASE_RATE_EXCEEDED 판정을 실제로 살렸다. 이 클래스는
+    tests/test_purchase_task_price_increase_demotion.py처럼
+    `_demote_price_change_on_increase()`를 직접 호출하는 게 아니라,
+    `evaluate_and_prepare()`를 통해 이 판정이 실제로 발동하는지
+    end-to-end로 검증한다.
+    """
+
+    def setUp(self):
+
+        super().setUp()
+
+        # 기반 클래스의 explicit 테이블 목록에는 Phase 3에서 추가된
+        # function_automation_states가 없다(이 파일이 Phase 3보다
+        # 먼저 존재했음) — 다른 테스트 클래스에 영향을 주지 않도록
+        # 이 클래스 안에서만 추가로 만든다.
+        from app.domains.automation_safety.model import FunctionAutomationState
+
+        FunctionAutomationState.__table__.create(
+            bind=self.engine, checkfirst=True,
+        )
+
+    def test_first_evaluation_sets_baseline_without_false_positive(self):
+
+        task = self._create_task(key="baseline1")
+        candidate = self._add_good_candidate(
+            task.id, key_suffix="baseline1", price=10000.0,
+        )
+        self.service.run_match_check(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, confirmed_by=1,
+        )
+        task, result = self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+
+        self.db.refresh(candidate)
+        self.assertIsNotNone(candidate.expected_amount_at_creation)
+        self.assertNotIn("PRICE_INCREASE_RATE_EXCEEDED", result.reasons)
+        self.assertEqual(task.status, PurchaseTaskStatus.PURCHASE_READY)
+
+    def test_baseline_stays_fixed_across_reevaluations(self):
+
+        task = self._create_task(key="baseline2")
+        candidate = self._add_good_candidate(
+            task.id, key_suffix="baseline2", price=10000.0,
+        )
+        self.service.run_match_check(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, confirmed_by=1,
+        )
+        self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+        self.db.refresh(candidate)
+        first_baseline = candidate.expected_amount_at_creation
+        self.assertIsNotNone(first_baseline)
+
+        # 재평가를 위해 작업을 다시 연다(운영자가 후보를 재확인하는
+        # 상황을 흉내낸다) — 가격은 그대로다.
+        task.status = PurchaseTaskStatus.CANDIDATES_READY
+        self.db.commit()
+
+        self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+        self.db.refresh(candidate)
+        self.assertEqual(candidate.expected_amount_at_creation, first_baseline)
+
+    def test_price_increase_beyond_tolerance_blocks_and_demotes_price_change(self):
+
+        task = self._create_task(key="baseline3")
+        candidate = self._add_good_candidate(
+            task.id, key_suffix="baseline3", price=10000.0,
+        )
+        self.service.run_match_check(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, confirmed_by=1,
+        )
+        task, result = self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+        self.assertEqual(result.decision, "ALLOW")
+
+        # 매입처 가격이 크게 올랐다고 가정(정책 허용률 50%를 확실히
+        # 넘도록 2배로 설정) — 재평가를 위해 작업을 다시 연다.
+        candidate.estimated_price = 25000.0
+        task.status = PurchaseTaskStatus.CANDIDATES_READY
+        self.db.commit()
+
+        task, result = self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+
+        self.assertIn("PRICE_INCREASE_RATE_EXCEEDED", result.reasons)
+        self.assertEqual(task.status, PurchaseTaskStatus.BLOCKED)
+
+        from app.domains.automation_safety.constants import FunctionCode
+        from app.domains.automation_safety.constants import FunctionMode
+
+        safety = SafetyService(self.db)
+        self.assertEqual(
+            safety.get_function_mode(self.company.id, FunctionCode.PRICE_CHANGE),
+            FunctionMode.ERROR,
+        )
+
+    def test_price_increase_within_tolerance_does_not_block(self):
+
+        task = self._create_task(key="baseline4")
+        candidate = self._add_good_candidate(
+            task.id, key_suffix="baseline4", price=10000.0,
+        )
+        self.service.run_match_check(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, confirmed_by=1,
+        )
+        self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+
+        # 정책 허용률(50%)보다 확실히 작은 변동(5%)은 차단하지 않아야
+        # 한다.
+        candidate.estimated_price = 10500.0
+        task.status = PurchaseTaskStatus.CANDIDATES_READY
+        self.db.commit()
+
+        task, result = self.service.evaluate_and_prepare(
+            task.id, candidate.id, self.company.id,
+            source_attrs=_SOURCE_ATTRS, evaluated_by=1,
+        )
+
+        self.assertNotIn("PRICE_INCREASE_RATE_EXCEEDED", result.reasons)
+
+
 class DuplicateAndUrlTestCase(PurchaseTaskServiceTestCaseBase):
 
     def test_duplicate_candidate_url_rejected(self):

@@ -607,7 +607,13 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "candidates.col_trend": "트렌드",
   "candidates.col_new_product": "신제품",
   "candidates.col_margin": "예상 마진",
-  "candidates.col_funding_needed": "필요 운영자금",
+  // 2026-09-10 UI 개선 중 발견·수정 — 이 컬럼은 실제로 항상
+  // demand_score(수요 AI 점수)를 표시하는데 라벨은 "필요 운영자금"
+  // (전혀 다른, 존재하지 않는 개념)이었다. ProductCandidateResponse
+  // 에는 자금 필요액 필드 자체가 없다 — 데이터를 만들어내는 대신
+  // 실제로 표시되는 값에 맞게 라벨과 키 이름을 고친다(버튼 이름과
+  // 실제 동작 불일치류 결함, 작업 지시서 6절).
+  "candidates.col_demand": "수요",
   "candidates.col_risk": "위험도",
   "candidates.col_status": "상태",
   "candidates.status.discovered": "검토 대기",
@@ -719,6 +725,13 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "safety.mode_change_confirm_body": "자동화 모드를 {from} → {to} 로 변경합니다.",
   "safety.mode_change_success": "자동화 모드가 변경되었습니다.",
   "safety.mode_change_error": "모드 변경 중 오류가 발생했습니다.",
+  "safety.function_modes_title": "기능별 자동화 상태",
+  "safety.function_modes_intro": "상품 발굴부터 환불까지 각 기능을 독립적으로 수동/반자동/자동/일시 중지로 설정합니다. 자동으로 설정해도 결제·발주·환불 권한이 자동으로 확대되지는 않습니다.",
+  "safety.function_modes_col_function": "기능",
+  "safety.function_modes_col_mode": "현재 상태",
+  "safety.function_modes_col_action": "변경",
+  "safety.function_modes_reason_prefix": "사유: ",
+  "safety.function_modes_set_at_prefix": "변경 시각: ",
 
   "decision.desc": "V3 상품 후보를 평가·추천한다. 최종 승인/보류/거절은 운영자가 직접 결정한다 — AI가 자동으로 상태를 바꾸지 않는다.",
   "decision.ai_disclosure": "정직한 공개: 이 \"Decision AI\"는 실제 LLM/외부 AI가 아니라 가중치 기반 규칙 엔진(evaluator_kind=\"deterministic\")입니다 — 같은 입력은 항상 같은 점수를 만듭니다. 실제 AI Provider 연동은 별도 승인 전까지 연결되지 않습니다.",
@@ -997,16 +1010,22 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "ls.bulk_retry_nothing_to_do": "지금 재시도할 수 있는 항목이 없습니다.",
 
   "finance.title": "자금·정산",
-  "finance.available_funding_title": "Available Funding (Funding Account)",
+  // 2026-09-10 UI 개선 중 발견·수정 — 이 4개 제목이 ko-KR.js에
+  // 영문 원문 그대로 남아 있었다(en-US.js와 완전히 동일한 문자열 —
+  // 번역 누락이 아니라 애초에 한국어로 옮겨진 적이 없었음). 기존
+  // 결함 우선 원칙(작업 지시서 6절)에 따라 자연스러운 한국어로
+  // 수정한다 — 이미 이 화면 다른 문구에서 쓰인 어휘(가용/운영자금/
+  // 공급처 지급/정산)와 일관되게 맞춘다.
+  "finance.available_funding_title": "가용 운영자금(Funding Account)",
   "finance.total_funding_prefix": "총 운영자금 ",
   "finance.no_funding_account": "등록된 Funding Account가 없습니다.",
-  "finance.hold_title": "Hold (예약)",
+  "finance.hold_title": "예약(Hold) 금액",
   "finance.hold_note": "주문별 상세 목록 API는 없어 합계만 표시합니다.",
   "finance.no_data": "데이터 없음",
-  "finance.supplier_payment_title": "Supplier Payment",
+  "finance.supplier_payment_title": "공급처 지급",
   "finance.supplier_payment_note": "공급처 지급 목록 조회 API가 아직 없어 이 화면에서는 표시할 수 없습니다(정직한 상태 표시).",
-  "finance.marketplace_settlement_title": "Marketplace Settlement",
-  "finance.settlement_no_data": "Settlement 데이터가 없습니다.",
+  "finance.marketplace_settlement_title": "판매채널 정산",
+  "finance.settlement_no_data": "정산 데이터가 없습니다.",
 
   "common.homez_logo_alt": "HOMEZ 로고",
   "common.password_confirm_label": "비밀번호 확인",
@@ -1100,6 +1119,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "auth.register.success_toast": "가입 신청이 접수되었습니다.",
   "auth.register.error_generic": "가입 신청 중 오류가 발생했습니다.",
   "auth.session_expired": "세션이 만료되었습니다. 다시 로그인하세요.",
+  "auth.session_idle_timeout": "3시간 동안 사용하지 않아 자동으로 로그아웃되었습니다. 다시 로그인하세요.",
   "auth.logged_out_toast": "로그아웃되었습니다.",
   "auth.server_unreachable": "서버에 연결할 수 없습니다. 서버 상태를 확인한 뒤 다시 시도해 주세요.",
 
@@ -2107,6 +2127,24 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "ship.return_reason_label": "사유",
   "ship.create_return_submit": "접수",
   "ship.create_return_success": "반품/교환이 접수되었습니다.",
+  // 2026-09-10 UI 개선(시안 06 배송 관리 참고) — 배송 상태를 원문
+  // 영문 코드가 아니라 한국어로 표시하고, 진행 현황을 한눈에 볼 수
+  // 있는 단계 표시(timeline)를 추가한다. 키는 console.js에서
+  // 템플릿 리터럴(`ship.status.${status.toLowerCase()}`)로 동적
+  // 조합되므로 test_all_js_t_call_keys_exist_in_catalog가 자동으로
+  // 잡지 못한다 — tests/test_i18n.py의 전용 테스트로 별도 고정한다
+  // (2026-08-30 사전검사 이슈 빈 문장 사고와 동일한 패턴).
+  "ship.timeline_heading": "배송 진행 현황",
+  "ship.status.pending": "접수",
+  "ship.status.ready": "출고 준비",
+  "ship.status.shipped": "출고 완료",
+  "ship.status.in_transit": "배송 중",
+  "ship.status.delivered": "배송 완료",
+  "ship.status.cancelled": "취소됨",
+  "ship.status.return_requested": "반품 요청",
+  "ship.status.returned": "반품 완료",
+  "ship.status.exchange_requested": "교환 요청",
+  "ship.status.exchanged": "교환 완료",
 
   // -------------------- 반품 · 교환 (Return / Exchange) --------------------
   "ret.title": "반품 · 교환",
@@ -2137,6 +2175,263 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "ret.reject_confirm_body": "거절 사유를 입력하세요.",
   "ret.reject_success": "거절되었습니다.",
   "ret.status_events_heading": "상태 이력",
+  // 2026-09-10 UI 개선(시안 07 취소·반품 관리 참고) — 배송 화면과
+  // 동일한 이유(ship.status.* 주석 참고)로 동적 템플릿 리터럴 키를
+  // 쓴다. tests/test_i18n.py의 전용 테스트로 별도 고정한다.
+  "ret.timeline_heading": "처리 진행 현황",
+  "ret.status.requested": "취소·반품 요청",
+  "ret.status.approved": "승인됨",
+  "ret.status.received": "회수 완료",
+  "ret.status.completed": "처리 완료",
+  "ret.status.rejected": "거절됨",
+
+  // -------------------- 환불 (Refund, Phase 8) --------------------
+  // 2026-09-10 UI 개선 — 백엔드(app/domains/refund)는 이번 세션
+  // Phase 8에서 완성·테스트됐지만 화면이 전혀 없어 운영자가 콘솔에서
+  // 환불을 승인할 방법이 없었다(UI-8 감사 중 발견). 신규 등록(생성)
+  // 화면은 이번 범위에 포함하지 않는다 — 승인/거부/실행확인만
+  // 다룬다(작업 목록/후속 항목 참고).
+  "refund.title": "환불 관리",
+  "refund.desc": "고객·매입처 환불 요청을 승인·거부하고 처리 상태를 확인합니다 — 실제 결제망과 연동되지 않습니다(Fake Provider, 내부 기록 전용).",
+  "refund.fake_notice": "이 화면의 승인·실행확인은 실제 결제망을 호출하지 않습니다 — 내부 기록만 남습니다. 실제 환불 이체는 사용자가 결제수단 제공사에서 직접 처리해야 합니다.",
+  "refund.refresh_btn": "새로고침",
+  "refund.filter.status_label": "상태",
+  "refund.col_id": "환불번호",
+  "refund.col_order_id": "주문 ID",
+  "refund.col_return_order_id": "반품접수 ID",
+  "refund.col_type": "구분",
+  "refund.col_status": "상태",
+  "refund.col_amount": "환불금액",
+  "refund.col_requested_at": "요청일시",
+  "refund.col_action": "작업",
+  "refund.type.customer_refund": "고객 환불",
+  "refund.type.supplier_reclaim": "매입처 회수",
+  "refund.status.awaiting_approval": "승인 대기",
+  "refund.status.approved": "승인됨",
+  "refund.status.rejected": "거절됨",
+  "refund.status.executed": "처리 완료",
+  "refund.empty": "환불 요청이 없습니다.",
+  "refund.empty_sub": "반품·취소 처리에서 환불이 필요하면 여기에 표시됩니다.",
+  "refund.detail_heading": "환불 상세",
+  "refund.close_btn": "닫기",
+  "refund.timeline_heading": "처리 진행 현황",
+  "refund.col_reason": "사유",
+  "refund.col_requested_by": "요청자 ID",
+  "refund.col_approved_by": "승인자 ID",
+  "refund.approve_btn": "승인",
+  "refund.reject_btn": "거부",
+  "refund.mark_executed_btn": "실행확인 처리",
+  "refund.approve_success": "환불이 승인되었습니다.",
+  "refund.reject_success": "환불 요청이 거부되었습니다.",
+  "refund.mark_executed_success": "환불 실행이 기록되었습니다(Fake Provider — 실제 이체 아님).",
+  "refund.reject_confirm_title": "환불 거부",
+  "refund.reject_confirm_body": "거부 사유를 입력하세요.",
+  "refund.status_events_heading": "처리 기록",
+
+  // -------------------- 결제 수단 (Payment, Phase 7) --------------------
+  // 2026-09-10 UI 개선(시안 05 매입처·결제 설정 참고) — 백엔드
+  // (app/domains/payment, Phase 7)는 완성됐지만 화면이 전혀 없어
+  // 결제수단·자동결제 한도를 콘솔에서 설정할 방법이 없었다(UI-6
+  // 감사 중 발견, Refund와 동일한 패턴). 실제 결제 실행 엔드포인트
+  // 자체가 없고(FakePaymentProvider만 존재), raw_details(카드·계좌
+  // 원문)는 절대 저장되지 않는다 — 이 화면은 그래서 실제 카드/계좌
+  // 번호 입력 필드를 아예 두지 않는다(의도적 설계, 아래 참고).
+  "pay.title": "결제 수단",
+  "pay.desc": "매입 결제에 사용할 결제수단과 자동결제 한도를 설정합니다 — 실제 결제망과 연동되지 않습니다(Fake Provider).",
+  "pay.fake_notice": "실제 카드·계좌 정보는 이 화면에 입력하지 않습니다 — 현재 결제 실행 기능이 없어(Fake Provider) 저장할 대상이 없습니다. 실제 Provider 연동 시 별도 입력 화면이 추가됩니다.",
+  "pay.automation_mode_hint": "자동 매입(결제) 모드는 이 화면이 아니라 \"자동화 안전\" 메뉴에서 기능별로 관리합니다.",
+  "pay.methods_heading": "등록된 결제수단",
+  "pay.col_type": "종류",
+  "pay.col_display_name": "이름",
+  "pay.col_default": "기본",
+  "pay.col_active": "상태",
+  "pay.col_created_at": "등록일",
+  "pay.col_action": "작업",
+  "pay.type.card": "카드",
+  "pay.type.paypal": "PayPal",
+  "pay.type.bank_transfer": "계좌이체",
+  "pay.type.virtual_account": "가상계좌",
+  "pay.status.active": "사용 중",
+  "pay.status.inactive": "비활성화됨",
+  "pay.deactivate_btn": "비활성화",
+  "pay.set_default_btn": "기본으로 설정",
+  "pay.deactivate_success": "결제수단이 비활성화되었습니다.",
+  "pay.set_default_success": "기본 결제수단으로 설정되었습니다.",
+  "pay.empty": "등록된 결제수단이 없습니다.",
+  "pay.empty_sub": "아래에서 결제수단을 등록할 수 있습니다.",
+  "pay.register_heading": "결제수단 등록",
+  "pay.type_label": "종류",
+  "pay.display_name_label": "이름",
+  "pay.display_name_placeholder": "예: 법인카드 A(끝자리 1234 기억용)",
+  "pay.make_default_label": "기본 결제수단으로 설정",
+  "pay.register_submit": "등록",
+  "pay.register_success": "결제수단이 등록되었습니다.",
+  "pay.auto_limit_heading": "자동결제 한도",
+  "pay.current_limit_heading": "현재 설정",
+  "pay.no_limit_set": "설정된 자동결제 한도가 없습니다.",
+  "pay.per_transaction_limit_label": "건당 한도",
+  "pay.daily_limit_label": "일일 한도",
+  "pay.daily_limit_not_enforced_notice": "일일 한도는 저장되지만 현재는 건당 한도만 실제로 적용됩니다 — 일일 누적 집계 기능은 아직 구현되지 않았습니다.",
+  "pay.auto_limit_save_submit": "한도 저장",
+  "pay.auto_limit_save_success": "자동결제 한도가 저장되었습니다.",
+
+  // -------------------- 환율 관리 (Currency, Phase 9) --------------------
+  // 2026-09-10 UI 개선 — 시스템 차원 발견(docs/HOMEZ_V7_UI_
+  // IMPLEMENTATION_AUDIT.md "4. 시스템 차원 발견" 절) — 백엔드는
+  // 완성됐지만 화면이 없었다. 실제 외부 환율 API 연동이 없고
+  // (사용자가 직접 확인한 값을 기록), 허용률 초과 판정 로직도
+  // 아직 실제 매입 발주 흐름에 연결되지 않았다 — 둘 다 화면에
+  // 정직하게 고지한다.
+  "curr.title": "환율 관리",
+  "curr.desc": "매입처 대금 환산에 쓰는 환율을 기록하고, 환율 변동 허용률을 설정합니다 — 실제 외부 환율 API와 연동되지 않습니다.",
+  "curr.fake_notice": "실제 외부 환율 API를 호출하지 않습니다 — 사용자가 직접 확인한 환율 수치를 기록하는 용도입니다.",
+  "curr.tolerance_not_wired_notice": "허용률 초과 판정 로직은 준비돼 있지만, 아직 실제 매입 발주 흐름에 자동으로 연결되지 않았습니다 — 이 화면에서는 조회·설정만 가능합니다.",
+  "curr.record_heading": "환율 기록",
+  "curr.base_currency_label": "기준 통화(매입처 대금 통화)",
+  "curr.quote_currency_label": "환산 통화",
+  "curr.rate_label": "환율",
+  "curr.rate_hint": "1 기준통화 = 환율 × 환산통화",
+  "curr.record_submit": "기록",
+  "curr.record_success": "환율이 기록되었습니다.",
+  "curr.lookup_heading": "최신 환율 조회",
+  "curr.lookup_submit": "조회",
+  "curr.lookup_result_heading": "조회 결과",
+  "curr.lookup_not_found": "기록된 환율이 없습니다 — 아직 이 통화쌍을 기록한 적이 없습니다.",
+  "curr.col_rate": "환율",
+  "curr.col_recorded_at": "기록 일시",
+  "curr.col_source": "출처",
+  "curr.tolerance_heading": "환율 변동 허용률",
+  "curr.current_tolerance_label": "현재 허용률",
+  "curr.new_tolerance_label": "새 허용률(%)",
+  "curr.tolerance_save_submit": "허용률 저장",
+  "curr.tolerance_save_success": "허용률이 저장되었습니다.",
+
+  // -------------------- 공급처 능력 (SupplierCapability, Phase 9) --------------------
+  // 2026-09-10 UI 개선(시스템 차원 발견) — 공급처 1곳당 프로필·
+  // 능력 요약표를 조회·기록한다. "미확인"은 절대 추측하지 않는다
+  // (기본값 UNKNOWN을 그대로 노출 — 추측으로 SUPPORTED/NOT_SUPPORTED
+  // 를 채우지 않는다).
+  "spc.title": "공급처 능력",
+  "spc.desc": "공급처별 국내·해외 여부와 상품·주문·배송·취소 지원 여부를 기록합니다 — 미확인 항목은 추측하지 않고 \"미확인\"으로 남습니다.",
+  "spc.lookup_label": "공급처 ID",
+  "spc.lookup_submit": "조회",
+  "spc.lookup_placeholder": "숫자 ID를 입력하세요",
+  "spc.profile_heading": "공급처 프로필",
+  "spc.is_international_label": "해외 공급처",
+  "spc.country_code_label": "국가 코드",
+  "spc.country_code_placeholder": "예: CN, US(비워두면 미설정)",
+  "spc.default_currency_label": "기본 통화",
+  "spc.consignment_direct_label": "위탁 시 고객에게 직접배송 가능",
+  "spc.profile_save_submit": "프로필 저장",
+  "spc.profile_save_success": "공급처 프로필이 저장되었습니다.",
+  "spc.matrix_heading": "능력 요약표",
+  "spc.col_flag": "항목",
+  "spc.col_support": "지원 여부",
+  "spc.col_note": "메모",
+  "spc.col_action": "작업",
+  "spc.flag.product_info": "상품정보",
+  "spc.flag.option_info": "옵션정보",
+  "spc.flag.price_info": "가격정보",
+  "spc.flag.stock_info": "재고정보",
+  "spc.flag.shipping_fee_info": "배송비정보",
+  "spc.flag.shipping_days_info": "배송기간정보",
+  "spc.flag.order_placement": "발주가능여부",
+  "spc.flag.cancelability": "취소가능여부",
+  "spc.support.supported": "지원",
+  "spc.support.not_supported": "미지원",
+  "spc.support.unknown": "미확인",
+  "spc.save_row_btn": "저장",
+  "spc.save_row_success": "저장되었습니다.",
+
+  // -------------------- 가격·재고 안전(설정) (PriceStockSafety, Phase 10) --------------------
+  // 2026-09-10 UI 개선(시스템 차원 발견) — 두 가지 미연결 사실을
+  // 화면에 정직하게 고지한다(app/domains/price_stock_safety/
+  // service.py 모듈 docstring 참고): (1) "표시 재고" 자동 조회가
+  // 없어 이 화면의 확인은 수동 입력값 검사 도구다(판매채널 실시간
+  // 감시 아님). (2) 가격 검토주기는 저장만 되고 실제 스케줄러
+  // Job에 아직 연결되지 않았다.
+  "pss.title": "가격·재고 안전 설정",
+  "pss.desc": "가상재고 임계값과 가격 검토주기를 설정합니다.",
+  "pss.threshold_not_wired_notice": "이 화면의 \"확인\"은 직접 입력한 표시 재고 수치를 판정하는 수동 도구입니다 — 판매채널의 실제 표시 재고를 자동으로 읽어오지 않습니다(그 연동은 아직 없습니다).",
+  "pss.review_cycle_not_wired_notice": "가격 검토주기는 저장되지만, 아직 실제 정기 재검토 작업(스케줄러)에 연결되지 않았습니다 — 값만 기록됩니다.",
+  "pss.threshold_heading": "가상재고 임계값",
+  "pss.current_threshold_label": "현재 임계값",
+  "pss.no_threshold_set": "설정된 임계값이 없습니다(항상 허용).",
+  "pss.new_threshold_label": "새 임계값(수량)",
+  "pss.threshold_save_submit": "임계값 저장",
+  "pss.threshold_save_success": "임계값이 저장되었습니다.",
+  "pss.check_heading": "가상재고 확인(수동)",
+  "pss.displayed_stock_label": "표시 재고 수량",
+  "pss.check_submit": "확인",
+  "pss.check_allowed": "허용 — 자동판매·자동발주를 막을 이유가 없습니다.",
+  "pss.check_blocked": "차단",
+  "pss.review_cycle_heading": "가격 검토주기",
+  "pss.current_review_cycle_label": "현재 검토주기",
+  "pss.review_cycle_days_suffix": "일",
+  "pss.new_review_cycle_label": "새 검토주기(일)",
+  "pss.review_cycle_save_submit": "검토주기 저장",
+  "pss.review_cycle_save_success": "검토주기가 저장되었습니다.",
+
+  // -------------------- AI 학습 기반 (AiLearning, Phase 12) --------------------
+  // 2026-09-10 UI 개선(시스템 차원 발견) — 백엔드
+  // (app/domains/ai_learning/constants.py::ModelCandidateStatus
+  // docstring 참고) 자신이 "APPROVED조차 실제 라이브 적용을 의미하지
+  // 않는다"고 명시한다 — 이 화면의 "승인" 라벨에도 그 사실을 그대로
+  // 반영한다. 실제 평가결과 기록(record_outcome)/데이터셋 export는
+  // Decision AI 화면과의 연결 설계가 필요해 이번 범위에 포함하지
+  // 않았다(모델 후보 심사 + 학습 데이터 준비도 확인만 다룬다).
+  "ail.title": "AI 학습 기반",
+  "ail.desc": "모델 후보의 오프라인 평가·회귀 비교·승인 이력을 관리하고, 학습 데이터셋 준비 상태를 확인합니다.",
+  "ail.fake_notice": "\"승인\"은 사람이 검토했다는 기록일 뿐입니다 — 이 후보를 실제 운영 판단 로직에 적용하는 기능은 아직 없습니다.",
+  "ail.candidates_heading": "모델 후보 목록",
+  "ail.filter.status_label": "상태",
+  "ail.col_id": "후보 ID",
+  "ail.col_name": "이름",
+  "ail.col_version": "버전",
+  "ail.col_status": "상태",
+  "ail.col_created_at": "생성일",
+  "ail.col_action": "작업",
+  "ail.status.draft": "초안",
+  "ail.status.offline_evaluated": "오프라인 평가 완료",
+  "ail.status.regression_compared": "회귀 비교 완료",
+  "ail.status.approved": "승인됨(실제 적용은 별도)",
+  "ail.status.rejected": "반려됨",
+  "ail.empty": "등록된 모델 후보가 없습니다.",
+  "ail.empty_sub": "아래에서 새 후보를 등록할 수 있습니다.",
+  "ail.create_heading": "새 후보 등록",
+  "ail.name_label": "이름",
+  "ail.version_label": "버전",
+  "ail.create_submit": "등록",
+  "ail.create_success": "모델 후보가 등록되었습니다.",
+  "ail.detail_heading": "후보 상세",
+  "ail.close_btn": "닫기",
+  "ail.col_sample_size": "사용 표본 수",
+  "ail.col_offline_summary": "오프라인 평가 요약",
+  "ail.col_regression_summary": "회귀 비교 요약",
+  "ail.col_approved_by": "승인자 ID",
+  "ail.col_approved_at": "승인일시",
+  "ail.offline_eval_heading": "오프라인 평가 완료 처리",
+  "ail.offline_summary_label": "평가 요약",
+  "ail.sample_size_label": "사용 표본 수",
+  "ail.offline_eval_submit": "오프라인 평가 완료로 표시",
+  "ail.offline_eval_success": "오프라인 평가 완료로 표시되었습니다.",
+  "ail.regression_heading": "회귀 비교 완료 처리",
+  "ail.regression_summary_label": "비교 요약",
+  "ail.regression_submit": "회귀 비교 완료로 표시",
+  "ail.regression_success": "회귀 비교 완료로 표시되었습니다.",
+  "ail.approve_btn": "승인",
+  "ail.approve_success": "승인되었습니다.",
+  "ail.reject_btn": "반려",
+  "ail.reject_confirm_title": "모델 후보 반려",
+  "ail.reject_confirm_body": "반려 사유를 입력하세요.",
+  "ail.reject_success": "반려되었습니다.",
+  "ail.readiness_heading": "학습 데이터셋 준비도 확인",
+  "ail.total_completed_orders_label": "전체 완료 주문 수",
+  "ail.readiness_check_submit": "확인",
+  "ail.readiness_ready": "준비됨",
+  "ail.readiness_not_ready": "준비되지 않음",
+  "ail.readiness_available_label": "확보된 데이터",
+  "ail.readiness_required_label": "필요한 데이터",
 
   // -------------------- 마진 · 수익 분석 (Pricing / Margin) --------------------
   "prc.title": "마진 · 수익 분석",
@@ -2159,10 +2454,14 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "prc.shipping_cost_label": "배송비",
   "prc.packaging_cost_label": "포장비",
   "prc.ad_cost_label": "광고비",
-  "prc.channel_fee_rate_label": "채널 수수료율(0~1)",
-  "prc.payment_fee_rate_label": "결제 수수료율(0~1)",
-  "prc.return_reserve_rate_label": "반품충당율(0~1)",
-  "prc.tax_basis_rate_label": "세율(0~1)",
+  // 2026-09-10 UI 개선 중 발견·수정 — Phase 10이 purchase_task/
+  // retail_purchase 화면에서 이미 고친 "0~1 소수점 입력" 결함이
+  // 이 화면(margin-analysis)에는 적용되지 않고 남아있었다. 같은
+  // 원칙(퍼센트 입력·표시, 0~1 소수점 직접 입력 금지)으로 맞춘다.
+  "prc.channel_fee_rate_label": "채널 수수료율(%)",
+  "prc.payment_fee_rate_label": "결제 수수료율(%)",
+  "prc.return_reserve_rate_label": "반품충당율(%)",
+  "prc.tax_basis_rate_label": "세율(%)",
   "prc.init_submit": "초기화",
   "prc.init_success": "가격/원가 정보가 등록되었습니다.",
   "prc.detail_heading": "가격/원가 상세",
@@ -2198,6 +2497,37 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "prc.variance_amount_label": "마진액 괴리",
   "prc.variance_rate_label": "마진율 괴리",
   "prc.load_error": "가격 정보를 불러오지 못했습니다.",
+  // 2026-09-10 UI 개선(시안 08 정산·손익 관리 참고) — margin-
+  // variance API가 이미 돌려주는 expected/latest_actual 전체
+  // 스냅샷(revenue/cost_of_goods/channel_fee 등 13개 항목)을
+  // 지금까지 화면이 버리고 차이값만 보여주고 있었다. 시안의 "예상
+  // (예시 데이터)/확정(실제 데이터)/차이" 비교표를 실제 데이터로
+  // 구현한다.
+  "prc.comparison_heading": "예상 대비 확정 비교",
+  "prc.comparison_col_item": "항목",
+  "prc.comparison_col_expected": "예상",
+  "prc.comparison_col_actual": "확정",
+  "prc.comparison_col_diff": "차이",
+  "prc.comparison_no_actual": "아직 확정(실측) 마진 스냅샷이 없습니다 — 정산 반영 전입니다.",
+  "prc.source_measured": "실측",
+  "prc.source_estimated": "추정 대체",
+  "prc.item.revenue": "매출",
+  "prc.item.cost_of_goods": "매입원가",
+  "prc.item.channel_fee": "채널 수수료",
+  "prc.item.payment_fee": "결제 수수료",
+  "prc.item.shipping_cost": "배송비",
+  "prc.item.packaging_cost": "포장비",
+  "prc.item.ad_cost": "광고비",
+  "prc.item.return_reserve": "반품충당금",
+  "prc.item.tax": "세금",
+  "prc.item.refund_adjustment": "환불 조정",
+  "prc.item.total_cost": "총 비용",
+  "prc.item.margin_amount": "마진액",
+  "prc.item.margin_rate": "마진율",
+  "prc.margin_type.expected": "예상",
+  "prc.margin_type.actual": "확정",
+  "prc.product_name_label": "상품명",
+  "prc.product_name_unavailable": "상품명을 확인할 수 없습니다.",
 
   // -------------------- 채널 정산 (Channel Settlement / Reconciliation) --------------------
   "stl.title": "채널 정산",
@@ -2225,6 +2555,19 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "stl.release_hold_success": "보류가 해제되었습니다.",
   "stl.settlement_heading": "정산 건 관리(입금/불일치)",
   "stl.settlement_empty": "조회된 정산 건이 없습니다.",
+  // 2026-09-10 UI 개선(시안 08 정산·손익 관리 참고) — 정산 차이/
+  // 정산 상태가 영문 코드 그대로 노출되던 것을 수정. 두 목록
+  // (RECONCILIATION_STATUS_OPTIONS/SETTLEMENT_STATUS_OPTIONS)이
+  // 공유하는 하나의 키 집합 — 두 값 집합에 겹치는 문자열이 없어
+  // 충돌하지 않는다.
+  "stl.status.pending_settlement": "정산 대기",
+  "stl.status.matched": "일치",
+  "stl.status.mismatch": "불일치",
+  "stl.status.held": "보류",
+  "stl.status.pending": "대기",
+  "stl.status.deposited": "입금 완료",
+  "stl.status.cancelled": "취소됨",
+  "stl.status.reversed": "환수됨",
   "stl.col_settlement_id": "정산번호",
   "stl.col_market": "마켓",
   "stl.col_settlement_status": "상태",
@@ -2403,9 +2746,9 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "retail_purchase.empty_sub": "새로운 구매 실행 요청이 생기면 여기에 표시됩니다.",
   "retail_purchase.field_allowed_providers": "허용 구매처",
   "retail_purchase.field_min_net_profit": "최소 순이익(원)",
-  "retail_purchase.field_min_margin_rate": "최소 마진율(0~1)",
+  "retail_purchase.field_min_margin_rate": "최소 마진율(%)",
   "retail_purchase.field_max_purchase_price": "최대 매입가격(원)",
-  "retail_purchase.field_max_price_increase_rate": "최대 가격 상승률(0~1)",
+  "retail_purchase.field_max_price_increase_rate": "최대 가격 상승률(%)",
   "retail_purchase.field_max_delivery_days": "허용 배송기간(일)",
   "retail_purchase.field_require_return_allowed": "반품 가능 상품만 허용",
   "retail_purchase.field_min_seller_trust": "최소 판매자 신뢰도(0~1)",
@@ -2631,6 +2974,19 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "purchase_task.cc_check_point_btn": "계정 확인(포인트 조회)",
   "purchase_task.cc_point_result": "조회 포인트 · 결제 사용 여부 미확인: {point} (계정: {account})",
   "purchase_task.cc_point_unreadable": "확인 불가",
+  "purchase_task.cc_capabilities_btn": "지원 기능 보기",
+  "purchase_task.cc_capability.connection_check": "연결 상태 확인",
+  "purchase_task.cc_capability.login_requirement_check": "로그인 필요 여부",
+  "purchase_task.cc_capability.product_option_price_stock_lookup": "상품·옵션·가격·재고 조회",
+  "purchase_task.cc_capability.order_form_and_final_amount": "주문서·최종 금액 확인",
+  "purchase_task.cc_capability.payment_executability_check": "결제 실행 가능 여부",
+  "purchase_task.cc_capability.existing_order_lookup": "기존 주문 조회",
+  "purchase_task.cc_capability.shipping_tracking_lookup": "배송·송장 조회",
+  "purchase_task.cc_capability.cancel_support_check": "취소 지원 여부",
+  "purchase_task.cc_capability_support.supported": "지원됨",
+  "purchase_task.cc_capability_support.not_supported": "미지원",
+  "purchase_task.cc_capability_support.unknown": "미확인",
+  "purchase_task.cc_capabilities_sales_application_hint": "판매신청은 이 목록에 없습니다 — 연결 단위가 아니라 상품마다 별도로 확인해야 합니다(발주 검토 화면에서 상품별로 표시됩니다).",
   "purchase_task.policy_btn": "매입예산·정책",
   "purchase_task.email_pref_btn": "이메일 알림 설정",
   "purchase_task.csv_import_btn": "CSV로 주문정보 가져오기",
@@ -2719,8 +3075,8 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "purchase_task.field_monthly_budget": "월간 매입예산(원)",
   "purchase_task.field_max_quantity": "상품별 최대 구매수량",
   "purchase_task.field_min_net_profit": "최소 예상이익(원)",
-  "purchase_task.field_min_margin_rate": "최소 예상마진율(0~1)",
-  "purchase_task.field_max_price_increase": "최대 가격상승률(0~1)",
+  "purchase_task.field_min_margin_rate": "최소 예상마진율(%)",
+  "purchase_task.field_max_price_increase": "최대 가격상승률(%)",
   "purchase_task.field_max_delivery_days": "최대 배송기한(일)",
   "purchase_task.field_min_match_confidence": "동일상품 신뢰도 하한(0.90~1)",
   "purchase_task.field_max_concurrent": "동시 진행 주문 한도",
@@ -2785,6 +3141,11 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "purchase_task.review_product_title_label": "온채널 상품명(지금 조회)",
   "purchase_task.review_estimated_amount_label": "상품 금액(추정)",
   "purchase_task.review_shipping_fee_label": "배송비",
+  "purchase_task.review_sales_application_label": "판매신청 상태",
+  "purchase_task.review_sales_application_confirmed": "접수 확인됨",
+  "purchase_task.review_sales_application_not_confirmed": "미확인",
+  "purchase_task.review_point_balance_label": "포인트(예치금) 잔액",
+  "purchase_task.review_point_balance_unknown": "확인 불가",
   "purchase_task.review_recipient_heading": "수취정보",
   "purchase_task.review_recipient_name": "받는 분",
   "purchase_task.review_recipient_phone": "연락처",
@@ -2793,7 +3154,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "purchase_task.review_unmasked_hint": "재인증으로 원문을 확인했습니다 — 이 화면을 벗어나면 다시 마스킹됩니다.",
   "purchase_task.review_blocked_heading": "지금 발주를 보낼 수 없는 이유",
   "purchase_task.review_send_btn": "실제 온채널에 발주 전송",
-  "purchase_task.review_send_disabled_hint": "온채널의 공식 답변을 받아 발주 계약(판매신청·결제·중복방지·재조회 방법)이 전부 확인되기 전까지 이 버튼은 눌러도 아무 일도 일어나지 않습니다.",
+  "purchase_task.review_send_disabled_hint": "온채널이 배송비를 사전에 확인할 방법을 제공하기 전까지 이 버튼은 눌러도 아무 일도 일어나지 않습니다 — 판매신청·결제·중복방지·재조회 방법은 이미 확인됐지만, 배송비 포함 최종 금액을 확정할 수 없어 실제 발주는 여전히 차단됩니다.",
   "purchase_task.create_required_error": "원 주문 ID와 상품명을 입력하세요.",
   "purchase_task.candidate_url_required_error": "상품 URL을 입력하세요.",
   "purchase_task.record_purchase_required_error": "주문번호·실제 결제금액·구매 완료시각을 입력하세요.",

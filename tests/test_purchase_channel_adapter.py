@@ -379,6 +379,80 @@ class OnchannelRealLookupTestCase(unittest.TestCase):
         self.assertEqual(result.external_order_number, "MO_1")
         self.assertEqual(result.amount, 13000)
 
+    def test_lookup_tracking_single_delivery_returns_it(self):
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {
+            "result": {
+                "order_code": "MO_1", "product_code": "CH1",
+                "product_name": "테스트", "order_price": 13000,
+                "status": 2, "detail_status": "배송중",
+                "deliverys": [
+                    {"name": "CJ대한통운", "tracking_number": "111", "created_at": "x"},
+                ],
+            },
+        }
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_get=self._fake_get(200, body),
+        )
+
+        result = adapter.lookup_tracking("MO_1")
+
+        self.assertEqual(result.support, CapabilitySupport.SUPPORTED)
+        self.assertEqual(result.tracking_number, "111")
+        self.assertFalse(result.multiple_deliveries_detected)
+
+    def test_lookup_tracking_multiple_deliveries_does_not_auto_select(self):
+        """2026-09-10 후속(온채널 공식 답변 — "부분배송·복수송장
+        미지원" 확정) — 단일 송장 정책의 핵심 회귀 테스트. 실제
+        응답에 2건 이상이 오면 자동으로 하나를 고르지 않는다."""
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {
+            "result": {
+                "order_code": "MO_1", "product_code": "CH1",
+                "product_name": "테스트", "order_price": 13000,
+                "status": 2, "detail_status": "배송중",
+                "deliverys": [
+                    {"name": "CJ대한통운", "tracking_number": "111", "created_at": "x"},
+                    {"name": "롯데택배", "tracking_number": "222", "created_at": "y"},
+                ],
+            },
+        }
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_get=self._fake_get(200, body),
+        )
+
+        result = adapter.lookup_tracking("MO_1")
+
+        self.assertEqual(result.support, CapabilitySupport.SUPPORTED)
+        self.assertTrue(result.multiple_deliveries_detected)
+        self.assertIsNone(result.tracking_number)
+        self.assertIsNone(result.courier)
+
+    def test_lookup_tracking_no_delivery_yet(self):
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {
+            "result": {
+                "order_code": "MO_1", "product_code": "CH1",
+                "product_name": "테스트", "order_price": 13000,
+                "status": 1, "detail_status": "상품준비중", "deliverys": [],
+            },
+        }
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_get=self._fake_get(200, body),
+        )
+
+        result = adapter.lookup_tracking("MO_1")
+
+        self.assertEqual(result.support, CapabilitySupport.SUPPORTED)
+        self.assertIsNone(result.tracking_number)
+        self.assertFalse(result.multiple_deliveries_detected)
+
     def test_check_member_point_normal_response(self):
         """2026-09-08 후속(발주·결제 계약 조사) — 정상 응답. member_id
         는 마스킹돼서만 나오고, point는 실제 관측값 그대로 온다."""
@@ -589,6 +663,86 @@ class OnchannelRealLookupTestCase(unittest.TestCase):
         self.assertEqual(
             matrix[ChannelCapability.PAYMENT_EXECUTABILITY_CHECK], CapabilitySupport.UNKNOWN,
         )
+
+
+class SalesApplicationAdapterTestCase(unittest.TestCase):
+    """2026-09-10 후속(온채널 공식 답변 — "발주 전 판매신청 필수"
+    확정) — apply_for_sale()의 Adapter 계층 배선을 검증한다. 실제
+    네트워크는 열지 않는다(가짜 http_post 주입)."""
+
+    def _fake_post(self, status_code, body):
+
+        class _Resp:
+            def __init__(self):
+                self.status_code = status_code
+            def json(self):
+                return body
+
+        def post(url, *, headers, json=None, timeout=None):
+            self.last_call = {"url": url, "headers": headers, "json": json}
+            return _Resp()
+
+        return post
+
+    def setUp(self):
+
+        self.store = InMemoryCredentialStore()
+
+    def test_apply_for_sale_requires_credential(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.apply_for_sale("CH1")
+
+    def test_apply_for_sale_success_does_not_claim_approval(self):
+        """support=SUPPORTED·submitted=True까지만 확인한다 — 이
+        결과에 "승인됨"을 뜻하는 필드가 아예 없다는 것 자체가
+        설계 검증이다(SalesApplicationResult에 approved 필드가
+        없다)."""
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {"result": {"prd_code": "CH1894996"}}
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_post=self._fake_post(200, body),
+        )
+
+        result = adapter.apply_for_sale("CH1894996")
+
+        self.assertEqual(result.support, CapabilitySupport.SUPPORTED)
+        self.assertTrue(result.submitted)
+        self.assertEqual(result.applied_product_code, "CH1894996")
+        self.assertFalse(hasattr(result, "approved"))
+        self.assertEqual(self.last_call["json"], {"prd_code": "CH1894996"})
+
+    def test_apply_for_sale_uses_this_connections_own_credential(self):
+
+        self.store.save("conn-1", {"auth_key": "jwt-for-conn-1", "allowed_ip": ""})
+        self.store.save("conn-2", {"auth_key": "jwt-for-conn-2", "allowed_ip": ""})
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-2",
+            http_post=self._fake_post(200, {"result": {"prd_code": "CH1"}}),
+        )
+
+        adapter.apply_for_sale("CH1")
+
+        self.assertEqual(self.last_call["headers"]["Authorization"], "Bearer jwt-for-conn-2")
+
+    def test_apply_for_sale_propagates_typed_error_on_409(self):
+
+        from app.domains.purchase_task.onchannel_client import OnchannelValidationError
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {"error": {"code": 409, "message": "이미 신청된 상품입니다."}}
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_post=self._fake_post(409, body),
+        )
+
+        with self.assertRaises(OnchannelValidationError):
+            adapter.apply_for_sale("CH1")
 
 
 if __name__ == "__main__":

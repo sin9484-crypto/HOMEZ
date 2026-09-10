@@ -957,6 +957,27 @@ class RealLookupServiceWiringTestCase(ChannelConnectionServiceTestCaseBase):
 
         self.assertIs(captured.get("credential_store"), self.credential_store)
 
+    def test_lookup_tracking_other_company_blocked_before_any_network_call(self):
+        """2026-09-10 신규(Phase 7) — lookup_tracking()도 lookup_
+        product()·lookup_order()와 동일한 회사 격리 게이트를 먼저
+        거친다."""
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        with self.assertRaises(NotFoundException):
+            self.service.lookup_tracking(c.id, self.company_b.id, "MO_1")
+
+    def test_lookup_tracking_without_credential_raises(self):
+
+        from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            self.service.lookup_tracking(c.id, self.company_a.id, "MO_1")
+
 
 class RealCheckRecordingTestCase(ChannelConnectionServiceTestCaseBase):
     """2026-09-08 재정정(id=3/4 사고 이후) — CREDENTIAL 방식은 실제
@@ -970,6 +991,7 @@ class RealCheckRecordingTestCase(ChannelConnectionServiceTestCaseBase):
         self, *, lookup_product_result=None, lookup_product_error=None,
         list_products_result=None, list_products_error=None,
         check_member_point_result=None, check_member_point_error=None,
+        lookup_tracking_result=None, lookup_tracking_error=None,
         on_call=None,
     ):
         """on_call은 Adapter가 "네트워크 응답을 받은 시점"을 흉내내는
@@ -1000,6 +1022,13 @@ class RealCheckRecordingTestCase(ChannelConnectionServiceTestCaseBase):
                 if check_member_point_error is not None:
                     raise check_member_point_error
                 return check_member_point_result
+
+            def lookup_tracking(self_inner, external_order_number):
+                if on_call is not None:
+                    on_call()
+                if lookup_tracking_error is not None:
+                    raise lookup_tracking_error
+                return lookup_tracking_result
 
             def check_connection(self_inner, account_label, *, verified_at=None):
                 # verify_connection_ready_for_order_submission()이 상태를
@@ -1039,6 +1068,23 @@ class RealCheckRecordingTestCase(ChannelConnectionServiceTestCaseBase):
             .first()
         )
         self.assertEqual(events.event_type, "VERIFIED")
+
+    def test_successful_lookup_tracking_records_verified_at_and_connected(self):
+        """2026-09-10 신규(Phase 7) — lookup_tracking()도 실제 조회
+        성공 시 lookup_product·lookup_order와 동일하게 연결 확인을
+        기록한다."""
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company_a.id, auth_key="x")
+        self._install_fake_adapter(lookup_tracking_result={"fake": "tracking"})
+
+        self.service.lookup_tracking(c.id, self.company_a.id, "MO_1")
+
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        self.assertEqual(row.status, ChannelConnectionStatus.CONNECTED)
+        self.assertIsNotNone(row.verified_at)
 
     def test_successful_list_products_records_verified_at_and_connected(self):
         """item 7 승인된 상품 목록 조회(page=1&page_size=1) 경로도
@@ -1311,11 +1357,32 @@ class OnchannelOrderContractStatusTestCase(unittest.TestCase):
         # 없도록 원본을 저장해 두고 tearDown에서 되돌린다.
         self._original_status = copy.deepcopy(c.ONCHANNEL_ORDER_CONTRACT_STATUS)
 
+        # 2026-09-10 — 온채널 공식 답변으로 실제 기본값이 "4개 전부
+        # 확인됨"으로 바뀌었다(아래 파일 하단 주석 참고). 이 클래스는
+        # "부분 확인만으로는 전체가 열리지 않는다"는 메커니즘 자체를
+        # 증명하는 것이 목적이지, 실제 운영 확인 상태를 다시
+        # 증명하는 것이 아니다 — 그래서 각 테스트는 항상 "전부
+        # 미확인"인 합성 기준선에서 시작하도록 여기서 강제로
+        # 초기화한다(실제 운영 상태와 무관하게 메커니즘만 독립적으로
+        # 검증). 실제 운영 확인 상태 자체는
+        # OnchannelOrderContractStatusCurrentValueTestCase가 별도로
+        # 고정한다.
+        self._constants.ONCHANNEL_ORDER_CONTRACT_STATUS.clear()
+        self._constants.ONCHANNEL_ORDER_CONTRACT_STATUS.update({
+            item: self._constants.OnchannelOrderContractItemStatus(
+                confirmed=False, official_basis=None, confirmed_at=None,
+            )
+            for item in self._constants.OnchannelOrderContractItem.ALL
+        })
+
     def tearDown(self):
         self._constants.ONCHANNEL_ORDER_CONTRACT_STATUS.clear()
         self._constants.ONCHANNEL_ORDER_CONTRACT_STATUS.update(self._original_status)
 
     def test_all_items_start_unconfirmed(self):
+        """합성 기준선(setUp이 강제 초기화한 전부-미확인 상태)에서
+        시작한다는 뜻이다 — 실제 운영 확인 상태를 뜻하지 않는다(위
+        setUp 주석 참고)."""
 
         self.assertFalse(self._constants.is_onchannel_order_contract_fully_confirmed())
         self.assertEqual(
@@ -1396,6 +1463,51 @@ class OnchannelOrderContractStatusTestCase(unittest.TestCase):
         )
 
 
+class OnchannelOrderContractStatusCurrentValueTestCase(unittest.TestCase):
+    """2026-09-10 — 온채널 공식 답변 도착 후 실제 운영 확인 상태를
+    고정한다(위 OnchannelOrderContractStatusTestCase는 메커니즘만
+    검증하고 setUp에서 매번 합성 기준선으로 초기화하므로 이 사실을
+    검증하지 않는다 — 이 클래스가 그 사실 자체를 담당). 모듈을
+    전혀 건드리지 않는다(순수 조회) — 다른 테스트의 dict 초기화·
+    복원과 절대 경합하지 않는다."""
+
+    def test_all_four_items_are_confirmed_with_official_basis(self):
+
+        from app.domains.purchase_task import constants as c
+
+        self.assertTrue(c.is_onchannel_order_contract_fully_confirmed())
+        self.assertEqual(c.unconfirmed_onchannel_order_contract_items(), ())
+
+        for item in c.OnchannelOrderContractItem.ALL:
+            status = c.ONCHANNEL_ORDER_CONTRACT_STATUS[item]
+            self.assertTrue(status.is_properly_confirmed, item)
+            self.assertIn("온채널 공식 답변", status.official_basis)
+            self.assertIsNotNone(status.confirmed_at)
+
+    def test_duplicate_prevention_basis_states_server_does_not_dedupe(self):
+        """가장 실무적으로 중요한 사실(온채널 서버가 sale_code 중복을
+        막아주지 않는다 — 그래서 HOMEZ 자체 UNIQUE 제약이 유일한
+        방어선이다)이 근거 문구에서 실수로 사라지지 않는지 고정한다."""
+
+        from app.domains.purchase_task import constants as c
+
+        basis = c.ONCHANNEL_ORDER_CONTRACT_STATUS[
+            c.OnchannelOrderContractItem.DUPLICATE_PREVENTION
+        ].official_basis
+        self.assertIn("제한하지 않는다", basis)
+
+    def test_result_reconciliation_basis_states_no_requery_method_exists(self):
+        """"sale_code로 재조회 불가"라는 확정 사실(자동 재시도 금지
+        원칙의 근거)이 사라지지 않는지 고정한다."""
+
+        from app.domains.purchase_task import constants as c
+
+        basis = c.ONCHANNEL_ORDER_CONTRACT_STATUS[
+            c.OnchannelOrderContractItem.RESULT_RECONCILIATION
+        ].official_basis
+        self.assertIn("재조회하는 기능은 없다", basis)
+
+
 class OnchannelOrderContractPartialConfirmationIntegrationTestCase(
     ChannelConnectionServiceTestCaseBase,
 ):
@@ -1413,6 +1525,18 @@ class OnchannelOrderContractPartialConfirmationIntegrationTestCase(
         self._constants = c
         self._original_status = copy.deepcopy(c.ONCHANNEL_ORDER_CONTRACT_STATUS)
         self.addCleanup(self._restore)
+
+        # 2026-09-10 — 위 OnchannelOrderContractStatusTestCase.setUp
+        # 과 동일한 이유로, 이 통합 테스트도 실제 운영 확인 상태와
+        # 무관하게 "부분 확인만으로는 막힌다"는 메커니즘 자체를
+        # 항상 전부-미확인 합성 기준선에서 검증한다.
+        c.ONCHANNEL_ORDER_CONTRACT_STATUS.clear()
+        c.ONCHANNEL_ORDER_CONTRACT_STATUS.update({
+            item: c.OnchannelOrderContractItemStatus(
+                confirmed=False, official_basis=None, confirmed_at=None,
+            )
+            for item in c.OnchannelOrderContractItem.ALL
+        })
 
     def _restore(self):
         self._constants.ONCHANNEL_ORDER_CONTRACT_STATUS.clear()

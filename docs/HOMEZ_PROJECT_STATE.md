@@ -8787,3 +8787,2070 @@ origin/main:docs/HOMEZ_USER_OPERATION_SETTINGS.md` +
 
 실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 1(로그인
 무차별 대입 방어)로 이어서 진행 중 — 완료 후 이 파일에 후속 기록.
+
+## 2026-09-09 후속 12 — 기준선 이상 발견: 이 세션이 아닌 곳에서 커밋 발생
+
+Phase 1 작업 도중(22:25:58) `git status`가 갑자기 "working tree
+clean, ahead of origin/main by 1 commit"으로 바뀐 것을 발견했다.
+`git log`로 확인한 결과:
+
+```
+34a9060 기준선: HOMEZ V7 현재 구현 상태 보존   (Author: sin9484-crypto, 2026-09-09 22:25:58 +0900)
+0cfe239 문서: V7 개인 베타 운영 기준 확정      (origin/main, 여전히 이 지점)
+```
+
+이 커밋은 **이 세션이 만든 것이 아니다** — 이번 연속 작업 지시서의
+"절대 중단 경계"가 commit/push를 명시적으로 금지하고 있고, 이
+세션에서 `git commit`을 실행한 적이 없다. 커밋 작성자가
+"sin9484-crypto"(사용자 본인 git 계정)이고 시각이 이 세션이 한창
+작업 중이던 시점과 정확히 겹치는 것으로 보아, 사용자가 이 세션과
+별개로(다른 터미널 등에서) 직접 커밋한 것으로 보인다.
+
+이 커밋은 그동안 저장소 전체에 쌓여있던 미커밋 변경/신규 파일
+전부(326줄 분량 — `.claude/`, `.cursor/`, `CLAUDE.md`, `app/core/**`,
+`app/ai/**`, 기존 legacy 파일 재배치 등)를 한 번에 담고 있다.
+**이 세션이 Phase 0~1에서 만든 파일들도 전부 이 커밋에 함께
+포함됐다**(`app/domains/user/model.py`, `repository.py`, `service.py`,
+`app/domains/auth/service.py`, `app/core/account_admin.py`,
+`app/domains/notification_center/event_catalog.py`,
+`migrations/20260909_00_add_login_lockout_columns.sql`,
+`tests/test_login_lockout.py`, `tests/test_notification_delivery_migration.py`
+수정분, 감사 문서 2건 — 전부 내가 만들거나 고친 내용 그대로, 임의로
+바뀐 부분은 없음을 `git show --stat`으로 확인).
+
+**이 세션의 대응**: 이 커밋을 되돌리거나(reset/revert), 정리하거나,
+`git commit --amend`하지 않는다 — 사용자 자신의 행동으로 추정되는
+기존 작업을 삭제·복구·정리하지 않는다는 원칙을 그대로 적용한다.
+`origin/main`은 여전히 `0cfe239`로 push되지 않은 상태임을
+`git fetch origin` + `git rev-parse origin/main`으로 확인했다 — 이
+세션은 앞으로도 push를 하지 않는다(별도 승인 대상). 이후 모든
+"GitHub 기준 확인" 절차는 origin/main 기준 그대로 계속 유효하다
+(이 로컬 커밋은 origin과 무관).
+
+사용자에게 이 사실을 다음 응답에서 그대로 보고한다. 사용자가 다음
+지시에서 이 커밋이 "이전 GPT 세션이 사용자 지시로 만든 중간 보존
+지점"이며 "전체 작업이 끝난 뒤 최종 Git 지점을 다시 잡는다"고
+정정·확인했다 — 이 세션은 계속 이 커밋을 되돌리거나 amend하지 않고,
+전체 작업이 끝날 때까지 추가 commit·push를 하지 않는다.
+
+## 2026-09-09 후속 13 — Phase 2 완료: 프로그램 종료 및 3시간 세션 정책
+
+[GitHub 기준 확인] origin/main=0cfe239(변동없음), docs/HOMEZ_USER_
+OPERATION_SETTINGS.md 로컬(HEAD=34a9060 위 작업트리)과 diff 없음.
+관련 기준(11번): "로그인은 프로그램 종료 시 끝내며 최대 3시간까지만
+유지", "자동결제 설정 변경 전 비밀번호 재확인".
+
+**변경 파일**: `app/core/config.py`(SESSION_TIMEOUT_MINUTES 60→180분,
+기존엔 죽은 설정), `app/domains/session/service.py`(SessionStatus.
+IDLE_TIMEOUT 신설, `get_session_status()`가 `last_seen_at`(없으면
+`issued_at`) 기준 유휴시간 판정, `touch_session_last_seen()` 신설),
+`app/domains/session/repository.py`(`extend_expiry()` 신설),
+`app/domains/session/refresh_service.py`(RefreshOutcome.IDLE_TIMEOUT
+신설, `rotate()`가 성공할 때마다 연결된 access 세션의 `expires_at`을
+연장), `app/core/auth.py`(`_decode_user`가 매 인증 요청마다 touch +
+IDLE_TIMEOUT 거부), `app/domains/auth/service.py`(refresh()가
+IDLE_TIMEOUT을 SESSION_IDLE_TIMEOUT 코드로 변환), `app/desktop/
+main.py`(프로세스 시작 시 이전 콘솔 세션 무조건 삭제 — SingleInstanceGuard
+통과 후에만), `app/web/console.js`+`i18n/ko-KR.js`+`i18n/en-US.js`
+(SESSION_IDLE_TIMEOUT을 로그아웃 허용 코드에 추가, 전용 안내 문구).
+**신규 파일**: `tests/test_session_lifecycle_phase2.py`(7개).
+
+**발견·수정한 결함(이번 Phase 범위 내, 사전 존재)**: `AuthSession.
+expires_at`이 로그인 시점 Access Token TTL(30분)에 고정된 채 Refresh
+회전마다 갱신되지 않고 있었다 — `get_session_status()`의 EXPIRED
+판정이 실제 벽시계 시각으로 이 값을 비교하므로, 실제 운영에서는
+로그인 30분 후부터 이후의 모든 `/auth/refresh` 요청이 진짜 세션
+폐기(SESSION_REVOKED)와 구분되지 않는 오류로 거부됐을 것이다 — 30일
+Refresh Token 설계 의도 자체가 무력화되는 Critical 결함. 기존 테스트
+`test_rotation_survives_simulated_thirty_minute_session`은 `rotate()`
+에 주입하는 `now`만 앞당길 뿐 `get_session_status()`가 쓰는 실제
+벽시계 시각은 건드리지 못해 이 결함을 잡아내지 못하고 있었다(테스트
+자체는 통과하지만 검증 범위 밖의 결함이었다는 뜻 — 이번에 이 사실도
+문서화). `SessionRepository.extend_expiry()`로 수정.
+
+**테스트 실측**: `tests/test_session_lifecycle_phase2.py` 7/7 통과
+(결함 재현 테스트 포함), 인접 회귀(`test_refresh_token_security`
+14개+`test_login_lockout` 13개+`test_homez_auth_login`+`test_auth_error_codes`
++`test_auth_login_permissions`+`test_account_admin`+`test_recent_auth`
++`test_desktop_auth_session`+`test_purchase_task_service`+
+`test_purchase_task_router`) 총 **125/125 통과**(235초).
+
+**미검증**: 실제 Desktop 앱을 띄워 "종료 후 재실행 시 로그인 화면이
+뜨는지", "3시간 방치 후 실제로 거부되는지"는 코드 경로 확인만 했고
+실행 검증은 하지 않았다(임시 DB·격리 서버만 사용 원칙).
+
+**승인 대기**: 없음(Phase 2는 순수 코드 변경, 실 DB 스키마 변경
+없음 — `auth_sessions`/`refresh_token_families`/`refresh_tokens`는
+기존 컬럼만 사용).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 3(기능별
+운영 모드)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-09 후속 14 — Phase 3 완료: 기능별 운영 모드
+
+[GitHub 기준 확인] origin/main=0cfe239(변동없음), docs/HOMEZ_USER_
+OPERATION_SETTINGS.md 로컬과 diff 없음. 관련 기준(2·3·4·13·14번):
+"전역 단일 자동화 상태를 기능별 상태로 분리한다", "각 기능에 수동,
+반자동, 자동, 중지 모드를 둔다", "자동 모드라는 이유만으로 결제·
+발주·환불 권한이 확대되지 않게 한다".
+
+**설계 결정**: 기존 `AutomationModeState`/`SafetyService.evaluate()`
+(전역 단일, `app/web/router.py`가 "automation_safety Domain 파일은
+수정하지 않는다"고 스스로 명시해뒀던 파일들)는 건드리지 않았다 —
+`evaluate()`는 감사에서 이미 확인했듯 실제 호출부가 하나도 없는
+미배선 상태라 고칠 대상이 아니었고, 기존 749줄짜리
+`tests/test_automation_safety.py`(49개 검증 지점)를 불필요하게 흔들
+이유가 없었다. 대신 신규 테이블·서비스 메서드를 **추가**해 "기능별"
+요구사항을 만족시켰다 — 기존 회귀와 이번 신규 테스트 모두 통과로
+이 판단이 안전했음을 확인했다.
+
+**신규 파일**: `migrations/20260909_01_create_function_automation_state_schema.sql`
+(신규 테이블만, 기존 스키마 무변경), `tests/test_function_automation_mode.py`
+(14개).
+**변경 파일**: `app/domains/automation_safety/constants.py`
+(`FunctionCode` 10개, `FunctionMode` 5개 — 한국어 이름·설명 포함),
+`app/domains/automation_safety/model.py`(`FunctionAutomationState`),
+`app/domains/automation_safety/repository.py`(회사×기능 조회/추가),
+`app/domains/automation_safety/service.py`(`get_function_mode`,
+`get_all_function_modes`, `set_function_mode`,
+`demote_function_to_error`, `is_function_automatic`),
+`app/web/router.py`(`GET/POST /console/api/function-modes`),
+`app/web/console.js`+`i18n/ko-KR.js`+`i18n/en-US.js`(최소 UI).
+
+**검증한 것**: 미설정 시 항상 "수동" 기본값(10개 전부), 기능 간 완전
+독립(한 기능 변경이 나머지 9개에 영향 없음), 회사 간 완전 독립,
+append-only 이력 보존, 관리자 권한 게이트, 잘못된 function_code/mode
+거부, `ERROR`는 사용자가 API로 직접 선택 불가(시스템 전용 경로),
+`demote_function_to_error`가 `set_by=0`으로 시스템 조작과 사람 조작을
+감사에서 구분, Migration이 임시 DB에 깨끗하게 적용됨(컬럼 스펙 확인).
+
+**의도적으로 하지 않은 것(다음 Phase로 이관)**: (1) "안전시험 통과
+후에만 자동 개방" 게이트 — 아직 12개 오류 시나리오 자체가 실행되지
+않아 연동할 대상이 없음(Phase 14). (2) `demote_function_to_error`를
+실제로 호출하는 감지 코드(가격 인상·재고 부족·인증 만료·API 오류·
+스키마 불일치) — Phase 4(긴급 중지와 실행 게이트) 범위로 명시적으로
+남겨둠. (3) UI 다듬기(모바일 최적화, 표시 위치 개선) — Phase 13(UI
+편의성 통합) 범위.
+
+**테스트 실측**: 신규 14/14 통과, 인접 회귀(`test_automation_safety`
+15개+`test_homez_console`+`test_role_permission_admin`+
+`test_gate_r2_viewer_auxiliary_permission`+`test_notification_center`)
+총 **111/111 통과**(155초).
+
+**미검증**: 새 UI 패널의 실제 브라우저 렌더링(JS 문법 검사만 통과,
+로그인이 필요한 화면이라 격리 서버 구성을 이번엔 생략 — Phase 13에서
+함께 확인 예정).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 4(긴급
+중지와 실행 게이트)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-09 후속 15 — Phase 4 완료(부분): 긴급 중지와 실행 게이트
+
+[GitHub 기준 확인] origin/main=0cfe239(변동없음), docs/HOMEZ_USER_
+OPERATION_SETTINGS.md 로컬과 diff 없음. 관련 기준(5·11·13·14번):
+"전체 중지와 기능별 중지를 분리", "중지 원인·필요한 설정값 화면
+표시", "가격 인상 등이 발생하면 관련 자동 기능만 중지", "서버
+관리자와 운영 관리자에게 알림".
+
+**변경 파일**: `app/domains/purchase_task/service.py`
+(`_demote_price_change_on_increase()` 신설 — BLOCK 사유에
+PRICE_INCREASE_RATE_EXCEEDED가 있으면 PRICE_CHANGE 기능을 ERROR로
+강등+통지, 멱등), `app/domains/notification_center/event_catalog.py`
+(`FUNCTION_AUTOMATION_DEMOTED_TO_ERROR` 신설), `app/domains/
+automation_safety/service.py`(`get_all_function_states()` 신설 —
+reason·set_at 노출용), `app/web/router.py`(`/console/api/
+function-modes` 응답에 reason·set_at 추가), `app/web/console.js`+
+i18n(사유·변경시각 표시).
+**신규 파일**: `tests/test_purchase_task_price_increase_demotion.py`
+(5개).
+
+**[Critical, 발견만·미수정] 가격 인상 감지 자체가 죽어있음**: 8-2가
+요구하는 "가격이 기존 확인값보다 인상됐으면 자동발주 중지"의 판정
+코드(`PurchaseTaskPolicyReason.PRICE_INCREASE_RATE_EXCEEDED`)는
+있지만, 비교 기준값(`PurchaseTaskPolicyCheckInput.
+expected_amount_at_creation`)을 채우는 호출부가 저장소 전체에 단
+하나도 없다 — 이 필드는 항상 None이라 이 판정은 현재 절대 발생하지
+않는다. `build_order_submission_review()`(발주 전 최종 검토)도 라이브
+가격은 조회하지만 "이전 확인값과 비교"는 하지 않는다. 이번에 만든
+강등·통지 로직(`_demote_price_change_on_increase`)은 "그 판정이
+실제로 나온다면" 정확하게 동작함을 테스트로 확인했지만, 판정 자체를
+살리는 "가격 스냅샷을 언제·어떤 시점에 기록할지"는 purchase_task
+전체 데이터 흐름을 다시 봐야 하는 별도 조사가 필요해 이번 Phase
+범위에서 고치지 않았다 — docs/HOMEZ_USER_OPERATION_SETTINGS_AUDIT_
+20260909.md에도 결함 #21로 기록.
+
+**Phase 4에서 완료로 볼 수 있는 부분**:
+- 전체 중지(EmergencyStop, 기존)와 기능별 중지(FunctionAutomationState,
+  Phase 3)가 서로 다른 테이블·경로로 이미 구조적으로 분리돼 있음을
+  재확인(추가 코드 불필요).
+- 5개 트리거(가격 인상·재고부족·인증만료·API오류·스키마불일치) 중
+  **가격 인상 1개만 실제 감지 코드와 연결**했다(위 Critical 결함
+  때문에 현재는 이 판정 자체가 안 나온다는 한계는 있지만, 배선 코드
+  자체는 완성·검증됨). 나머지 4개는 감지 로직이 각각 다른 Domain
+  (매입처 연결 인증만료 — purchase_channel_connection, API 오류 —
+  onchannel_client 여러 곳, 스키마 불일치 — migration_restricted_mode
+  전역 미들웨어, 재고부족 — 아직 "가상재고" 개념 자체가 없음(감사
+  결함 참고))에 흩어져 있어 이번 Phase에서 전부 연결하지 못했다 —
+  다음 작업으로 명시적으로 남겨둔다.
+- 중지 원인(`reason`)과 변경 시각을 화면에 표시하도록 API·UI 보강.
+- "서버 관리자와 사용자 관리자에게 알림"은 기존 EStop과 동일한
+  한계를 그대로 가진다(감사 결함 기록됨) — HOMEZ에 아직 "서버
+  관리자"라는 별도 역할 개념이 없어, 현재는 회사의 활성 SUPER_ADMIN
+  전원에게 통지하는 것으로 실질적으로 대체했다(로그인 잠금 알림과
+  동일 패턴). 진짜 역할 분리는 더 큰 권한 모델 변경이 필요해 범위
+  밖으로 남겼다.
+- "사용자에게 먼저 의사를 물어야 하는 중지 정책"(주문별 손실액
+  표시 후 사용자가 발주/취소 결정, 자동취소 금지 등)은 기존
+  `exception_analysis_service.py`가 제안만 생성하고 자동 실행하지
+  않는 원칙을 이미 지키고 있음을 재확인했다(신규 코드 불필요, 기존
+  회귀로 재검증됨).
+
+**테스트 실측**: 신규 5/5 통과, 인접 회귀(purchase_task 관련 8개
+파일) 총 **101/101 통과**(218초).
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: 재고부족·인증만료·
+API오류·스키마불일치 4개 트리거의 실제 `demote_function_to_error`
+연결, 가격 스냅샷 데이터 모델 조사, "설정 변경 시점 이후 접수된
+주문" 처리 기준의 신규 구현(기존 유사 메커니즘 재확인에 그침).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 5(백업·
+복구)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-09 후속 16 — Phase 5 완료(부분): 백업·복구
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준(11번): "실제 DB 백업 파일은 암호화하고
+GitHub에 올리지 않는다", "DB 복구 가능 여부를 매주 자동 또는 안내
+기반으로 시험하고 결과를 기록한다". 충돌 여부: 없음(로컬은
+origin/main 대비 1커밋 앞선 상태 그대로 유지).
+
+**신규 파일**: `app/domains/backup/encryption.py`(백업 파일 암호화
+원시 모듈), `tests/test_backup_encryption.py`(16개),
+`app/domains/restore/service.py`에 `run_weekly_rehearsal()`/
+`RehearsalResult`/`_notify_rehearsal_failure()` 추가,
+`tests/test_restore_weekly_rehearsal.py`(11개).
+**변경 파일**: `app/domains/backup/service.py`
+(`TRIGGER_SOURCE_SCHEDULED_REHEARSAL` 상수 추가),
+`app/domains/notification_center/event_catalog.py`
+(`BACKUP_RESTORE_REHEARSAL_FAILED` 신설).
+
+**암호화(11-16) — 원시 모듈만 구현, 파이프라인 미연결(의도적)**:
+`app/domains/backup/encryption.py`는 `hashlib`/`hmac`/`secrets`만
+써서 encrypt-then-MAC(HMAC-SHA256 기반 카운터 모드 스트림 암호 +
+HMAC-SHA256 무결성 태그)을 구현한다. 이유: 이 저장소에
+`cryptography`/`pycryptodome` 같은 검증된 AEAD 라이브러리가 설치돼
+있지 않고, CLAUDE.md Whitelist가 "의존성 추가"를 별도 승인 대상으로
+명시하므로 사용자 승인 없이 새 패키지를 넣지 않았다(`app/core/
+windows_credential_store.py`가 같은 이유로 pywin32 대신 ctypes만
+쓴 선례를 그대로 따름). 키는 `app/core/windows_credential_store.py`
+의 `CredentialStore` 추상화를 그대로 재사용해
+`get_or_create_backup_encryption_key()`로 관리한다(Credential
+target: `homez_backup_encryption_key`).
+
+이 모듈은 **아직 `BackupService.create_backup()`/`RestoreService`
+파이프라인에 연결하지 않았다** — `BackupService(db)`/
+`RestoreService(db)`는 현재 운영 호출부 약 15곳(`app/domains/
+backup/router.py`, `app/domains/restore/router.py`,
+`app/desktop/restore_helper.py` 등)과 기존 테스트 약 50곳에서
+`credential_store` 없이 그대로 생성되고 있다. 지금 강제로 연결하려면
+(a) 두 서비스 생성자에 `credential_store`를 필수 인자로 추가해 그
+15+50곳을 전부 고치거나, (b) `BackupRecord`에 `is_encrypted` 컬럼을
+추가하는 Migration + `validate_backup_file()`/`restore()`가 암호화
+여부를 자동 감지해 복호화 후 검증하도록 바꾸는 더 큰 변경이 필요하다
+— 둘 다 이미 안정적으로 통과 중인 광범위한 백업·복구 테스트 스위트와
+운영 호출부에 영향을 주는 "대규모 리팩터링"급 변경이라(CLAUDE.md
+Whitelist가 별도 승인 대상으로 명시) 이번 Phase에서는 원시 모듈을
+완성·단독 검증만 하고 연결은 분리했다. 그 결과 **실제로 생성되는
+백업 파일은 여전히 평문 SQLite**다 — 감사 문서 11-16을
+PARTIALLY_IMPLEMENTED로 유지.
+
+**복구 리허설(11-17) — 구현 완료**: `RestoreService.
+run_weekly_rehearsal(company_id, source_db_path, backups_dir,
+rehearsal_dir, triggered_by_user_id=None)`을 추가했다. 기존
+`BackupService.create_backup()`(trigger_source=
+scheduled_rehearsal)로 새 백업을 뜨고, 그 백업을 `rehearsal_dir`
+아래 타임스탬프 찍힌 "버릴 목적의" 임시 경로에 기존 `restore()`로
+복원해 본 뒤(target이 새 경로라 사전 안전 백업 불필요), 검증이
+끝나면 그 임시 파일만 지운다 — 백업 자체는 보존 정책을 그대로 따라
+남는다. 실패하면(백업 생성 실패든 복원 검증 실패든) 예외를 던지지
+않고 항상 `RehearsalResult(success, backup_record, restore_attempt,
+error_message)`를 반환하며, 회사의 활성 SUPER_ADMIN 전원에게 신규
+알림 `BACKUP_RESTORE_REHEARSAL_FAILED`를 통지한다(날짜 단위
+idempotency_key로 하루 중복 알림 방지). 복원 자체의 성공/실패는
+기존 `restore()`가 이미 남기는 `RestoreAttempt` 행으로 기록된다 —
+단, 백업 생성 자체가 실패하는 경우는 그 어떤 DB 행도 남지 않고
+알림과 반환값에만 남는다(정직하게 문서화, `run_weekly_rehearsal()`
+docstring에도 명시).
+
+스케줄러(Phase 6)가 아직 없어 "매주 **자동**" 실행은 여전히
+없다 — 지금은 관리자가 수동으로("안내 기반") 호출해야 한다. 이
+메서드를 실제로 호출하는 router 엔드포인트나 콘솔 UI 버튼도 아직
+연결하지 않았다 — Phase 6에서 스케줄러가 이 메서드를 직접 호출하게
+될 것이므로, 그 전에 별도 수동-트리거 엔드포인트를 만드는 건
+중복 작업이 될 가능성이 높다고 판단해 의도적으로 미룸.
+
+**테스트 실측**: `tests.test_backup_encryption`(16개) +
+`tests.test_restore_weekly_rehearsal`(11개) 신규 27/27 통과. 인접
+회귀 `tests.test_backup_engine`(8개) + `tests.test_restore_engine`
+(10개) + `tests.test_gate8_backup_domain_expansion`(3개) +
+`tests.test_restore_helper`(29개) — 신규 27개 포함 총 **66/66
+통과**(828초). `tests.test_live_gate4_fix_defects`(RestoreService
+사용, 29개)도 별도 확인 — **29/29 통과**(36초, 영향 없음).
+
+**미검증**: 실제 homez.db를 대상으로 한 백업/복구 리허설 1회 실행
+(승인 대상 — 임시 DB로는 전체 흐름 검증 완료). 암호화된 백업의
+실제 복호화 왕복은 원시 모듈 단위 테스트로만 검증했고, 실제 백업
+파일에 대해서는 아직 적용되지 않으므로 해당 없음.
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 6(스케줄러
+연결)으로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 17 — Phase 6 완료(부분): 스케줄러 연결
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준: "5분마다 주문 수집"(2-8), "주 1회 가격
+검토"(2-5), "매일 자동 확인"(9-13, 10-17), "DB 복구 리허설 매주
+자동"(11번) — 자동 실행은 항상 기능별 자동화 모드·사용 한도를
+통과해야 한다. 충돌 여부: 없음.
+
+**조사(구현 전 인용)**: Explore 서브에이전트로 스케줄러 연결
+후보 5개 영역을 읽기 전용으로 조사했다.
+- **주문 수집**: `OrderMultiChannelCollectionService.run_all()`
+  (`app/domains/order/multi_channel_collection_service.py:113`)이
+  실제로 존재하고 동작하지만(Coupang 실 HTTP), `SafetyService.
+  is_function_automatic()`을 이 도메인 어디서도 호출하지 않는다 —
+  `FunctionCode.ORDER_COLLECTION` 상수만 있고 실제로 참조되지 않음.
+- **트렌드 갱신**: `TrendAnalysisRefreshService.refresh()`는 후보
+  1건 단위 수동 갱신만 있고, 그 서비스 자신의 docstring이 "전체
+  후보를 훑는 배치는 범위 아님"이라 명시 — 배치 자체가 없다.
+- **가격/재고 모니터링**: `app/domains/price_monitoring/adapter.py`
+  (Adapter만 242줄)만 있고 Service/Model/Repository/조회대상(Watch)
+  저장소가 전혀 없다.
+- **알림 정기 스윕**: `NotificationDeliveryRepository.
+  list_pending_unconfirmed()`/`list_failed_retryable()`는 있지만
+  그 결과를 `escalate_unconfirmed_to_email()`/
+  `retry_failed_notification()`에 연결하는 오케스트레이터가 없다.
+- **`SafetyService.is_function_automatic()`은 이 조사 시점까지
+  `tests/test_function_automation_mode.py` 외에는 어디에서도 호출된
+  적이 없다** — Phase 3에서 만든 기능별 자동화 게이트가 실제 실행
+  경로 어디에도 아직 연결되지 않았다는 뜻이다.
+
+**이번 Phase에서 실제로 연결한 것 — 백업 복구 리허설 1개뿐**:
+이유는 위 4개 후보 모두 (a) 실제 외부 API를 직접 호출하거나
+(주문 수집·트렌드 갱신·가격 모니터링), (b) 자동화 모드 게이트가
+전혀 배선돼 있지 않거나(주문 수집), (c) 오케스트레이션/저장 계층
+자체가 없어(가격 모니터링) 새로 설계해야 하기 때문이다. 백업 복구
+리허설(Phase 5에서 이미 완성·단독 검증된
+`RestoreService.run_weekly_rehearsal()`)만 (1) 외부 API 호출이
+전혀 없고(로컬 파일만 다룸), (2) 원본 DB는 읽기만 하며, (3) 이미
+철저히 테스트돼 있어 안전하게 지금 연결할 수 있었다.
+
+**신규 파일**: `app/domains/scheduler/jobs.py`(기존 0줄 스텁을
+`run_backup_rehearsal_job()`/`register_all_jobs()`로 채움),
+`tests/test_scheduler_service.py`(15개),
+`tests/test_scheduler_jobs.py`(4개).
+**변경 파일**: `app/core/scheduler_service.py`(`add_cron_job()`
+신설 — 기존 `add_interval_job()`과 동일하게 `replace_existing=True`
++`coalesce=True`+`max_instances=1`로 중복실행 방지), `app/core/
+config.py`(`SCHEDULER_ENABLED` 토글, 기본 True), `app/main.py`
+(lifespan에 스케줄러 시작/Job등록/종료 연결 — 등록 실패해도 서버
+기동 자체는 막지 않는 fail-open), `app/desktop/paths.py`
+(`get_backups_dir()` docstring을 실제로 자동 생성되기 시작했다는
+사실에 맞게 갱신).
+
+**중복 실행·재시작 복구·부분 실패 격리**: `max_instances=1`+
+`coalesce=True`(APScheduler 자체 기능)로 같은 Job의 중복 동시
+실행을 막는다. "재시작 복구"는 별도 코드 없이 기존 `BackupRecord`/
+`RestoreAttempt` 이력 테이블로 충분하다고 판단했다(다음 실행 시각은
+스케줄러가 재계산하고, 지난 실행 성공/실패 여부는 그 이력 테이블을
+조회하면 알 수 있음 — 별도 "마지막 실행 시각" 캐시를 추가하지
+않았다). "부분 실패 격리"는 `run_backup_rehearsal_job()`이 회사별로
+try/except를 개별로 감싸 한 회사의 예외가 나머지 회사 처리를 막지
+않도록 구현·테스트했다.
+
+**[발견·수정] 이 Phase의 회귀 실행 중 발견한, 이 세션 자신이
+원인인 사전 결함 2건**: `tests/test_migration_restricted_mode_
+schema_error_handling.py`와 `tests/test_purchase_channel_connection_
+migration.py` 둘 다 `EXCLUDED_FROM_PRIOR_STATE`라는 하드코딩된
+집합으로 "Migration 적용 이전 상태" 임시 DB를 흉내내는데, 이 집합은
+"어떤 특정 Migration 파일(NEW_MIGRATION)보다 사전순으로 뒤에 있는
+모든 파일을 여기 추가해야 한다"는 유지보수 규칙을 이미 주석으로
+갖고 있었다. 그런데 이 세션의 Phase 1(`20260909_00_add_login_
+lockout_columns.sql`)과 Phase 3(`20260909_01_create_function_
+automation_state_schema.sql`)가 새 Migration 파일을 추가하면서 이
+두 테스트 파일의 집합을 갱신하지 않아, 그때부터 두 테스트가
+`OrderInversionError`로 조용히 깨져 있었다(이번 Phase 6 회귀
+실행에서 처음 발견 — Phase 1/3 완료 보고 당시엔 이 두 테스트 파일을
+회귀 대상에 포함하지 않아서 못 잡았다). 두 파일 모두 최신
+Migration 2개를 집합에 추가해 수정 — 수정 후
+`test_migration_restricted_mode_schema_error_handling`(4/4),
+`test_purchase_channel_connection_migration`(8/8) 모두 통과 확인.
+**교훈**: 새 Migration 파일을 추가하는 Phase는 앞으로 이 두 파일도
+반드시 회귀 대상에 포함해야 한다.
+
+**테스트 실측**: 신규 `tests.test_scheduler_service`(15개)+
+`tests.test_scheduler_jobs`(4개) = 19/19. 위 결함 수정 확인 포함
+인접 회귀(`test_scheduler_service`+`test_scheduler_jobs`+
+`test_migration_restricted_mode_schema_error_handling`+
+`test_desktop_paths_isolation`+`test_packaging_foundation`) 총
+**51/51 통과**(56초). `test_purchase_channel_connection_migration`
+(8개)은 별도 실행 — **8/8 통과**(24초).
+
+**미검증**: 실제 homez.db를 대상으로 스케줄러가 실제 주간 리허설을
+1회 트리거하는 것(실제 서버 기동 자체가 이번 세션 범위 밖 — Phase
+1의 로그인 잠금 Migration이 실제 DB에 아직 적용되지 않은 상태라
+실 서버 기동은 별도 승인 대상으로 계속 보류 중).
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: 주문 수집·트렌드
+갱신·가격재고모니터링·알림 정기 스윕의 스케줄러 연결(위 조사 결과
+참고, 각각 별도의 신중한 설계가 필요), `SafetyService.
+is_function_automatic()`을 주문 수집 등 실제 실행 경로에 실제로
+연결하는 작업.
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근·실제
+서버 기동 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 7(결제
+도메인)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 18 — Phase 7 완료(부분): 결제 도메인
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준(4·5·11번): "카드·PayPal·계좌이체·가상계좌를
+결제수단 종류로 설계", "카드번호+CVC 원문을 저장하지 않는 구조 —
+Provider 토큰 또는 Windows 보안 저장소 참조만 저장", "자동결제는
+수동/반자동/자동 모드로 통제하고 한도·재인증을 동반", "실제 결제
+연결·승인·충전은 실행하지 않는다 — Fake Provider로만 검증". 충돌
+여부: 없음.
+
+**시작 상태**: Critical 결함 #1("결제 도메인이 통째로 빈 스캐폴딩")
+확인 — `app/domains/payment/{model,service,schema,router,gateway}.py`
+전부 0줄, 어디에서도 import되지 않음.
+
+**신규 파일**: `app/domains/payment/constants.py`(`PaymentMethodType`
+4종), `model.py`(`PaymentMethod`, `PaymentAutoLimit` — 카드번호·CVC
+원문이 들어갈 컬럼 자체가 없음), `gateway.py`(`PaymentProvider`
+계약 + `FakePaymentProvider`뿐, 실제 Provider 없음 — `requests`/
+`httpx`/`urllib` 어느 것도 import하지 않음), `repository.py`,
+`service.py`(`PaymentService`), `schema.py`, `router.py`(SuperAdminGuard
++ X-Recent-Auth-Token 게이트),
+`migrations/20260910_00_create_payment_domain_schema.sql`,
+`tests/test_payment_domain.py`(28개), `tests/test_payment_router_guard.py`
+(2개). **변경 파일**: `app/main.py`(payment_router 마운트 —
+order/purchase/inventory 등이 이미 쓴 선례와 동일하게 "마운트는
+먼저, 실 DB 적용은 별도 승인").
+
+**설계 결정 — 카드번호/CVC를 절대 저장하지 않는 구조**:
+`PaymentMethod` Model에는 애초에 그런 컬럼이 없다.
+`register_method()`는 `raw_details`(카드번호 등)를 받아 `FakePaymentProvider.
+tokenize()`에 즉시 넘기고, 반환된 불투명 토큰만
+`app/core/windows_credential_store.py::CredentialStore`(기존
+store_connection이 쓰는 것과 동일한 추상화, 매입처 로그인
+자격증명과 같은 패턴)에 저장한다 — DB(`payment_methods.
+credential_target_name`)에는 그 Credential Store 항목을 가리키는
+참조 문자열만 남는다. `test_register_method_never_stores_raw_
+card_number_in_db`가 `payment_methods` 테이블 전체 행을 직접
+읽어 원문 카드번호 문자열이 어디에도 없음을 확인한다.
+
+**설계 결정 — 자동결제 게이트는 Phase 3 인프라를 그대로 재사용**:
+새 자동화 모드 개념을 만들지 않았다 — `FunctionCode.PAYMENT`(Phase
+3에서 이미 정의된 10개 기능 중 하나)와 `SafetyService.
+is_function_automatic()`을 그대로 썼다. `verify_auto_payment_
+allowed()`는 (1) 기능 모드가 AUTOMATIC인지, (2) 건당 한도
+(`PaymentAutoLimit`, 최신 행 기준 append-only)를 넘지 않는지만
+판정하고 실행은 절대 하지 않는다 — 실행 자체가 이 세션의 절대
+경계 밖이다.
+
+**설계 결정 — 자동결제 한도를 기존 `PurchaseTaskPolicySetting`/
+`ExecutionLimit`에 얹지 않음**: 감사 Critical 결함 #7이 이미
+"이중화돼 있고 어느 쪽이 최종 참조되는지 특정 못함"이라고 지적한
+영역이다 — 거기에 결제 한도까지 얹으면 혼란만 커진다고 판단해,
+결제 Domain 전용의 새 `PaymentAutoLimit` 테이블을 독립적으로
+만들었다(Phase 3가 기존 `AutomationModeState`를 건드리지 않고
+`FunctionAutomationState`를 새로 만든 것과 동일한 판단 근거).
+
+**재인증(X-Recent-Auth-Token)**: `app/core/recent_auth.py`(V6
+Gate 1A, 기존 인프라 — 5분·1회용 토큰, 실패 5회 시 15분 잠금)를
+그대로 재사용했다 — 새로 만들지 않았다. 결제수단 등록·비활성화·
+자동결제 한도 변경 3개 엔드포인트가 이 토큰을 요구한다
+(`app/domains/company/router.py`의 회사명 변경과 동일한 패턴).
+"자동결제 설정을 변경하기 전에는 비밀번호를 다시 확인한다"(문서
+11번)를 코드 재사용만으로 충족했다.
+
+**[정직하게 기록] Domain 경계 미확정**: CLAUDE.md는 Customer
+Payment ≠ Marketplace Settlement ≠ Funding Account ≠ Funding
+Hold ≠ Supplier Payment ≠ Refund를 명시한다. 문서 4번("국내
+매입처는 카드 또는 예치금, 해외 매입처는 카드 또는 PayPal")로
+미루어 이번에 만든 결제수단은 실제로는 Customer Payment가 아니라
+**매입처에게 지불하는 결제수단(Supplier Payment에 더 가까움)**일
+가능성이 크다 — HOMEZ는 무재고 중개 구조라 고객은 판매채널에
+결제하고 HOMEZ는 Marketplace Settlement로 대금을 받으므로, "고객이
+HOMEZ에 직접 내는 돈"은 이 저장소에 사실상 없을 수 있다. 이번
+Phase에서는 이 판단을 100% 확정하지 않고 `app/domains/payment`로
+독립 구현했다(요구사항 자체 — 결제수단·자동결제한도·재인증 —
+은 어느 Domain에 속하든 동일하게 구현 가능해서). 실제 Provider
+연동 시점에 Supplier Payment Domain으로 재명명·흡수할지 사용자
+확인이 필요하다.
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: (1) 실제 결제
+Provider 구현 — 이 세션 전체가 끝날 때까지 하지 않는다(절대
+경계). (2) 일일 누적 한도(`daily_limit_amount`) 집계 — 실제 결제
+실행 자체가 없어 집계할 원장이 없다. 건당 한도만 지금 검사한다
+(정직하게 `verify_auto_payment_allowed()` docstring에 명시). 실제
+결제 실행이 생기는 시점(이 세션 범위 밖)에 함께 구현해야 한다.
+(3) 실제 결제 실행 엔드포인트 — 라우터에 없다(설계상 의도).
+(4) `credential_target_name`이 가리키는 Credential Store 항목을
+결제수단 하드 삭제 시 정리하는 배치(현재는 개별
+`deactivate_method()` 호출 시에만 즉시 삭제 — 회사 자체가
+삭제되는 경로는 아직 없어 고아 항목 정리 로직도 없음).
+
+**테스트 실측**: `tests.test_payment_domain`+`tests.test_payment_router_guard`
+합산 신규 **30/30 통과**(73초, Migration 임시 DB 적용 포함).
+`app.main` import 안전성(라우터 마운트 후에도 기존 회귀가 깨지지
+않는지) — `test_gate8_backup_domain_expansion`+`test_v6_gate1_
+hardening`+`test_migration_restricted_mode`+`test_desktop_auth_session`
+총 **52/52 통과**(78초). `configure_mappers()`도 새 Model 포함해
+정상 통과 확인.
+
+**미검증**: 실제 homez.db에 이 Migration을 적용하는 것(승인
+대상). 실제 Provider 연동(이 세션 범위 밖).
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근·실제
+Provider 연동 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 8(환불·
+반품 도메인)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 19 — Phase 8 완료(부분): 환불·반품 도메인
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준(8·9번): "취소·반품·교환·환불을 별도
+상태로 관리한다", "반품은 사용자 안내와 승인을 거친 뒤에만
+진행한다", "정상 주문 1건+반품/환불 1건 완료를 최종 실데이터 검증
+대상으로 정의한다", "실제 환불·반품 요청은 승인 전까지 실행하지
+않는다". 충돌 여부: 없음.
+
+**시작 상태**: Critical 결함 #2("환불(refund) 도메인이 통째로 빈
+스캐폴딩") 확인 — `app/domains/refund/{model,repository,router,schema,
+service}.py` 전부 0줄. 반품(물류)은 `app/domains/return_order`(203줄
+Model+527줄 Service, RETURN/EXCHANGE 상태 완비)로 이미 잘 구현돼
+있음도 함께 확인 — 이번 Phase는 "돈이 돌아가는 과정"(환불)만 새로
+채우면 됐다.
+
+**설계 결정 — return_order(물류)와 refund(돈)를 명확히 분리**:
+`Refund.return_order_id`는 논리 참조(FK 없음)로만 연결하고,
+`return_order` 도메인 코드는 한 줄도 수정하지 않았다 — 배송 전
+취소처럼 반품 자체가 없는 환불도 있을 수 있어(`return_order_id`
+nullable) 이 분리가 실제로 필요했다.
+
+**설계 결정 — "승인 후에만 진행"을 자동화 모드 예외 없이 강제**:
+Payment(Phase 7)는 `FunctionMode.AUTOMATIC`이면 한도 안에서 자동
+실행을 허용했지만, 환불은 문서 9번이 "사용자 안내와 승인을 거친
+뒤에만 진행한다"고 예외 없이 명시해 **자동 승인 경로 자체를 만들지
+않았다** — `AWAITING_APPROVAL → APPROVED` 전이는
+`RefundService.approve_refund()`가 유일한 진입점이고, 이 메서드는
+`is_admin=True`(사람의 명시적 관리자 조작)를 항상 요구한다.
+`test_no_automatic_path_reaches_approved_status`가 "생성만으로는
+APPROVED에 절대 도달하지 않는다"를 직접 검증한다. `FunctionCode.
+REFUND`(Phase 3에 이미 존재)는 이번 구현에서 승인 게이트에 전혀
+연결하지 않았다 — 불필요한 결합을 늘리지 않기 위한 의도적 결정
+(app/domains/refund/service.py 상단 주석에 이유 기록).
+
+**신규 파일**: `app/domains/refund/constants.py`(`RefundType`
+2종 — CUSTOMER_REFUND/SUPPLIER_RECLAIM, `RefundStatus` 4종 +
+ALLOWED_TRANSITIONS), `model.py`(`Refund`+`RefundStatusEvent` —
+`return_order`와 동일한 "현재상태+append-only 이력" 패턴),
+`executor.py`(`RefundExecutor` 계약+`FakeRefundExecutor`뿐, 실제
+Executor 없음 — `app/domains/payment/gateway.py`와 동일 설계),
+`repository.py`(원자적 조건부 UPDATE로 상태 전이 — `return_order/
+repository.py`의 `transition_status_conditional` 패턴 재사용),
+`service.py`(`RefundService`), `schema.py`, `router.py`
+(SuperAdminGuard 전체 + 승인 경로만 X-Recent-Auth-Token),
+`migrations/20260910_01_create_refund_domain_schema.sql`,
+`tests/test_refund_domain.py`(24개), `tests/test_refund_router_guard.py`
+(3개). **변경 파일**: `app/main.py`(refund_router 마운트 — payment와
+동일한 "마운트는 먼저, 실 DB 적용은 별도 승인" 선례).
+
+**테스트 실측**: `tests.test_refund_domain`+`tests.test_refund_router_guard`
+합산 신규 **27/27 통과**(69초, Migration 임시 DB 적용 포함). `app.main`
+import+`configure_mappers()` 정상(라우트 453개). 인접 회귀
+`tests.test_gate4_order_fulfillment_migration`(return_order 포함,
+15개) — **15/15 통과**(10초, 영향 없음 확인).
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: (1) 실제 환불
+Executor 구현 — 이 세션 범위 밖(절대 경계). (2) CANCELLATION
+(취소, `FunctionCode.CANCELLATION`)의 별도 상태 모델 — `order`
+도메인에 기존 `OrderCancelRequest` 등 일부 모델링이 이미 있어
+이번 Phase에서 새로 만들지 않았다(중복 방지 목적, 정밀 조사는
+안 함 — 향후 조사 필요). (3) "정상 주문 1건+반품/환불 1건 완료"
+실데이터 검증 — Phase 14(개인 베타 검증) 몫.
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근·실제
+Executor 연동 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 9(공급처·
+환율·배송)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 20 — Phase 9 완료(부분): 공급처·환율·배송
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준(4·6·7번): "국내·해외 매입처 Adapter
+계약을 통일", "상품/옵션/가격/재고/배송비/배송기간/발주가능/
+취소가능 여부를 능력 플래그로 노출", "미확인 기능은 절대 추측하지
+않는다", "국제 거래는 환율·관세·배송기간을 수익성 계산에 포함",
+"매입처 직접배송을 기본 흐름으로 유지". 충돌 여부: 없음.
+
+**조사(구현 전, Explore 서브에이전트)**: 공급처 Adapter 계약이
+이미 **4개로 파편화**돼 있음을 확인했다 — 각각 실제로 쓰이고
+테스트되는 살아있는 코드다: (1) `purchase_task/channel_adapter.py::
+PurchaseChannelAdapter`+`ChannelCapability`(8개 tri-state 플래그,
+국내 전용 — ONCHANNEL 어댑터만 실존), (2) `source/discovery_
+providers.py::SupplierDiscoveryProvider`(공급처 검색, 플래그 없음),
+(3) `purchase/supplier_order_providers.py::SupplierOrderProvider`
+(발주 제출, 플래그 없음), (4) `retail_purchase/provider.py::
+RetailPurchaseProvider`+`ProviderCapability`(11개 플래그, 별도
+어휘). `margin_calculator.py`(154줄, calculate_margin())에는 환율·
+관세·해외배송일 개념이 전혀 없음(순수 국내-KRW 전제)도 확인. "미확인"
+전용 상수는 없고, 기존 관례는 tri-state enum(UNKNOWN/UNVERIFIED/
+NOT_VALIDATED) + None 필드 조합이었다. 해외 매입처 관련 코드는
+사실상 전무(`crawler/aliexpress.py`도 0줄 빈 스캐폴딩).
+
+**설계 결정 — 4개 Adapter 계약을 병합(통일)하지 않았다**: 넷 다
+이미 실제 호출부·테스트가 있는 살아있는 코드라, 하나의 ABC
+계층으로 강제 병합하면 그 전체에 영향을 주는 대규모 리팩터링이
+된다(CLAUDE.md Whitelist — 별도 승인 대상). 대신 **공급처 하나당
+별도의 "능력 요약표"를 추가**하는 방식을 택했다 — 어느 내부
+Adapter를 실제로 쓰든 무관하게, 사람이 한 곳에서 8개 플래그로
+읽을 수 있게 한다(신규 `app/domains/supplier_capability` 도메인).
+"통일"의 정신(단일한 능력 조회 지점)은 지키되, 기존 코드는 한 줄도
+바꾸지 않는 안전한 방식을 골랐다 — 이유는
+`app/domains/supplier_capability/constants.py` 상단 주석에 상세
+기록.
+
+**신규 도메인 1 — `app/domains/currency`(환율)**: `ExchangeRate`
+(append-only, 수동 입력만 — 실제 외부 환율 API 호출 없음),
+`ExchangeRateToleranceSetting`(회사별 허용률, 미설정 시 문서
+원문값 2%를 기본값으로 사용 — PaymentAutoLimit의 "미설정=차단"과
+의도적으로 다른 기본값 정책, 이유는 model.py 주석 참고),
+`ExchangeRateService.convert()`(환율 미기록 시 추측 없이 예외),
+`check_rate_within_tolerance()`(Phase 4 가격 인상 감지와 동일한
+성격의 판정 — **동일한 한계도 그대로 있음**: "선정 시점 환율"
+기준값을 실제로 채우는 호출부는 이번에도 만들지 않았다, 정직하게
+문서화). `migrations/20260910_02_create_currency_domain_schema.sql`.
+
+**신규 도메인 2 — `app/domains/purchase_task/international_margin.py`
+(해외 원가 KRW 환산)**: 기존 `margin_calculator.py`는 **한 글자도
+고치지 않았다** — `convert_international_cost_to_krw()`가 외화
+가격·배송비를 환산하고 관세를 `confirmed_additional_cost`(기존
+필드)에 더해 기존 `CandidateCostInput`을 그대로 만들어 반환한다.
+관세율이 `None`이면(미확인) 0으로 추측하지 않고 예외를 던진다 —
+호출자가 정말 관세가 0이면 명시적으로 `Decimal("0")`을 넘겨야
+한다. `test_converted_result_feeds_directly_into_unchanged_
+calculate_margin`이 기존 `calculate_margin()`에 그대로 먹히는지
+직접 검증한다.
+
+**신규 도메인 3 — `app/domains/supplier_capability`(공급처
+능력표)**: `SupplierProfile`(공급처당 1행 — 국내/해외, 기본통화,
+`consignment_direct_to_customer` 기본값 True로 "매입처 직접배송
+기본 흐름"을 구조화), `SupplierCapabilityRecord`(공급처×8개 플래그
+upsert, 기존 `ChannelCapability`의 tri-state 관례를 독립적으로
+재사용). `get_capability_matrix()`가 8개 플래그를 항상 채워
+반환하고, 기록된 적 없는 플래그는 항상 UNKNOWN(미확인)으로
+채운다 — `test_unrecorded_supplier_shows_all_eight_flags_as_
+unknown`으로 검증. `migrations/20260910_03_create_supplier_
+capability_schema.sql`.
+
+**신규 파일**: 위 3개 도메인의 `constants/model/repository/service/
+schema/router.py` 전체(currency 6개, supplier_capability 7개),
+`purchase_task/international_margin.py`, Migration 2건(currency,
+supplier_capability), `tests/test_currency_domain.py`(19개),
+`tests/test_international_margin.py`(7개),
+`tests/test_supplier_capability_domain.py`(13개),
+`tests/test_currency_and_supplier_capability_router_guard.py`
+(2개). **변경 파일**: `app/main.py`(currency_router+
+supplier_capability_router 마운트 — payment/refund와 동일한 선례).
+
+**테스트 실측**: 신규 4개 파일 합산 **41/41 통과**(125초, Migration
+2건 임시 DB 적용 포함). `app.main` import+`configure_mappers()`
+정상(라우트 461개). 인접 회귀 — `margin_calculator.py`를 실제로
+쓰는 기존 테스트(`test_listing_wizard_margin_calculator`+
+`test_pricing_core`) **27/27 통과**(43초, 영향 없음 확인 — 이
+파일을 한 글자도 고치지 않았다는 주장의 실측 근거).
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: (1) 4개 Adapter
+계약의 실제 병합/통일 — 위 설계 결정 참고, 별도의 신중한 대규모
+작업으로 남김. (2) 환율 허용률 판정을 실제 후보평가 흐름에
+연결(baseline 환율 기록 지점 신설) — Phase 4 가격 인상 감지와
+동일한 한계, 별도 데이터 모델 조사 필요. (3) 실제 해외 공급처
+Adapter(AliExpress 등) 구현 — 이 세션 범위 밖(외부 공식 정책 확인
+필요, 절대 경계이기도 함). (4) 배송비 관련 Phase 9 요구사항 중
+"배송" 부분(Critical 결함 #10 — 배송비 미확인해도 발주가 막히지
+않는 결함)은 이번에 손대지 않았다 — Phase 10(가격·재고 안전장치)
+범위와 더 밀접해 그쪽으로 이관.
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB·외부 API
+접근 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 10(가격·
+재고 안전장치)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 21 — Phase 10 완료(부분): 가격·재고 안전장치
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준: "매입처 가격 인상 시 자동발주 중지+통지"
+(8-2), "판매채널 가상재고 기준 이하 시 신규판매 중지"(7-7), "가격은
+주 1회 정기 검토"(2-5), "마진율·원가상승률·환율허용률은 퍼센트
+단위로 입력"(6-15). 충돌 여부: 없음.
+
+**[Critical 결함 #21 해결] 가격 인상 감지를 실제로 살렸다**: Phase
+4에서 만들었지만 기준값이 없어 절대 발동하지 않던
+`PRICE_INCREASE_RATE_EXCEEDED` 판정을 이번에 실제로 연결했다.
+`PurchaseTaskCandidate.expected_amount_at_creation`(신규 컬럼,
+`migrations/20260910_04_add_purchase_task_candidate_price_baseline.sql`)
+를 추가해, `evaluate_and_prepare()`가 후보를 **처음** 평가할 때만
+(컬럼이 아직 None일 때만) 실질 매입비를 가격 기준선으로 1회 기록
+하고, 이후 같은 후보를 재평가할 때마다 이 불변 기준선과 비교해
+인상률을 판정한다. `tests/test_purchase_task_service.py::
+PriceIncreaseBaselineTestCase`(4개)가 end-to-end로 검증한다: (1)
+첫 평가는 기준선만 기록하고 오탐하지 않음, (2) 재평가해도 기준선은
+바뀌지 않음, (3) 정책 허용률을 넘는 가격 인상은 실제로 BLOCK+
+`FunctionCode.PRICE_CHANGE` ERROR 강등까지 발생함, (4) 허용률
+이내 변동은 차단하지 않음. `tests/test_purchase_task_price_increase_
+demotion.py`(기존, Phase 4에서 만든 격리 테스트)는 그대로 남기고
+docstring만 갱신 — 두 파일이 역할을 분담한다.
+
+**[High 결함 #9 해결] 마진율·원가상승률 UI를 퍼센트로 수정**:
+`app/web/console.html`의 4개 입력(소매구매/구매작업 정책 화면 각각
+최소마진율·최대가격상승률)이 `(0~1)` 소수 입력에서 `(%)` 0~100
+입력으로 바뀌었다. `console.js` 표시/저장 양쪽에서 ×100/÷100
+변환을 추가했고, 실수로 남겨뒀다면 스케일이 안 맞았을 "완화 위험
+경고" 비교 로직(`detectRiskyRelaxation()`)과 읽기전용 요약표
+(`rpFormatPolicySummary()`)도 함께 고쳤다 — 백엔드 스키마(`ge=0,
+le=1`)는 전혀 건드리지 않았다(변환은 프론트엔드에서만 일어나고
+API 페이로드는 이전과 동일한 0~1 소수를 그대로 보낸다). `node
+--check`로 문법만 검증했다 — 실제 브라우저 렌더링은 미검증(로그인이
+필요한 화면이라 이번 세션에서는 생략, 기존 Phase 13 UI 검증 예정
+목록과 동일한 한계).
+
+**신규 도메인 — `app/domains/price_stock_safety`(가상재고 임계값 +
+가격 검토주기)**: `VirtualStockThreshold`(회사별, append-only, 미설정
+시 항상 허용 — 값을 0으로 추측하지 않음), `PriceReviewCycleSetting`
+(회사별, append-only, 미설정 시 문서 원문 초기값 7일).
+`check_virtual_stock_allows_auto_order()`가 판정만 한다(실행은
+호출자 책임). **"가상재고"(판매채널 표시 재고)와 `InventorySku`
+(실물 창고 재고)는 다른 개념임을 다시 확인**하고 InventorySku를
+전혀 참조하지 않았다(High 결함 #15가 지적한 개념 혼동 반복 방지).
+`migrations/20260910_05_create_price_stock_safety_schema.sql`.
+
+**의도적으로 연결하지 않은 것(정직하게 기록)**: (1) `check_virtual_
+stock_allows_auto_order()`가 받는 "표시 재고 수치" 자체를 실제
+판매채널 리스팅에서 읽어오는 필드가 이 저장소 어디에도 없다 —
+`marketplace_listing` 도메인에 그 필드를 새로 설계해야 하는 별도
+작업(조사 완료, 코드는 안 함). (2) `review_cycle_days`를 실제
+Phase 6 스케줄러의 "매주 가격 재검토" Job으로 연결하지 않았다 —
+`price_advisory_service.suggest()`를 스케줄러에 연결하는 것은
+그 자체로 신중한 별도 조사가 필요하다.
+
+**발견·수정한 결함(이 Phase의 회귀 실행 중 발견, 이 세션 자신이
+원인)**: `PurchaseTaskCandidate`에 새 컬럼을 추가하면서
+`tests/test_purchase_task_migration.py`의 두 테스트가 깨졌다 —
+(a) `test_migration_matches_sqlalchemy_model_ddl`(Model↔Migration DDL
+드리프트 감지 테스트, 새 컬럼이 원본 Gate PT-1 Migration 파일에는
+당연히 없어 불일치로 잡힘), (b) `test_create_and_add_candidate_on_
+migrated_schema`(원본 Migration만 적용한 임시 DB에 새 컬럼이 없어
+실제 쿼리가 "no such column"으로 실패). 이 파일은 `channel_
+connection_id` 컬럼 추가 때 이미 같은 문제를 겪어 "이후 Migration이
+추가한 컬럼은 명시적으로 예외 처리한다"는 패턴
+(`_LATER_MIGRATION_COLUMN_FRAGMENT`)을 갖고 있었다 — 그 패턴을
+그대로 따라 `expected_amount_at_creation`용 예외를 추가하고, 두
+테스트 모두 수정 확인. **교훈**: `purchase_task_candidates`/
+`purchase_tasks`/`purchase_records`에 새 컬럼을 추가하는 앞으로의
+모든 작업은 `tests/test_purchase_task_migration.py`를 반드시 회귀
+대상에 포함해야 한다(Phase 6의 `EXCLUDED_FROM_PRIOR_STATE` 교훈과
+같은 종류).
+
+**신규 파일**: `app/domains/price_stock_safety/{constants,model,
+repository,service,schema,router}.py`,
+`migrations/20260910_04_add_purchase_task_candidate_price_baseline.sql`,
+`migrations/20260910_05_create_price_stock_safety_schema.sql`,
+`tests/test_price_stock_safety_domain.py`(14개),
+`tests/test_price_stock_safety_router_guard.py`(1개). **변경 파일**:
+`app/domains/purchase_task/model.py`(`expected_amount_at_creation`
+컬럼), `app/domains/purchase_task/service.py`(기준선 기록+
+policy_input 전달), `app/web/console.html`+`console.js`+
+`i18n/ko-KR.js`+`i18n/en-US.js`(퍼센트 UI), `app/main.py`
+(price_stock_safety_router 마운트), `tests/test_purchase_task_service.py`
+(`PriceIncreaseBaselineTestCase` 4개 신규),
+`tests/test_purchase_task_migration.py`(Phase-10 컬럼 예외 처리),
+`tests/test_purchase_task_price_increase_demotion.py`(docstring
+갱신).
+
+**테스트 실측**: 신규 `test_price_stock_safety_domain`(14개)+
+`test_price_stock_safety_router_guard`(1개) = 15/15. purchase_task
+전체 회귀(`channel_connection_assignment`+`csv_import`+`email`+
+`migration`+`order_item_linkage`+`order_submission_review`+
+`order_sync`+`price_increase_demotion`+`router`+`service`, 신규
+4개 포함) + `price_stock_safety_domain` 합산 **131/131 통과**
+(262초). `app.main` import+`configure_mappers()` 정상(라우트
+466개). `node --check`로 console.js 문법 확인.
+
+**미검증**: console.html/js 퍼센트 UI의 실제 브라우저 렌더링(로그인
+필요 화면, Phase 13으로 이관). 가상재고 게이트를 실제 판매채널
+리스팅 흐름에 연결하는 것. 가격 검토주기를 실제 스케줄러 Job으로
+연결하는 것.
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 11(개인
+정보·권한·보안)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 22 — Phase 11 완료(부분): 개인정보·권한·보안
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준(11번): "로그에는 전화번호·주소·API키·
+카드정보를 항상 가린다", "개인정보 조회 권한을 별도로 설정한다",
+"조회 권한이 있어도 비밀번호 재인증을 통과해야 원문 확인 가능",
+"프로그램 종료 또는 3시간 경과 시 재인증 필요", "로그인 잠금과
+관리자 잠금해제를 연결한다". 충돌 여부: 없음.
+
+**조사(구현 전, Explore 서브에이전트) — 이미 끝나 있던 것과 실제로
+비어 있던 것을 구분**: 아래 두 항목은 Phase 1·2에서 이미 완전히
+구현돼 있었음을 이번 조사로 재확인만 했다(추가 코드 없음):
+- **로그인 잠금 ↔ 관리자 잠금해제**: `app/core/account_admin.py`
+  `POST /admin/users/{user_id}/unlock`(SuperAdminGuard, 같은 회사로
+  스코프, `failed_login_count=0`+`locked_until=None` 리셋+
+  `UNLOCK_USER` 감사로그) — Phase 1에서 이미 만들어져 있었다.
+- **프로그램 종료·3시간 경과 시 재인증**: Phase 2에서 이미
+  `SESSION_IDLE_TIMEOUT`이 리프레시를 침묵 허용하지 않고 refresh
+  token family 전체를 폐기(`app/domains/session/refresh_service.py`)
+  하며, 프론트엔드가 로그인 화면(`transitionToLogin()`)으로 강제
+  전환한다 — "토큰만 몰래 갱신"이 아니라 실제로 비밀번호를 다시
+  입력해야 한다. 프로그램 재시작 시에도 `app/desktop/main.py`가
+  콘솔 세션 저장소를 무조건 지운다. 둘 다 이미 문서 요구사항을
+  충족하고 있었다.
+
+**실제로 비어 있던 것과 이번에 채운 것**:
+1. **[Medium 결함 #18 해결] 감사로그 자유 텍스트 강제 마스킹**:
+   `app/core/audit_db.py::write_audit_log()`가 이제 `description`을
+   저장 직전에 항상 `redact_free_text()`(기존 함수, 전화번호·JWT
+   형태 패턴만 치환)로 통과시킨다 — 이전에는 이 게이트가 전혀 없어
+   호출자가 실수로 전화번호를 그대로 넣으면 그대로 로그에 남았다.
+   일반적인 설명 문구는 영향받지 않는다(패턴 매칭 방식이라 오탐
+   없음). `tests/test_audit_log_description_masking.py`(4개)로
+   검증.
+2. **카드정보 마스킹 함수 신설**: `app/core/sensitive_data.py::
+   mask_card_number()` — 이 저장소에 지금까지 카드번호 마스킹
+   함수 자체가 없었다(카드 저장 코드가 Phase 7 전까지 아예 없었기
+   때문). `mask_phone()`과 동일한 등급(마지막 4자리만 노출).
+3. **[신규] `VIEW_SENSITIVE_DATA` 권한 코드**: "개인정보 조회
+   권한을 별도로 설정한다"는 이전까지 전혀 없었다 — 기존
+   `/orders/{id}/sensitive-detail`, `POST /purchase-tasks/{id}/
+   order-submission-review`(원문 요청 시)는 재인증(recent-auth)
+   만으로 게이트됐지, "이 사람이 개인정보를 볼 권한이 있는가"는
+   확인하지 않았다(admin_guard만 — 회사 관리자면 누구나 가능).
+   `app/database/seed.py::DEFAULT_PERMISSIONS`에 `VIEW_SENSITIVE_
+   DATA` 추가 + 두 엔드포인트에 `require_permission(db, user,
+   "VIEW_SENSITIVE_DATA")` 삽입(재인증 체크와 별개 게이트).
+   SUPER_ADMIN은 `is_super_admin()` 단락 평가로 자동 통과하므로
+   기존 관리자 흐름은 그대로 유지된다 — 이 권한은 비-SUPER_ADMIN
+   역할에게 개별적으로 부여할 때만 의미가 생긴다. **UI 작업이
+   전혀 필요 없었다** — 기존 `app/domains/role_permission/
+   admin_router.py`의 `GET /permissions/catalog`+`PUT /roles/
+   {role_id}/permissions` 화면이 이미 DB의 모든 permissions 행을
+   범용으로 관리하므로, 새 코드가 시딩되는 순간 그 화면에 자동으로
+   나타난다. `tests/test_sensitive_data_view_permission.py`(5개)로
+   SUPER_ADMIN 자동통과/일반역할 기본거부/명시적부여 시 통과/
+   최소권한(다른 권한까지 함께 열리지 않음)을 검증.
+
+**변경 파일**: `app/core/audit_db.py`(마스킹 게이트),
+`app/core/sensitive_data.py`(`mask_card_number` 추가),
+`app/database/seed.py`(`VIEW_SENSITIVE_DATA` 권한 추가),
+`app/domains/order/router.py`+`app/domains/purchase_task/router.py`
+(권한 체크 삽입), `tests/test_order_response_privacy.py`(기존
+2개 테스트가 `require_permission`을 mock 처리하도록 갱신 — 이
+파일은 원래 SimpleNamespace 가짜 객체로 라우터 함수를 직접
+호출하는 경량 스타일이라 실제 DB 권한조회를 할 수 없었음).
+**신규 파일**: `tests/test_sensitive_data_view_permission.py`
+(5개), `tests/test_audit_log_description_masking.py`(4개),
+`mask_card_number` 테스트 1개(`tests/test_sensitive_data_masking.py`
+에 추가).
+
+**발견·수정한 결함(이 Phase의 회귀 실행 중 발견, 이 세션 자신이
+원인)**: `tests/test_permissions_timestamps_migration.py::
+test_migration_directory_contains_only_expected_files`가 실제
+`migrations/` 디렉터리 전체를 하드코딩된 예상 목록과 정확히
+비교하는 테스트인데, 이 세션이 Phase 1·3·7~10에서 추가한 신규
+Migration 파일 8개가 그 목록에 없어 실패하고 있었다(이번 Phase
+회귀에서 처음 발견 — 지금까지 이 특정 테스트 파일을 회귀 대상에
+포함한 적이 없었다). 목록에 8개를 추가해 수정, 13/13 통과 확인.
+**교훈**: 이 파일도 앞으로 Migration을 추가하는 모든 Phase의
+회귀 대상에 포함해야 한다(Phase 6의 `EXCLUDED_FROM_PRIOR_STATE`,
+Phase 10의 `_LATER_MIGRATION_COLUMN_FRAGMENT`와 같은 종류의
+"하드코딩된 전체 목록" 테스트 — 이제 이런 종류의 테스트 파일이
+최소 3개 있다는 것을 인지하고 있어야 한다).
+
+**테스트 실측**: 신규 `test_sensitive_data_view_permission`(5개)+
+`test_audit_log_description_masking`(4개)+`mask_card_number` 1개 =
+10개. `write_audit_log()` 마스킹 게이트의 전체 호출부 영향 회귀
+(감사로그를 쓰는 11개 테스트 파일) **168/168 통과**(168초, 영향
+없음 확인). `test_permissions_timestamps_migration`(수정 후)
+13/13. 최종 통합 회귀(`test_account_admin`+`test_login_lockout`+
+`test_purchase_task_router`+`test_purchase_task_order_submission_
+review`) **55/55 통과**(146초). `app.main` import+
+`configure_mappers()` 정상(라우트 466개, 신규 라우터 없음 — 이번
+Phase는 기존 라우터 보강뿐).
+
+**미검증**: `VIEW_SENSITIVE_DATA` 권한을 실제 콘솔 UI 화면
+(role_permission 관리 화면)에서 클릭으로 부여해 보는 실제 브라우저
+검증(로그인 필요 화면, Phase 13 이관).
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 12(AI
+데이터·학습 기반)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 23 — Phase 12 완료(부분): AI 데이터·학습 기반
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준(12번): "AI 추천·이유·점수·사용자 승인
+거절·실제 판매량/마진/품절/취소/반품/배송지연을 저장", "현재 데이터
+만으로 학습됐다고 주장하지 않는다", "학습 가능한 데이터셋을 운영
+DB와 분리", "초기 학습 검토는 최소 50건, 누적 주문 1,000건 초과 시
+최소 100건", "오프라인 평가+회귀비교+사용자 승인 후에만 자동학습
+적용". 충돌 여부: 없음.
+
+**조사(구현 전, Explore 서브에이전트)**: `app/domains/ai_governance`
+는 능력 레지스트리+`ProposedAction`(제안-승인 이력)만 있고 모델/
+정책 버전·판단 결과 연결이 없음을 확인. `app/domains/decision`의
+`DecisionEvaluation`이 이 요구사항에 가장 근접한 기존 테이블(입력
+스냅샷·정책버전·추천·추천이유·평가자버전 보유)이지만 **실제 결과
+(판매/마진/품절/취소/반품/배송지연) 연결 필드가 전혀 없음**을
+확인. 표본크기 게이트(50/1,000/100), 학습셋-운영DB 분리, 오프라인
+평가+회귀비교+승인 게이트 — 셋 다 이 저장소 어디에도 존재하지
+않음을 grep으로 확인(추측 아님).
+
+**신규 도메인 — `app/domains/ai_learning`**: `app/domains/decision`
+(DecisionEvaluation/DecisionReview)의 어떤 테이블도 수정하지
+않았다 — 전부 읽기 전용 조회 + 별도 신규 테이블로 구현:
+- **`DecisionOutcome`**: AI 판단(evaluation_id, 논리 참조) 1건당
+  실제 결과(판매액·마진액·품절·취소·반품·배송지연)를 나중에(결과가
+  확정되는 시점에) 연결한다. `record_outcome()` — 중복 기록 차단.
+- **`LearningDatasetRecord`**: "학습 가능한 데이터셋을 운영 DB와
+  분리한다"의 구현 — `DecisionEvaluation`+`DecisionReview`(최신
+  결정)+`DecisionOutcome`에서 값을 **복사**해 독립된 행을 만든다
+  (참조가 아니다 — `test_export_does_not_modify_operational_
+  evaluation_row`가 export 이후 원본을 바꿔도 이미 export된 학습
+  행은 영향받지 않음을 직접 증명). 결과가 없는 판단은 export할 수
+  없다("정답 없는 학습 행"을 만들지 않기 위함).
+- **`ModelCandidate`+`ModelCandidateStatusEvent`**: 후보 모델/정책
+  검증 상태기계(DRAFT→OFFLINE_EVALUATED→REGRESSION_COMPARED→
+  APPROVED/REJECTED, `app/domains/refund`와 동일한 "현재상태+
+  append-only 이력" 패턴+원자적 조건부 UPDATE로 전이). 상태 이름
+  자체가 "학습됐다"고 절대 주장하지 않는다(`APPROVED`도 "사람이
+  승인했다"는 뜻일 뿐) — `ModelCandidateStatus.LABELS_KO`에 이
+  원칙을 명시. 오프라인 평가 없이 회귀비교로, 회귀비교 없이 승인
+  으로 건너뛸 수 없음을 전이 검증으로 강제(4개 테스트).
+  `get_required_sample_size()`가 문서 원문 그대로 50/1,000/100을
+  구현(경계값 포함 3개 테스트).
+
+**[정직하게 기록] 실제로 하지 않은 것**: 이 후보 모델을 실제
+라이브 정책(`DecisionPolicy`/`CompanyDecisionPolicy`)에 적용하는
+코드는 어디에도 없다 — `approve_model_candidate()`는 "사람이
+승인했다"는 사실만 기록한다. 실제 모델 학습 코드 자체도 없다(이
+세션의 절대 경계 — 실제 학습 실행은 범위 밖). "학습 가능한
+데이터셋을 운영 DB와 분리"도 **같은 물리 SQLite 파일 안의 별도
+테이블**로 구현했다 — 완전히 별도의 DB 파일/스토리지로 분리하는
+것은 이번 Phase에서 하지 않았다(정직하게 기록 — "참조가 아니라
+복사"라는 핵심 속성은 충족하지만, 물리적 분리까지는 아니다).
+
+**신규 파일**: `app/domains/ai_learning/{constants,model,repository,
+service,schema,router}.py`,
+`migrations/20260910_06_create_ai_learning_schema.sql`,
+`tests/test_ai_learning_domain.py`(21개),
+`tests/test_ai_learning_router_guard.py`(2개). **변경 파일**:
+`app/main.py`(ai_learning_router 마운트 — 이전 Phase들과 동일한
+"마운트는 먼저, 실 DB 적용은 별도 승인" 선례),
+`tests/test_permissions_timestamps_migration.py`(신규 Migration
+파일 목록에 1개 추가 — Phase 6/10/11에서 이미 겪은 것과 동일한
+패턴, 이번엔 미리 알고 있어서 처음부터 함께 고쳤다).
+
+**테스트 실측**: 신규 `test_ai_learning_domain`(21개)+
+`test_ai_learning_router_guard`(2개) = 23/23. 인접 회귀 —
+`app/domains/decision`을 실제로 쓰는 4개 테스트 파일(66개, 읽기
+전용 영향 확인) + `test_permissions_timestamps_migration`(13개)
+합산 **66/66 통과**(58초 — 별도 실행, decision 66개+migration
+13개+router_guard 2개 도합이지만 로그상 합계 66으로 보고됨, 실제
+분리 실행 결과는 각각 정상). `app.main` import+
+`configure_mappers()` 정상(라우트 475개).
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: (1) 승인된 후보
+모델을 실제 `DecisionPolicy`에 반영하는 연결 코드. (2) 학습
+데이터셋의 물리적 DB 분리(현재는 같은 파일의 별도 테이블). (3) 실제
+주문 완료 시점에 `record_outcome()`을 자동 호출하는 배선(현재는
+수동 API 호출 — Phase 6 스케줄러나 주문완료 이벤트 훅에 연결하는
+것은 별도 조사 필요).
+
+**승인 대기**: 없음(코드·임시 DB 테스트만 진행, 실제 DB 접근 없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 13(UI
+편의성 통합)으로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 24 — Phase 13 완료(부분): UI 편의성 통합
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), `git diff origin/main -- docs/HOMEZ_USER_OPERATION_SETTINGS.md`
+결과 없음(동일). 관련 기준: "기능별 상태·중지사유·다음 필요 조치를
+한눈에 표시", "자동화 모드 설명을 쉬운 한국어로 표시", "데스크톱과
+모바일 화면 모두 확인", "테스트 화면과 실제 운영 화면을 명확히
+구분", "중복 버튼·거짓 성공 표시·오래된 상태·실수로 인한 강제
+로그아웃 점검". 충돌 여부: 없음.
+
+**이 Phase에서 처음으로 실제 브라우저 렌더링을 검증했다** — Phase
+3/6/9/10/11이 각각 "미검증: 실제 브라우저 렌더링(Phase 13 이관)"
+으로 남겨둔 항목들을 여기서 실제로 확인했다. 격리 스크래치 DB
+(Migration 57개 전부 적용 — 이 세션이 Phase 1~12에서 추가한 8개
+포함, 전부 깨끗하게 적용됨을 이 과정에서 재확인)에 SUPER_ADMIN
+계정을 만들고, `.claude/launch.json`에 `phase13-ui-verify`(포트
+8930) 설정을 추가해 Browser 도구로 실제 로그인 후 화면을 확인했다.
+실제 homez.db는 전혀 열지 않았다 — 이 스크래치 DB는 이 검증 세션
+자신이 만든 새 파일 하나뿐이다.
+
+**확인된 것(전부 통과)**:
+- **로그인 흐름**: 아이디/비밀번호 입력 → "로그인 중..." → 대시보드
+  진입까지 정상 동작. 콘솔 세션이 화면 전환(뷰 변경) 중에는 끊기지
+  않음 — 여러 화면을 오가도 "실수로 인한 강제 로그아웃"이 발생하지
+  않음을 실제로 확인.
+- **Phase 3/4 "기능별 자동화 상태" 패널**: 시딩한 4가지 상태(반자동/
+  자동/일시중지/오류)가 전부 정확한 한국어 라벨+쉬운 설명 문구로
+  렌더링됨. 특히 **가격 변경 기능의 "오류" 상태**(Phase 4에서
+  시뮬레이션한 `demote_function_to_error` 호출 결과)가 사유
+  ("[Phase13 UI검증] 매입처 가격 인상 감지 시뮬레이션")와 변경
+  시각까지 화면에 정확히 표시됨 — Phase 4가 구현한 "중지 원인과
+  다음 필요 조치를 화면에 표시"가 실제로 작동함을 처음으로 실측
+  확인. 기본값(한 번도 설정 안 한 기능)은 "변경 시각" 자체가
+  표시되지 않는 것도 확인(의도된 동작).
+- **Phase 10 퍼센트 UI 수정**: `purchase-task`/`retail-purchase`
+  두 정책 화면의 마진율 입력 필드를 실제 DOM에서 조회해
+  `min=0, max=100, step=0.1`(퍼센트 스케일)로 렌더링됨을 확인 —
+  `(0~1)`으로 되돌아간 곳 없음.
+- **모바일 화면**: 375×812(모바일 프리셋)에서 대시보드와 기능별
+  자동화 상태 패널 모두 카드형으로 자연스럽게 재배치되고
+  `document.body.scrollWidth`가 `window.innerWidth`를 넘지 않음
+  (가로 스크롤 없음)을 직접 측정 확인.
+- **테스트/실제 화면 구분**: 기존에 이미 "이 기능은 실제 데이터·
+  API가 연결되지 않아 동작하는 것처럼 보이지 않도록 비활성화되어
+  있습니다" + "실제 기능으로 계속" 같은 명시적 안내 패턴이 여러
+  화면에 이미 있음을 확인(이번에 새로 만들 필요 없음).
+- 브라우저 콘솔에 에러 없음(여러 화면 전환 동안).
+
+**[정직하게 기록] 이번 Phase에서 하지 않은 것 — UI 자체가 아직
+없는 6개 신규 도메인**: Phase 7~12에서 만든
+`payment`/`refund`/`currency`/`supplier_capability`/
+`price_stock_safety`/`ai_learning` 6개 도메인은 전부 REST API+
+테스트만 있고 **콘솔 UI(console.html/console.js) 화면이 하나도
+없다** — 백엔드 권한·재인증 게이트는 완성됐지만 사람이 브라우저로
+결제수단을 등록하거나 환불을 승인하거나 후보 모델을 검증하는
+화면 자체가 없다. 6개 도메인 각각의 UI를 새로 만드는 것은 이번
+"UI 편의성 통합"(기존 화면 정리·검증) Phase의 범위를 크게 벗어나는
+별도의 대규모 작업이라 이번엔 하지 않았다 — 명시적으로 다음
+작업으로 남긴다.
+
+**신규 파일(코드 저장소 밖, 검증 전용)**: 스크래치 시딩 스크립트
+(`seed_phase13_ui_verify.py`)와 서버 실행 스크립트
+(`start_phase13_ui_verify.cmd`) — 둘 다 세션 스크래치 디렉터리에만
+존재하고 저장소에 커밋되지 않는다. **변경 파일**: `.claude/
+launch.json`(`phase13-ui-verify` 설정 1개 추가, 포트 8930).
+
+**의도적으로 하지 않은 것(다음 작업으로 이관)**: (1) Phase 7~12
+6개 신규 도메인의 콘솔 UI 신설(위 설명). (2) console.js 전체
+(18,000줄 이상)에 대한 전수 "중복 버튼·거짓 성공 표시" 감사 —
+이번엔 이번 세션이 새로 만든 화면(기능별 자동화 상태, 퍼센트
+입력)만 표적 검증했다. (3) Desktop 앱(브라우저가 아닌 실제 패키징된
+실행파일) 자체의 종료·재시작 화면 검증 — 이번엔 웹 브라우저로만
+확인했다.
+
+**승인 대기**: 없음(격리 스크래치 DB만 사용, 실제 homez.db 접근
+없음).
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 14(개인
+베타 검증)로 이어서 진행 — 시작 전 GitHub 기준 재확인 예정.
+
+## 2026-09-10 후속 25 — Phase 14 완료(부분): 개인 베타 검증
+
+[GitHub 기준 확인] origin/main=0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72
+(변동없음), 문서 diff 없음. 충돌 여부: 없음.
+
+**[승인 경계로 인한 구조적 제약을 먼저 명시]** 이 Phase가 요구하는
+핵심 작업(주문 가능한 등록 상품 찾기, 사용자 자택주소로 첫 발주,
+실제 상품 2건의 전체 과정 검증 — 1건 정상배송완료 + 1건 반품환불
+완료, 자동 모드 개방)은 전부 실제 운영 DB 접근+실제 외부 API 호출+
+실제 주문·결제·반품·환불 실행을 요구한다 — 이번 연속 작업 지시서의
+"절대 중단 경계" 전부에 해당한다. 이 세션은 실제 homez.db를 한
+번도 열지 않았고, Phase 1의 로그인 잠금 Migration조차 아직 실
+DB에 적용되지 않아 실 서버 기동 자체가 보류 중이다. 따라서 이
+Phase의 실행 부분은 전부 **[승인 대기]**로 남기고, 실행 없이도
+안전하게 할 수 있는 유일한 하위 작업(12개 오류 시나리오 커버리지
+조사)만 수행했다.
+
+**12개 오류 시나리오 → 기존 테스트 매핑(감사 14-10 대응)**:
+문서 원문(HOMEZ_USER_OPERATION_SETTINGS.md 280번줄) 12개 항목을
+Explore 서브에이전트로 전체 tests/ 디렉터리에서 실제로 조사했다
+(코드 변경 없음, 순수 조사):
+
+| # | 시나리오 | 커버리지 | 대표 테스트 |
+|---|---|---|---|
+| 1 | 정상 성공 | 확실 | `test_retail_purchase_service.py::HappyPathTestCase`, `test_purchase_task_service.py::HappyPathTestCase` |
+| 2 | 가격 인상 | 부분 | `test_purchase_task_service.py::PriceIncreaseBaselineTestCase`(탄탄) — retail_purchase 쪽은 enum만 있고 서비스 레벨 테스트 없음 |
+| 3 | 품절 | 확실 | `test_retail_purchase_service.py::PolicyBlockTestCase`, `test_purchase_task_order_submission_review.py::StockAndPriceChangeTestCase` |
+| 4 | 옵션 불일치 | 확실 | `test_purchase_task_order_submission_review.py::ProductOptionMismatchTestCase` |
+| 5 | 중복 주문 | 확실 | `test_purchase_order_submission_service.py`(idempotency key 동시성 포함) |
+| 6 | 중복 결제 | **미커버** | `app/domains/payment`에 idempotency 로직 자체가 없음(결제 실행 메서드 자체가 아직 없어 "중복 실행 방지"를 검증할 대상이 없음) |
+| 7 | 인증 만료 | 확실 | `test_purchase_task_order_submission_review.py::AuthExpiredTestCase` |
+| 8 | API 지연 | 부분 | rate-limit/backoff 순수 로직만 있고 "응답 지연 자체"의 시간 재현 테스트 없음 |
+| 9 | 타임아웃 | 확실 | `test_purchase_order_submission_service.py`, `test_coupang_live_submission.py` |
+| 10 | 결과불명(UNKNOWN) | 확실 | `test_retail_purchase_service.py::UncertainResultTestCase`, `test_coupang_live_submission.py` |
+| 11 | 배송 지연 | 확실 | `test_order_exception_analysis.py`(SHIPMENT_IN_TRANSIT_DELAYED) |
+| 12 | 반품·부분 환불 | 부분 | 반품(물류)·환불(금전) 각각 테스트 있음 — "부분" 금액 개념 자체가 `RefundType`에 없음(FULL/PARTIAL 구분 미구현) |
+
+**요약**: 12개 중 8개(1,3,4,5,7,9,10,11) 확실히 커버, 3개(2,8,12)
+부분 커버, 1개(6) 사실상 미커버. 감사 14-10이 지적한 "통합 매트릭스
+부재"는 이 표로 처음 해소됐다 — 다만 **매핑만 했을 뿐 부족한
+3.5개(2·8·12 부분 + 6 신규)를 메우는 새 테스트는 이번 Phase에서
+작성하지 않았다**(정직하게 기록 — 특히 6번은 결제 실행 메서드
+자체를 새로 설계해야 해서, Payment Phase 7이 의도적으로 "실행은
+하지 않는다"로 남겨둔 경계와 정면으로 부딪힌다. 성급하게 만들지
+않기로 판단).
+
+**[승인 대기] 이 Phase가 실제로 요구하지만 실행하지 않은 것 전부**:
+(1) 실제 주문 가능한 등록 상품 탐색 — 실 homez.db·실 판매채널
+접근 필요. (2) 사용자 자택주소 확인 후 첫 실제 발주 — 실제 주문
+실행. (3) 실제 상품 2건(정상배송완료 1건+반품환불완료 1건) 전체
+과정 검증 — 실제 결제·배송·반품·환불 다수 실행. (4) 12개 오류
+시나리오 "전체 통과" 후 자동 모드 개방 — 시나리오 자체가 아직
+실행되지 않았고(위 매핑에서 확인) 문서 자신도 "베타 시작 일괄
+조건에서 제외, 기능별 자동모드 개방 조건으로 관리"라고 명시해
+개인 베타 시작을 막는 조건은 아니지만 자동 모드 개방은 계속
+보류해야 함.
+
+**승인 대기**: 위 4개 항목 전부 — 사용자의 명시적 실행 승인 및
+실제 homez.db Migration 적용(Phase 1)이 선행되어야 한다.
+
+실제 DB·Migration 적용·외부 호출·commit/push 없음. Phase 0~14
+연속 구현의 승인 없이 가능한 범위는 여기서 마무리 — 최종 회귀·
+git 체크포인트 절차로 이어간다.
+
+## 최종 회귀 검증 (2026-09-10)
+
+**[GitHub 기준 확인]** `git fetch origin` 실행, `origin/main` =
+`0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72` — 이번 세션 시작 이후
+단 한 번도 변하지 않음(Phase 6~14, 최종 회귀까지 매번 확인, 항상
+동일). `docs/HOMEZ_USER_OPERATION_SETTINGS.md`는 `origin/main` 대비
+diff 없음(최종 재확인). 로컬 `main`은 `origin/main` 대비 1 commit
+ahead(세션 시작 전부터 있던 기존 로컬 커밋, 이번 세션 작업과 무관,
+베이스라인 `34a9060` 보존 확인) + 전부 미커밋 상태의 이번 세션
+작업(수정 파일 다수 + Phase 6~12가 추가한 신규 Domain/테스트/
+Migration 파일들, git status로 확인). 충돌 없음.
+
+전체 회귀(`unittest discover`, 291개 파일 / 약 4070개 테스트) 1차
+실행 결과 `Ran 4070 tests ... FAILED (failures=21, errors=52)`로
+확인됐다(런타임 약 94분). 상세 로그가 `tail -5000`으로 잘려 일부만
+검토 가능했던 항목 중, 실제로 근본 원인까지 규명·수정한 3건:
+
+1. **`tests/test_route_authentication_contract.py`** —
+   Phase 9(`app/domains/supplier_capability/router.py`)가 새로 마운트한
+   `/suppliers/{supplier_id}/capability/*` 경로가
+   `test_previously_removed_legacy_crud_routers_stay_unmounted`의
+   `/suppliers` 접두사 검사에 걸림. 실제 보안 결함이 아니라(이
+   라우터는 처음부터 `SuperAdminGuard` 전체 적용으로 설계됨,
+   `tests/test_currency_and_supplier_capability_router_guard.py`로
+   별도 확인됨) 2026-08-15 Gate 4가 `/orders`/`/purchases`/
+   `/shipments`에 이미 적용한 것과 동일한 예외 패턴을
+   `/suppliers/*/capability/*`에도 적용해 수정.
+
+2. **`app/domains/user/model.py::User.failed_login_count`** — 실제
+   버그. ORM `default=0`만 있고 `server_default`가 없어
+   `Base.metadata.create_all()`로 만든 테스트용 스키마의 `CREATE
+   TABLE` DDL에는 이 컬럼의 SQL 레벨 DEFAULT가 붙지 않았음(실제
+   Migration `20260909_00_add_login_lockout_columns.sql`은 `ALTER
+   TABLE ... DEFAULT 0`으로 명시적으로 붙어 있어 실제 homez.db는
+   영향 없음). 이 드리프트 때문에
+   `app/core/first_admin_setup.py::atomic_create_first_admin()`의
+   raw SQL INSERT가 `sqlite3.IntegrityError`(NOT NULL 위반)로
+   실패했고, 그 예외를 "이미 계정 존재"로 오해석해
+   `ALREADY_COMPLETED`를 잘못 반환했다
+   (`tests/test_desktop_first_admin_setup.py`에서 재현). 단일 테스트
+   단독 실행으로도 동일하게 재현되어 테스트 간 오염이 아닌 확정적
+   결함임을 확인. `server_default="0"`을 Migration과 동일하게 추가해
+   드리프트 자체를 제거. 수정 후
+   `tests/test_desktop_first_admin_setup.py` 30/30 OK(수정 전 4
+   failures/8 errors).
+   영향 범위 확인을 위해 `failed_login_count`를 참조하는
+   `tests/test_login_lockout.py`도 별도 재실행 — 13/13 OK, 회귀 없음.
+
+3. **"오래된 Migration 파일 하드코딩 목록" 패턴 세 번째 재발** —
+   `tests/test_migration_restricted_mode_schema_error_handling.py`,
+   `tests/test_purchase_channel_connection_migration.py`의
+   `EXCLUDED_FROM_PRIOR_STATE`에 Phase 7~12가 추가한 7개 Migration
+   (`20260910_00`~`20260910_06`)을 추가. 수정 후 두 파일 합산
+   12/12 OK.
+
+1차 실행은 `tail -5000`으로 출력이 잘려 21 failures + 52 errors
+전체를 다 검토하지 못했다(눈으로 확인·조사한 것은 위 3건 관련
+항목뿐). 잘리지 않은 전체 실패 목록을 얻기 위해 2차 전체 회귀를
+`grep -E "^FAIL:|^ERROR:|^Ran |^OK$|^FAILED"` 필터로 다시 실행
+중(이 3건 수정 **이전** 상태를 기준으로 시작됐으므로, 검토 후
+남은 진짜 결함을 전부 고친 뒤 최종 확인용 3차 전체 회귀가 별도로
+필요함 — 아직 완료되지 않음).
+
+**Git 상태 위생 점검(부분)**: `git status --short | grep -iE
+"\.db$|\.env|credential|secret|\.log$|backup"` — 매치된 3개 전부
+`app/domains/backup/**`(정상 소스 코드, Domain 이름에 "backup"이
+포함될 뿐 실제 백업 파일 아님)뿐. DB/로그/자격증명/개인정보 파일
+없음 확인.
+
+아직 commit/push 없음(승인 대기).
+
+### 2차 전체 회귀(grep 필터, 잘림 없음) 검토 결과 (2026-09-10, 계속)
+
+2차 전체 회귀(`bp1vk18ck`, 3건 수정 **이전** 상태 기준, 4070개 테스트,
+런타임 5735초)의 잘리지 않은 전체 실패 목록(failures=21, errors=52)을
+확보해 전수 검토했다. 이미 수정·검증된 위 3건(경로 검사 예외,
+`failed_login_count` server_default, Migration 목록 3차 갱신)과
+정확히 대응하는 항목을 빼고 나면 남는 것은 다음 두 범주뿐이었다:
+
+**4. `tests/test_notification_delivery_pt3.py` — 동일 패턴의 5번째
+재발 (실제 버그, 수정 완료)**: `test_catalog_listing_returns_all_29_
+events_with_honest_wired_flag`의 하드코딩된 `expected_wired` 집합과
+`test_every_wired_event_has_a_real_non_catalog_call_site`의 하드코딩된
+`source_files` 목록이, 이번 세션 Phase 1(`LOGIN_ACCOUNT_LOCKED`)·
+Phase 4(`FUNCTION_AUTOMATION_DEMOTED_TO_ERROR`)·Phase 5
+(`BACKUP_RESTORE_REHEARSAL_FAILED`)가 `event_catalog.py`에
+`wired=True`로 추가한 3개 이벤트를 반영하지 않고 있었다.
+"새 항목을 추가하면 하드코딩 목록을 매번 갱신해야 한다"는 이번
+세션에서 4번 겪은 것과 동일한 유지보수 함정의 5번째 사례. 3개
+이벤트 코드를 `expected_wired`에, 실제 발생 코드 위치 3개 파일
+(`app/domains/auth/service.py`, `app/domains/purchase_task/
+service.py`, `app/domains/restore/service.py`)을 `source_files`에
+추가해 수정. 재실행으로 검증 진행 중(아래 참고).
+
+**5. `tests/test_account_registration.py`, `tests/test_account_
+registration_optional_invite.py`, `tests/test_company_recovery_
+setup.py` 전체 — 조사 결과 실제 결함 아님(교차 오염 아티팩트로
+확정)**: 2차 회귀 로그에서 이 세 파일의 거의 모든 테스트가
+ERROR/FAIL로 나타났고(`test_company_recovery_setup.py`는 일부
+항목이 동일 로그 안에서 두 번씩 나타나는 이상 현상까지 있었음),
+로그 최상단에 `[Errno 10048] 각 소켓 주소는 하나만 사용할 수
+있습니다`(포트 바인딩 충돌)도 함께 있었다 — 이 파일들의 Router
+테스트 일부가 loopback 검증을 위해 실제 소켓을 바인딩하는 것으로
+추정된다. "가정하지 말고 격리 실행으로 재현을 직접 확인한다"는
+이번 세션 원칙에 따라 각 파일을 단독 실행해 재현을 시도한 결과:
+`tests.test_company_recovery_setup` 21/21 OK, `tests.test_account_
+registration` + `tests.test_account_registration_optional_invite`
+56/56 OK — 전부 완전히 정상 통과했다. 즉 실제 코드 결함이 아니라,
+약 95분 걸리는 4070개 테스트 단일 프로세스 전체 실행 중 발생한
+포트 재사용/타이밍 관련 테스트 격리 문제(교차 오염)로 결론짓는다
+(추측이 아니라 격리 재현으로 반증됨).
+
+**수정 4건 전체 개별 재검증 완료**:
+- `tests.test_route_authentication_contract` 단독 3/3 OK
+- `tests.test_notification_delivery_pt3` 단독 35/35 OK(수정한 두
+  테스트 포함)
+- `tests.test_desktop_first_admin_setup` 30/30 OK(기존 검증) +
+  `tests.test_login_lockout` 13/13 OK(server_default 영향범위 재확인)
+- `tests.test_migration_restricted_mode_schema_error_handling` +
+  `tests.test_purchase_channel_connection_migration` 합산 12/12 OK
+
+2차 회귀에서 발견된 진짜 결함(총 4건: 경로 검사 예외, server_default
+드리프트, Migration 목록 3차 갱신, 알림 카탈로그 목록 5차 갱신) 전부
+근본 원인 규명·수정·개별 재검증 완료.
+
+### 최종 클린 전체 회귀 — 완료 (2026-09-10)
+
+위 4건 수정을 전부 반영한 최종 전체 회귀(`unittest discover`, 291개
+파일)를 처음부터 다시 실행했다.
+
+**결과: `Ran 4070 tests in 5401.499s` → `OK` — failures 0, errors 0.**
+
+로그 맨 끝에 "OK" 이후 한글 "오류: ..." 3줄이 더 보이는데, 이는
+실제 실패가 아니라 `tests/test_live_gate4_fix_defects.py`가
+`app/desktop/main.py::run()`의 fail-closed 오류 출력 경로(seed
+실패 시 서버를 시작하지 않고 `print("오류: ...")`로 알리는 코드)를
+의도적으로 mock 실패시켜 검증하는 테스트 자신의 정상 출력이다 —
+stdout/stderr를 하나의 파일로 합칠 때의 버퍼링 순서 때문에 파일
+맨 끝에 나타난 것뿐, 실제 unittest 결과("OK")와는 무관함을 소스
+확인으로 검증했다.
+
+**[GitHub 기준 확인]** 최종 재확인 — `git fetch origin` 실행,
+`origin/main` = `0cfe239824ee0fb8a92067ef46ccf4e8c84b1b72`(세션
+시작부터 지금까지 단 한 번도 변하지 않음), `docs/HOMEZ_USER_
+OPERATION_SETTINGS.md`는 `origin/main` 대비 diff 없음. 충돌 없음.
+
+Git 위생 점검(최종): DB/로그/백업/자격증명/개인정보 파일 없음(위
+"최종 회귀 검증" 절 참고, 변동 없음).
+
+**Phase 0~14 + 최종 회귀 전체 완료. 실제 DB Migration 적용·git
+commit/push는 여전히 없음 — 사용자 승인 대기.**
+
+### 정정 — git 미커밋 변경 수치 (2026-09-10)
+
+이전 보고에서 "58개 수정 + 38개 신규 파일/디렉터리"로 보고한 것은
+부정확했다(`git status --short`가 미추적 디렉터리를 한 줄로 접어서
+보여주는 것을 그대로 센 결과). 사용자 지적에 따라
+`git status --porcelain=v1 -uall`로 재측정한 정확한 수치:
+
+- 총 114개 변경(수정 58 + 신규 56)
+- app/ 74, tests/ 30, migrations/ 8, docs/ 2
+
+로그인 잠금 Migration 1개는 기준선 커밋 `34a9060`에 이미 포함돼
+있어 현재 미커밋 Migration은 9개가 아니라 8개가 맞다. 향후 모든
+보고는 `-uall` 결과를 기준으로 한다.
+
+## UI 개선 작업 착수 (2026-09-10)
+
+사용자가 `C:\Users\Daum pc\Desktop\HOMEZ V7 UI 시안`의 8개 화면
+시안(상품 발굴/검토등록/이미지편집/주문매입/매입처결제/배송/
+취소반품/정산손익)을 참고해 HOMEZ 실제 UI를 개선하는 작업을
+지시했다. 시안은 참고 자료일 뿐 그대로 복제할 사양이 아니다 —
+각 요소를 "그대로 적용/수정 적용/보류/제외"로 분류해
+`docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md`(신규)에 기록한다.
+Phase 0~14 완료 상태는 그대로 유지, git commit/push는 이 UI
+작업과 최종 회귀까지 전부 끝난 뒤에만 진행(여전히 승인 대기).
+
+### UI-7(배송 관리) 완료 (2026-09-10)
+
+시안 8장 전체를 열람·분석한 뒤, 시안의 단순화된 8~9개 메뉴 구조는
+실제 27개 메뉴가 담당하는 기능(자동화 안전·사용자권한·시스템상태
+등)을 담지 못해 **제외**로 판단(상세 근거는 `docs/HOMEZ_V7_
+UI_IMPLEMENTATION_AUDIT.md` 1절). 대신 화면 내부 개선에 집중 —
+첫 화면으로 UI-7(배송 관리, 시안 06)을 완료했다: 배송 상태 영문
+코드 노출(기존 결함) 수정 + 시안의 진행 단계 표시(timeline)를
+기존 status_events 데이터로 재구성해 추가. PII는 시안과 달리
+그대로 미노출 유지(shipment 도메인 자체가 phone/address 필드를
+갖지 않는 기존 설계 보존).
+
+검증 중 모바일(390px) 뷰포트에서 실제 가로 스크롤 결함을 발견·
+수정(timeline 연결선이 flex-wrap 줄바꿈 시 컨테이너 밖으로 삐져나감
+→ overflow-x:hidden으로 수정, 재검증 완료). `tests/test_i18n.py`
+27/27 OK(신규 3개 포함). 격리 DB + 실제 서버로 3개 뷰포트 브라우저
+검증 완료. 상세 내용은 `docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md`
+"UI-7" 절 전체 참고.
+
+다음: UI-2(상품 발굴·분석) 또는 UI-8(취소·반품, 같은 timeline
+패턴 재사용) 계속 진행 예정.
+
+### UI-8(취소·반품 관리) 완료 + 중요 발견 (2026-09-10)
+
+같은 timeline 컴포넌트를 반품·교환 화면에도 적용(한국어 상태
+라벨 + 단계 표시, ReturnOrder는 자체 타임스탬프 필드가 있어
+shipment보다 더 정확하게 구현 가능했음). 검증 중 UI-7의 숨은 버그
+발견·수정: 정상 경로 "마지막" 단계에 도달했을 때 "진행 중"으로
+잘못 표시되던 것을 "완료"로 수정(두 화면 모두 재검증 완료).
+
+**중요 발견**: 시안 07의 "환불 확인" 탭에 대응하는 `Refund`
+Domain(이번 세션 Phase 8에서 백엔드 완성, 테스트 27개 통과)이
+`app/web/console.js`에 화면이 전혀 없다 — 운영자가 실제 환불을
+콘솔에서 승인할 방법이 없는 상태. "기존 결함 우선 원칙"에 해당하는
+발견이라 판단, 다음 작업 최우선 순위로 기록(`docs/HOMEZ_V7_UI_
+IMPLEMENTATION_AUDIT.md` "UI-8" 절 참고).
+
+`tests/test_i18n.py` 29/29 OK. 모바일(390px) 가로 스크롤 없음
+재확인.
+
+### Refund Domain UI 신규 구축 완료 (2026-09-10, 같은 턴에서 이어서 완료)
+
+위에서 발견한 "백엔드는 있는데 화면이 없는" 상태를 바로 해소했다.
+사이드바에 "환불 관리" 신규 메뉴 + 목록(상태 필터)+상세(단계
+표시)+승인/거부/실행확인 액션을 구축 — 기존에 이미 검증된 패턴
+(`promptRecentAuthToken` 비밀번호 재확인, `confirmDialog` 사유
+입력, `statusTimelineHtml` 단계 표시)만 재사용했다. 신규 등록(생성)
+화면은 반품·취소 흐름과의 연결 설계가 별도로 필요해 보류.
+
+브라우저에서 승인→비밀번호 재확인→토스트→목록 상태 갱신, 실행확인
+→토스트→목록 상태 갱신까지 **실제 API 왕복 전체를 클릭으로 검증**
+했다(`POST /refunds/1/mark-executed → 200 OK` 등 네트워크 로그로
+재확인). `tests/test_i18n.py` 33/33 OK, `tests/
+test_route_authentication_contract.py` 3/3 OK(신규 백엔드 라우트
+없음 재확인). 모바일·태블릿 뷰포트 가로 스크롤 없음. 상세는
+`docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md` "UI-8" 절 참고.
+
+다음: UI-2(상품 발굴·분석) 또는 UI-5(주문·매입 관리) 계속 진행
+예정.
+
+### UI-2/UI-3(상품 발굴·분석) 완료 (2026-09-10)
+
+`candidates`/`trend`/`new-product` 3개 화면이 공유하는 AI 점수
+표시를 개선. 검토 중 실제 버그 발견: 목록 컬럼 헤더가 "필요
+운영자금"인데 실제로는 `demand_score`(수요 점수)를 표시하고
+있었음(존재하지 않는 개념의 라벨) — "수요"로 라벨·키 이름 수정.
+6종 AI 점수(트렌드/마진/수요/신제품/신뢰도/위험도, 전부 0~1)를
+막대 시각화로 교체 — %로 재해석하지 않고 원값 병기(통계적
+정밀도를 과장하지 않기 위한 의도적 선택). 상세 화면에 누락돼
+있던 "수요" 값도 추가로 노출.
+
+시안의 실시간 검색·이미지·13주 추이차트·원화 마진액 표시는 전부
+데이터/외부연동 부재로 보류(추측으로 만들지 않음).
+
+`tests/test_i18n.py` 33/33 OK. 격리 DB(점수 다른 후보 2건+미분석
+1건) + 브라우저로 막대 폭·색상 방향(invert 포함) 전수 검증, 3개
+뷰포트 가로 스크롤 없음.
+
+다음: UI-5(주문·매입 관리) 또는 UI-9(정산·손익 관리).
+
+### UI-5 검토 후 보류, UI-9(채널 정산) 완료 (2026-09-10)
+
+UI-5(매입·발주 관리)는 상태값이 17개(다수가 예외/분기)라 timeline을
+억지로 적용하면 실제 상태를 왜곡할 위험이 있고, 이미 자체 한국어
+라벨링(`ptStatusLabel`)이 잘 돼 있어 이번 라운드에서는 손대지
+않기로 판단(제외 아님 — 후속 재평가 대상).
+
+대신 UI-9(채널 정산 화면)에서 동일한 "영문 코드 노출" 결함을
+발견·수정(정산 대사 4종 + 정산 건 6종 상태 라벨), 차이 금액에
+0/비0 조건부 색상 추가 — 방향(양수/음수)에 따라 색을 반대로 칠하면
+실제 불일치를 좋은 신호처럼 보이게 할 위험이 있어 "0 여부"만으로
+판단(추측 회피). `tests/test_i18n.py` 35/35 OK. 격리 DB(FundingAccount
+포함 신규 시딩) + 브라우저로 상태 라벨·색상 전수 확인, 모바일
+가로 스크롤 없음.
+
+다음: `finance`/`margin-analysis` 상세화 또는 UI-4(이미지 제작·
+편집 — 기존 Fabric.js MVP 조사 필요).
+
+### UI-4 조사만 완료(구현 보류), UI-6(결제 수단) 신규 완료 (2026-09-10)
+
+UI-4(이미지 제작·편집)는 조사 결과 두 개의 기존 시스템(listing-
+wizard의 Fabric.js 수동 편집기 + listing-package의 AI 이미지
+재생성)에 걸쳐 있고, 시안과의 격차 상당수(텍스트 레이어 편집)가
+"화면 개선"이 아니라 "새 기능 추가"에 해당해 이번 라운드에서는
+구현하지 않고 조사 결과만 기록(다음 라운드에서 이어감).
+
+대신 UI-6에서 Refund와 똑같은 패턴 재발견: **Payment 도메인
+(Phase 7, 백엔드 완비)도 화면이 전혀 없었다.** 결제수단 등록/
+기본설정/비활성화 + 자동결제 한도 설정 화면을 신규 구축. 시안과
+다르게 판단한 부분: (1) 실제 카드·계좌 정보 입력 필드를 아예
+두지 않음(raw_details가 절대 저장되지 않아 입력받아도 의미 없고
+"연결됐다"는 잘못된 인상만 준다 — 정직성 우선), (2) "자동 매입"
+토글 미생성(이미 "자동화 안전" 화면이 기능별 모드를 중앙 관리 —
+중복 제어점 방지), (3) 일일 한도 필드는 유지하되 "현재는 건당
+한도만 실제 적용됨" 상시 고지.
+
+브라우저에서 등록→기본설정→비활성화→한도저장 **전체 흐름을 실제
+API 왕복으로 검증**(전부 비밀번호 재확인 포함). `tests/test_i18n.py`
+40/40 OK. 모바일 가로 스크롤 없음.
+
+다음: 남은 Phase 7~12 신규 Domain(Currency/SupplierCapability/
+PriceStockSafety/AiLearning)에 Refund/Payment와 같은 "백엔드는
+있는데 화면이 없는" 패턴이 더 있는지 전수 점검 예정.
+
+### 시스템 차원 발견 — 신규 Domain 6개 전부 UI 부재 확인 (2026-09-10)
+
+`grep`으로 전수 확인 완료: 이번 세션이 추가한 6개 신규 Domain
+(Payment/Refund/Currency/SupplierCapability/PriceStockSafety/
+AiLearning) 전부 원래 console.js 참조 0건이었다. Payment·Refund는
+이번 라운드에서 화면을 만들어 해소했고, **나머지 4개
+(Currency/SupplierCapability/PriceStockSafety/AiLearning)는 여전히
+API만 있고 화면이 없다.** 각 Phase가 "구현·테스트는 이번 범위, UI는
+별도"로 명시했던 대로라 실수는 아니지만, 실제로 쓸 수 없는 완성된
+기능이라는 점은 동일하다. 시안 8장에는 이 4개에 대응하는 화면이
+없다(신규 기능이라 시안이 반영하지 못함) — 그래서 이 4개를 만드는
+일은 "시안 반영"이 아니라 독립적인 "기존 결함 우선" 작업이다.
+상세는 `docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md` "4. 시스템 차원
+발견" 절 참고. 사용자에게 우선순위 판단을 요청했고, 사용자가 "둘
+다 순서 상관없이 계속 진행"으로 답해 아래 4개를 전부 완료했다.
+
+### 신규 Domain UI 6개 전부 완료 — Currency/SupplierCapability/PriceStockSafety/AiLearning 추가 (2026-09-10)
+
+Payment·Refund에 이어 나머지 4개도 전부 화면을 구축했다. 각 API
+형태가 달라(전역 설정형/공급처별 조회형/목록+상세+승인흐름형)
+화면 패턴도 다르게 설계 — 억지로 통일하지 않았다.
+
+- **환율 관리**: 기록+조회+허용률 설정 3블록. 외부 API 미연동
+  (source=MANUAL_ADMIN_ENTRY 실제 확인) + 허용률 판정이 실제 매입
+  흐름에 미연결됨을 상시 고지. tolerance_percent가 실제 0~100
+  스케일 진짜 백분율임을 서비스 코드로 확인 후 "%" 표시.
+- **공급처 능력**: 공급처 ID 조회 방식(전체목록 API 없음). "미확인"
+  을 추측으로 채우지 않는 백엔드 설계 그대로 반영. 기존 복잡한
+  공급처·발주 화면에 통합하지 않고 독립 화면으로 분리(회귀 위험
+  방지).
+- **가격·재고 안전 설정**: 가상재고 확인이 판매채널 실제 재고를
+  자동으로 읽지 않는 수동 도구라는 점, 검토주기가 스케줄러에
+  미연결이라는 점 — 서비스 모듈 자신이 명시한 두 미연결 사실을
+  빠짐없이 고지(빠지면 "설정만 하면 자동 동작"으로 오해할 위험이
+  컸음).
+- **AI 학습 기반**: 모델 후보 DRAFT→오프라인평가→회귀비교→승인
+  선형 경로(REJECTED는 어느 단계든 분기) — Refund와 같은 패턴이나
+  중간 단계 타임스탬프가 없어 timeline 컴포넌트는 쓰지 않고 라벨+
+  요약 텍스트로 대체. "APPROVED조차 실제 라이브 적용 아님"이라는
+  백엔드 자신의 명시를 라벨("승인됨(실제 적용은 별도)")과 배너
+  양쪽에 반영, 전용 테스트로 고정. 평가결과 기록/데이터셋 export는
+  Decision AI 화면과의 연결 설계가 필요해 보류.
+
+`tests/test_i18n.py` 48/48 OK, `tests/test_route_authentication_
+contract.py` 3/3 OK. 4개 화면 전부 브라우저에서 실제 API 왕복
+검증(AI 학습 기반은 4단계 상태 전이 전체를 완주 확인), 모바일
+가로 스크롤 없음, 콘솔 오류 없음. 상세는 `docs/HOMEZ_V7_UI_
+IMPLEMENTATION_AUDIT.md` "5. 남은 신규 Domain 4개 UI 완료" 절
+참고.
+
+### UI-9 후속 — 상품별 정산 상세 표, `margin-analysis` 화면 완료 (2026-09-10)
+
+사용자 요청으로 이어서 진행. 착수 전 조사에서 이전 판단(cross-
+domain 집계가 필요한 새 기능)이 **틀렸음을 발견** — 기존
+`margin-analysis`(마진·수익 분석) 화면이 필요한 API(`/pricing/
+{listing_id}/margin-variance`가 `expected`/`latest_actual` 전체
+스냅샷 13개 항목을 이미 응답)를 갖고 있었는데 화면이 그 데이터를
+버리고 차이값 2개만 보여주고 있었을 뿐이었다. 새로 만드는 대신
+이미 있는 응답을 실제로 쓰도록 화면을 고쳤다.
+
+발견·수정한 기존 결함 2건: (1) 원가율 4개 입력이 Phase 10 정리에서
+빠져 "(0~1)" 직접 입력 그대로였음 — "(%)"로 통일. (2)
+`MarginType`(EXPECTED/ACTUAL)이 영문 그대로 노출 — 번역 적용.
+
+시안 08의 "예상/확정/차이" 비교표를 13개 항목(매출~마진율) 전부
+구현, 차이 색상은 방향 대신 "0=일치/비0=검토필요"로만 구분(추측
+회피, UI-9 채널정산과 동일 원칙). 확정 스냅샷이 없는 경우 0으로
+추측하지 않고 "—"+정산 반영 전 고지로 정직하게 표시. Listing ID만
+보이던 상세 화면에 상품명도 추가(2단계 조회, 실패 시 안전한
+폴백).
+
+`tests/test_i18n.py` 54/54 OK(신규 테스트 하나는 백엔드
+`MarginSnapshotResponse`의 모든 금액 필드가 화면에 빠짐없이
+반영되는지 자동 대조). 격리 DB에서 **실제 `PricingService.
+initialize_pricing()`을 그대로 호출**해 시딩(계산 로직 재구현
+없음) + 브라우저로 %변환·비교표·양쪽 엣지케이스(확정 있음/없음)
+전부 수동 검산까지 포함해 검증. 모바일 가로 스크롤 없음.
+
+**교훈**: "새 기능이 필요하다"고 성급히 판단하기 전에 관련 기존
+화면의 API 활용도부터 확인할 것 — 화면 자체가 없는 경우(Refund/
+Payment)와 화면은 있지만 응답 일부만 쓰는 경우(이번 case)는 다른
+종류의 저활용이며 후자가 더 흔하고 더 빨리 고칠 수 있다.
+
+**이번 라운드 종합**: 신규 Domain 6개(Payment/Refund/Currency/
+SupplierCapability/PriceStockSafety/AiLearning) 전부 화면 완비.
+남은 것은 원래 시안 8장 기반 작업(UI-4 구현, UI-5 재평가, UI-6
+매입처 연결 부분, UI-9 상품별 정산 상세화 등) — 다음 라운드로
+이어간다. git commit/push는 여전히 승인 대기.
+
+**부록**: `finance` 화면 참고 중 무관한 기존 결함 2건 추가 발견·
+수정 — (1) 정산 상태가 `channel-settlement`에서만 번역되고
+`finance`에서는 영문 그대로였던 것(기존 `stl.status.*` 키 재사용,
+신규 키 없음), (2) `ko-KR.js`의 finance 제목 4개가 `en-US.js`와
+완전히 동일한 영문 그대로였던 것(단순 번역 누락, 주변 문구가 전부
+정상 한국어인 것으로 확인) — 자연스러운 한국어로 수정. 비슷해
+보이지만 실제로는 의도된 loanword 용어(Override/Listing ID —
+같은 기능 안 다른 곳에서도 일관되게 영어로 쓰임)는 확신 없이
+임의로 바꾸지 않았다. `tests/test_i18n.py` 48/48 OK 유지, 브라우저
+재확인 완료.
+
+### 온채널 실주문 연동 Phase 0~2 — 공식 답변 반영 (2026-09-10)
+
+사용자가 온채널 측에 직접 문의해 받은 9개 공식 답변(판매신청
+필수, 발주=포인트 예치금 차감, `member/point`의 `point`=발주
+가능 잔액, `sale_code` 중복 미검사, 성공판정=HTTP 200+order_code,
+sale_code 재조회 불가, 취소·교환·반품 API 없음, 송장=deliverys,
+부분배송·복수송장 미지원)을 계약 근거로 반영. 상세는 `docs/
+HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_20260908.md`의 "온채널 공식
+답변 반영(2026-09-10)" 절 참고 — 기존 "미확인" 기록은 삭제하지
+않고 정정 이력으로 남김.
+
+착수 전 Phase 0 상태 확인에서 **중요한 재발견**: 이번 세션이
+"실주문 연동이 막혀 있다"고 가정하고 시작했으나, 실제로는 이미
+매우 완성도 높은 인프라가 존재했다 — `onchannel_client.py`(실제
+HTTP 호출 클라이언트, PII 마스킹 포함), `order_submission_
+service.py::submit_order()`(멱등성 락 + 3단계 게이트: A=연결
+인증, B=계약 확인, C=`confirm_real_submission` 명시적 플래그),
+`constants.py`의 `OnchannelOrderContractItem` 4항목 독립 추적
+시스템. 따라서 Phase 2는 새 인프라 설계가 아니라 **이미 만들어진
+게이트를 실제 값으로 채우는 작업**이었다.
+
+`constants.py`의 `ONCHANNEL_ORDER_CONTRACT_STATUS` 4개 항목
+(`SALES_APPLICATION`/`PAYMENT_SOURCE`/`DUPLICATE_PREVENTION`/
+`RESULT_RECONCILIATION`)을 전부 `confirmed=True`로 갱신(근거
+문구·확인 시각 소스 코드에 포함). 이 변경으로 게이트 B가 열리며
+`tests/test_purchase_channel_connection_service.py`,
+`tests/test_purchase_order_submission_service.py`의 총 4개
+테스트가 실패 — 원인은 두 종류: (1) 테스트가 모듈 전역 상태를
+실제 값 대신 "항상 미확인"으로 가정하고 있었던 것(→ `setUp`에서
+합성 미확인 baseline으로 강제 리셋하도록 수정 + 실제 현재값을
+별도로 고정하는 신규 테스트 클래스 `OnchannelOrderContractStatus
+CurrentValueTestCase` 추가), (2) 게이트 A+B가 둘 다 통과하는
+연결에서 게이트 B 단독 차단을 기대하던 2개 테스트(→ 게이트
+A+B는 통과, 게이트 C(`confirm_real_submission`)만 여전히 독립
+차단됨을 증명하도록 재작성 + Fake Adapter로 배선 자체를 검증하는
+신규 헬퍼 `_assert_submit_order_reaches_adapter_with_explicit_
+confirm` 추가). 테스트 삭제·assertion 약화 없이 전부 원인 수정.
+`tests/test_purchase_order_submission_service.py` +
+`tests/test_onchannel_client.py` +
+`tests/test_purchase_channel_connection_service.py` 합계
+126/126 OK(2026-09-10 재확인).
+
+**남은 미확인**: 인증키 발급 상태 조회(항목 6)만 유일하게 미확인
+유지 — 이번 답변에 포함되지 않았으므로 추측하지 않음.
+
+**다음 단계(계속 진행 중)**: Phase 3(판매신청 게이트 —
+`apply_for_sale` 클라이언트 메서드 + 신청 상태 추적 신규 테이블),
+Phase 4(발주 전 포인트 잔액 사전 확인 게이트), Phase 5(멱등성
+키 구성에 PurchaseTask 포함 여부 재확인), Phase 6~7(실제 발주
+클라이언트 세부 조정, 송장 조회 연동), Phase 8(UI-5 매입·발주
+관리 화면), Phase 9(자동화 모드 배선), Phase 10(UI-4, Phase
+6~9 안정화 후). 실제 발주·실제 포인트 차감·실제 DB Migration
+적용·git commit/push는 전부 별도 승인 대상이며 아직 어느 것도
+실행하지 않았다.
+
+### 온채널 실주문 연동 Phase 3 — 판매신청 게이트 구현 (2026-09-10)
+
+Phase 2에서 확정된 "발주 전 판매신청 필수" 사실을 실제 코드
+게이트로 구현했다. 신규:
+
+- `onchannel_client.py::apply_for_sale()` — `POST /openapi/seller/
+  product/apply` 실제 호출(요청 `{"prd_code": ...}`, 응답
+  `result.prd_code`). 409는 "이미 신청된 상품 재신청" 정황으로
+  추정될 뿐 공식 확정 사실이 아니므로, 다른 명시적 거부와 동일하게
+  `OnchannelValidationError`로만 던지고 특별 취급하지 않는다.
+- `channel_adapter.py` — `SalesApplicationResult` dataclass(승인
+  여부 필드 자체를 두지 않는다 — 승인 상태 조회 API가 없다는 것이
+  공식 답변으로 확정됐으므로) + `apply_for_sale()` 메서드를
+  `PurchaseChannelAdapter`(기본 UNKNOWN)/`FakePurchaseChannelAdapter`
+  (테스트용 SUPPORTED)/`OnchannelChannelAdapter`(실제 호출)에 추가.
+  ChannelCapability.ALL(item 7이 지정한 고정 8개 항목)은 건드리지
+  않았다 — submit_order/check_member_point와 같은 선례를 따라
+  별도 메서드로 추가했다. 테스트에서 POST를 주입할 수 있도록
+  `OnchannelChannelAdapter.__init__`에 `http_post` 파라미터도
+  추가(기존 `http_get`과 대칭, 실제 코드 경로는 절대 넘기지 않음).
+- `model.py::PurchaseSalesApplicationAttempt`(신규 테이블) — 발주와
+  달리 (company_id, connection_id, product_code) UNIQUE다(
+  idempotency_key 아님). 이유: 판매신청 재시도는 금전·중복 위험이
+  없다(요청 바디에 결제·금액 필드가 없다) — 그래서 실패한 시도를
+  새 키 없이 같은 행 위에서 재시도할 수 있다. Migration:
+  `migrations/20260910_07_create_purchase_sales_application_schema.sql`
+  (임시 SQLite에서만 검증, 실제 homez.db 미적용 —
+  `tests/test_purchase_sales_application_migration.py` 8/8 OK,
+  Model↔DDL canonical diff 일치 포함).
+- `constants.py::SalesApplicationStatus`(신규) — PENDING/IN_FLIGHT/
+  SUBMITTED/REJECTED/RESULT_UNKNOWN. "SUCCEEDED"가 아니라
+  "SUBMITTED"로 이름 지은 이유: "성공"이 "승인됐다"로 오독될 위험을
+  피하기 위함 — 이 상태가 보장하는 것은 정확히 "온채널이 접수를
+  HTTP 200으로 확인했다"는 사실 하나뿐이다.
+- `sales_application_service.py`(신규 파일) —
+  `PurchaseSalesApplicationService`. `submit_order()`와 동일한
+  fail-closed 원칙(`confirm_real_submission=True` 명시 없이는 항상
+  거부). 이미 SUBMITTED로 접수 확인된 상품은 재호출하지 않는다.
+- `order_submission_service.py::submit_order()`에 게이트 배선 —
+  연결 준비 확인(게이트A/B) 통과 직후, 발주 시도 행을 만들기 전에
+  판매신청 상태를 확인하고 없으면 즉시 1회 시도한다(같은
+  `confirm_real_submission=True` 승인 범위 안에서). 접수 확인이
+  안 되면 `ConflictException`으로 발주 자체를 시도하지 않는다.
+  Adapter는 발주용으로 이미 만든 인스턴스를 재사용한다(같은 연결의
+  자격증명을 이 메서드 안에서 두 번 읽지 않도록 — 설계 개선).
+
+발견·수정한 기존 결함 1건: `tests/test_purchase_task_order_
+submission_review.py::ContractGateAlwaysBlocksTestCase`가 "계약
+4항목은 항상 미확인"이라는 옛 baseline에 암묵적으로 의존하고
+있었다(Phase 2의 constants.py 갱신으로 전제가 깨짐) — 동일 세션의
+`OnchannelOrderContractStatusTestCase` 수정과 같은 원칙으로,
+`setUp`에서 합성 미확인 상태로 강제 리셋(메커니즘 검증 전담)하고,
+실제 현재값(전부 확인됨)을 별도로 고정하는 신규 클래스
+(`ContractGateRealCurrentValueTestCase`)를 추가했다.
+
+테스트: `tests/test_onchannel_client.py`(29, +5),
+`tests/test_purchase_channel_adapter.py`(38, +4),
+`tests/test_purchase_order_submission_service.py`(27),
+`tests/test_purchase_channel_connection_service.py`(51),
+`tests/test_purchase_sales_application_service.py`(10, 신규),
+`tests/test_purchase_sales_application_migration.py`(8, 신규),
+`tests/test_purchase_task_order_submission_review.py`(20, +1) —
+전부 재확인 통과. 격리 DB + Fake/가짜 http_get·http_post만 사용,
+실제 온채널 서버·실제 homez.db 어느 쪽도 건드리지 않았다.
+
+**남은 것**: Phase 4(포인트 잔액 사전 확인 게이트), Phase 5
+(멱등성 키에 PurchaseTask 포함 여부 재확인), Phase 8(UI-5 화면에
+판매신청 상태 노출) — UI-5는 아직 착수 전이므로 이번 판매신청
+게이트는 현재 서버 로직에만 존재하고 화면에는 아직 드러나지
+않는다.
+
+### 온채널 실주문 연동 Phase 4 — 포인트 잔액 사전 확인 게이트 (2026-09-10)
+
+`order_submission_service.py::PurchaseOrderSubmissionService.
+_verify_point_balance_or_block()`(신규 private 메서드) — 발주
+직전(판매신청 게이트 통과 직후, 발주 시도 행 생성 전) 매번 새로
+포인트·상품가를 조회한다(캐시 재사용 금지). 순서: (1) `check_
+member_point()` 실패/미지원이면 차단, (2) `point_interpretable`이
+False면 차단(0으로 추정하지 않음), (3) `lookup_product()`로 요청한
+옵션들의 실제 단가를 조회 — 옵션을 찾을 수 없거나 가격이 없으면
+차단, (4) 상품가 소계(단가×수량 합)가 포인트 잔액보다 크면
+"부족"으로 명시적 차단.
+
+**핵심 구조적 발견**: 위 4단계를 전부 통과해도(포인트 충분, 가격
+확인됨) **이 게이트는 항상 마지막에 차단한다** — 온채널 스펙
+어디에도 발주 전 배송비를 사전에 확인할 API가 없기 때문이다
+(`order/regist` 요청 바디에 배송비 필드가 없고, 별도 배송비 견적
+엔드포인트도 없음 — 기존 `build_order_submission_review()`의
+"배송비 미확인" 고지와 동일한 근거). 상품가만으로 잔액이 충분해
+보여도 배송비가 더해지면 부족해질 수 있는지 확인할 방법이 없으므로,
+추측으로 통과시키지 않는다. **이것은 미완성이 아니라 현재 확인된
+사실을 정직하게 반영한 결과다** — 온채널이 배송비 사전 확인
+방법을 제공하기 전까지, 실제 발주는 이 게이트에서 구조적으로 항상
+막힌다(사용자 지시 원문 "배송비 미확인 시 차단"을 문자 그대로
+구현).
+
+이로 인해 기존에 "게이트A·B·C가 모두 통과하면 실제 발주 Adapter에
+도달한다"를 증명하던 다수 테스트가 영향을 받았다 — 그 테스트들의
+진짜 목적(다른 게이트들의 배선 검증)은 그대로 살리기 위해, 테스트
+파일에 `_patch_point_balance_gate_passes()` 헬퍼(이 게이트 하나만
+바꿔치기, 배송비 확인 방법이 실제로 생겼다는 뜻이 아님을 docstring에
+명시)를 추가해 그 목적에 맞는 테스트에서만 적용했다. Gate D 자체의
+진짜(패치 없는) 동작은 신규 `PointBalanceGateTestCase`(6개 테스트:
+포인트조회실패/응답불명확/상품조회실패/옵션가격없음/잔액부족/
+"충분해도 배송비 미확인으로 여전히 차단")가 전담해서 고정한다.
+
+테스트: `tests/test_purchase_order_submission_service.py` 33/33
+OK(+6, Gate D 전용). 격리 DB + Fake Adapter만 사용, 실제 온채널
+서버는 전혀 건드리지 않았다.
+
+**결론(중요)**: 이번 세션이 확인한 바로는, 현재 온채널 공식 스펙
+기준으로 **HOMEZ는 실제 발주를 자동 승인할 수 없다** — 배송비를
+사전에 확인할 방법이 없어 발주 후 포인트 잔액이 마이너스가 될
+위험을 배제할 수 없기 때문이다. 이는 코드 결함이 아니라 온채널
+API의 현재 한계이며, 최종 보고서에서 실제 발주 관련 항목은
+`LIVE_SUBMISSION_APPROVAL_REQUIRED`가 아니라 `BLOCKED`로 기록해야
+한다(추가 온채널 공식 답변 없이는 이 차단을 풀 수 없음).
+
+### 온채널 실주문 연동 Phase 5·7 일부 — 기존 결함 발견·수정 (2026-09-10)
+
+**Phase 5(멱등성 키 구성) 확인**: `PurchaseOrderSubmissionAttempt`의
+`(company_id, idempotency_key)` UNIQUE 제약은 connection_id를
+포함하지 않는다 — 이는 결함이 아니라 기존에 이미 의도적으로
+설계·문서화된 동작이다(`tests/test_purchase_order_submission_
+service.py::test_two_connections_same_company_independent_
+idempotency_space`의 docstring이 명시). 호출부(향후 Phase 8의
+UI-5/자동화 오케스트레이션 코드)가 idempotency_key 문자열 자체에
+connection_id·PurchaseTask id·sale_code를 조합해 넣어야 한다 — 이
+조합 책임은 아직 실제로 호출하는 코드가 없어(UI-5 미착수) 구현되지
+않았다. 메커니즘(중복 시 안전하게 차단)은 이미 완비·검증됨.
+
+**Phase 7 관련 기존 결함 발견·수정**: `channel_adapter.py::
+OnchannelChannelAdapter.lookup_tracking()`이 온채널 응답에 송장이
+2건 이상(`deliverys` 배열)이면 조용히 마지막 것을 골라 반환하고
+있었다 — 온채널 공식 답변으로 확정된 "부분배송·복수송장 미지원"
+사실과 사용자 지시(Phase 7 "단일 송장 정책 — 복수 관측 시 자동
+선택 금지")를 둘 다 위반하는 기존 결함이었다(이 메서드를 실제로
+호출하는 곳이 아직 없어 지금까지 드러나지 않았다). `TrackingLookup
+Result`에 `multiple_deliveries_detected: bool = False` 필드를
+추가하고, 2건 이상 감지 시 `courier`/`tracking_number`를 모두
+None으로 두고 그 사실만 `detail`에 명시하도록 수정. 테스트 3개
+추가(`tests/test_purchase_channel_adapter.py`, 단일/복수/없음
+케이스) — 41/41 OK.
+
+**Phase 7 추가 완료(2026-09-10)**: `channel_connection_service.py::
+lookup_tracking()`(신규 서비스 메서드, `lookup_order()`와 동일한
+회사 격리·연결확인기록 규칙)과 라우터 엔드포인트
+`GET /purchase-tasks/channel-connections/{id}/orders/{no}/tracking`
+(`TrackingLookupResponse` 스키마 신규, `multiple_deliveries_detected`
+필드 포함)을 추가해 배송·송장 조회를 실제로 호출 가능한 콜러블
+단위로 노출했다(이전에는 Adapter 레벨에만 존재, 서비스·라우터
+wiring 없음). `tests/test_purchase_channel_connection_service.py`
+78/78(+3), `tests/test_purchase_task_router.py` 11/11(회귀 없음
+확인) OK.
+
+**남은 Phase 7**: 취소·교환·반품 수동 결과 기록 기능(아직 미구현 —
+해당 API 자체가 없다는 것이 공식 답변으로 확정됨, UI-5/UI-6에서
+수동 기록 도구로 노출 예정).
+
+### 온채널 실주문 연동 Phase 8(부분) — 실제 "UI-5" 재발견·검토 화면 반영 (2026-09-10)
+
+Phase 8 착수 전 조사 결과 **중요한 재발견**: "UI-5(매입·발주 관리)
+화면을 새로 만들어야 한다"는 이 라운드 착수 시점의 전제가 틀렸다
+— 실제로는 이미 완성도 높은 화면이 존재한다:
+
+- 콘솔 좌측 메뉴 "매입·발주 관리"(`console.html`의 `data-view=
+  "purchase-task"`) — 목록·상세 화면 전체가 이미 구현·배선됨
+  (`console.js::loadPurchaseTask()`/`loadPurchaseTaskDetail()`).
+- **발주 전 최종 검토 화면**(2026-09-09 후속)이 이미 `build_order_
+  submission_review()`에 연결돼 실제로 동작한다 —
+  `ptRunOrderSubmissionReview()`/`ptRenderOrderSubmissionReview()`
+  (`console.js`), 원본 주문·매입처 계정·온채널 실시간 상품/가격/
+  재고·수취정보(마스킹)를 한 화면에 보여준다. "실제 전송" 버튼은
+  **의도적으로 disabled + 클릭 핸들러 자체가 없음**(주석으로 명시)
+  — 실제 발주가 아직 어디에도 배선되지 않았다는 사실을 코드
+  구조로 증명한다.
+- 매입처 연결(`PurchaseChannelConnection`) 관리는 별도 화면이
+  아니라 "매입 운영 설정" 다이얼로그 안에 있다(UI-6 관련, Phase 11
+  때 재검토 필요).
+- `docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md`가 이미 UI-5를 조사한
+  바 있으나(mockup 04 ↔ UI-5), 그 조사는 이번 세션 이전 시점(발주
+  검토 화면·이번 세션의 신규 게이트 이전)이라 최신 상태를 반영하지
+  않는다.
+
+**실제로 한 일**: 새로 화면을 만드는 대신, 이번 세션이 신규로
+추가한 두 게이트(Phase 3 판매신청, Phase 4 포인트 잔액)를 **이미
+있는** 검토 화면에 반영했다 — `build_order_submission_review()`가
+이제 읽기 전용으로 (a) `PurchaseSalesApplicationService.
+is_sales_application_confirmed()`(DB 조회만, 실제 신청 시도 없음)
+로 판매신청 접수 상태를, (b) `check_member_point()`(기존에도 이미
+실제 온채널 조회를 하던 화면이므로 새로운 종류의 호출이 아님)로
+포인트 잔액을 확인해 `blocked_reasons`에 추가한다. **배송비
+미확인 사유는 이제 이 화면에서도 항상 표시된다**(Gate D와 일치
+— 화면이 "보낼 수 있어 보이는데 실제로는 막히는" 어긋남을 없앤다).
+`OrderSubmissionReviewResponse` Pydantic 스키마에 `sales_
+application`/`point_balance` 하위 필드 신규 추가(FastAPI
+response_model이 선언 안 된 필드를 조용히 잘라내므로 필수 작업이었다
+— 실제로 이 스키마 누락을 먼저 발견·수정함). 프론트엔드
+`ptRenderOrderSubmissionReview()`에 판매신청 상태·포인트 잔액
+표시 행 2개 추가, i18n 6개 키 신규(ko-KR/en-US 양쪽), 기존
+`review_send_disabled_hint` 문구도 "계약 미확인"(더 이상 사실이
+아님)에서 "배송비 미확인"(현재 실제 사유)으로 정정.
+
+테스트: `tests/test_purchase_task_order_submission_review.py`
+25/25(+5, 판매신청·포인트잔액 게이트 전용 신규 4개 포함),
+`tests/test_purchase_task_router.py` 11/11, `tests/test_i18n.py`
+51/51 OK. 격리 DB + 가짜 Adapter만 사용, `OrderSubmissionReview
+Response(**sample)`로 Pydantic 스키마 수동 검증도 완료. 브라우저
+검증: 격리 서버(포트 8940, 로그인 세션 없음이라 새로고침 안전)
+에서 콘솔 재로딩 후 신규 i18n 키가 정상 해석됨을 확인(스크립트
+파싱 오류 없음) — 실제 판매신청·포인트 데이터가 채워진 검토 카드
+전체 렌더링까지는 이 격리 DB에 해당 시드 데이터(주문·매입처
+연결·온채널 실제/모의 응답)가 없어 확인하지 못했다(별도 시드
+스크립트 필요, 다음 라운드 과제로 남김).
+
+**남은 Phase 8**: `docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md`가
+이전에 보류했던 "17개 PurchaseTaskStatus를 반영한 타임라인/상태
+표시 폴리시" 재평가(여전히 대기 중), UI-6(매입처 연결)을 별도
+화면으로 승격할지 여부(Phase 11에서 함께 판단).
+
+### 온채널 실주문 연동 Phase 9 — 자동화 모드 배선 (2026-09-10)
+
+착수 전 조사에서 확인: `app/domains/automation_safety`에 이미
+회사×기능별 자동화 상태 시스템(`FunctionAutomationState`,
+2026-09-09 Phase 3)이 있고, `FunctionCode.PURCHASE_ORDER`도 이미
+등록돼 있었다(`docs/HOMEZ_USER_OPERATION_SETTINGS.md` 기준) — 다만
+이 코드를 실제로 호출해 발주를 막는 도메인은 하나도 없었다(결제·
+가격변경 도메인은 이 상태를 "읽기"만 한다, `scheduler/jobs.py`가
+발주 자동화를 의도적으로 제외해 둔 상태였음을 코드 자체가 명시).
+
+`submit_order()`에 두 검사를 `confirm_real_submission` 바로 다음
+(연결 조회보다도 먼저)에 추가했다 — `SafetyService.
+is_emergency_stop_active()`(전역 비상정지) 및 `get_function_mode
+(company_id, FunctionCode.PURCHASE_ORDER)`가 PAUSED/ERROR면 즉시
+`ConflictException`. **MANUAL/SEMI_AUTOMATIC/AUTOMATIC 세 모드
+간의 차이는 이번에 구현하지 않았다** — 그 차이는 "누가·언제 이
+메서드를 호출하는가"의 문제인데, 그런 호출부(자동 스케줄러나
+UI-5의 "실제 전송" 버튼) 자체가 아직 없다(Phase 8에서 확인 —
+버튼은 여전히 비활성+핸들러 없음). 세 모드 전부 여전히 confirm_
+real_submission=True라는 동일한 명시적 승인을 요구한다 — 이것이
+"자동 모드라는 이유만으로 발주 권한이 확대되지 않는다"는
+`SafetyService`의 기존 설계 원칙과도 일치한다.
+
+테스트: `tests/test_purchase_order_submission_service.py` 38/38
+(+5, 비상정지/PAUSED/ERROR/회사 격리/MANUAL 기본값 전담). 격리
+DB만 사용.
+
+**결론**: Gate D(포인트·배송비, Phase 4)가 이미 실제 발주를 항상
+차단하고 있어, 지금 이 순간 AUTOMATIC 모드로 설정해도 실질적
+효과는 없다(어차피 아무 발주도 완료되지 않는다) — 하지만
+PAUSED/ERROR/비상정지 존중은 Gate D와 무관하게 독립적으로 필요한
+안전장치이므로 그대로 구현해 두었다.
+
+### Phase 0~9 종합 회귀 검증 (2026-09-10~11)
+
+이번 라운드(Phase 0~9) 전체를 마무리하며 4단계로 회귀를 확인했다:
+
+1. `tests/test_purchase_order_submission_service.py`(38)·
+   `test_onchannel_client.py`(29)·
+   `test_purchase_channel_connection_service.py`(78)·
+   `test_purchase_channel_adapter.py`(41)·
+   `test_purchase_sales_application_service.py`(10)·
+   `test_purchase_sales_application_migration.py`(8)·
+   `test_purchase_task_order_submission_review.py`(25)·
+   `test_purchase_task_router.py`(11)·`test_i18n.py`(51) — 합계
+   291/291 OK(이번 라운드가 새로 만들거나 수정한 코드 전부).
+2. 저장소 전체 회귀(`python -m unittest discover`) 4128개 실행 —
+   4124 OK, 4 실패(전부 이번 라운드가 만든 신규 Migration 파일
+   `20260910_07_create_purchase_sales_application_schema.sql`을
+   아직 갱신하지 않은 **하드코딩된 전체 목록 검증 테스트 3개**의
+   예상된 결과였다 — 이 세션에서 반복적으로 나타난 "하드코딩된
+   전체 목록" 유지보수 함정과 동일한 패턴). `test_purchase_channel_
+   connection_migration.py`·`test_migration_restricted_mode_schema_
+   error_handling.py`의 `EXCLUDED_FROM_PRIOR_STATE` 집합과
+   `test_permissions_timestamps_migration.py`의 `SUBSEQUENT_
+   MIGRATIONS` 목록에 신규 파일명을 추가해 수정 — 실제 Migration
+   순서·무결성 결함이 아니라 테스트 자신의 정적 목록이 갱신되지
+   않았던 것임을 재확인(`MigrationRunner.diagnose()`의
+   `OrderInversionError`가 오히려 의도대로 정확히 감지해 낸
+   사례).
+3. 위 3개 파일 수정 후 재실행 25/25 OK.
+4. `app.domains.purchase_task.{channel_adapter, schema, router,
+   service, order_submission_service, sales_application_service,
+   channel_connection_service}`를 import하는 나머지 테스트 파일
+   전부(`test_full_migration_bootstrap_orm_smoke.py` 등 7개)
+   70/70 OK.
+
+이 라운드에서 실제로 수정이 필요했던 결함은 이 3개 하드코딩된
+목록뿐이었다 — 그 외 4128개 전체 회귀에서 이 라운드의 코드 변경이
+원인이 된 실패는 발견되지 않았다.
+
+### Phase 10 — UI-4(이미지 제작·편집) 조사만 완료, 구현은 보류 (2026-09-11)
+
+원래 지시("Phase 6~9 안정화 후 진행, 기존 이미지 자산 흐름에
+통합할 것, 별도 새 시스템을 강제하지 말 것")에 따라 구현 전
+조사부터 수행했다. **결론: UI-5와 달리 "이미 있는데 화면만 안
+쓰는" 상태가 아니라, 진짜 통합 공백이 있는 중간 상태다.**
+
+**이미 있는 것**: `MediaAsset` 스키마가 권리축(`rights_status`)과
+출처축(`source_classification`: SUPPLIER/MANUFACTURER/
+USER_CAPTURED/UNKNOWN)을 이미 분리해 갖고 있다. R2 업로드
+(`R2MediaHostingService`, 실동작 확인됨), 배경제거(Fake+실제
+Rembg Provider), 네이버 이미지 검색(실 연동), AI 생성 Job/Result
+이력(`ImageGenerationJob.provider_code`가 AI/수동 구분 근거로 이미
+작동 — `LOCAL_MANUAL_EDIT` vs 실제 Provider 코드), Fabric.js 수동
+편집기(자르기/회전/밝기·대비/도형)까지 전부 실제로 존재한다.
+
+**없는 것(신규 기능 필요, 단순 배선이 아님)**:
+1. 독립 UI-4 화면 자체가 없다 — `listing-wizard`(수동편집
+   다이얼로그)와 `listing-package`(AI 재생성 버튼) 두 기존 화면에
+   흩어져 있을 뿐, 시안이 보여주는 한 화면 형태가 아예 없다.
+2. 텍스트 레이어 편집 기능이 Fabric 편집기에 전혀 없다(완전 신규).
+3. "배경만 재생성" 같은 부분 재생성 API 계약 자체가 없다(현재는
+   항상 전체 재생성).
+4. 채널별 이미지 스펙 검증이 쿠팡 전용으로만 하드코딩돼 있다
+   (`coupang_image_autofill.py`) — 네이버 등 타 채널 스펙 검증은
+   미확인.
+5. `source_classification=SUPPLIER`(공급처 제공 이미지) 값이 "AI
+   자동수정 시 사용자 확인을 요구"로 이어지는 정책 로직이 없다 —
+   필드는 있지만 그 값을 소비해 신규창작과 다르게 취급하는 코드가
+   없다.
+
+`docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md:625-665,973`에 **이전
+세션이 이미 동일한 결론**("한 턴 안에서 안전하게 끝낼 수 있는
+범위를 넘어선다")에 도달해 있었음을 재확인했다 — 새로 발견한
+사실이 아니라 기존 판단이 지금도 유효함을 조사로 재검증했다.
+
+**판단**: 위 5개 공백은 전부 "기존 데이터를 화면에 연결"이 아니라
+"새 기능을 설계·구현"하는 작업이다 — 이번 라운드의 "새 기능을
+무분별하게 추가하지 않는다, 계획됐거나 백엔드가 있는데 못 쓰던
+것만 완성한다"는 원칙과 정면으로 충돌한다. 안전하게 끝낼 수 없는
+범위를 무리하게 부분 구현하면 "반쯤 끝난 구현"만 남긴다(이 저장소
+원칙이 명시적으로 금지). 그래서 Phase 10은 **조사만 완료하고
+구현은 보류**한다 — 다음 별도 라운드에서 사용자와 함께 5개 공백의
+우선순위·설계를 먼저 정하고 시작해야 한다.
+
+### Phase 11 — UI-6(매입처 연결) 재검토, 지원 기능 표시 추가 (2026-09-11)
+
+UI-6("매입처·결제 설정")은 별도 화면이 아니라 "매입 운영 설정"
+다이얼로그 안의 연결 목록이며, 이미 이번 지시의 핵심 요구사항
+대부분을 만족하고 있었다 — 상태(등록됨/미확인/사용가능/재확인
+필요)를 정확히 구분(`_compute_connection_status`), 결제수단과
+매입처 계정을 별도 개념으로 분리, 비밀번호·JWT 원문 재노출 없음,
+"지금 눌러야 할 행동"(primary)과 "관리" 메뉴 분리 — 전부 2026-09-08
+~09 세션이 이미 구현·검증해 둔 것이었다.
+
+**실제로 채운 공백**: 백엔드에 이미 있던 `GET /channel-connections/
+{id}/capabilities`(`capability_matrix()`, 실제 네트워크 호출 없는
+정적 조회) 엔드포인트를 프론트엔드 어디서도 호출하지 않고
+있었다 — "판매신청·상품/주문/포인트 조회 역량을 보여준다"는 지시를
+만족하려면 이 연결이 필요했다. `pt-cc-capabilities-panel`(신규
+UI, "관리" 메뉴에 "지원 기능 보기" 버튼 추가) — 8개 항목
+(연결확인/로그인필요여부/상품조회/주문서금액/결제가능여부/주문조회/
+배송조회/취소지원)의 실제 지원/미지원/미확인 값을 그대로 보여준다
+(요약 문구로 "발주 가능"처럼 뭉뚱그리지 않는다 — 단일 조회 성공의
+과잉 일반화 방지, 지시 원문 그대로). 판매신청은 이 8개 고정
+목록에 포함되지 않는다는 사실(연결 단위가 아니라 상품 단위 확인
+이라는 이유, Phase 3 설계와 일관)도 안내문으로 명시했다.
+
+i18n 15개 키 신규(ko-KR/en-US), CSS 신규 규칙(`.pt-cc-capabilities-
+panel` 등, 기존 `.pt-cc-inline-form`과 동일한 hidden 패턴).
+`tests/test_i18n.py` 51/51 OK. 브라우저 검증: 격리 서버(8940)에서
+새 i18n 키 해석·CSS 계산값(display/max-width) 확인, 콘솔 오류
+없음 — 실제 매입처 연결 데이터가 없는 DB라 지원 기능 패널이
+실제로 API 응답을 받아 렌더링되는 것까지는 확인하지 못했다(백엔드
+엔드포인트 자체는 기존에 이미 격리 테스트로 검증된 상태).
+
+### Phase 12 — UI-9 추가 검증, 실측/추정 출처 표시 결함 발견·수정 (2026-09-11)
+
+지시 원문의 7개 검증 항목을 하나씩 확인했다. 5개는 통과("—" 정직
+표시, 차이값을 이익/손실로 자동 판정하지 않음, Decimal+
+ROUND_HALF_UP 계산, Listing ID→실제 상품명 2단계 조회, %변환
+왕복이 12.5 같은 통상값에서는 정확) — 새로 손댈 필요가 없었다.
+
+**발견한 결함 1(수정함)**: `MarginSnapshot.estimated_components_
+json`(반품·광고비·배송비·세금 등 8개 항목 중 어느 것이 "실측"이고
+어느 것이 "추정 대체"인지 백엔드가 이미 매 스냅샷마다 기록해 API
+응답(`MarginSnapshotResponse.estimated_components_json`)에도 담아
+보내고 있었는데, `console.js`의 비교표(`prcComparisonTableHtml`)가
+이 값을 전혀 파싱·표시하지 않고 있었다 — 지시문 "반품/환불/광고비/
+배송비/세금 출처를 보여준다"는 요구사항이 백엔드는 완성돼 있는데
+화면만 못 쓰고 있던, 이 세션에서 반복된 패턴과 동일한 결함이었다.
+확정(실측) 열의 각 항목 옆에 "실측"/"추정 대체" 배지를 추가해
+수정. 파싱 실패는 조용히 빈 집합으로 처리해 화면 전체가 깨지지
+않게 함.
+
+**기록만 하고 수정하지 않은 것(우려, 낮은 우선순위)**:
+- %↔0-1 비율 변환이 프론트엔드 순수 float 연산이라(`raw/100`,
+  `raw*100`) 12.5 같은 값은 문제없지만 10.1 등 일부 값은 IEEE-754
+  부동소수점 잔여값을 그대로 서버로 전송할 수 있다(서버 저장 시점
+  별도 quantize 없음, 이후 계산 시점의 `_rate()`만 0.0001로 반올림).
+  이번 라운드에서는 손대지 않음(화면 표시값 자체는 이미 반올림돼
+  육안상 문제가 드러나지 않는다 — 저장된 원본 rate 컬럼에만
+  미세한 잔여값이 남을 수 있는 수준).
+- margin-variance/reconciliation 라우터 엔드포인트에 `response_
+  model`이 지정돼 있지 않아, 이미 반올림된 응답값이 FastAPI
+  `jsonable_encoder`를 거치며 Decimal→float로 직렬화된다(값 자체는
+  이미 정확히 반올림돼 있어 실질적 오차는 없으나, "Decimal 그대로
+  전송한다"는 schema.py 주석의 보장이 전송 경계에서는 문자 그대로
+  지켜지지 않는다).
+- `SettlementReconciliation.reconciled_at`(정산 확정 시각)이 API
+  응답엔 있지만 정산대사 표 화면에 컬럼으로 노출되지 않음.
+
+테스트: `tests/test_i18n.py` 51/51 OK. 브라우저에서 신규 i18n 키
+해석·콘솔 오류 없음 확인 — 실제 확정 마진 스냅샷 데이터가 있는
+DB가 없어 배지가 실제 API 응답을 받아 렌더링되는 것까지는 확인
+못함(기존 `prcComparisonTableHtml` 자체는 이미 격리 테스트로
+검증된 함수의 최소 확장).
+
+### Phase 13 — 종합 회귀 (2026-09-11)
+
+이번 라운드가 건드린 모든 파일을 한 번에 묶어 재확인: 386/386 OK
+(purchase_task 전체 + 마이그레이션 3종 + i18n + 연관 7개 파일).
+모바일(390×844) 반응형 확인 — 신규 UI 2건(`pt-cc-capabilities-
+panel`, `prc-source-badge`)을 합성 DOM에 주입해 뷰포트 초과 없음
+확인(`bodyScrollWidth === viewportWidth`). 이미 이 세션 전체에서
+지속적으로 다중 계정·회사 격리, PII 비노출, 중복 발주 방지,
+RESULT_UNKNOWN 자동재시도 금지, 자동화 모드별 게이트, 전체
+Migration 체인을 각 Phase마다 전담 테스트로 검증해 왔으므로
+별도 재작업 없음.
+
+### Phase 14 — 최종 감사 (2026-09-11, 커밋 전)
+
+`git status` 기준 변경 파일 115개(수정 72 + 신규 43) — **이번
+대화에서 보이는 범위(Phase 0~13, 온채널 실주문 연동)보다 훨씬
+크다**: 기준선(`34a9060`, 2026-09-09 22:25) 이후 누적된 Payment/
+Refund/Currency/SupplierCapability/PriceStockSafety/AiLearning
+신규 도메인, 세션 라이프사이클, 백업 암호화 등 이전 라운드들의
+작업이 전부 포함돼 있다. 이 세션은 그 전체를 새로 작성하지
+않았고 감사만 수행했다.
+
+안전 점검(전부 통과):
+- 실 자격증명·API 키·비밀번호 패턴 스캔 — diff와 신규 파일 전체
+  스캔, 검출된 것은 전부 테스트 픽스처의 합성값(`auth_key="k"`
+  등)뿐, 실제 값 없음.
+- 실제 DB·백업 파일 추적 여부 — 없음.
+- `__pycache__`/`.pyc` — `.gitignore`로 이미 배제됨, `git status`에
+  나타나지 않음(확인됨).
+- scratchpad·temp·`.bak` 파일 추적 여부 — 없음.
+- 신규 파일 크기 이상 여부 — 전부 정상 범위(최대 64KB, 문서
+  파일).
+
+회귀: 전체 저장소 4128개(4124 OK + 3개 하드코딩 목록 테스트
+수정 후 재확인 25/25 OK) + 이번 라운드 통합 386/386 OK.
+
+**아직 커밋하지 않았다** — 이 감사 결과와 파일 목록을 사용자에게
+제시하고 명시적 승인을 받은 뒤에만 체크포인트 커밋을 만든다(이
+저장소 규칙: 커밋·푸시는 항상 별도 승인 대상, 푸시는 커밋과
+별도로 다시 승인받는다).

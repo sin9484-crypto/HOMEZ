@@ -42,6 +42,8 @@ from app.core.dependency import get_db
 from app.core.desktop_auth import require_desktop_token
 from app.core.guard import admin_guard
 from app.domains.automation_safety.constants import AutomationMode
+from app.domains.automation_safety.constants import FunctionCode
+from app.domains.automation_safety.constants import FunctionMode
 from app.domains.automation_safety.model import EmergencyStop
 from app.core.audit_db import write_audit_log
 from app.domains.notification_center.delivery_service import (
@@ -90,6 +92,12 @@ class EmergencyStopActivateRequest(BaseModel):
 
 
 class AutomationModeRequest(BaseModel):
+
+    mode: str
+    reason: str | None = None
+
+
+class FunctionModeRequest(BaseModel):
 
     mode: str
     reason: str | None = None
@@ -661,6 +669,133 @@ def set_automation_mode(
 
     return {
         "mode": state.mode,
+        "set_at": state.set_at.isoformat(),
+    }
+
+
+# --------------------------------------------------
+# 기능별 자동화 상태 (Phase 3, 2026-09-09)
+#
+# HOMEZ_USER_OPERATION_SETTINGS.md 2·3·4·13·14번 — "전역 단일 자동화
+# 상태를 기능별 상태로 분리한다." 위 `/console/api/safety/mode`(전역
+# 단일)는 그대로 두고, 이 10개 엔드포인트 그룹을 추가한다. 회사
+# 스코프는 항상 `current_user.company_id`에서 가져온다(다른 회사
+# 조작 불가).
+# --------------------------------------------------
+
+@router.get("/console/api/function-modes")
+def get_function_modes(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+
+    existing = _existing_tables(db)
+
+    if "function_automation_states" not in existing:
+        return _schema_not_ready_payload()
+
+    if current_user.company_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="소속 회사가 없는 계정은 기능별 자동화 상태를 조회할 수 없습니다.",
+        )
+
+    service = SafetyService(db)
+    states = service.get_all_function_states(current_user.company_id)
+
+    def _mode_of(code: str) -> str:
+        state = states[code]
+        return state.mode if state is not None else FunctionMode.DEFAULT
+
+    return {
+        "schema_ready": True,
+        "functions": [
+            {
+                "code": code,
+                "mode": _mode_of(code),
+                "label_ko": FunctionCode.LABELS_KO[code],
+                "mode_label_ko": FunctionMode.LABELS_KO[_mode_of(code)],
+                "mode_description_ko": FunctionMode.DESCRIPTIONS_KO[_mode_of(code)],
+                # 2026-09-09 Phase 4 — "중지 원인과 필요한 설정값을
+                # 화면에 표시한다". 한 번도 설정된 적 없으면 전부 None.
+                "reason": states[code].reason if states[code] is not None else None,
+                "set_at": (
+                    states[code].set_at.isoformat()
+                    if states[code] is not None else None
+                ),
+            }
+            for code in FunctionCode.ALL
+        ],
+        "mode_all": list(FunctionMode.USER_SELECTABLE),
+        "mode_labels_ko": dict(FunctionMode.LABELS_KO),
+    }
+
+
+@router.post("/console/api/function-modes/{function_code}")
+def set_function_mode(
+    function_code: str,
+    data: FunctionModeRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    _desktop: None = Depends(require_desktop_token),
+):
+
+    existing = _existing_tables(db)
+
+    if "function_automation_states" not in existing:
+        raise HTTPException(
+            status_code=409,
+            detail="Migration 적용 필요 — function_automation_states 테이블 없음",
+        )
+
+    if current_user.company_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="소속 회사가 없는 계정은 기능별 자동화 상태를 변경할 수 없습니다.",
+        )
+
+    if function_code not in FunctionCode.ALL:
+        raise HTTPException(
+            status_code=400,
+            detail=f"알 수 없는 기능 코드: {function_code}",
+        )
+
+    if data.mode not in FunctionMode.USER_SELECTABLE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"사용자가 직접 설정할 수 없는 상태입니다: {data.mode}",
+        )
+
+    service = SafetyService(db)
+    state = service.set_function_mode(
+        company_id=current_user.company_id,
+        function_code=function_code,
+        mode=data.mode,
+        set_by=current_user.id,
+        is_admin=True,
+        reason=data.reason,
+    )
+
+    try:
+        write_audit_log(
+            db, user_id=current_user.id, action="FUNCTION_AUTOMATION_MODE_CHANGED",
+            entity="function_automation_state", entity_id=f"{function_code}",
+            description=(
+                f"관리자(id={current_user.id})가 {function_code} 기능의 자동화 "
+                f"모드를 {state.mode}로 변경했습니다."
+                + (f" 사유: {data.reason}" if data.reason else "")
+            ),
+            company_id=current_user.company_id,
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 — 감사 기록 실패가 모드 변경 자체를 막지 않는다
+        db.rollback()
+
+    return {
+        "code": function_code,
+        "mode": state.mode,
+        "label_ko": FunctionCode.LABELS_KO[function_code],
+        "mode_label_ko": FunctionMode.LABELS_KO[state.mode],
         "set_at": state.set_at.isoformat(),
     }
 

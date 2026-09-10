@@ -407,6 +407,566 @@ class PrecheckContractMessageTestCase(unittest.TestCase):
         self.assertIn("issue.code", section)
 
 
+class ShipmentTimelineTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시안 06 배송 관리 참고) — 배송 상태 라벨과
+    진행 단계 표시가 `` `ship.status.${status.toLowerCase()}` ``
+    형태의 템플릿 리터럴로 동적 조합되므로(console.js
+    buildShipmentTimelineSteps/statusPillHtmlLabeled),
+    test_all_js_t_call_keys_exist_in_catalog(리터럴 문자열만 인식)가
+    자동으로 잡지 못한다. PrecheckContractMessageTestCase와 동일한
+    이유로 SHIPMENT_STATUS_OPTIONS의 모든 값에 대응하는 키를 직접
+    고정한다(2026-08-30 사전검사 이슈 빈 문장 사고의 재발 방지 패턴).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def test_every_shipment_status_option_has_a_label_key(self):
+
+        start = self.js.index("const SHIPMENT_STATUS_OPTIONS = [")
+        end = self.js.index("];", start)
+        options_src = self.js[start:end]
+        statuses = re.findall(r'"([A-Z_]+)"', options_src)
+        self.assertGreater(len(statuses), 0)
+
+        for status in statuses:
+            key = f"ship.status.{status.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+            self.assertTrue(self.ko[key].strip())
+            self.assertTrue(self.en[key].strip())
+
+    def test_timeline_heading_key_exists(self):
+
+        self.assertIn("ship.timeline_heading", self.ko)
+        self.assertIn("ship.timeline_heading", self.en)
+        self.assertTrue(self.ko["ship.timeline_heading"].strip())
+        self.assertTrue(self.en["ship.timeline_heading"].strip())
+
+    def test_status_pill_labeled_falls_back_to_raw_status_when_key_missing(self):
+        """
+        statusPillHtmlLabeled()가 번역 누락 시 빈 라벨이 아니라 원문
+        상태 코드로 fallback하는지 소스 패턴으로 확인한다(빈 문자열
+        노출 사고 재발 방지 — 위 클래스 docstring 참고).
+        """
+
+        start = self.js.index("function statusPillHtmlLabeled(")
+        end = self.js.index("\n  }\n", start)
+        body = self.js[start:end]
+
+        self.assertIn("translated || raw", body)
+
+
+class ReturnOrderTimelineTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시안 07 취소·반품 관리 참고) —
+    ShipmentTimelineTranslationTestCase와 동일한 이유(동적 템플릿
+    리터럴 키, PrecheckContractMessageTestCase 선례)로
+    RETURN_STATUS_OPTIONS의 모든 값에 대응하는 키를 직접 고정한다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def test_every_return_status_option_has_a_label_key(self):
+
+        start = self.js.index("const RETURN_STATUS_OPTIONS = [")
+        end = self.js.index("];", start)
+        options_src = self.js[start:end]
+        statuses = re.findall(r'"([A-Z_]+)"', options_src)
+        self.assertGreater(len(statuses), 0)
+
+        for status in statuses:
+            key = f"ret.status.{status.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+            self.assertTrue(self.ko[key].strip())
+            self.assertTrue(self.en[key].strip())
+
+    def test_timeline_heading_key_exists(self):
+
+        self.assertIn("ret.timeline_heading", self.ko)
+        self.assertIn("ret.timeline_heading", self.en)
+        self.assertTrue(self.ko["ret.timeline_heading"].strip())
+        self.assertTrue(self.en["ret.timeline_heading"].strip())
+
+
+class RefundUiTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시안 07 "환불 확인" 참고, UI-8 감사 중 발견 —
+    docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md 참고) — Refund 화면
+    신규 추가. `refund.status.*`/`refund.type.*`는
+    `` `refund.status.${status.toLowerCase()}` ``처럼 동적으로
+    조합되므로 위 두 TranslationTestCase와 동일한 이유로 별도
+    고정한다. `refund.type.*`는 console.js에 대응하는 하드코딩
+    배열이 없어(서버가 내려준 refund_type을 그대로 쓴다) 백엔드
+    `app.domains.refund.constants.RefundType.ALL`을 직접 참조해
+    드리프트를 방지한다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _assert_key_in_both(self, key):
+
+        self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+        self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+        self.assertTrue(self.ko[key].strip())
+        self.assertTrue(self.en[key].strip())
+
+    def test_every_refund_status_option_has_a_label_key(self):
+
+        start = self.js.index("const REFUND_STATUS_OPTIONS = [")
+        end = self.js.index("];", start)
+        statuses = re.findall(r'"([A-Z_]+)"', self.js[start:end])
+        self.assertGreater(len(statuses), 0)
+
+        for status in statuses:
+            self._assert_key_in_both(f"refund.status.{status.lower()}")
+
+    def test_every_refund_type_has_a_label_key(self):
+
+        from app.domains.refund.constants import RefundType
+
+        self.assertGreater(len(RefundType.ALL), 0)
+        for refund_type in RefundType.ALL:
+            self._assert_key_in_both(f"refund.type.{refund_type.lower()}")
+
+    def test_timeline_heading_key_exists(self):
+
+        self._assert_key_in_both("refund.timeline_heading")
+
+    def test_fake_notice_key_exists_and_mentions_no_real_transfer(self):
+        """
+        Refund 승인·실행확인이 FakeRefundExecutor만 호출한다는 사실을
+        화면에서 숨기지 않는지 고정한다(HOMEZ 전반의 Fake Provider
+        정직 공개 원칙, app/domains/refund/router.py 상단 주석 참고).
+        """
+
+        self._assert_key_in_both("refund.fake_notice")
+        self.assertIn("refund.fake_notice", self.js)
+
+
+class ChannelSettlementTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시안 08 정산·손익 관리 참고) — 정산 차이/
+    정산 상태 라벨을 동적 키로 번역하도록 바꿨다. 위 여러
+    TranslationTestCase와 동일한 이유(동적 템플릿 리터럴 키)로
+    RECONCILIATION_STATUS_OPTIONS와 SETTLEMENT_STATUS_OPTIONS
+    전체 값에 대응하는 키를 직접 고정한다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _statuses_from(self, array_name):
+
+        start = self.js.index(f"const {array_name} = [")
+        end = self.js.index("];", start)
+        statuses = re.findall(r'"([A-Z_]+)"', self.js[start:end])
+        self.assertGreater(len(statuses), 0)
+        return statuses
+
+    def test_every_reconciliation_status_option_has_a_label_key(self):
+
+        for status in self._statuses_from("RECONCILIATION_STATUS_OPTIONS"):
+            key = f"stl.status.{status.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+            self.assertTrue(self.ko[key].strip())
+            self.assertTrue(self.en[key].strip())
+
+    def test_every_settlement_status_option_has_a_label_key(self):
+
+        for status in self._statuses_from("SETTLEMENT_STATUS_OPTIONS"):
+            key = f"stl.status.{status.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+            self.assertTrue(self.ko[key].strip())
+            self.assertTrue(self.en[key].strip())
+
+
+class PaymentMethodUiTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시안 05 매입처·결제 설정 참고, UI-6 감사 중
+    발견 — docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md 참고) — Payment
+    화면 신규 추가. `pay.type.*`는 동적 템플릿 리터럴 키라 위 여러
+    TranslationTestCase와 동일한 이유로 별도 고정한다.
+    `app.domains.payment.constants.PaymentMethodType.ALL`을 직접
+    참조해 백엔드와의 드리프트를 방지한다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _assert_key_in_both(self, key):
+
+        self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+        self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+        self.assertTrue(self.ko[key].strip())
+        self.assertTrue(self.en[key].strip())
+
+    def test_every_payment_method_type_has_a_label_key(self):
+
+        from app.domains.payment.constants import PaymentMethodType
+
+        self.assertGreater(len(PaymentMethodType.ALL), 0)
+        for method_type in PaymentMethodType.ALL:
+            self._assert_key_in_both(f"pay.type.{method_type.lower()}")
+
+    def test_js_method_types_array_matches_backend_constant(self):
+        """
+        console.js의 PAY_METHOD_TYPES가 백엔드
+        PaymentMethodType.ALL과 정확히 같은 집합인지 확인한다 —
+        둘이 갈라지면 등록 폼의 종류 선택지가 백엔드가 실제로
+        받는 값과 어긋나게 된다.
+        """
+
+        from app.domains.payment.constants import PaymentMethodType
+
+        start = self.js.index("const PAY_METHOD_TYPES = [")
+        end = self.js.index("];", start)
+        js_types = set(re.findall(r'"([A-Z_]+)"', self.js[start:end]))
+
+        self.assertEqual(js_types, set(PaymentMethodType.ALL))
+
+    def test_fake_notice_key_exists_and_warns_against_real_card_entry(self):
+        """
+        raw_details가 저장되지 않는다는 사실을 화면에서 숨기지
+        않는지 고정한다 — 실제 카드번호를 입력하도록 유도하지
+        않는다는 이 화면의 핵심 설계 판단(app/domains/payment/
+        schema.py 주석 참고).
+        """
+
+        self._assert_key_in_both("pay.fake_notice")
+        self.assertIn("pay.fake_notice", self.js)
+
+    def test_daily_limit_not_enforced_notice_key_exists(self):
+        """
+        daily_limit_amount가 저장만 되고 실제로 집계·적용되지
+        않는다는 사실(app/domains/payment/service.py::
+        verify_auto_payment_allowed 주석 참고)을 화면에서 숨기지
+        않는지 고정한다.
+        """
+
+        self._assert_key_in_both("pay.daily_limit_not_enforced_notice")
+        self.assertIn("pay.daily_limit_not_enforced_notice", self.js)
+
+    def test_register_request_never_sends_a_real_card_field(self):
+        """
+        등록 요청 바디에 raw_details를 항상 빈 객체로 보내는지(실제
+        카드 정보 입력 필드 자체가 없다는 설계를 코드 레벨에서도
+        고정) 소스 패턴으로 확인한다.
+        """
+
+        start = self.js.index('await apiFetch("/payments/methods", {')
+        end = self.js.index("});", start)
+        body = self.js[start:end]
+
+        self.assertIn("raw_details: {}", body)
+
+
+class CurrencyUiTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시스템 차원 발견 — docs/HOMEZ_V7_UI_
+    IMPLEMENTATION_AUDIT.md "4. 시스템 차원 발견" 절) — Currency
+    화면 신규 추가. 백엔드 `KNOWN_CURRENCIES`와의 드리프트 방지,
+    두 정직성 고지(외부 API 미연동, 허용률 판정 미연결) 키 고정.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _assert_key_in_both(self, key):
+
+        self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+        self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+        self.assertTrue(self.ko[key].strip())
+        self.assertTrue(self.en[key].strip())
+
+    def test_js_known_currencies_matches_backend_constant(self):
+
+        from app.domains.currency.constants import KNOWN_CURRENCIES
+
+        start = self.js.index("const CURR_KNOWN_CURRENCIES = [")
+        end = self.js.index("];", start)
+        js_currencies = set(re.findall(r'"([A-Z]+)"', self.js[start:end]))
+
+        self.assertEqual(js_currencies, set(KNOWN_CURRENCIES))
+
+    def test_fake_notice_and_not_wired_notice_keys_exist(self):
+
+        self._assert_key_in_both("curr.fake_notice")
+        self._assert_key_in_both("curr.tolerance_not_wired_notice")
+        self.assertIn("curr.fake_notice", self.js)
+        self.assertIn("curr.tolerance_not_wired_notice", self.js)
+
+
+class SupplierCapabilityUiTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시스템 차원 발견) — SupplierCapability 화면
+    신규 추가. `SupplierCapabilityFlag.ALL`/`CapabilitySupport.ALL`
+    과의 드리프트 방지.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _js_array(self, array_name):
+
+        start = self.js.index(f"const {array_name} = [")
+        end = self.js.index("];", start)
+        return set(re.findall(r'"([A-Z_]+)"', self.js[start:end]))
+
+    def test_js_flags_array_matches_backend_constant(self):
+
+        from app.domains.supplier_capability.constants import SupplierCapabilityFlag
+
+        js_flags = self._js_array("SPC_FLAGS")
+        self.assertEqual(js_flags, set(SupplierCapabilityFlag.ALL))
+        for flag in SupplierCapabilityFlag.ALL:
+            key = f"spc.flag.{flag.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+
+    def test_js_support_options_matches_backend_constant(self):
+
+        from app.domains.supplier_capability.constants import CapabilitySupport
+
+        js_support = self._js_array("SPC_SUPPORT_OPTIONS")
+        self.assertEqual(js_support, set(CapabilitySupport.ALL))
+        for support in CapabilitySupport.ALL:
+            key = f"spc.support.{support.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+
+
+class PriceStockSafetyUiTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시스템 차원 발견) — PriceStockSafety 화면
+    신규 추가. 두 가지 미연결 사실(가상재고 자동조회 없음, 검토주기
+    스케줄러 미연결 — app/domains/price_stock_safety/service.py
+    모듈 docstring 참고)을 화면에서 숨기지 않는지 고정한다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def test_not_wired_notice_keys_exist_and_are_referenced(self):
+
+        for key in ("pss.threshold_not_wired_notice", "pss.review_cycle_not_wired_notice"):
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+            self.assertTrue(self.ko[key].strip())
+            self.assertTrue(self.en[key].strip())
+            self.assertIn(key, self.js)
+
+
+class AiLearningUiTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시스템 차원 발견) — AiLearning 화면 신규
+    추가. `ModelCandidateStatus.ALL`과의 드리프트 방지 및 "승인=
+    실제 적용 아님" 정직 고지 키 고정(app/domains/ai_learning/
+    constants.py docstring 참고).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def test_js_status_options_matches_backend_constant(self):
+
+        from app.domains.ai_learning.constants import ModelCandidateStatus
+
+        start = self.js.index("const AIL_STATUS_OPTIONS = [")
+        end = self.js.index("];", start)
+        js_statuses = set(re.findall(r'"([A-Z_]+)"', self.js[start:end]))
+
+        expected = {
+            ModelCandidateStatus.DRAFT, ModelCandidateStatus.OFFLINE_EVALUATED,
+            ModelCandidateStatus.REGRESSION_COMPARED, ModelCandidateStatus.APPROVED,
+            ModelCandidateStatus.REJECTED,
+        }
+        self.assertEqual(js_statuses, expected)
+
+        for status in expected:
+            key = f"ail.status.{status.lower()}"
+            self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+            self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+
+    def test_approved_label_discloses_no_live_application(self):
+        """
+        백엔드가 명시한 "APPROVED조차 실제 라이브 적용을 의미하지
+        않는다"는 사실이 라벨에서 사라지지 않는지 고정한다.
+        """
+
+        self.assertIn("별도", self.ko["ail.status.approved"])
+        self.assertIn("separate", self.en["ail.status.approved"].lower())
+
+    def test_fake_notice_key_exists_and_referenced(self):
+
+        self.assertIn("ail.fake_notice", self.ko)
+        self.assertIn("ail.fake_notice", self.en)
+        self.assertIn("ail.fake_notice", self.js)
+
+
+class MarginAnalysisComparisonTableTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-10 UI 개선(시안 08 정산·손익 관리 참고) — margin-analysis
+    화면에 "예상 대비 확정" 비교표를 추가했다. `prc.item.*`/
+    `prc.margin_type.*`는 동적 템플릿 리터럴 키라 위 여러
+    TranslationTestCase와 동일한 이유로 별도 고정한다. 백엔드
+    `MarginSnapshotResponse`/`MarginType`과의 드리프트도 방지한다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+        with open(os.path.join(WEB_DIR, "console.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def _assert_key_in_both(self, key):
+
+        self.assertIn(key, self.ko, f"ko-KR.js에 '{key}'가 없습니다.")
+        self.assertIn(key, self.en, f"en-US.js에 '{key}'가 없습니다.")
+        self.assertTrue(self.ko[key].strip())
+        self.assertTrue(self.en[key].strip())
+
+    def test_every_comparison_item_has_a_label_key(self):
+
+        start = self.js.index("const PRC_COMPARISON_ITEMS = [")
+        end = self.js.index("];", start)
+        items = re.findall(r'"([a-z_]+)"', self.js[start:end])
+        self.assertGreater(len(items), 0)
+
+        for item in items:
+            self._assert_key_in_both(f"prc.item.{item}")
+        # margin_rate는 PRC_COMPARISON_ITEMS에 없지만(별도 % 처리)
+        # prcComparisonTableHtml()이 직접 참조한다.
+        self._assert_key_in_both("prc.item.margin_rate")
+
+    def test_margin_type_keys_match_backend_constant(self):
+
+        from app.domains.pricing.constants import MarginType
+
+        for value in (MarginType.EXPECTED, MarginType.ACTUAL):
+            self._assert_key_in_both(f"prc.margin_type.{value.lower()}")
+
+    def test_comparison_items_cover_every_margin_snapshot_money_field(self):
+        """
+        `MarginSnapshotResponse`의 모든 금액 필드(margin_rate·
+        estimated_components_json 등 비금액 필드 제외)가
+        PRC_COMPARISON_ITEMS에 빠짐없이 포함되는지 확인한다 —
+        새 필드가 스키마에 추가됐는데 화면에 반영되지 않는
+        드리프트를 방지한다.
+        """
+
+        from app.domains.pricing.schema import MarginSnapshotResponse
+
+        non_money_fields = {
+            "id", "company_id", "listing_id", "margin_type", "order_id",
+            "settlement_id", "reason", "quantity_basis", "margin_rate",
+            "estimated_components_json", "created_at",
+        }
+        money_fields = {
+            name for name in MarginSnapshotResponse.model_fields
+            if name not in non_money_fields
+        }
+
+        start = self.js.index("const PRC_COMPARISON_ITEMS = [")
+        end = self.js.index("];", start)
+        js_items = set(re.findall(r'"([a-z_]+)"', self.js[start:end]))
+
+        self.assertEqual(js_items, money_fields)
+
+
 class ConsoleMoneyFormattingLocaleTestCase(unittest.TestCase):
     """
     Gate X-3(2026-08-12) — fmtMoney()가 "ko-KR"을 하드코딩해, 언어를

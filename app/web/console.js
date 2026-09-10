@@ -157,6 +157,12 @@
     "SESSION_EXPIRED",
     "SESSION_REVOKED",
     "ACCOUNT_DISABLED",
+    // 2026-09-09 Phase 2 — 마지막 사용 후 SESSION_TIMEOUT_MINUTES(기본
+    // 3시간) 경과. 이 코드를 화이트리스트에 추가하지 않으면
+    // handleAuthFailure가 "허용되지 않은 코드"로 판단해 로그아웃
+    // 화면 전환 자체를 건너뛴다 — 서버는 정확히 거부했는데 화면만
+    // 계속 붙어있는 상태가 된다.
+    "SESSION_IDLE_TIMEOUT",
   ]);
 
   function stopTopbarPolling() {
@@ -216,7 +222,10 @@
     // code가 없는 401은 FastAPI OAuth2PasswordBearer가 Authorization
     // 헤더 자체가 없을 때 자동으로 반환하는 경우뿐이다(실질적으로
     // "애초에 인증되지 않음") — 로그인 화면 전환이 안전하다.
-    transitionToLogin(HomezI18n.t("auth.session_expired"));
+    const reason = code === "SESSION_IDLE_TIMEOUT"
+      ? HomezI18n.t("auth.session_idle_timeout")
+      : HomezI18n.t("auth.session_expired");
+    transitionToLogin(reason);
   }
 
   async function apiFetch(path, options = {}, { skipAuthHandling = false } = {}) {
@@ -637,7 +646,10 @@
     if (!resp.ok) {
       const code = resp.headers.get("X-Auth-Error-Code");
       if (code && ALLOWED_LOGOUT_CODES.has(code)) {
-        transitionToLogin(HomezI18n.t("auth.session_expired"));
+        const reason = code === "SESSION_IDLE_TIMEOUT"
+          ? HomezI18n.t("auth.session_idle_timeout")
+          : HomezI18n.t("auth.session_expired");
+        transitionToLogin(reason);
       }
       // 그 외(일시적 서버 오류 등)는 조용히 둔다 — 다음 실제 API
       // 호출이 필요해지는 시점에 apiFetch의 401 처리가 최종 판단한다.
@@ -2535,6 +2547,7 @@
 
     const fmtAmount = (v) => (v === null || v === undefined ? HomezI18n.t("retail_purchase.no_limit") : escapeHtml(String(v)));
     const fmtDays = (v) => (v === null || v === undefined ? HomezI18n.t("retail_purchase.no_limit") : `${escapeHtml(String(v))}${HomezI18n.t("retail_purchase.days_suffix")}`);
+    const fmtPercent = (v) => (v === null || v === undefined ? HomezI18n.t("retail_purchase.no_limit") : `${escapeHtml(String(v * 100))}%`);
     const providerLabels = policy.allowed_provider_codes.length
       ? policy.allowed_provider_codes.map((c) => (RP_PROVIDER_LABEL_KEYS[c] ? HomezI18n.t(RP_PROVIDER_LABEL_KEYS[c]) : c)).join(", ")
       : HomezI18n.t("retail_purchase.no_provider_allowed");
@@ -2543,9 +2556,9 @@
       <dl class="detail-grid">
         <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_allowed_providers"))}</dt><dd>${escapeHtml(providerLabels)}</dd>
         <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_min_net_profit"))}</dt><dd>${fmtAmount(policy.min_net_profit)}</dd>
-        <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_min_margin_rate"))}</dt><dd>${escapeHtml(String(policy.min_margin_rate))}</dd>
+        <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_min_margin_rate"))}</dt><dd>${fmtPercent(policy.min_margin_rate)}</dd>
         <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_max_purchase_price"))}</dt><dd>${fmtAmount(policy.max_purchase_price)}</dd>
-        <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_max_price_increase_rate"))}</dt><dd>${escapeHtml(String(policy.max_price_increase_rate))}</dd>
+        <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_max_price_increase_rate"))}</dt><dd>${fmtPercent(policy.max_price_increase_rate)}</dd>
         <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_max_delivery_days"))}</dt><dd>${fmtDays(policy.max_delivery_days)}</dd>
         <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_require_return_allowed"))}</dt><dd>${policy.require_return_allowed ? HomezI18n.t("common.yes") : HomezI18n.t("common.no")}</dd>
         <dt>${escapeHtml(HomezI18n.t("retail_purchase.field_min_seller_trust"))}</dt><dd>${escapeHtml(String(policy.min_seller_trust_score))}</dd>
@@ -2660,9 +2673,9 @@
     `).join(" ");
 
     el("rp-policy-min-net-profit").value = rpCurrentPolicy.min_net_profit;
-    el("rp-policy-min-margin-rate").value = rpCurrentPolicy.min_margin_rate;
+    el("rp-policy-min-margin-rate").value = rpCurrentPolicy.min_margin_rate == null ? "" : rpCurrentPolicy.min_margin_rate * 100;
     el("rp-policy-max-purchase-price").value = rpCurrentPolicy.max_purchase_price ?? "";
-    el("rp-policy-max-price-increase-rate").value = rpCurrentPolicy.max_price_increase_rate;
+    el("rp-policy-max-price-increase-rate").value = rpCurrentPolicy.max_price_increase_rate == null ? "" : rpCurrentPolicy.max_price_increase_rate * 100;
     el("rp-policy-max-delivery-days").value = rpCurrentPolicy.max_delivery_days ?? "";
     el("rp-policy-require-return-allowed").checked = !!rpCurrentPolicy.require_return_allowed;
     el("rp-policy-min-seller-trust").value = rpCurrentPolicy.min_seller_trust_score;
@@ -2701,7 +2714,7 @@
         risks.push(HomezI18n.t("retail_purchase.risk_min_net_profit_lowered"));
       }
       if (numOrNull("rp-policy-min-margin-rate") !== null
-        && numOrNull("rp-policy-min-margin-rate") < rpCurrentPolicy.min_margin_rate) {
+        && numOrNull("rp-policy-min-margin-rate") < rpCurrentPolicy.min_margin_rate * 100) {
         risks.push(HomezI18n.t("retail_purchase.risk_min_margin_rate_lowered"));
       }
       if (numOrNull("rp-policy-max-purchase-price") === null
@@ -2709,7 +2722,7 @@
         risks.push(HomezI18n.t("retail_purchase.risk_max_purchase_price_removed"));
       }
       if (numOrNull("rp-policy-max-price-increase-rate") !== null
-        && numOrNull("rp-policy-max-price-increase-rate") > rpCurrentPolicy.max_price_increase_rate) {
+        && numOrNull("rp-policy-max-price-increase-rate") > rpCurrentPolicy.max_price_increase_rate * 100) {
         risks.push(HomezI18n.t("retail_purchase.risk_price_increase_rate_raised"));
       }
       if (numOrNull("rp-policy-min-seller-trust") !== null
@@ -2794,9 +2807,9 @@
           body: JSON.stringify({
             allowed_provider_codes: allowedProviderCodes,
             min_net_profit: numOrNull("rp-policy-min-net-profit"),
-            min_margin_rate: numOrNull("rp-policy-min-margin-rate"),
+            min_margin_rate: (() => { const v = numOrNull("rp-policy-min-margin-rate"); return v === null ? null : v / 100; })(),
             max_purchase_price: numOrNull("rp-policy-max-purchase-price"),
-            max_price_increase_rate: numOrNull("rp-policy-max-price-increase-rate"),
+            max_price_increase_rate: (() => { const v = numOrNull("rp-policy-max-price-increase-rate"); return v === null ? null : v / 100; })(),
             max_delivery_days: numOrNull("rp-policy-max-delivery-days"),
             require_return_allowed: el("rp-policy-require-return-allowed").checked,
             min_seller_trust_score: numOrNull("rp-policy-min-seller-trust"),
@@ -3918,6 +3931,14 @@
         <dd>${p.estimated_item_amount === null || p.estimated_item_amount === undefined ? escapeHtml(HomezI18n.t("purchase_task.review_price_unknown")) : fmtMoney(p.estimated_item_amount)}</dd>
         <dt>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_fee_label"))}</dt>
         <dd>${escapeHtml(review.shipping_fee_detail)}</dd>
+        <dt>${escapeHtml(HomezI18n.t("purchase_task.review_sales_application_label"))}</dt>
+        <dd>${review.sales_application.confirmed
+          ? escapeHtml(HomezI18n.t("purchase_task.review_sales_application_confirmed"))
+          : `<span class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_sales_application_not_confirmed"))}</span>`}</dd>
+        <dt>${escapeHtml(HomezI18n.t("purchase_task.review_point_balance_label"))}</dt>
+        <dd>${review.point_balance.point_interpretable
+          ? fmtMoney(review.point_balance.point)
+          : `<span class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_point_balance_unknown"))}</span>`}</dd>
       </dl>
       <div class="table-wrap"><table class="responsive-cards">
         <thead><tr>
@@ -4672,7 +4693,12 @@
           // (서버 계약, channel_connection_service.check_member_point
           // 참고) — 그래서 primaryActions가 아니라 여기 둔다.
           manageActions.push(`<button type="button" class="btn btn-ghost btn-sm" data-cc-check-point="${c.id}">${HomezI18n.t("purchase_task.cc_check_point_btn")}</button>`);
-        } else {
+        // 2026-09-11 후속(Phase 11 — UI-6 재검토) — 이 매입처
+        // Adapter가 실제로 무엇을 확인했는지(8개 항목: 지원/미지원/
+        // 미확인)를 보여준다. 단일 조회 성공 하나로 "이 연결은
+        // 발주 가능"이라고 과잉 일반화하지 않기 위해, "발주 가능"
+        // 같은 요약 문구 대신 항목별 실제 값을 그대로 노출한다.
+        manageActions.push(`<button type="button" class="btn btn-ghost btn-sm" data-cc-capabilities="${c.id}">${HomezI18n.t("purchase_task.cc_capabilities_btn")}</button>`);
           // BROWSER_LOGIN(사람이 직접 로그인하는 매입처)은 HOMEZ가
           // 세션을 기술적으로 확인할 방법이 전혀 없어 이 자기보고
           // 버튼이 여전히 유일한 확인 수단이다.
@@ -4732,6 +4758,7 @@
                 <button type="button" class="btn btn-ghost btn-sm" data-lookup-form-cancel="${c.id}">${HomezI18n.t("purchase_task.cc_form_cancel_btn")}</button>
               </div>
             </div>
+            <div class="pt-cc-capabilities-panel" data-capabilities-panel="${c.id}" hidden></div>
           </div>
           <div class="pt-cc-item-actions">
             <div class="pt-cc-item-actions-primary">${primaryActions.join("")}</div>
@@ -4930,6 +4957,44 @@
       };
     });
 
+    // 2026-09-11 후속(Phase 11) — 실제 네트워크 호출 없는 정적 조회
+    // (capability_matrix()는 저장된 값을 그대로 보여줄 뿐, 호출
+    // 시점에 온채널을 다시 두드리지 않는다 — router.py 주석 참고).
+    // "발주 가능" 같은 요약 대신 8개 항목 각각의 실제 값(지원/
+    // 미지원/미확인)을 그대로 보여줘 단일 조회 성공을 과잉
+    // 일반화하지 않는다. 판매신청은 이 8개 고정 목록에 포함되지
+    // 않는다(연결 단위가 아니라 상품 단위 확인이라는 사실 자체를
+    // 별도 안내문으로 구분해 보여준다).
+    listEl.querySelectorAll("[data-cc-capabilities]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.dataset.ccCapabilities;
+        const panel = listEl.querySelector(`[data-capabilities-panel="${id}"]`);
+        const wasHidden = panel.hidden;
+        closeAllInlineForms();
+        if (!wasHidden) {
+          panel.hidden = true;
+          return;
+        }
+        panel.hidden = false;
+        panel.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+        try {
+          const result = await apiFetch(`/purchase-tasks/channel-connections/${id}/capabilities`);
+          const rows = Object.entries(result.capabilities || {}).map(([code, support]) => `
+            <li>
+              <span>${escapeHtml(HomezI18n.t(`purchase_task.cc_capability.${code.toLowerCase()}`))}</span>
+              ${statusPillHtmlLabeled(support, "purchase_task.cc_capability_support.")}
+            </li>
+          `).join("");
+          panel.innerHTML = `
+            <ul class="pt-cc-capabilities-list">${rows || `<li>—</li>`}</ul>
+            <p class="field-hint">${HomezI18n.t("purchase_task.cc_capabilities_sales_application_hint")}</p>
+          `;
+        } catch (err) {
+          panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("purchase_task.cc_action_error"))}</p>`;
+        }
+      };
+    });
+
     listEl.querySelectorAll("[data-cc-verify]").forEach((btn) => {
       btn.onclick = async () => {
         try {
@@ -5093,8 +5158,8 @@
       el("pt-pol-monthly-budget").value = ptCurrentPolicy.monthly_purchase_budget_amount ?? "";
       el("pt-pol-max-quantity").value = ptCurrentPolicy.max_quantity_per_product ?? "";
       el("pt-pol-min-profit").value = ptCurrentPolicy.min_net_profit;
-      el("pt-pol-min-margin").value = ptCurrentPolicy.min_margin_rate;
-      el("pt-pol-max-increase").value = ptCurrentPolicy.max_price_increase_rate;
+      el("pt-pol-min-margin").value = ptCurrentPolicy.min_margin_rate == null ? "" : ptCurrentPolicy.min_margin_rate * 100;
+      el("pt-pol-max-increase").value = ptCurrentPolicy.max_price_increase_rate == null ? "" : ptCurrentPolicy.max_price_increase_rate * 100;
       el("pt-pol-max-delivery").value = ptCurrentPolicy.max_delivery_days ?? "";
       el("pt-pol-min-match").value = ptCurrentPolicy.min_match_confidence;
       el("pt-pol-max-concurrent").value = ptCurrentPolicy.max_concurrent_tasks ?? "";
@@ -5146,8 +5211,8 @@
               monthly_purchase_budget_amount: numOrNull("pt-pol-monthly-budget"),
               max_quantity_per_product: numOrNull("pt-pol-max-quantity"),
               min_net_profit: numOrNull("pt-pol-min-profit"),
-              min_margin_rate: numOrNull("pt-pol-min-margin"),
-              max_price_increase_rate: numOrNull("pt-pol-max-increase"),
+              min_margin_rate: (() => { const v = numOrNull("pt-pol-min-margin"); return v === null ? null : v / 100; })(),
+              max_price_increase_rate: (() => { const v = numOrNull("pt-pol-max-increase"); return v === null ? null : v / 100; })(),
               max_delivery_days: numOrNull("pt-pol-max-delivery"),
               require_return_allowed: el("pt-pol-require-return").checked,
               min_match_confidence: numOrNull("pt-pol-min-match"),
@@ -5538,6 +5603,35 @@
     return "risk-low";
   }
 
+  // 2026-09-10 UI 개선(시안 01 상품 발굴·분석 참고) — 상품 후보의
+  // AI 점수(trend/margin/demand/novelty/confidence/risk_score,
+  // 전부 0~1 float — app/domains/product_candidate/schema.py 참고)가
+  // 지금까지 맨 숫자로만 표시돼 위험·기회를 한눈에 훑기 어려웠다.
+  // 원래 수치를 그대로 보여주면서(추측으로 %로 재해석하지 않음 —
+  // "0~1 점수"가 실제로 비율/확률을 의미한다는 근거가 스키마에
+  // 없어 %로 바꾸면 실제보다 더 정밀한 통계처럼 보일 위험이 있음)
+  // 막대로 크기를 시각화만 추가한다.
+  // invert=false(기본): 높을수록 좋음(trend/margin/demand/novelty/
+  // confidence) — 초록이 높은 쪽. invert=true: 높을수록 나쁨
+  // (risk_score) — 기존 riskClass()와 동일한 방향, risk-tag와 색상
+  // 일관성 유지.
+  function scoreBarHtml(score, { invert = false } = {}) {
+    if (score === null || score === undefined) {
+      return `<span class="stat-sub">—</span>`;
+    }
+    const clamped = Math.max(0, Math.min(1, score));
+    const pct = Math.round(clamped * 100);
+    const cls = invert
+      ? riskClass(score)
+      : (score >= 0.66 ? "risk-low" : score >= 0.33 ? "risk-mid" : "risk-high");
+    return `
+      <div class="score-bar">
+        <div class="score-bar-track"><div class="score-bar-fill ${cls}" style="width:${pct}%"></div></div>
+        <span class="score-bar-value">${escapeHtml(clamped.toFixed(2))}</span>
+      </div>
+    `;
+  }
+
   function renderEmptyState(container, message, sub = "", actionsHtml = "") {
     container.innerHTML = "";
     const wrap = document.createElement("div");
@@ -5869,7 +5963,7 @@
     const colTrend = HomezI18n.t("candidates.col_trend");
     const colNewProduct = HomezI18n.t("candidates.col_new_product");
     const colMargin = HomezI18n.t("candidates.col_margin");
-    const colFundingNeeded = HomezI18n.t("candidates.col_funding_needed");
+    const colDemand = HomezI18n.t("candidates.col_demand");
     const colRisk = HomezI18n.t("candidates.col_risk");
     const colStatus = HomezI18n.t("candidates.col_status");
 
@@ -5877,11 +5971,11 @@
       <tr class="row-clickable" tabindex="0" data-id="${r.id}">
         <td data-label="${colName}">${escapeHtml(r.product_name)}</td>
         <td data-label="${colSource}">${escapeHtml(r.source_type)}</td>
-        <td data-label="${colTrend}"><span class="${riskClass(r.trend_score)}">${r.trend_score ?? "—"}</span></td>
+        <td data-label="${colTrend}">${scoreBarHtml(r.trend_score)}</td>
         <td data-label="${colNewProduct}">${r.is_new_product === true ? HomezI18n.t("common.yes") : r.is_new_product === false ? HomezI18n.t("common.no") : "—"}</td>
-        <td data-label="${colMargin}">${r.margin_score ?? "—"}</td>
-        <td data-label="${colFundingNeeded}">${r.demand_score ?? "—"}</td>
-        <td data-label="${colRisk}"><span class="risk-tag ${riskClass(r.risk_score)}">${r.risk_score ?? "—"}</span></td>
+        <td data-label="${colMargin}">${scoreBarHtml(r.margin_score)}</td>
+        <td data-label="${colDemand}">${scoreBarHtml(r.demand_score)}</td>
+        <td data-label="${colRisk}">${scoreBarHtml(r.risk_score, { invert: true })}</td>
         <td data-label="${colStatus}"><span class="status-tag status-${r.status}">${escapeHtml(candidateStatusLabel(r.status))}</span></td>
       </tr>
     `).join("");
@@ -5890,7 +5984,7 @@
       <table class="responsive-cards">
         <thead><tr>
           <th>${colName}</th><th>${colSource}</th><th>${colTrend}</th><th>${colNewProduct}</th>
-          <th>${colMargin}</th><th>${colFundingNeeded}</th><th>${colRisk}</th><th>${colStatus}</th>
+          <th>${colMargin}</th><th>${colDemand}</th><th>${colRisk}</th><th>${colStatus}</th>
         </tr></thead>
         <tbody>${trs}</tbody>
       </table>
@@ -6062,12 +6156,13 @@
           <div class="detail-panel">
             <h2>${HomezI18n.t("candidate_detail.ai_scores_title")}</h2>
             <dl class="kv-list">
-              <dt>${HomezI18n.t("candidate_detail.trend_score_label")}</dt><dd>${candidate.trend_score ?? "—"}</dd>
+              <dt>${HomezI18n.t("candidate_detail.trend_score_label")}</dt><dd>${scoreBarHtml(candidate.trend_score)}</dd>
               <dt>${HomezI18n.t("candidate_detail.is_new_product_label")}</dt><dd>${candidate.is_new_product === true ? HomezI18n.t("common.yes") : candidate.is_new_product === false ? HomezI18n.t("common.no") : HomezI18n.t("candidate_detail.not_analyzed")}</dd>
-              <dt>${HomezI18n.t("candidate_detail.novelty_score_label")}</dt><dd>${candidate.novelty_score ?? "—"}</dd>
-              <dt>${HomezI18n.t("candidates.col_margin")}</dt><dd>${candidate.margin_score ?? "—"}</dd>
-              <dt>${HomezI18n.t("candidates.col_risk")}</dt><dd><span class="risk-tag ${riskClass(candidate.risk_score)}">${candidate.risk_score ?? "—"}</span></dd>
-              <dt>${HomezI18n.t("candidate_detail.confidence_label")}</dt><dd>${candidate.confidence ?? "—"}</dd>
+              <dt>${HomezI18n.t("candidate_detail.novelty_score_label")}</dt><dd>${scoreBarHtml(candidate.novelty_score)}</dd>
+              <dt>${HomezI18n.t("candidates.col_demand")}</dt><dd>${scoreBarHtml(candidate.demand_score)}</dd>
+              <dt>${HomezI18n.t("candidates.col_margin")}</dt><dd>${scoreBarHtml(candidate.margin_score)}</dd>
+              <dt>${HomezI18n.t("candidates.col_risk")}</dt><dd>${scoreBarHtml(candidate.risk_score, { invert: true })}</dd>
+              <dt>${HomezI18n.t("candidate_detail.confidence_label")}</dt><dd>${scoreBarHtml(candidate.confidence)}</dd>
             </dl>
           </div>
 
@@ -6352,8 +6447,8 @@
           <tr class="row-clickable" tabindex="0" data-id="${r.id}">
             <td data-label="${colName}">${escapeHtml(r.product_name)}</td>
             <td data-label="${colMarket}">${escapeHtml(r.market)}</td>
-            <td data-label="${colTrendScore}">${r.trend_score}</td>
-            <td data-label="${colConfidence}">${r.confidence ?? "—"}</td>
+            <td data-label="${colTrendScore}">${scoreBarHtml(r.trend_score)}</td>
+            <td data-label="${colConfidence}">${scoreBarHtml(r.confidence)}</td>
             <td data-label="${colStatus}"><span class="status-tag status-${r.status}">${escapeHtml(candidateStatusLabel(r.status))}</span></td>
           </tr>
         `).join("")}</tbody>
@@ -6398,7 +6493,7 @@
             <td data-label="${colName}">${escapeHtml(r.product_name)}</td>
             <td data-label="${colMarket}">${escapeHtml(r.market)}</td>
             <td data-label="${colReleaseDate}">${r.release_date || "—"}</td>
-            <td data-label="${colNoveltyScore}">${r.novelty_score ?? "—"}</td>
+            <td data-label="${colNoveltyScore}">${scoreBarHtml(r.novelty_score)}</td>
             <td data-label="${colStatus}"><span class="status-tag status-${r.status}">${escapeHtml(candidateStatusLabel(r.status))}</span></td>
           </tr>
         `).join("")}</tbody>
@@ -6473,6 +6568,14 @@
           </dl>
         ` : `<p class="stat-sub">${HomezI18n.t("safety.no_global_limit")}</p>`}
       </div>
+
+      <div class="detail-panel" id="function-modes-panel">
+        <h2>${HomezI18n.t("safety.function_modes_title")}</h2>
+        <p class="stat-sub">${HomezI18n.t("safety.function_modes_intro")}</p>
+        <div id="function-modes-list">
+          <p class="loading-text">${HomezI18n.t("common.loading")}</p>
+        </div>
+      </div>
     `;
 
     el("btn-toggle-estop").addEventListener("click", () => withButtonGuard(el("btn-toggle-estop"), async () => {
@@ -6533,6 +6636,97 @@
         toast(err.message || HomezI18n.t("safety.mode_change_error"), "error");
       }
     }));
+
+    loadFunctionModes();
+  }
+
+  // 2026-09-09 Phase 3 — 회사×기능별 자동화 상태(기존 전역 단일 모드와
+  // 별개). 이 화면은 기능적 최소치만 제공한다 — 표시/필터/모바일
+  // 최적화 같은 편의성 다듬기는 Phase 13(UI 편의성 통합)에서 이어서
+  // 한다.
+  async function loadFunctionModes() {
+    const list = el("function-modes-list");
+    if (!list) return;
+
+    let data;
+    try {
+      data = await apiFetch("/console/api/function-modes");
+    } catch (err) {
+      renderErrorState(list, err);
+      return;
+    }
+
+    if (!data.schema_ready) {
+      renderEmptyState(
+        list,
+        HomezI18n.t("safety.schema_not_ready_title"),
+        data.message || HomezI18n.t("safety.schema_not_ready_default"),
+      );
+      return;
+    }
+
+    list.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>${HomezI18n.t("safety.function_modes_col_function")}</th>
+            <th>${HomezI18n.t("safety.function_modes_col_mode")}</th>
+            <th>${HomezI18n.t("safety.function_modes_col_action")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.functions.map((fn) => `
+            <tr data-function-code="${fn.code}">
+              <td>${escapeHtml(fn.label_ko)}</td>
+              <td>
+                <span class="badge badge-mode-${fn.mode.toLowerCase()}">${escapeHtml(fn.mode_label_ko)}</span>
+                <div class="stat-sub">${escapeHtml(fn.mode_description_ko)}</div>
+                ${fn.reason ? `<div class="stat-sub">${HomezI18n.t("safety.function_modes_reason_prefix")}${escapeHtml(fn.reason)}</div>` : ""}
+                ${fn.set_at ? `<div class="stat-sub">${HomezI18n.t("safety.function_modes_set_at_prefix")}${fmtDate(fn.set_at)}</div>` : ""}
+              </td>
+              <td>
+                <select class="function-mode-select">
+                  ${data.mode_all.map((m) => `<option value="${m}" ${m === fn.mode ? "selected" : ""}>${escapeHtml(data.mode_labels_ko[m])}</option>`).join("")}
+                </select>
+                <button class="btn btn-secondary btn-set-function-mode">${HomezI18n.t("safety.change_mode_btn")}</button>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+
+    list.querySelectorAll("tr[data-function-code]").forEach((tr) => {
+      const code = tr.dataset.functionCode;
+      const select = tr.querySelector(".function-mode-select");
+      const btn = tr.querySelector(".btn-set-function-mode");
+      const current = data.functions.find((fn) => fn.code === code);
+
+      btn.addEventListener("click", () => withButtonGuard(btn, async () => {
+        const newMode = select.value;
+        if (newMode === current.mode) {
+          toast(HomezI18n.t("safety.mode_unchanged"));
+          return;
+        }
+        const { confirmed, value } = await confirmDialog({
+          title: HomezI18n.t("safety.mode_change_confirm_title"),
+          body: HomezI18n.t("safety.mode_change_confirm_body", {
+            from: current.mode_label_ko, to: data.mode_labels_ko[newMode],
+          }),
+        });
+        if (!confirmed) return;
+        try {
+          await apiFetch(`/console/api/function-modes/${encodeURIComponent(code)}`, {
+            method: "POST",
+            body: JSON.stringify({ mode: newMode, reason: value || null }),
+          });
+          toast(HomezI18n.t("safety.mode_change_success"), "success");
+          loadFunctionModes();
+        } catch (err) {
+          toast(err.message || HomezI18n.t("safety.mode_change_error"), "error");
+        }
+      }));
+    });
   }
 
   // --------------------------------------------------
@@ -12989,7 +13183,14 @@
     } else if (settlements && settlements.length) {
       const counts = {};
       settlements.forEach((s) => { counts[s.status] = (counts[s.status] || 0) + 1; });
-      settlementSummaryHtml = Object.entries(counts).map(([k, v]) => `<div>${escapeHtml(k)}: <strong>${v}</strong></div>`).join("");
+      // 2026-09-10 UI 개선 — 채널 정산 화면(UI-9)에서 이미 고친 것과
+      // 같은 결함: 정산 상태가 영문 코드 그대로 노출되고 있었다.
+      // 같은 stl.status.* 키를 재사용한다(이미 검증된 8개 상태 전부
+      // 포함).
+      settlementSummaryHtml = Object.entries(counts).map(([k, v]) => {
+        const label = HomezI18n.t(`stl.status.${String(k).toLowerCase()}`) || k;
+        return `<div>${escapeHtml(label)}: <strong>${v}</strong></div>`;
+      }).join("");
     }
 
     container.innerHTML = `
@@ -13049,6 +13250,184 @@
 
   function statusPillHtml(status) {
     return `<span class="pill ${genericStatusPillClass(status)}">${escapeHtml(String(status || "—"))}</span>`;
+  }
+
+  // 2026-09-10 UI 개선(시안 06 배송 관리 참고) — statusPillHtml()은
+  // 여러 화면이 공유하므로 그대로 두고(번역 키 없는 화면에서 빈
+  // 라벨이 뜨는 회귀를 막기 위해), 라벨 번역이 준비된 화면만 옵트인
+  // 하는 별도 함수를 추가한다. 키가 없거나 빈 문자열이면(HomezI18n.t
+  // fallback) 원문 상태 코드를 그대로 보여준다 — 번역 누락이 빈
+  // 라벨로 이어지지 않는다.
+  function statusPillHtmlLabeled(status, labelKeyPrefix) {
+    const raw = String(status || "—");
+    const translated = status ? HomezI18n.t(`${labelKeyPrefix}${raw.toLowerCase()}`) : "";
+    return `<span class="pill ${genericStatusPillClass(status)}">${escapeHtml(translated || raw)}</span>`;
+  }
+
+  // 진행 단계 표시(status timeline) — 시안 04/06/07(주문·매입/배송/
+  // 취소·반품)이 공통으로 쓰는 단계 도식을 재사용 가능한 형태로
+  // 만든다. steps: [{label, time, state}], state는 done/current/
+  // pending/branch 중 하나.
+  function statusTimelineHtml(steps) {
+    return `
+      <div class="status-timeline">
+        ${steps.map((s) => `
+          <div class="status-timeline-step is-${escapeHtml(s.state)}">
+            <div class="status-timeline-dot">${s.state === "done" ? "✓" : ""}</div>
+            <div class="status-timeline-label">${escapeHtml(s.label)}</div>
+            <div class="status-timeline-time">${s.time ? escapeHtml(s.time) : "—"}</div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  const SHIPMENT_TIMELINE_HAPPY_PATH = ["PENDING", "READY", "SHIPPED", "IN_TRANSIT", "DELIVERED"];
+
+  function buildShipmentTimelineSteps(shipment, events) {
+    // 각 상태에 처음 도달한 시각 — status_events의 new_status를
+    // 순서대로 훑어 처음 매칭된 시각만 쓴다. PENDING은 생성 시점의
+    // 상태라 별도 이벤트가 없을 수 있어 shipment.created_at으로
+    // 대체한다.
+    const reachedAt = {};
+    (events || []).forEach((e) => {
+      if (e.new_status && reachedAt[e.new_status] === undefined) {
+        reachedAt[e.new_status] = e.created_at;
+      }
+    });
+    if (reachedAt.PENDING === undefined) reachedAt.PENDING = shipment.created_at;
+
+    const currentIndex = SHIPMENT_TIMELINE_HAPPY_PATH.indexOf(shipment.status);
+
+    const steps = SHIPMENT_TIMELINE_HAPPY_PATH.map((s, idx) => {
+      let state;
+      if (currentIndex === -1) {
+        // 현재 상태가 정상 경로 밖(취소·반품·교환 등 분기)이다 —
+        // 이미 지나온 단계까지만 done, 나머지는 pending으로 남긴다
+        // (정상 경로로 왜곡해 표시하지 않는다).
+        state = reachedAt[s] !== undefined ? "done" : "pending";
+      } else if (idx < currentIndex) {
+        state = "done";
+      } else if (idx === currentIndex) {
+        // 정상 경로의 마지막 단계(예: DELIVERED)에 도달했다면 "아직
+        // 진행 중"이 아니라 완전히 끝난 것이므로 done(체크)으로
+        // 표시한다 — current(진행 중 표시)는 다음 단계가 실제로
+        // 남아있을 때만 쓴다.
+        state = (idx === SHIPMENT_TIMELINE_HAPPY_PATH.length - 1) ? "done" : "current";
+      } else {
+        state = "pending";
+      }
+      return {
+        label: HomezI18n.t(`ship.status.${s.toLowerCase()}`) || s,
+        time: reachedAt[s] ? fmtDate(reachedAt[s]) : null,
+        state,
+      };
+    });
+
+    if (currentIndex === -1) {
+      // 분기 상태를 마지막 단계로 별도 표시한다.
+      const branchKey = String(shipment.status || "").toLowerCase();
+      steps.push({
+        label: HomezI18n.t(`ship.status.${branchKey}`) || shipment.status,
+        time: reachedAt[shipment.status] ? fmtDate(reachedAt[shipment.status]) : null,
+        state: "branch",
+      });
+    }
+
+    return steps;
+  }
+
+  // 2026-09-10 UI 개선(시안 07 취소·반품 관리 참고) — ReturnOrder는
+  // 각 단계 시각을 이벤트에서 되짚을 필요 없이 리소스 자신에
+  // requested_at/approved_at/received_at/completed_at으로 이미
+  // 갖고 있어 shipment보다 더 단순하게 만들 수 있다.
+  const RETURN_ORDER_TIMELINE_HAPPY_PATH = ["REQUESTED", "APPROVED", "RECEIVED", "COMPLETED"];
+  const RETURN_ORDER_TIMELINE_TIMESTAMP_FIELD = {
+    REQUESTED: "requested_at", APPROVED: "approved_at",
+    RECEIVED: "received_at", COMPLETED: "completed_at",
+  };
+
+  function buildReturnOrderTimelineSteps(ret) {
+    const currentIndex = RETURN_ORDER_TIMELINE_HAPPY_PATH.indexOf(ret.status);
+
+    const steps = RETURN_ORDER_TIMELINE_HAPPY_PATH.map((s, idx) => {
+      const ts = ret[RETURN_ORDER_TIMELINE_TIMESTAMP_FIELD[s]];
+      let state;
+      if (currentIndex === -1) {
+        // REJECTED 등 정상 경로 밖 — 실제 시각 데이터가 있는
+        // 단계까지만 done으로 표시한다(왜곡 방지, ship과 동일 원칙).
+        state = ts ? "done" : "pending";
+      } else if (idx < currentIndex) {
+        state = "done";
+      } else if (idx === currentIndex) {
+        // shipment와 동일한 이유(위 buildShipmentTimelineSteps 주석
+        // 참고) — 마지막 단계(COMPLETED)는 done으로 표시한다.
+        state = (idx === RETURN_ORDER_TIMELINE_HAPPY_PATH.length - 1) ? "done" : "current";
+      } else {
+        state = "pending";
+      }
+      return {
+        label: HomezI18n.t(`ret.status.${s.toLowerCase()}`) || s,
+        time: ts ? fmtDate(ts) : null,
+        state,
+      };
+    });
+
+    if (currentIndex === -1) {
+      const branchKey = String(ret.status || "").toLowerCase();
+      steps.push({
+        label: HomezI18n.t(`ret.status.${branchKey}`) || ret.status,
+        // 거절(REJECTED) 시각은 이 리소스 응답에 별도 필드가 없어
+        // 추측하지 않는다 — 아래 "상태 이력" 테이블에서 정확한
+        // 시각을 확인할 수 있다.
+        time: null,
+        state: "branch",
+      });
+    }
+
+    return steps;
+  }
+
+  // 2026-09-10 UI 개선(시안 07 "환불 확인" 참고) — Refund도
+  // ReturnOrder와 동일하게 자체 타임스탬프 필드(requested_at/
+  // approved_at/executed_at)를 갖는다.
+  const REFUND_TIMELINE_HAPPY_PATH = ["AWAITING_APPROVAL", "APPROVED", "EXECUTED"];
+  const REFUND_TIMELINE_TIMESTAMP_FIELD = {
+    AWAITING_APPROVAL: "requested_at", APPROVED: "approved_at", EXECUTED: "executed_at",
+  };
+
+  function buildRefundTimelineSteps(refund) {
+    const currentIndex = REFUND_TIMELINE_HAPPY_PATH.indexOf(refund.status);
+
+    const steps = REFUND_TIMELINE_HAPPY_PATH.map((s, idx) => {
+      const ts = refund[REFUND_TIMELINE_TIMESTAMP_FIELD[s]];
+      let state;
+      if (currentIndex === -1) {
+        state = ts ? "done" : "pending";
+      } else if (idx < currentIndex) {
+        state = "done";
+      } else if (idx === currentIndex) {
+        state = (idx === REFUND_TIMELINE_HAPPY_PATH.length - 1) ? "done" : "current";
+      } else {
+        state = "pending";
+      }
+      return {
+        label: HomezI18n.t(`refund.status.${s.toLowerCase()}`) || s,
+        time: ts ? fmtDate(ts) : null,
+        state,
+      };
+    });
+
+    if (currentIndex === -1) {
+      const branchKey = String(refund.status || "").toLowerCase();
+      steps.push({
+        label: HomezI18n.t(`refund.status.${branchKey}`) || refund.status,
+        time: null,
+        state: "branch",
+      });
+    }
+
+    return steps;
   }
 
   function simpleEmptyPanel(message, sub) {
@@ -14960,7 +15339,7 @@
             <tr>
               <td data-label="${HomezI18n.t("ship.col_shipment_number")}">${escapeHtml(s.shipment_number)}</td>
               <td data-label="${HomezI18n.t("ship.col_order_id")}">#${s.order_id}</td>
-              <td data-label="${HomezI18n.t("ship.col_status")}">${statusPillHtml(s.status)}</td>
+              <td data-label="${HomezI18n.t("ship.col_status")}">${statusPillHtmlLabeled(s.status, "ship.status.")}</td>
               <td data-label="${HomezI18n.t("ship.col_courier")}">${s.courier ? escapeHtml(s.courier) : "—"}</td>
               <td data-label="${HomezI18n.t("ship.col_shipped_at")}">${s.shipped_at ? fmtDate(s.shipped_at) : "—"}</td>
               <td data-label="${HomezI18n.t("ship.col_delivered_at")}">${s.delivered_at ? fmtDate(s.delivered_at) : "—"}</td>
@@ -15015,11 +15394,16 @@
           <button type="button" class="btn btn-ghost btn-sm" id="ship-detail-close-btn">${HomezI18n.t("ship.close_btn")}</button>
         </div>
         <dl class="kv-list">
-          <dt>${HomezI18n.t("ship.col_status")}</dt><dd>${statusPillHtml(shipment.status)}</dd>
+          <dt>${HomezI18n.t("ship.col_status")}</dt><dd>${statusPillHtmlLabeled(shipment.status, "ship.status.")}</dd>
           <dt>${HomezI18n.t("ship.col_order_id")}</dt><dd>#${shipment.order_id}</dd>
           <dt>${HomezI18n.t("ship.col_courier")}</dt><dd>${shipment.courier ? escapeHtml(shipment.courier) : "—"}</dd>
           <dt>${HomezI18n.t("ord.invoice_number_label")}</dt><dd>${shipment.invoice_number ? escapeHtml(shipment.invoice_number) : "—"}</dd>
         </dl>
+      </div>
+
+      <div class="detail-panel">
+        <h3>${HomezI18n.t("ship.timeline_heading")}</h3>
+        ${statusTimelineHtml(buildShipmentTimelineSteps(shipment, events))}
       </div>
 
       <div class="detail-panel">
@@ -15196,7 +15580,7 @@
               <td data-label="${HomezI18n.t("ret.col_id")}">#${r.id}</td>
               <td data-label="${HomezI18n.t("ret.col_order_id")}">#${r.order_id}</td>
               <td data-label="${HomezI18n.t("ret.col_type")}">${escapeHtml(r.return_type)}</td>
-              <td data-label="${HomezI18n.t("ret.col_status")}">${statusPillHtml(r.status)}</td>
+              <td data-label="${HomezI18n.t("ret.col_status")}">${statusPillHtmlLabeled(r.status, "ret.status.")}</td>
               <td data-label="${HomezI18n.t("ret.col_qty")}">${r.quantity}</td>
               <td data-label="${HomezI18n.t("ret.col_requested_at")}">${fmtDate(r.requested_at)}</td>
               <td data-label="${HomezI18n.t("ret.col_action")}"><button type="button" class="btn btn-ghost btn-sm" id="ret-detail-btn-${r.id}">${HomezI18n.t("ret.detail_btn")}</button></td>
@@ -15252,7 +15636,7 @@
           <button type="button" class="btn btn-ghost btn-sm" id="ret-detail-close-btn">${HomezI18n.t("ret.close_btn")}</button>
         </div>
         <dl class="kv-list">
-          <dt>${HomezI18n.t("ret.col_status")}</dt><dd>${statusPillHtml(ret.status)}</dd>
+          <dt>${HomezI18n.t("ret.col_status")}</dt><dd>${statusPillHtmlLabeled(ret.status, "ret.status.")}</dd>
           <dt>${HomezI18n.t("ret.col_order_id")}</dt><dd>#${ret.order_id}</dd>
           <dt>${HomezI18n.t("ret.col_type")}</dt><dd>${escapeHtml(ret.return_type)}</dd>
           <dt>${HomezI18n.t("ret.col_qty")}</dt><dd>${ret.quantity}</dd>
@@ -15264,6 +15648,11 @@
           <button type="button" class="btn btn-primary btn-sm" id="ret-complete-btn" ${canComplete ? "" : "disabled"}>${HomezI18n.t("ret.complete_btn")}</button>
           <button type="button" class="btn btn-danger btn-sm" id="ret-reject-btn" ${canReject ? "" : "disabled"}>${HomezI18n.t("ret.reject_btn")}</button>
         </div>
+      </div>
+
+      <div class="detail-panel">
+        <h3>${HomezI18n.t("ret.timeline_heading")}</h3>
+        ${statusTimelineHtml(buildReturnOrderTimelineSteps(ret))}
       </div>
 
       <div class="detail-panel">
@@ -15332,6 +15721,1141 @@
   VIEW_LOADERS["return-order"] = loadReturnOrder;
 
   // --------------------------------------------------
+  // 환불 (Refund, Phase 8) — 2026-09-10 UI 개선(UI-8 감사 중 발견,
+  // docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md "UI-8" 절 참고). 백엔드
+  // (app/domains/refund)는 이미 완성·테스트됐지만 이 화면이 생기기
+  // 전까지는 콘솔에서 환불을 승인할 방법이 전혀 없었다. 신규 환불
+  // 등록(생성) 화면은 이번 범위에 포함하지 않는다 — 반품/취소 처리
+  // 흐름에서 실제로 어떻게 Refund가 생성돼야 하는지는 별도 설계가
+  // 필요해, 승인/거부/실행확인(이미 만들어진 요청을 처리하는 것)만
+  // 먼저 다룬다.
+  // --------------------------------------------------
+
+  const rfState = { rows: [], statusFilter: "", detailRefundId: null };
+  const REFUND_STATUS_OPTIONS = ["AWAITING_APPROVAL", "APPROVED", "REJECTED", "EXECUTED"];
+
+  async function loadRefund() {
+    rfState.detailRefundId = null;
+    await rfRenderList();
+  }
+
+  async function rfRenderList() {
+    const container = el("rf-content");
+    container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let rows;
+    try {
+      const qs = rfState.statusFilter ? `?status=${encodeURIComponent(rfState.statusFilter)}` : "";
+      rows = await apiFetch(`/refunds${qs}`);
+    } catch (err) {
+      renderErrorState(container, err);
+      return;
+    }
+    rfState.rows = rows || [];
+
+    const filterHtml = `
+      <div class="detail-panel">
+        <p class="field-hint">${HomezI18n.t("refund.fake_notice")}</p>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("refund.filter.status_label")}</span>
+            ${statusFilterSelectHtml("rf-filter-status", REFUND_STATUS_OPTIONS, rfState.statusFilter)}
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-ghost btn-sm" id="rf-refresh-btn">${HomezI18n.t("refund.refresh_btn")}</button></div>
+        </div>
+      </div>
+    `;
+
+    const tableHtml = rfState.rows.length === 0
+      ? simpleEmptyPanel(HomezI18n.t("refund.empty"), HomezI18n.t("refund.empty_sub"))
+      : `
+        <div class="detail-panel"><div class="table-wrap"><table class="responsive-cards">
+          <thead><tr>
+            <th>${HomezI18n.t("refund.col_id")}</th><th>${HomezI18n.t("refund.col_order_id")}</th>
+            <th>${HomezI18n.t("refund.col_type")}</th><th>${HomezI18n.t("refund.col_status")}</th>
+            <th>${HomezI18n.t("refund.col_amount")}</th><th>${HomezI18n.t("refund.col_requested_at")}</th>
+            <th>${HomezI18n.t("refund.col_action")}</th>
+          </tr></thead>
+          <tbody>${rfState.rows.map((r) => `
+            <tr>
+              <td data-label="${HomezI18n.t("refund.col_id")}">#${r.id}</td>
+              <td data-label="${HomezI18n.t("refund.col_order_id")}">#${r.order_id}</td>
+              <td data-label="${HomezI18n.t("refund.col_type")}">${escapeHtml(HomezI18n.t(`refund.type.${String(r.refund_type).toLowerCase()}`) || r.refund_type)}</td>
+              <td data-label="${HomezI18n.t("refund.col_status")}">${statusPillHtmlLabeled(r.status, "refund.status.")}</td>
+              <td data-label="${HomezI18n.t("refund.col_amount")}">${fmtMoney(r.amount, r.currency)}</td>
+              <td data-label="${HomezI18n.t("refund.col_requested_at")}">${fmtDate(r.requested_at)}</td>
+              <td data-label="${HomezI18n.t("refund.col_action")}"><button type="button" class="btn btn-ghost btn-sm" id="rf-detail-btn-${r.id}">${HomezI18n.t("ret.detail_btn")}</button></td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div></div>
+      `;
+
+    container.innerHTML = `${filterHtml}${tableHtml}<div id="rf-detail-panel"></div>`;
+
+    el("rf-filter-status").addEventListener("change", (ev) => {
+      rfState.statusFilter = ev.target.value;
+      rfRenderList();
+    });
+    el("rf-refresh-btn").addEventListener("click", () => rfRenderList());
+
+    rfState.rows.forEach((r) => {
+      const btn = el(`rf-detail-btn-${r.id}`);
+      if (btn) btn.addEventListener("click", () => rfShowDetail(r.id));
+    });
+
+    if (rfState.detailRefundId) {
+      rfShowDetail(rfState.detailRefundId);
+    }
+  }
+
+  // GET /refunds/{id} 단건 조회 엔드포인트가 없다(백엔드 설계 —
+  // 목록만 제공) — 방금 불러온 목록 캐시에서 찾는다. 승인/거부/
+  // 실행확인 후에는 항상 rfRenderList()로 목록을 다시 불러오므로
+  // 캐시가 오래된 상태로 남지 않는다.
+  function rfShowDetail(refundId) {
+    rfState.detailRefundId = refundId;
+    const panel = el("rf-detail-panel");
+    if (!panel) return;
+
+    const refund = rfState.rows.find((r) => r.id === refundId);
+    if (!refund) {
+      panel.innerHTML = "";
+      return;
+    }
+
+    const canApprove = refund.status === "AWAITING_APPROVAL";
+    const canReject = refund.status === "AWAITING_APPROVAL";
+    const canMarkExecuted = refund.status === "APPROVED";
+
+    panel.innerHTML = `
+      <div class="detail-panel">
+        <div class="view-header">
+          <h2>${HomezI18n.t("refund.detail_heading")} — #${refund.id}</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="rf-detail-close-btn">${HomezI18n.t("refund.close_btn")}</button>
+        </div>
+        <dl class="kv-list">
+          <dt>${HomezI18n.t("refund.col_status")}</dt><dd>${statusPillHtmlLabeled(refund.status, "refund.status.")}</dd>
+          <dt>${HomezI18n.t("refund.col_order_id")}</dt><dd>#${refund.order_id}</dd>
+          <dt>${HomezI18n.t("refund.col_return_order_id")}</dt><dd>${refund.return_order_id ? `#${refund.return_order_id}` : "—"}</dd>
+          <dt>${HomezI18n.t("refund.col_type")}</dt><dd>${escapeHtml(HomezI18n.t(`refund.type.${String(refund.refund_type).toLowerCase()}`) || refund.refund_type)}</dd>
+          <dt>${HomezI18n.t("refund.col_amount")}</dt><dd>${fmtMoney(refund.amount, refund.currency)}</dd>
+          <dt>${HomezI18n.t("refund.col_reason")}</dt><dd>${escapeHtml(refund.reason)}</dd>
+          <dt>${HomezI18n.t("refund.col_requested_by")}</dt><dd>#${refund.requested_by}</dd>
+          <dt>${HomezI18n.t("refund.col_approved_by")}</dt><dd>${refund.approved_by ? `#${refund.approved_by}` : "—"}</dd>
+        </dl>
+        <div class="decision-actions">
+          <button type="button" class="btn btn-primary btn-sm" id="rf-approve-btn" ${canApprove ? "" : "disabled"}>${HomezI18n.t("refund.approve_btn")}</button>
+          <button type="button" class="btn btn-danger btn-sm" id="rf-reject-btn" ${canReject ? "" : "disabled"}>${HomezI18n.t("refund.reject_btn")}</button>
+          <button type="button" class="btn btn-primary btn-sm" id="rf-mark-executed-btn" ${canMarkExecuted ? "" : "disabled"}>${HomezI18n.t("refund.mark_executed_btn")}</button>
+        </div>
+      </div>
+
+      <div class="detail-panel">
+        <h3>${HomezI18n.t("refund.timeline_heading")}</h3>
+        ${statusTimelineHtml(buildRefundTimelineSteps(refund))}
+      </div>
+    `;
+
+    el("rf-detail-close-btn").addEventListener("click", () => {
+      rfState.detailRefundId = null;
+      panel.innerHTML = "";
+    });
+
+    const approveBtn = el("rf-approve-btn");
+    if (approveBtn && !approveBtn.disabled) {
+      approveBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        // 환불 승인은 실제 돈이 나가는 결정이라(app/domains/refund/
+        // router.py 주석 참고) 결제수단 등록과 동일한 민감도로
+        // 취급한다 — 현재 비밀번호 재확인(recent-auth) 필수.
+        const token = await promptRecentAuthToken();
+        if (token === null) return;
+        try {
+          await apiFetch(`/refunds/${refundId}/approve`, {
+            method: "POST",
+            headers: { "X-Recent-Auth-Token": token },
+          });
+          toast(HomezI18n.t("refund.approve_success"), "success");
+          await rfRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    }
+
+    const rejectBtn = el("rf-reject-btn");
+    if (rejectBtn && !rejectBtn.disabled) {
+      rejectBtn.addEventListener("click", async () => {
+        const { confirmed, value } = await confirmDialog({
+          title: HomezI18n.t("refund.reject_confirm_title"),
+          body: HomezI18n.t("refund.reject_confirm_body"),
+          requireReason: true,
+        });
+        if (!confirmed) return;
+        try {
+          await apiFetch(`/refunds/${refundId}/reject`, {
+            method: "POST",
+            body: JSON.stringify({ reason: value }),
+          });
+          toast(HomezI18n.t("refund.reject_success"), "success");
+          await rfRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      });
+    }
+
+    const markExecutedBtn = el("rf-mark-executed-btn");
+    if (markExecutedBtn && !markExecutedBtn.disabled) {
+      markExecutedBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        try {
+          await apiFetch(`/refunds/${refundId}/mark-executed`, { method: "POST" });
+          toast(HomezI18n.t("refund.mark_executed_success"), "success");
+          await rfRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    }
+  }
+
+  VIEW_LOADERS["refund"] = loadRefund;
+
+  // --------------------------------------------------
+  // 결제 수단 (Payment, Phase 7) — 2026-09-10 UI 개선(UI-6 감사 중
+  // 발견, docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md "UI-6" 절 참고).
+  // Refund와 동일한 이유로 화면이 없었다. raw_details(카드·계좌
+  // 원문)는 백엔드가 애초에 저장하지 않으므로(app/domains/payment/
+  // schema.py 주석 참고) 이 화면은 실제 카드·계좌번호 입력 필드를
+  // 두지 않는다 — 등록 폼은 종류·이름만 받는다.
+  // --------------------------------------------------
+
+  const PAY_METHOD_TYPES = ["CARD", "PAYPAL", "BANK_TRANSFER", "VIRTUAL_ACCOUNT"];
+
+  async function loadPayment() {
+    const container = el("pay-content");
+    container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let methods, limit;
+    try {
+      [methods, limit] = await Promise.all([
+        apiFetch("/payments/methods?include_inactive=true"),
+        apiFetch("/payments/auto-limit"),
+      ]);
+    } catch (err) {
+      renderErrorState(container, err);
+      return;
+    }
+
+    const methodTypeOptionsHtml = PAY_METHOD_TYPES.map((t) => `<option value="${t}">${escapeHtml(HomezI18n.t(`pay.type.${t.toLowerCase()}`))}</option>`).join("");
+
+    const methodsListHtml = (!methods || methods.length === 0)
+      ? simpleEmptyPanel(HomezI18n.t("pay.empty"), HomezI18n.t("pay.empty_sub"))
+      : `
+        <div class="detail-panel"><div class="table-wrap"><table class="responsive-cards">
+          <thead><tr>
+            <th>${HomezI18n.t("pay.col_type")}</th><th>${HomezI18n.t("pay.col_display_name")}</th>
+            <th>${HomezI18n.t("pay.col_default")}</th><th>${HomezI18n.t("pay.col_active")}</th>
+            <th>${HomezI18n.t("pay.col_created_at")}</th><th>${HomezI18n.t("pay.col_action")}</th>
+          </tr></thead>
+          <tbody>${methods.map((m) => `
+            <tr>
+              <td data-label="${HomezI18n.t("pay.col_type")}">${escapeHtml(HomezI18n.t(`pay.type.${String(m.method_type).toLowerCase()}`) || m.method_type)}</td>
+              <td data-label="${HomezI18n.t("pay.col_display_name")}">${escapeHtml(m.display_name)}</td>
+              <td data-label="${HomezI18n.t("pay.col_default")}">${m.is_default ? HomezI18n.t("common.yes") : HomezI18n.t("common.no")}</td>
+              <td data-label="${HomezI18n.t("pay.col_active")}"><span class="pill ${m.active ? "ok" : "neutral"}">${HomezI18n.t(m.active ? "pay.status.active" : "pay.status.inactive")}</span></td>
+              <td data-label="${HomezI18n.t("pay.col_created_at")}">${fmtDate(m.created_at)}</td>
+              <td data-label="${HomezI18n.t("pay.col_action")}">
+                ${m.active ? `
+                  ${!m.is_default ? `<button type="button" class="btn btn-ghost btn-sm" id="pay-default-${m.id}">${HomezI18n.t("pay.set_default_btn")}</button>` : ""}
+                  <button type="button" class="btn btn-ghost btn-sm" id="pay-deactivate-${m.id}">${HomezI18n.t("pay.deactivate_btn")}</button>
+                ` : "—"}
+              </td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div></div>
+      `;
+
+    container.innerHTML = `
+      <div class="detail-panel">
+        <p class="field-hint">${HomezI18n.t("pay.fake_notice")}</p>
+        <p class="field-hint">${HomezI18n.t("pay.automation_mode_hint")}</p>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("pay.methods_heading")}</h2>
+      </div>
+      ${methodsListHtml}
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("pay.register_heading")}</h2>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pay.type_label")}</span>
+            <select id="pay-register-type">${methodTypeOptionsHtml}</select>
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pay.display_name_label")}</span>
+            <input type="text" id="pay-register-display-name" placeholder="${escapeHtml(HomezI18n.t("pay.display_name_placeholder"))}" maxlength="100">
+          </label>
+          <label class="field">
+            <span class="field-label">&nbsp;</span>
+            <span><input type="checkbox" id="pay-register-make-default"> ${HomezI18n.t("pay.make_default_label")}</span>
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="pay-register-submit-btn">${HomezI18n.t("pay.register_submit")}</button></div>
+        </div>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("pay.auto_limit_heading")}</h2>
+        <p class="field-hint">${HomezI18n.t("pay.daily_limit_not_enforced_notice")}</p>
+        <h3>${HomezI18n.t("pay.current_limit_heading")}</h3>
+        ${limit ? `
+          <dl class="kv-list">
+            <dt>${HomezI18n.t("pay.per_transaction_limit_label")}</dt><dd>${fmtMoney(limit.per_transaction_limit_amount, limit.currency)}</dd>
+            <dt>${HomezI18n.t("pay.daily_limit_label")}</dt><dd>${fmtMoney(limit.daily_limit_amount, limit.currency)}</dd>
+          </dl>
+        ` : `<p class="stat-sub">${HomezI18n.t("pay.no_limit_set")}</p>`}
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pay.per_transaction_limit_label")}</span>
+            <input type="number" min="0" step="1" id="pay-limit-per-transaction" value="${limit ? limit.per_transaction_limit_amount : ""}">
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pay.daily_limit_label")}</span>
+            <input type="number" min="0" step="1" id="pay-limit-daily" value="${limit ? limit.daily_limit_amount : ""}">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="pay-limit-save-btn">${HomezI18n.t("pay.auto_limit_save_submit")}</button></div>
+        </div>
+      </div>
+    `;
+
+    methods.forEach((m) => {
+      const defaultBtn = el(`pay-default-${m.id}`);
+      if (defaultBtn) {
+        defaultBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+          try {
+            await apiFetch(`/payments/methods/${m.id}/set-default`, { method: "POST" });
+            toast(HomezI18n.t("pay.set_default_success"), "success");
+            await loadPayment();
+          } catch (err) {
+            toast(err.message || "", "error");
+          }
+        }));
+      }
+      const deactivateBtn = el(`pay-deactivate-${m.id}`);
+      if (deactivateBtn) {
+        deactivateBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+          const token = await promptRecentAuthToken();
+          if (token === null) return;
+          try {
+            await apiFetch(`/payments/methods/${m.id}/deactivate`, {
+              method: "POST",
+              headers: { "X-Recent-Auth-Token": token },
+            });
+            toast(HomezI18n.t("pay.deactivate_success"), "success");
+            await loadPayment();
+          } catch (err) {
+            toast(err.message || "", "error");
+          }
+        }));
+      }
+    });
+
+    el("pay-register-submit-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const displayName = el("pay-register-display-name").value.trim();
+      if (!displayName) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      const token = await promptRecentAuthToken();
+      if (token === null) return;
+      try {
+        await apiFetch("/payments/methods", {
+          method: "POST",
+          headers: { "X-Recent-Auth-Token": token },
+          body: JSON.stringify({
+            method_type: el("pay-register-type").value,
+            display_name: displayName,
+            raw_details: {},
+            make_default: el("pay-register-make-default").checked,
+          }),
+        });
+        toast(HomezI18n.t("pay.register_success"), "success");
+        await loadPayment();
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+
+    el("pay-limit-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const perTx = Number(el("pay-limit-per-transaction").value);
+      const daily = Number(el("pay-limit-daily").value);
+      if (!perTx || !daily || perTx <= 0 || daily <= 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      const token = await promptRecentAuthToken();
+      if (token === null) return;
+      try {
+        await apiFetch("/payments/auto-limit", {
+          method: "PUT",
+          headers: { "X-Recent-Auth-Token": token },
+          body: JSON.stringify({
+            per_transaction_limit_amount: perTx,
+            daily_limit_amount: daily,
+            currency: "KRW",
+          }),
+        });
+        toast(HomezI18n.t("pay.auto_limit_save_success"), "success");
+        await loadPayment();
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+  }
+
+  VIEW_LOADERS["payment"] = loadPayment;
+
+  // --------------------------------------------------
+  // 환율 관리 (Currency, Phase 9) — 2026-09-10 UI 개선(시스템 차원
+  // 발견, docs/HOMEZ_V7_UI_IMPLEMENTATION_AUDIT.md "4. 시스템 차원
+  // 발견" 절). 실제 외부 환율 API 연동이 없고(사용자가 직접 확인한
+  // 값을 기록), 허용률 초과 판정 로직도 아직 실제 매입 발주 흐름에
+  // 연결되지 않았다 — 둘 다 화면에 정직하게 고지한다.
+  // --------------------------------------------------
+
+  const CURR_KNOWN_CURRENCIES = ["KRW", "USD", "CNY", "JPY", "EUR"];
+
+  async function loadCurrency() {
+    const container = el("curr-content");
+    container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let tolerance;
+    try {
+      tolerance = await apiFetch("/currency/tolerance");
+    } catch (err) {
+      renderErrorState(container, err);
+      return;
+    }
+
+    const currencyOptionsHtml = (selected) => CURR_KNOWN_CURRENCIES.map((c) => `<option value="${c}" ${c === selected ? "selected" : ""}>${c}</option>`).join("");
+
+    container.innerHTML = `
+      <div class="detail-panel">
+        <p class="field-hint">${HomezI18n.t("curr.fake_notice")}</p>
+        <p class="field-hint">${HomezI18n.t("curr.tolerance_not_wired_notice")}</p>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("curr.record_heading")}</h2>
+        <p class="field-hint">${HomezI18n.t("curr.rate_hint")}</p>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("curr.base_currency_label")}</span>
+            <select id="curr-record-base">${currencyOptionsHtml("USD")}</select>
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("curr.quote_currency_label")}</span>
+            <select id="curr-record-quote">${currencyOptionsHtml("KRW")}</select>
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("curr.rate_label")}</span>
+            <input type="number" min="0" step="0.0001" id="curr-record-rate">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="curr-record-submit-btn">${HomezI18n.t("curr.record_submit")}</button></div>
+        </div>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("curr.lookup_heading")}</h2>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("curr.base_currency_label")}</span>
+            <select id="curr-lookup-base">${currencyOptionsHtml("USD")}</select>
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("curr.quote_currency_label")}</span>
+            <select id="curr-lookup-quote">${currencyOptionsHtml("KRW")}</select>
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-ghost btn-sm" id="curr-lookup-submit-btn">${HomezI18n.t("curr.lookup_submit")}</button></div>
+        </div>
+        <div id="curr-lookup-result"></div>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("curr.tolerance_heading")}</h2>
+        <dl class="kv-list">
+          <dt>${HomezI18n.t("curr.current_tolerance_label")}</dt><dd>${tolerance.tolerance_percent}%</dd>
+        </dl>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("curr.new_tolerance_label")}</span>
+            <input type="number" min="0.1" step="0.1" id="curr-tolerance-input" value="${tolerance.tolerance_percent}">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="curr-tolerance-save-btn">${HomezI18n.t("curr.tolerance_save_submit")}</button></div>
+        </div>
+      </div>
+    `;
+
+    el("curr-record-submit-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const rate = Number(el("curr-record-rate").value);
+      if (!rate || rate <= 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      try {
+        await apiFetch("/currency/rates", {
+          method: "POST",
+          body: JSON.stringify({
+            base_currency: el("curr-record-base").value,
+            quote_currency: el("curr-record-quote").value,
+            rate,
+          }),
+        });
+        toast(HomezI18n.t("curr.record_success"), "success");
+        el("curr-record-rate").value = "";
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+
+    el("curr-lookup-submit-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const base = el("curr-lookup-base").value;
+      const quote = el("curr-lookup-quote").value;
+      const resultEl = el("curr-lookup-result");
+      resultEl.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        const rate = await apiFetch(`/currency/rates/latest?base_currency=${encodeURIComponent(base)}&quote_currency=${encodeURIComponent(quote)}`);
+        if (!rate) {
+          resultEl.innerHTML = `<p class="stat-sub">${HomezI18n.t("curr.lookup_not_found")}</p>`;
+          return;
+        }
+        resultEl.innerHTML = `
+          <dl class="kv-list">
+            <dt>${HomezI18n.t("curr.col_rate")}</dt><dd>1 ${escapeHtml(rate.base_currency)} = ${rate.rate} ${escapeHtml(rate.quote_currency)}</dd>
+            <dt>${HomezI18n.t("curr.col_source")}</dt><dd>${escapeHtml(rate.source)}</dd>
+            <dt>${HomezI18n.t("curr.col_recorded_at")}</dt><dd>${fmtDate(rate.recorded_at)}</dd>
+          </dl>
+        `;
+      } catch (err) {
+        renderErrorState(resultEl, err);
+      }
+    }));
+
+    el("curr-tolerance-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const value = Number(el("curr-tolerance-input").value);
+      if (!value || value <= 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      try {
+        await apiFetch("/currency/tolerance", {
+          method: "PUT",
+          body: JSON.stringify({ tolerance_percent: value }),
+        });
+        toast(HomezI18n.t("curr.tolerance_save_success"), "success");
+        await loadCurrency();
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+  }
+
+  VIEW_LOADERS["currency"] = loadCurrency;
+
+  // --------------------------------------------------
+  // 공급처 능력 (SupplierCapability, Phase 9) — 2026-09-10 UI
+  // 개선(시스템 차원 발견). API가 공급처 1곳 단위(`/suppliers/
+  // {id}/capability/*`)라 전체 목록 화면이 아니라 ID 조회 방식으로
+  // 만든다(Currency 화면의 "조회" 패턴과 동일). "미확인"은 절대
+  // 추측하지 않는다 — 기본값 UNKNOWN을 그대로 노출한다.
+  // --------------------------------------------------
+
+  const SPC_SUPPORT_OPTIONS = ["SUPPORTED", "NOT_SUPPORTED", "UNKNOWN"];
+  const SPC_FLAGS = [
+    "PRODUCT_INFO", "OPTION_INFO", "PRICE_INFO", "STOCK_INFO",
+    "SHIPPING_FEE_INFO", "SHIPPING_DAYS_INFO", "ORDER_PLACEMENT",
+    "CANCELABILITY",
+  ];
+
+  let spcCurrentSupplierId = null;
+
+  async function loadSupplierCapability() {
+    const container = el("spc-content");
+    container.innerHTML = `
+      <div class="detail-panel">
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("spc.lookup_label")}</span>
+            <input type="number" min="1" id="spc-lookup-id" placeholder="${escapeHtml(HomezI18n.t("spc.lookup_placeholder"))}">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="spc-lookup-submit-btn">${HomezI18n.t("spc.lookup_submit")}</button></div>
+        </div>
+      </div>
+      <div id="spc-detail-panel"></div>
+    `;
+
+    el("spc-lookup-submit-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const supplierId = Number(el("spc-lookup-id").value);
+      if (!supplierId || supplierId <= 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      await spcShowSupplier(supplierId);
+    }));
+
+    if (spcCurrentSupplierId) {
+      el("spc-lookup-id").value = spcCurrentSupplierId;
+      await spcShowSupplier(spcCurrentSupplierId);
+    }
+  }
+
+  async function spcShowSupplier(supplierId) {
+    spcCurrentSupplierId = supplierId;
+    const panel = el("spc-detail-panel");
+    panel.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let profile, matrix;
+    try {
+      [profile, matrix] = await Promise.all([
+        apiFetch(`/suppliers/${supplierId}/capability/profile`),
+        apiFetch(`/suppliers/${supplierId}/capability/matrix`),
+      ]);
+    } catch (err) {
+      renderErrorState(panel, err);
+      return;
+    }
+
+    const currencyOptionsHtml = CURR_KNOWN_CURRENCIES.map((c) => `<option value="${c}" ${c === profile.default_currency ? "selected" : ""}>${c}</option>`).join("");
+
+    panel.innerHTML = `
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("spc.profile_heading")} — #${supplierId}</h2>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("spc.is_international_label")}</span>
+            <span><input type="checkbox" id="spc-profile-international" ${profile.is_international ? "checked" : ""}></span>
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("spc.country_code_label")}</span>
+            <input type="text" id="spc-profile-country" maxlength="2" placeholder="${escapeHtml(HomezI18n.t("spc.country_code_placeholder"))}" value="${profile.country_code ? escapeHtml(profile.country_code) : ""}">
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("spc.default_currency_label")}</span>
+            <select id="spc-profile-currency">${currencyOptionsHtml}</select>
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("spc.consignment_direct_label")}</span>
+            <span><input type="checkbox" id="spc-profile-consignment" ${profile.consignment_direct_to_customer ? "checked" : ""}></span>
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="spc-profile-save-btn">${HomezI18n.t("spc.profile_save_submit")}</button></div>
+        </div>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("spc.matrix_heading")}</h2>
+        <div class="table-wrap"><table class="responsive-cards">
+          <thead><tr>
+            <th>${HomezI18n.t("spc.col_flag")}</th><th>${HomezI18n.t("spc.col_support")}</th>
+            <th>${HomezI18n.t("spc.col_note")}</th><th>${HomezI18n.t("spc.col_action")}</th>
+          </tr></thead>
+          <tbody>${SPC_FLAGS.map((flag) => {
+            const current = matrix.capabilities[flag] || {};
+            const support = current.support || "UNKNOWN";
+            const note = current.note || "";
+            return `
+              <tr>
+                <td data-label="${HomezI18n.t("spc.col_flag")}">${escapeHtml(HomezI18n.t(`spc.flag.${flag.toLowerCase()}`) || flag)}</td>
+                <td data-label="${HomezI18n.t("spc.col_support")}">
+                  <select id="spc-support-${flag}">${SPC_SUPPORT_OPTIONS.map((s) => `<option value="${s}" ${s === support ? "selected" : ""}>${escapeHtml(HomezI18n.t(`spc.support.${s.toLowerCase()}`))}</option>`).join("")}</select>
+                </td>
+                <td data-label="${HomezI18n.t("spc.col_note")}"><input type="text" id="spc-note-${flag}" maxlength="500" value="${escapeHtml(note)}"></td>
+                <td data-label="${HomezI18n.t("spc.col_action")}"><button type="button" class="btn btn-ghost btn-sm" id="spc-save-${flag}">${HomezI18n.t("spc.save_row_btn")}</button></td>
+              </tr>
+            `;
+          }).join("")}</tbody>
+        </table></div>
+      </div>
+    `;
+
+    el("spc-profile-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      try {
+        await apiFetch(`/suppliers/${supplierId}/capability/profile`, {
+          method: "PUT",
+          body: JSON.stringify({
+            is_international: el("spc-profile-international").checked,
+            country_code: el("spc-profile-country").value.trim() || null,
+            default_currency: el("spc-profile-currency").value,
+            consignment_direct_to_customer: el("spc-profile-consignment").checked,
+          }),
+        });
+        toast(HomezI18n.t("spc.profile_save_success"), "success");
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+
+    SPC_FLAGS.forEach((flag) => {
+      el(`spc-save-${flag}`).addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        try {
+          await apiFetch(`/suppliers/${supplierId}/capability/matrix`, {
+            method: "PUT",
+            body: JSON.stringify({
+              capability: flag,
+              support: el(`spc-support-${flag}`).value,
+              note: el(`spc-note-${flag}`).value.trim() || null,
+            }),
+          });
+          toast(HomezI18n.t("spc.save_row_success"), "success");
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    });
+  }
+
+  VIEW_LOADERS["supplier-capability"] = loadSupplierCapability;
+
+  // --------------------------------------------------
+  // 가격·재고 안전 설정 (PriceStockSafety, Phase 10) — 2026-09-10
+  // UI 개선(시스템 차원 발견). 두 가지 미연결 사실을 화면에 고지한다
+  // (app/domains/price_stock_safety/service.py 모듈 docstring 참고):
+  // 가상재고 확인은 수동 입력값 검사 도구일 뿐 판매채널을 자동으로
+  // 읽지 않고, 가격 검토주기는 저장만 되고 스케줄러에 연결되지
+  // 않았다.
+  // --------------------------------------------------
+
+  async function loadPriceStockSafety() {
+    const container = el("pss-content");
+    container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let threshold, reviewCycle;
+    try {
+      [threshold, reviewCycle] = await Promise.all([
+        apiFetch("/price-stock-safety/virtual-stock-threshold"),
+        apiFetch("/price-stock-safety/review-cycle"),
+      ]);
+    } catch (err) {
+      renderErrorState(container, err);
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("pss.threshold_heading")}</h2>
+        <p class="field-hint">${HomezI18n.t("pss.threshold_not_wired_notice")}</p>
+        <dl class="kv-list">
+          <dt>${HomezI18n.t("pss.current_threshold_label")}</dt>
+          <dd>${threshold.threshold_quantity !== null && threshold.threshold_quantity !== undefined ? threshold.threshold_quantity : HomezI18n.t("pss.no_threshold_set")}</dd>
+        </dl>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pss.new_threshold_label")}</span>
+            <input type="number" min="0" step="1" id="pss-threshold-input" value="${threshold.threshold_quantity ?? ""}">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="pss-threshold-save-btn">${HomezI18n.t("pss.threshold_save_submit")}</button></div>
+        </div>
+      </div>
+
+      <div class="detail-panel">
+        <h3>${HomezI18n.t("pss.check_heading")}</h3>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pss.displayed_stock_label")}</span>
+            <input type="number" min="0" step="1" id="pss-check-stock-input">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-ghost btn-sm" id="pss-check-submit-btn">${HomezI18n.t("pss.check_submit")}</button></div>
+        </div>
+        <div id="pss-check-result"></div>
+      </div>
+
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("pss.review_cycle_heading")}</h2>
+        <p class="field-hint">${HomezI18n.t("pss.review_cycle_not_wired_notice")}</p>
+        <dl class="kv-list">
+          <dt>${HomezI18n.t("pss.current_review_cycle_label")}</dt>
+          <dd>${reviewCycle.review_cycle_days}${HomezI18n.t("pss.review_cycle_days_suffix")}</dd>
+        </dl>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("pss.new_review_cycle_label")}</span>
+            <input type="number" min="1" step="1" id="pss-review-cycle-input" value="${reviewCycle.review_cycle_days}">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="pss-review-cycle-save-btn">${HomezI18n.t("pss.review_cycle_save_submit")}</button></div>
+        </div>
+      </div>
+    `;
+
+    el("pss-threshold-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const value = el("pss-threshold-input").value;
+      if (value === "" || Number(value) < 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      try {
+        await apiFetch("/price-stock-safety/virtual-stock-threshold", {
+          method: "PUT",
+          body: JSON.stringify({ threshold_quantity: Number(value) }),
+        });
+        toast(HomezI18n.t("pss.threshold_save_success"), "success");
+        await loadPriceStockSafety();
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+
+    el("pss-check-submit-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const stockValue = el("pss-check-stock-input").value;
+      const resultEl = el("pss-check-result");
+      if (stockValue === "" || Number(stockValue) < 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      resultEl.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        const result = await apiFetch("/price-stock-safety/virtual-stock-check", {
+          method: "POST",
+          body: JSON.stringify({ displayed_stock: Number(stockValue) }),
+        });
+        resultEl.innerHTML = `<p class="${result.allowed ? "risk-low" : "risk-high"}">${result.allowed ? HomezI18n.t("pss.check_allowed") : `${HomezI18n.t("pss.check_blocked")} — ${escapeHtml(result.reason || "")}`}</p>`;
+      } catch (err) {
+        renderErrorState(resultEl, err);
+      }
+    }));
+
+    el("pss-review-cycle-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const value = el("pss-review-cycle-input").value;
+      if (!value || Number(value) < 1) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      try {
+        await apiFetch("/price-stock-safety/review-cycle", {
+          method: "PUT",
+          body: JSON.stringify({ review_cycle_days: Number(value) }),
+        });
+        toast(HomezI18n.t("pss.review_cycle_save_success"), "success");
+        await loadPriceStockSafety();
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+  }
+
+  VIEW_LOADERS["price-stock-safety"] = loadPriceStockSafety;
+
+  // --------------------------------------------------
+  // AI 학습 기반 (AiLearning, Phase 12) — 2026-09-10 UI 개선(시스템
+  // 차원 발견). ModelCandidateStatus 자신이 "APPROVED조차 실제
+  // 라이브 적용을 의미하지 않는다"고 명시한다(app/domains/
+  // ai_learning/constants.py 참고) — 라벨에 그대로 반영한다. 평가결과
+  // 기록/데이터셋 export는 Decision AI 화면과의 연결 설계가 필요해
+  // 이번 범위에 포함하지 않았다(docs/HOMEZ_V7_UI_IMPLEMENTATION_
+  // AUDIT.md 참고) — 모델 후보 심사 + 학습 데이터 준비도 확인만.
+  // --------------------------------------------------
+
+  const ailState = { rows: [], statusFilter: "", detailCandidateId: null };
+  const AIL_STATUS_OPTIONS = ["DRAFT", "OFFLINE_EVALUATED", "REGRESSION_COMPARED", "APPROVED", "REJECTED"];
+
+  async function loadAiLearning() {
+    ailState.detailCandidateId = null;
+    await ailRenderList();
+  }
+
+  async function ailRenderList() {
+    const container = el("ail-content");
+    container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let rows;
+    try {
+      const qs = ailState.statusFilter ? `?status=${encodeURIComponent(ailState.statusFilter)}` : "";
+      rows = await apiFetch(`/ai-learning/model-candidates${qs}`);
+    } catch (err) {
+      renderErrorState(container, err);
+      return;
+    }
+    ailState.rows = rows || [];
+
+    const filterHtml = `
+      <div class="detail-panel">
+        <p class="field-hint">${HomezI18n.t("ail.fake_notice")}</p>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("ail.filter.status_label")}</span>
+            ${statusFilterSelectHtml("ail-filter-status", AIL_STATUS_OPTIONS, ailState.statusFilter)}
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-ghost btn-sm" id="ail-refresh-btn">${HomezI18n.t("common.refresh")}</button></div>
+        </div>
+      </div>
+    `;
+
+    const listHtml = ailState.rows.length === 0
+      ? simpleEmptyPanel(HomezI18n.t("ail.empty"), HomezI18n.t("ail.empty_sub"))
+      : `
+        <div class="detail-panel"><div class="table-wrap"><table class="responsive-cards">
+          <thead><tr>
+            <th>${HomezI18n.t("ail.col_id")}</th><th>${HomezI18n.t("ail.col_name")}</th>
+            <th>${HomezI18n.t("ail.col_version")}</th><th>${HomezI18n.t("ail.col_status")}</th>
+            <th>${HomezI18n.t("ail.col_created_at")}</th><th>${HomezI18n.t("ail.col_action")}</th>
+          </tr></thead>
+          <tbody>${ailState.rows.map((c) => `
+            <tr>
+              <td data-label="${HomezI18n.t("ail.col_id")}">#${c.id}</td>
+              <td data-label="${HomezI18n.t("ail.col_name")}">${escapeHtml(c.name)}</td>
+              <td data-label="${HomezI18n.t("ail.col_version")}">${escapeHtml(c.version)}</td>
+              <td data-label="${HomezI18n.t("ail.col_status")}">${statusPillHtmlLabeled(c.status, "ail.status.")}</td>
+              <td data-label="${HomezI18n.t("ail.col_created_at")}">${fmtDate(c.created_at)}</td>
+              <td data-label="${HomezI18n.t("ail.col_action")}"><button type="button" class="btn btn-ghost btn-sm" id="ail-detail-btn-${c.id}">${HomezI18n.t("ret.detail_btn")}</button></td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div></div>
+      `;
+
+    const createHtml = `
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("ail.create_heading")}</h2>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("ail.name_label")}</span>
+            <input type="text" id="ail-create-name" maxlength="200">
+          </label>
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("ail.version_label")}</span>
+            <input type="text" id="ail-create-version" maxlength="50">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="ail-create-submit-btn">${HomezI18n.t("ail.create_submit")}</button></div>
+        </div>
+      </div>
+    `;
+
+    const readinessHtml = `
+      <div class="detail-panel">
+        <h2>${HomezI18n.t("ail.readiness_heading")}</h2>
+        <div class="ls-filter-row">
+          <label class="field">
+            <span class="field-label">${HomezI18n.t("ail.total_completed_orders_label")}</span>
+            <input type="number" min="0" step="1" id="ail-readiness-orders">
+          </label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-ghost btn-sm" id="ail-readiness-check-btn">${HomezI18n.t("ail.readiness_check_submit")}</button></div>
+        </div>
+        <div id="ail-readiness-result"></div>
+      </div>
+    `;
+
+    container.innerHTML = `${filterHtml}${listHtml}${createHtml}${readinessHtml}<div id="ail-detail-panel"></div>`;
+
+    el("ail-filter-status").addEventListener("change", (ev) => {
+      ailState.statusFilter = ev.target.value;
+      ailRenderList();
+    });
+    el("ail-refresh-btn").addEventListener("click", () => ailRenderList());
+
+    ailState.rows.forEach((c) => {
+      const btn = el(`ail-detail-btn-${c.id}`);
+      if (btn) btn.addEventListener("click", () => ailShowDetail(c.id));
+    });
+
+    el("ail-create-submit-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const name = el("ail-create-name").value.trim();
+      const version = el("ail-create-version").value.trim();
+      if (!name || !version) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      try {
+        await apiFetch("/ai-learning/model-candidates", {
+          method: "POST",
+          body: JSON.stringify({ name, version }),
+        });
+        toast(HomezI18n.t("ail.create_success"), "success");
+        await ailRenderList();
+      } catch (err) {
+        toast(err.message || "", "error");
+      }
+    }));
+
+    el("ail-readiness-check-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const total = el("ail-readiness-orders").value;
+      const resultEl = el("ail-readiness-result");
+      if (total === "" || Number(total) < 0) {
+        toast(HomezI18n.t("inv.quantity_required_error"), "error");
+        return;
+      }
+      resultEl.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        const result = await apiFetch(`/ai-learning/dataset/readiness?total_completed_orders=${encodeURIComponent(total)}`);
+        resultEl.innerHTML = `
+          <dl class="kv-list">
+            <dt>${HomezI18n.t("ail.filter.status_label")}</dt><dd class="${result.ready ? "risk-low" : "risk-high"}">${result.ready ? HomezI18n.t("ail.readiness_ready") : HomezI18n.t("ail.readiness_not_ready")}${result.reason ? ` — ${escapeHtml(result.reason)}` : ""}</dd>
+            <dt>${HomezI18n.t("ail.readiness_available_label")}</dt><dd>${result.available}</dd>
+            <dt>${HomezI18n.t("ail.readiness_required_label")}</dt><dd>${result.required}</dd>
+          </dl>
+        `;
+      } catch (err) {
+        renderErrorState(resultEl, err);
+      }
+    }));
+
+    if (ailState.detailCandidateId) {
+      await ailShowDetail(ailState.detailCandidateId);
+    }
+  }
+
+  async function ailShowDetail(candidateId) {
+    ailState.detailCandidateId = candidateId;
+    const panel = el("ail-detail-panel");
+    if (!panel) return;
+
+    const c = ailState.rows.find((r) => r.id === candidateId);
+    if (!c) {
+      panel.innerHTML = "";
+      return;
+    }
+
+    const canOfflineEval = c.status === "DRAFT";
+    const canRegressionCompare = c.status === "OFFLINE_EVALUATED";
+    const canApprove = c.status === "REGRESSION_COMPARED";
+    const canReject = ["DRAFT", "OFFLINE_EVALUATED", "REGRESSION_COMPARED"].includes(c.status);
+
+    panel.innerHTML = `
+      <div class="detail-panel">
+        <div class="view-header">
+          <h2>${HomezI18n.t("ail.detail_heading")} — #${c.id}</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="ail-detail-close-btn">${HomezI18n.t("ail.close_btn")}</button>
+        </div>
+        <dl class="kv-list">
+          <dt>${HomezI18n.t("ail.col_name")}</dt><dd>${escapeHtml(c.name)}</dd>
+          <dt>${HomezI18n.t("ail.col_version")}</dt><dd>${escapeHtml(c.version)}</dd>
+          <dt>${HomezI18n.t("ail.col_status")}</dt><dd>${statusPillHtmlLabeled(c.status, "ail.status.")}</dd>
+          <dt>${HomezI18n.t("ail.col_sample_size")}</dt><dd>${c.sample_size_used ?? "—"}</dd>
+          <dt>${HomezI18n.t("ail.col_offline_summary")}</dt><dd>${c.offline_eval_summary ? escapeHtml(c.offline_eval_summary) : "—"}</dd>
+          <dt>${HomezI18n.t("ail.col_regression_summary")}</dt><dd>${c.regression_comparison_summary ? escapeHtml(c.regression_comparison_summary) : "—"}</dd>
+          <dt>${HomezI18n.t("ail.col_approved_by")}</dt><dd>${c.approved_by ? `#${c.approved_by}` : "—"}</dd>
+          <dt>${HomezI18n.t("ail.col_approved_at")}</dt><dd>${c.approved_at ? fmtDate(c.approved_at) : "—"}</dd>
+        </dl>
+      </div>
+
+      ${canOfflineEval ? `
+      <div class="detail-panel">
+        <h3>${HomezI18n.t("ail.offline_eval_heading")}</h3>
+        <div class="ls-filter-row">
+          <label class="field"><span class="field-label">${HomezI18n.t("ail.offline_summary_label")}</span><input type="text" id="ail-offline-summary" maxlength="1000"></label>
+          <label class="field"><span class="field-label">${HomezI18n.t("ail.sample_size_label")}</span><input type="number" min="0" step="1" id="ail-offline-sample-size"></label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="ail-offline-submit-btn">${HomezI18n.t("ail.offline_eval_submit")}</button></div>
+        </div>
+      </div>
+      ` : ""}
+
+      ${canRegressionCompare ? `
+      <div class="detail-panel">
+        <h3>${HomezI18n.t("ail.regression_heading")}</h3>
+        <div class="ls-filter-row">
+          <label class="field"><span class="field-label">${HomezI18n.t("ail.regression_summary_label")}</span><input type="text" id="ail-regression-summary" maxlength="1000"></label>
+          <div class="ls-filter-actions"><button type="button" class="btn btn-primary btn-sm" id="ail-regression-submit-btn">${HomezI18n.t("ail.regression_submit")}</button></div>
+        </div>
+      </div>
+      ` : ""}
+
+      <div class="detail-panel">
+        <div class="decision-actions">
+          <button type="button" class="btn btn-primary btn-sm" id="ail-approve-btn" ${canApprove ? "" : "disabled"}>${HomezI18n.t("ail.approve_btn")}</button>
+          <button type="button" class="btn btn-danger btn-sm" id="ail-reject-btn" ${canReject ? "" : "disabled"}>${HomezI18n.t("ail.reject_btn")}</button>
+        </div>
+      </div>
+    `;
+
+    el("ail-detail-close-btn").addEventListener("click", () => {
+      ailState.detailCandidateId = null;
+      panel.innerHTML = "";
+    });
+
+    const offlineBtn = el("ail-offline-submit-btn");
+    if (offlineBtn) {
+      offlineBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const summary = el("ail-offline-summary").value.trim();
+        const sampleSize = el("ail-offline-sample-size").value;
+        if (!summary || sampleSize === "" || Number(sampleSize) < 0) {
+          toast(HomezI18n.t("inv.quantity_required_error"), "error");
+          return;
+        }
+        try {
+          await apiFetch(`/ai-learning/model-candidates/${candidateId}/offline-evaluated`, {
+            method: "POST",
+            body: JSON.stringify({ summary, sample_size_used: Number(sampleSize) }),
+          });
+          toast(HomezI18n.t("ail.offline_eval_success"), "success");
+          await ailRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    }
+
+    const regressionBtn = el("ail-regression-submit-btn");
+    if (regressionBtn) {
+      regressionBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const summary = el("ail-regression-summary").value.trim();
+        if (!summary) {
+          toast(HomezI18n.t("inv.quantity_required_error"), "error");
+          return;
+        }
+        try {
+          await apiFetch(`/ai-learning/model-candidates/${candidateId}/regression-compared`, {
+            method: "POST",
+            body: JSON.stringify({ summary }),
+          });
+          toast(HomezI18n.t("ail.regression_success"), "success");
+          await ailRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    }
+
+    const approveBtn = el("ail-approve-btn");
+    if (approveBtn && !approveBtn.disabled) {
+      approveBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const token = await promptRecentAuthToken();
+        if (token === null) return;
+        try {
+          await apiFetch(`/ai-learning/model-candidates/${candidateId}/approve`, {
+            method: "POST",
+            headers: { "X-Recent-Auth-Token": token },
+          });
+          toast(HomezI18n.t("ail.approve_success"), "success");
+          await ailRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    }
+
+    const rejectBtn = el("ail-reject-btn");
+    if (rejectBtn && !rejectBtn.disabled) {
+      rejectBtn.addEventListener("click", async () => {
+        const { confirmed, value } = await confirmDialog({
+          title: HomezI18n.t("ail.reject_confirm_title"),
+          body: HomezI18n.t("ail.reject_confirm_body"),
+          requireReason: true,
+        });
+        if (!confirmed) return;
+        try {
+          await apiFetch(`/ai-learning/model-candidates/${candidateId}/reject`, {
+            method: "POST",
+            body: JSON.stringify({ reason: value }),
+          });
+          toast(HomezI18n.t("ail.reject_success"), "success");
+          await ailRenderList();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      });
+    }
+  }
+
+  VIEW_LOADERS["ai-learning"] = loadAiLearning;
+
+  // --------------------------------------------------
   // 마진 · 수익 분석 (Pricing / Margin, Gate 5)
   // --------------------------------------------------
 
@@ -15347,6 +16871,94 @@
     ["return_reserve_rate", "prc.return_reserve_rate_label"],
     ["tax_basis_rate", "prc.tax_basis_rate_label"],
   ];
+
+  // 2026-09-10 UI 개선 중 발견·수정 — 이 4개는 서버에 0~1 소수점
+  // 비율로 저장되지만(app/domains/pricing/model.py::RATE), 나머지
+  // 4개(cost_of_goods 등)는 원화 금액이다. 입력·표시만 %로
+  // 바꾸고(퍼센트 입력 → 저장 시 /100) 서버 계약은 그대로 유지한다
+  // (Phase 10이 purchase_task/retail_purchase에 이미 적용한 것과
+  // 동일한 원칙 — 이 화면엔 빠져 있었다).
+  const PRC_RATE_FIELDS = new Set([
+    "channel_fee_rate", "payment_fee_rate", "return_reserve_rate", "tax_basis_rate",
+  ]);
+
+  // MarginSnapshotResponse의 13개 항목 — 금액 항목과 비율 항목을
+  // 구분해 표시 방식을 다르게 한다(금액은 fmtMoney, margin_rate만 %).
+  const PRC_COMPARISON_ITEMS = [
+    "revenue", "cost_of_goods", "channel_fee", "payment_fee",
+    "shipping_cost", "packaging_cost", "ad_cost", "return_reserve",
+    "tax", "refund_adjustment", "total_cost", "margin_amount",
+  ];
+
+  // 2026-09-10 UI 개선(시안 08 정산·손익 관리 참고) — /pricing/
+  // {listing_id}/margin-variance가 이미 돌려주는 expected/
+  // latest_actual 전체 스냅샷(13개 항목)을 지금까지 화면이 버리고
+  // 차이값만 보여주고 있었다. 실제로 존재하는 데이터로 "예상/확정/
+  // 차이" 표를 만든다 — latest_actual이 없으면(아직 정산 반영 전)
+  // 확정 칸을 "—"로 정직하게 남기고 0으로 추측하지 않는다.
+  function prcComparisonTableHtml(variance) {
+    const expected = variance.expected;
+    const actual = variance.latest_actual || null;
+
+    // 2026-09-11 후속(Phase 12 — UI-9 추가 검증) — 백엔드는 확정
+    // 스냅샷의 각 항목이 실측인지 추정 대체인지를 estimated_
+    // components_json에 이미 기록해 두고 있었지만, 이 화면은 지금까지
+    // 그 값을 읽지 않고 있었다(반품·광고비·배송비·세금 등의 "출처"를
+    // 보여주라는 요구사항이 채워지지 않은 상태였다). 파싱 실패 시
+    // 조용히 빈 집합으로 — "출처 표시 실패"가 화면 전체를 깨뜨리지
+    // 않는다.
+    let estimatedComponents = new Set();
+    if (actual && actual.estimated_components_json) {
+      try {
+        estimatedComponents = new Set(JSON.parse(actual.estimated_components_json));
+      } catch (err) {
+        estimatedComponents = new Set();
+      }
+    }
+
+    const rows = PRC_COMPARISON_ITEMS.map((item) => {
+      const expVal = expected && expected[item] !== undefined ? Number(expected[item]) : null;
+      const actVal = actual && actual[item] !== undefined ? Number(actual[item]) : null;
+      const diff = (expVal !== null && actVal !== null) ? (actVal - expVal) : null;
+      const diffCls = diff === null ? "" : (diff === 0 ? "risk-low" : "risk-high");
+      const isEstimated = actVal !== null && estimatedComponents.has(item);
+      const sourceBadge = actVal === null
+        ? ""
+        : ` <span class="pill neutral prc-source-badge">${HomezI18n.t(isEstimated ? "prc.source_estimated" : "prc.source_measured")}</span>`;
+      return `
+        <tr>
+          <td data-label="${HomezI18n.t("prc.comparison_col_item")}">${escapeHtml(HomezI18n.t(`prc.item.${item}`))}</td>
+          <td data-label="${HomezI18n.t("prc.comparison_col_expected")}">${expVal === null ? "—" : fmtMoney(expVal)}</td>
+          <td data-label="${HomezI18n.t("prc.comparison_col_actual")}">${actVal === null ? "—" : fmtMoney(actVal)}${sourceBadge}</td>
+          <td data-label="${HomezI18n.t("prc.comparison_col_diff")}">${diff === null ? "—" : `<span class="${diffCls}">${fmtMoney(diff)}</span>`}</td>
+        </tr>
+      `;
+    }).join("");
+
+    const expRate = expected && expected.margin_rate !== undefined ? Number(expected.margin_rate) * 100 : null;
+    const actRate = actual && actual.margin_rate !== undefined ? Number(actual.margin_rate) * 100 : null;
+    const rateDiff = (expRate !== null && actRate !== null) ? (actRate - expRate) : null;
+    const rateDiffCls = rateDiff === null ? "" : (rateDiff === 0 ? "risk-low" : "risk-high");
+    const rateRow = `
+      <tr>
+        <td data-label="${HomezI18n.t("prc.comparison_col_item")}">${escapeHtml(HomezI18n.t("prc.item.margin_rate"))}</td>
+        <td data-label="${HomezI18n.t("prc.comparison_col_expected")}">${expRate === null ? "—" : `${expRate.toFixed(1)}%`}</td>
+        <td data-label="${HomezI18n.t("prc.comparison_col_actual")}">${actRate === null ? "—" : `${actRate.toFixed(1)}%`}</td>
+        <td data-label="${HomezI18n.t("prc.comparison_col_diff")}">${rateDiff === null ? "—" : `<span class="${rateDiffCls}">${rateDiff.toFixed(1)}%p</span>`}</td>
+      </tr>
+    `;
+
+    return `
+      ${!actual ? `<p class="field-hint">${HomezI18n.t("prc.comparison_no_actual")}</p>` : ""}
+      <div class="table-wrap"><table class="responsive-cards">
+        <thead><tr>
+          <th>${HomezI18n.t("prc.comparison_col_item")}</th><th>${HomezI18n.t("prc.comparison_col_expected")}</th>
+          <th>${HomezI18n.t("prc.comparison_col_actual")}</th><th>${HomezI18n.t("prc.comparison_col_diff")}</th>
+        </tr></thead>
+        <tbody>${rows}${rateRow}</tbody>
+      </table></div>
+    `;
+  }
 
   async function loadMarginAnalysis() {
     prcState.detailPricingId = null;
@@ -15366,9 +16978,10 @@
     }
     prcState.rows = rows || [];
 
-    const initFieldsHtml = PRC_ECON_FIELDS.map(([field, labelKey]) => `
-      <label class="field"><span class="field-label">${HomezI18n.t(labelKey)}</span><input type="number" step="0.0001" min="0" id="prc-init-${field}" value="0"></label>
-    `).join("");
+    const initFieldsHtml = PRC_ECON_FIELDS.map(([field, labelKey]) => {
+      const isRate = PRC_RATE_FIELDS.has(field);
+      return `<label class="field"><span class="field-label">${HomezI18n.t(labelKey)}</span><input type="number" step="${isRate ? "0.01" : "1"}" min="0" ${isRate ? 'max="100"' : ""} id="prc-init-${field}" value="0"></label>`;
+    }).join("");
 
     const initHtml = `
       <div class="detail-panel">
@@ -15421,7 +17034,8 @@
       }
       const body = { listing_id: listingId, initial_sale_price: price };
       PRC_ECON_FIELDS.forEach(([field]) => {
-        body[field] = Number(el(`prc-init-${field}`).value) || 0;
+        const raw = Number(el(`prc-init-${field}`).value) || 0;
+        body[field] = PRC_RATE_FIELDS.has(field) ? raw / 100 : raw;
       });
       try {
         await apiFetch("/pricing/init", { method: "POST", body: JSON.stringify(body) });
@@ -15491,9 +17105,27 @@
       // 각 섹션은 독립적으로 비어 있는 상태로 표시된다.
     }
 
-    const econFieldsHtml = PRC_ECON_FIELDS.map(([field, labelKey]) => `
-      <label class="field"><span class="field-label">${HomezI18n.t(labelKey)}</span><input type="number" step="0.0001" min="0" id="prc-econ-${field}" value="${pricing[field] !== undefined ? pricing[field] : 0}"></label>
-    `).join("");
+    // 2026-09-10 UI 개선(시안 08 정산·손익 관리 참고) — "Listing
+    // #47"만으로는 어떤 상품인지 알 수 없다. Listing→ProductCandidate
+    // 2단계 조회로 상품명을 붙인다(둘 중 하나라도 실패하면 상품명 없이
+    // Listing ID만 표시 — 상세 화면 자체를 막지 않는다, 위와 동일한
+    // 원칙). 목록 화면에서는 N+1 호출을 피하기 위해 하지 않는다 —
+    // 상세 화면 1회 조회에서만 수행한다.
+    let productName = null;
+    try {
+      const listing = await apiFetch(`/marketplace-listings/${listingId}`);
+      const candidate = await apiFetch(`/product-candidates/${listing.product_candidate_id}`);
+      productName = candidate.product_name || null;
+    } catch (_) {
+      productName = null;
+    }
+
+    const econFieldsHtml = PRC_ECON_FIELDS.map(([field, labelKey]) => {
+      const isRate = PRC_RATE_FIELDS.has(field);
+      const raw = pricing[field] !== undefined ? Number(pricing[field]) : 0;
+      const displayValue = isRate ? raw * 100 : raw;
+      return `<label class="field"><span class="field-label">${HomezI18n.t(labelKey)}</span><input type="number" step="${isRate ? "0.01" : "1"}" min="0" ${isRate ? 'max="100"' : ""} id="prc-econ-${field}" value="${displayValue}"></label>`;
+    }).join("");
 
     panel.innerHTML = `
       <div class="detail-panel">
@@ -15502,6 +17134,7 @@
           <button type="button" class="btn btn-ghost btn-sm" id="prc-detail-close-btn">${HomezI18n.t("prc.close_btn")}</button>
         </div>
         <dl class="kv-list">
+          <dt>${HomezI18n.t("prc.product_name_label")}</dt><dd>${productName ? escapeHtml(productName) : HomezI18n.t("prc.product_name_unavailable")}</dd>
           <dt>${HomezI18n.t("prc.col_sale_price")}</dt><dd>${pricing.current_sale_price !== undefined ? fmtMoney(pricing.current_sale_price) : "—"}</dd>
           <dt>${HomezI18n.t("prc.col_margin_rate")}</dt><dd>${pricing.expected_margin_rate !== undefined ? `${(Number(pricing.expected_margin_rate) * 100).toFixed(1)}%` : "—"}</dd>
           <dt>${HomezI18n.t("prc.col_margin_amount")}</dt><dd>${pricing.expected_margin_amount !== undefined ? fmtMoney(pricing.expected_margin_amount) : "—"}</dd>
@@ -15551,7 +17184,7 @@
             <thead><tr><th>${HomezI18n.t("prc.col_ms_type")}</th><th>${HomezI18n.t("prc.col_ms_margin_amount")}</th><th>${HomezI18n.t("prc.col_ms_margin_rate")}</th><th>${HomezI18n.t("prc.col_ms_reason")}</th><th>${HomezI18n.t("prc.col_ms_date")}</th></tr></thead>
             <tbody>${marginSnapshots.map((ms) => `
               <tr>
-                <td data-label="${HomezI18n.t("prc.col_ms_type")}">${statusPillHtml(ms.margin_type)}</td>
+                <td data-label="${HomezI18n.t("prc.col_ms_type")}">${statusPillHtmlLabeled(ms.margin_type, "prc.margin_type.")}</td>
                 <td data-label="${HomezI18n.t("prc.col_ms_margin_amount")}">${fmtMoney(ms.margin_amount)}</td>
                 <td data-label="${HomezI18n.t("prc.col_ms_margin_rate")}">${(Number(ms.margin_rate) * 100).toFixed(1)}%</td>
                 <td data-label="${HomezI18n.t("prc.col_ms_reason")}">${escapeHtml(ms.reason)}</td>
@@ -15563,13 +17196,8 @@
       </div>
 
       <div class="detail-panel">
-        <h3>${HomezI18n.t("prc.margin_variance_heading")}</h3>
-        ${(!variance || !variance.latest_actual) ? `<p class="stat-sub">${HomezI18n.t("prc.margin_variance_empty")}</p>` : `
-          <dl class="kv-list">
-            <dt>${HomezI18n.t("prc.variance_amount_label")}</dt><dd>${fmtMoney(variance.margin_amount_variance)}</dd>
-            <dt>${HomezI18n.t("prc.variance_rate_label")}</dt><dd>${(Number(variance.margin_rate_variance) * 100).toFixed(1)}%</dd>
-          </dl>
-        `}
+        <h3>${HomezI18n.t("prc.comparison_heading")}</h3>
+        ${!variance || !variance.expected ? `<p class="stat-sub">${HomezI18n.t("prc.margin_variance_empty")}</p>` : prcComparisonTableHtml(variance)}
       </div>
     `;
 
@@ -15581,7 +17209,8 @@
     el("prc-econ-submit-btn").addEventListener("click", async () => {
       const body = {};
       PRC_ECON_FIELDS.forEach(([field]) => {
-        body[field] = Number(el(`prc-econ-${field}`).value) || 0;
+        const raw = Number(el(`prc-econ-${field}`).value) || 0;
+        body[field] = PRC_RATE_FIELDS.has(field) ? raw / 100 : raw;
       });
       try {
         await apiFetch(`/pricing/${pricingId}/economics`, { method: "PATCH", body: JSON.stringify(body) });
@@ -15697,8 +17326,8 @@
               <td data-label="${HomezI18n.t("stl.col_order_id")}">#${r.order_id}</td>
               <td data-label="${HomezI18n.t("stl.col_expected_net")}">${fmtMoney(r.expected_net_amount)}</td>
               <td data-label="${HomezI18n.t("stl.col_actual_net")}">${r.actual_net_amount !== null && r.actual_net_amount !== undefined ? fmtMoney(r.actual_net_amount) : "—"}</td>
-              <td data-label="${HomezI18n.t("stl.col_variance")}">${r.variance_amount !== null && r.variance_amount !== undefined ? fmtMoney(r.variance_amount) : "—"}</td>
-              <td data-label="${HomezI18n.t("stl.col_recon_status")}">${statusPillHtml(r.status)}</td>
+              <td data-label="${HomezI18n.t("stl.col_variance")}">${r.variance_amount !== null && r.variance_amount !== undefined ? `<span class="${r.variance_amount === 0 ? "risk-low" : "risk-high"}">${fmtMoney(r.variance_amount)}</span>` : "—"}</td>
+              <td data-label="${HomezI18n.t("stl.col_recon_status")}">${statusPillHtmlLabeled(r.status, "stl.status.")}</td>
               <td data-label="${HomezI18n.t("stl.col_action")}">
                 ${r.status === "HELD"
                   ? `<button type="button" class="btn btn-ghost btn-sm" id="stl-recon-release-${r.order_id}">${HomezI18n.t("stl.release_hold_btn")}</button>`
@@ -15735,7 +17364,7 @@
             <tr>
               <td data-label="${HomezI18n.t("stl.col_settlement_id")}">#${s.id}</td>
               <td data-label="${HomezI18n.t("stl.col_market")}">${escapeHtml(s.market)}</td>
-              <td data-label="${HomezI18n.t("stl.col_settlement_status")}">${statusPillHtml(s.status)}</td>
+              <td data-label="${HomezI18n.t("stl.col_settlement_status")}">${statusPillHtmlLabeled(s.status, "stl.status.")}</td>
               <td data-label="${HomezI18n.t("stl.col_net_amount")}">${fmtMoney(s.net_amount)}</td>
               <td data-label="${HomezI18n.t("stl.col_settlement_action")}">${stlSettlementActionsHtml(s)}</td>
             </tr>

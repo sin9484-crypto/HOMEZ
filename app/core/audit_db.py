@@ -49,6 +49,8 @@ from datetime import timezone
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.sensitive_data import redact_free_text
+
 
 def _has_created_at_column(db: Session) -> bool:
 
@@ -67,6 +69,20 @@ def write_audit_log(
     description: str,
     company_id: int | None = None,
 ) -> None:
+    """
+    2026-09-10 Phase 11(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+    "로그에는 누가 언제 어떤 작업을 했는지는 기록하되 전화번호,
+    주소, API 키와 카드정보는 항상 가린다") — 이 함수를 거치는 모든
+    자유 텍스트 `description`은 저장 직전에 `redact_free_text()`를
+    항상 통과한다(호출자가 마스킹을 깜빡해도 여기서 한 번 더
+    막는다는 뜻의 중앙 강제 게이트 — 이전에는 이 게이트가 없었다,
+    Medium 결함으로 기록됨). `redact_free_text()`는 알려진 패턴
+    (전화번호 형태, JWT 형태)만 치환하고 그 외 평범한 텍스트는
+    그대로 통과시키므로, 기존 호출부의 일반적인 설명 문구
+    (예: "user(id=5) unlocked")에는 영향이 없다.
+    """
+
+    description = redact_free_text(description)
 
     if _has_created_at_column(db):
         db.execute(

@@ -56,6 +56,18 @@ def _fake_get_factory(response):
     return fake_get
 
 
+def _fake_post_factory(response):
+
+    calls = []
+
+    def fake_post(url, *, headers, json=None, timeout=None):
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return response
+
+    fake_post.calls = calls
+    return fake_post
+
+
 PRODUCT_DETAIL_SUCCESS_BODY = {
     "status": 200,
     "meta": {"timestamp": "2026-09-08 00:00:00", "api_type": "openapi"},
@@ -370,6 +382,71 @@ class OrderRegistrationRequestDesignTestCase(unittest.TestCase):
         body = minimal.to_request_body()
         for optional in ("address_detail", "comment", "sale_code", "site_name"):
             self.assertNotIn(optional, body)
+
+
+class SalesApplicationTestCase(unittest.TestCase):
+    """2026-09-10 후속(온채널 공식 답변 — "발주 전 판매신청 필수"
+    확정) — apply_for_sale()의 요청 바디·응답 해석·오류 분류를
+    검증한다. 실제 네트워크를 전혀 열지 않는다(가짜 http_post 주입).
+    승인 여부를 이 응답에서 읽으려 시도하지 않는다는 것도 함께
+    확인한다(그런 필드 자체가 응답 dataclass에 없다 — 이 메서드가
+    반환하는 것은 문자열 prd_code 하나뿐이다)."""
+
+    def test_apply_for_sale_sends_prd_code_and_bearer_auth(self):
+
+        body = {
+            "status": 200, "meta": {"timestamp": "x", "api_type": "openapi"},
+            "result": {"prd_code": "CH1894996"},
+        }
+        fake_post = _fake_post_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="secret-jwt", http_post=fake_post)
+
+        applied_code = client.apply_for_sale("CH1894996")
+
+        self.assertEqual(applied_code, "CH1894996")
+        self.assertEqual(fake_post.calls[0]["json"], {"prd_code": "CH1894996"})
+        self.assertEqual(
+            fake_post.calls[0]["headers"]["Authorization"], "Bearer secret-jwt",
+        )
+        self.assertEqual(
+            fake_post.calls[0]["url"],
+            "https://api.onch3.co.kr/openapi/seller/product/apply",
+        )
+
+    def test_apply_for_sale_missing_prd_code_raises_format_error(self):
+
+        fake_post = _fake_post_factory(_FakeResponse(200, {"result": {}}))
+        client = OnchannelApiClient(auth_key="k", http_post=fake_post)
+        with self.assertRaises(OnchannelResponseFormatError):
+            client.apply_for_sale("CH1")
+
+    def test_apply_for_sale_409_raises_validation_error(self):
+        """409는 "이미 신청된 상품 재신청" 정황으로 추정될 뿐 공식
+        확정 사실이 아니다(docs 참고) — 그래서 이 클라이언트는 409를
+        "이미 신청됨"으로 특별 취급하지 않고, 다른 명시적 거부와
+        동일하게 OnchannelValidationError로만 던진다."""
+
+        body = {"error": {"code": 409, "message": "이미 신청된 상품입니다."}}
+        fake_post = _fake_post_factory(_FakeResponse(409, body))
+        client = OnchannelApiClient(auth_key="k", http_post=fake_post)
+        with self.assertRaises(OnchannelValidationError):
+            client.apply_for_sale("CH1")
+
+    def test_apply_for_sale_401_raises_authentication_error(self):
+
+        fake_post = _fake_post_factory(_FakeResponse(401, ERROR_BODY_401))
+        client = OnchannelApiClient(auth_key="k", http_post=fake_post)
+        with self.assertRaises(OnchannelAuthenticationError):
+            client.apply_for_sale("CH1")
+
+    def test_apply_for_sale_network_exception_raises_network_error(self):
+
+        def raising_post(*args, **kwargs):
+            raise TimeoutError("연결 시간 초과")
+
+        client = OnchannelApiClient(auth_key="k", http_post=raising_post)
+        with self.assertRaises(OnchannelNetworkError):
+            client.apply_for_sale("CH1")
 
 
 if __name__ == "__main__":

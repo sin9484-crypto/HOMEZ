@@ -133,8 +133,10 @@ def get_logs_dir() -> Path:
 
 def get_backups_dir() -> Path:
     """
-    향후 자동/수동 백업 저장 위치(계약만 — 이번 단계는 백업을 자동
-    생성하지 않는다).
+    자동/수동 백업 저장 위치. 2026-09-10 Phase 6부터
+    `app/domains/scheduler/jobs.py::run_backup_rehearsal_job()`이
+    이 경로 아래(`rehearsal/` 하위 디렉터리)에 주간 복구 리허설용
+    백업을 실제로 생성한다.
     """
 
     if is_frozen():

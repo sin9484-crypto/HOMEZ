@@ -23,6 +23,7 @@ from app.core.dependency import get_db
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import NotFoundException
 from app.core.exceptions import UnauthorizedException
+from app.core.permission_check import require_permission
 from app.core.guard import admin_guard
 from app.core.recent_auth import consume_recent_auth_token
 from app.core.audit_db import write_audit_log
@@ -401,7 +402,20 @@ def get_order_sensitive_detail(
         default=None, alias="X-Recent-Auth-Token",
     ),
 ):
-    """배송 원문은 관리자 재인증 후 정확히 한 번만 조회할 수 있다."""
+    """
+    배송 원문은 (1) VIEW_SENSITIVE_DATA 권한을 가진 사용자만, (2)
+    관리자 재인증 후 정확히 한 번만 조회할 수 있다.
+
+    2026-09-10 Phase 11(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+    "개인정보 조회 권한을 별도로 설정한다") — 이전에는 admin_guard
+    (일반 관리자 여부)만으로 이 엔드포인트에 접근할 수 있었다.
+    SUPER_ADMIN은 `has_permission()`이 무조건 True를 반환하므로
+    (app/core/permission_check.py::is_super_admin 단락 평가) 이
+    권한 체크가 추가돼도 기존 SUPER_ADMIN 흐름은 그대로 동작한다 —
+    이 체크는 "SUPER_ADMIN이 아닌 관리자급 사용자에게 개인정보
+    조회 권한을 별도로 주지 않는 한 막는다"는 새 게이트다.
+    """
+    require_permission(db, current_user, "VIEW_SENSITIVE_DATA")
     if not consume_recent_auth_token(recent_auth_token, current_user.id):
         raise UnauthorizedException(
             "ORDER_SENSITIVE_DETAIL_RECENT_AUTH_REQUIRED: 배송 정보를 "

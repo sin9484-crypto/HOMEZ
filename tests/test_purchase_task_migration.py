@@ -178,6 +178,18 @@ class SchemaMigrationStaticTestCase(unittest.TestCase):
         "ix_purchase_records_channel_connection_id",
     })
 
+    # 2026-09-10 Phase 10 추가 — migrations/20260910_04_add_purchase_
+    # task_candidate_price_baseline.sql이 purchase_task_candidates에
+    # expected_amount_at_creation을 더했다(가격 인상 감지 기준값 —
+    # Critical 결함 #21 해결). 위와 동일한 이유로 이 컬럼도 canonical
+    # DDL 문자열에서 제거하고 비교한다(별도 테스트
+    # tests/test_purchase_task_service.py::PriceIncreaseBaselineTestCase
+    # 가 이 컬럼의 실제 추가·동작을 이미 검증한다). 인덱스는 만들지
+    # 않는 컬럼이라 _LATER_MIGRATION_INDEX_NAMES에는 추가할 것이 없다.
+    _LATER_MIGRATION_CANDIDATE_COLUMN_FRAGMENT = (
+        ", expected_amount_at_creation FLOAT"
+    )
+
     def test_migration_matches_sqlalchemy_model_ddl(self):
 
         dialect = sqlite_dialect.dialect()
@@ -191,6 +203,10 @@ class SchemaMigrationStaticTestCase(unittest.TestCase):
             if table.name in ("purchase_tasks", "purchase_records"):
                 normalized = normalized.replace(
                     self._LATER_MIGRATION_COLUMN_FRAGMENT, "",
+                )
+            if table.name == "purchase_task_candidates":
+                normalized = normalized.replace(
+                    self._LATER_MIGRATION_CANDIDATE_COLUMN_FRAGMENT, "",
                 )
             canonical_statements.append(normalized)
             for index in sorted(table.indexes, key=lambda ix: ix.name):
@@ -379,6 +395,17 @@ class ServiceOnMigratedSchemaTestCase(unittest.TestCase):
             "BEGIN;\n"
             "ALTER TABLE purchase_tasks ADD COLUMN channel_connection_id INTEGER;\n"
             "ALTER TABLE purchase_records ADD COLUMN channel_connection_id INTEGER;\n"
+            "COMMIT;\n",
+        )
+        # 2026-09-10 Phase 10 추가 — migrations/20260910_04_add_
+        # purchase_task_candidate_price_baseline.sql이 purchase_task_
+        # candidates에 expected_amount_at_creation을 더했다. 같은
+        # 이유로 여기도 함께 적용해야 현재 Model로 실제 쿼리가
+        # 성공한다.
+        conn.executescript(
+            "BEGIN;\n"
+            "ALTER TABLE purchase_task_candidates ADD COLUMN "
+            "expected_amount_at_creation FLOAT;\n"
             "COMMIT;\n",
         )
         conn.close()

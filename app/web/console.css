@@ -1071,6 +1071,30 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .risk-mid { color: #8A6D00; }
 .risk-low { color: var(--ok); }
 
+/* 2026-09-10 UI 개선(시안 01 상품 발굴·분석 참고) — AI 점수 시각화
+   막대. risk-high/mid/low와 동일한 색상 팔레트를 배경색으로
+   재사용해 텍스트 색상 버전과 시각적으로 한 가족임을 유지한다. */
+.score-bar { display: flex; align-items: center; gap: 6px; min-width: 70px; }
+.score-bar-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.score-bar-fill { height: 100%; border-radius: 3px; }
+.score-bar-fill.risk-high { background: var(--danger); }
+.score-bar-fill.risk-mid { background: #8A6D00; }
+.score-bar-fill.risk-low { background: var(--ok); }
+.score-bar-value {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 30px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 /* --------------------------------------------------
    상세 화면
    -------------------------------------------------- */
@@ -1097,6 +1121,92 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 }
 
 .kv-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; }
+
+/* 2026-09-10 UI 개선(시안 04/06/07 참고) — 진행 단계 표시(status
+   timeline). 배송·매입·반품처럼 순서가 있는 처리 흐름의 현재
+   위치를 한눈에 보여준다. 좁은 화면(모바일)에서는 flex-wrap으로
+   두 줄 이상으로 흐르는 것을 허용한다 — 가로 스크롤을 만들지
+   않는다. */
+.status-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 0;
+  margin: 4px 0 2px 0;
+  /* 좁은 화면에서 flex-wrap으로 줄이 바뀌면, 그 줄의 마지막
+     항목이 실제 마지막 단계가 아닌 경우 ::after 연결선이 다음
+     형제(다음 줄로 넘어간)를 향해 계산돼 컨테이너 우측 밖으로
+     삐져나간다(2026-09-10 390px 모바일 뷰포트 검증 중 발견 —
+     document.documentElement.scrollWidth가 390을 넘어서는 실제
+     가로 스크롤 결함이었다). 그 삐져나온 연결선만 시각적으로
+     잘라내는 용도로만 overflow-x를 쓴다 — 점·라벨은 항목 자체
+     박스 안에 있어 잘리지 않는다. */
+  overflow-x: hidden;
+}
+.status-timeline-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1 1 88px;
+  min-width: 88px;
+  padding: 0 6px;
+}
+.status-timeline-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: calc(50% + 13px);
+  right: calc(-50% + 13px);
+  height: 2px;
+  background: var(--border);
+}
+.status-timeline-step.is-done:not(:last-child)::after { background: var(--teal); }
+.status-timeline-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  z-index: 1;
+  flex-shrink: 0;
+}
+.status-timeline-step.is-done .status-timeline-dot {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+.status-timeline-step.is-current .status-timeline-dot {
+  background: var(--surface);
+  border-color: var(--teal);
+  color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(0, 212, 200, 0.18);
+}
+.status-timeline-step.is-branch .status-timeline-dot {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #fff;
+}
+.status-timeline-label {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+}
+.status-timeline-step.is-pending .status-timeline-label { color: var(--text-faint); font-weight: 500; }
+.status-timeline-time {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
 
 /* Gate T(2026-08-10) — 역할별 Permission 편집 */
 .pe-group {
@@ -1844,6 +1954,7 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 
 .pill.neutral { background: #ECEDF1; color: var(--text-muted); }
 .pill.neutral::before { background: var(--text-faint); }
+.prc-source-badge { margin-left: 6px; font-size: 0.75em; vertical-align: middle; }
 .pill.verifying { background: rgba(108, 92, 231, 0.14); color: var(--purple); }
 .pill.verifying::before { background: var(--purple); }
 
@@ -1931,6 +2042,19 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .pt-cc-inline-form-actions { display: flex; gap: 6px; }
 .pt-cc-inline-form .field-error { margin: 0; }
 .pt-cc-inline-form .field-error:empty { display: none; }
+
+/* 2026-09-11 후속(Phase 11) — .pt-cc-inline-form과 동일한 hidden
+   규칙(같은 이유). */
+.pt-cc-capabilities-panel {
+  display: none; margin-top: 6px; padding: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-muted, rgba(0,0,0,0.02));
+  max-width: 420px;
+}
+.pt-cc-capabilities-panel:not([hidden]) { display: block; }
+.pt-cc-capabilities-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pt-cc-capabilities-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pt-cc-capabilities-panel .field-hint { margin: 0; }
 
 /* --------------------------------------------------
    연결 마법사 Dialog

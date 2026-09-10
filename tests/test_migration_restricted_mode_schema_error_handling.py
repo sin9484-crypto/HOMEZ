@@ -54,9 +54,33 @@ NEW_MIGRATION = "20260908_00_create_purchase_channel_connection_schema.sql"
 # 상태가 되면서 MigrationRunner.diagnose()가 OrderInversionError를
 # 정확히 잡아냈다(전체 회귀 2026-09-09 실행에서 재현). 같은 작업 단위
 # (item 7)이므로 "이전 상태"에서는 둘 다 제외해야 한다.
+#
+# 2026-09-10 Phase 6 회귀 중 재발견 — 같은 원인이 다시 발생했다.
+# HOMEZ V7 개인 베타 Phase 1(로그인 잠금)·Phase 3(기능별 자동화
+# 모드)이 각각 20260909_00/20260909_01 Migration을 추가했는데, 이
+# 둘 다 사전순으로 NEW_MIGRATION보다 뒤라 이 집합에 없으면 같은
+# OrderInversionError가 재현된다. "NEW_MIGRATION 이후에 추가되는
+# Migration 파일은 전부 여기 추가해야 한다"는 이 파일의 유지보수
+# 규칙을 다시 명시해둔다 — 이 세트를 갱신하지 않은 채 새 Migration을
+# 추가하면 이 테스트가 항상 이렇게 깨진다.
 EXCLUDED_FROM_PRIOR_STATE = {
     NEW_MIGRATION,
     "20260908_01_create_purchase_order_submission_attempts.sql",
+    "20260909_00_add_login_lockout_columns.sql",
+    "20260909_01_create_function_automation_state_schema.sql",
+    # 2026-09-10 최종 회귀에서 재발견 — HOMEZ V7 개인 베타 Phase
+    # 7~12(결제/환불/환율/공급처능력/가격재고안전/가격기준선/AI학습
+    # 기반)가 추가한 7개. Phase 6에서 이미 겪은 것과 동일한 패턴
+    # (새 Migration을 추가하면 이 집합을 매번 갱신해야 한다).
+    "20260910_00_create_payment_domain_schema.sql",
+    "20260910_01_create_refund_domain_schema.sql",
+    "20260910_02_create_currency_domain_schema.sql",
+    "20260910_03_create_supplier_capability_schema.sql",
+    "20260910_04_add_purchase_task_candidate_price_baseline.sql",
+    "20260910_05_create_price_stock_safety_schema.sql",
+    "20260910_06_create_ai_learning_schema.sql",
+    # 2026-09-10 Phase 3(판매신청 게이트) — 동일한 이유로 추가.
+    "20260910_07_create_purchase_sales_application_schema.sql",
 }
 
 

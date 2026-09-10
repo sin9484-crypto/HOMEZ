@@ -23,6 +23,7 @@ from app.core.security import decode_access_token
 from app.database.session import get_db
 from app.domains.session.service import SessionStatus
 from app.domains.session.service import get_session_status
+from app.domains.session.service import touch_session_last_seen
 from app.domains.user.model import User
 
 
@@ -82,6 +83,23 @@ def _decode_user(
 
         if session_status == SessionStatus.EXPIRED:
             raise _credentials_exception("SESSION_EXPIRED")
+
+        # 2026-09-09 Phase 2(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+        # "마지막 사용 후 최대 3시간까지만 유지") — JWT 자체는 아직
+        # 안 만료됐어도 그만큼 요청이 없었으면 여기서 거부한다.
+        if session_status == SessionStatus.IDLE_TIMEOUT:
+            raise _credentials_exception("SESSION_IDLE_TIMEOUT")
+
+        # 세션이 실제로 유효했던 이번 요청을 "마지막 사용"으로 기록한다
+        # (VALID일 때만 — NOT_FOUND/SCHEMA_NOT_READY는 세션 계층 자체가
+        # 없거나 이 토큰을 세션 테이블이 모르는 경우라 touch할 대상이
+        # 없다). 실패해도 요청 자체는 막지 않는다(관측 기능일 뿐, 그
+        # 자체가 인증 판정에 관여하지 않는다).
+        if session_status == SessionStatus.VALID:
+            try:
+                touch_session_last_seen(db, jti)
+            except Exception:  # noqa: BLE001
+                pass
 
     user = (
         db.query(User)

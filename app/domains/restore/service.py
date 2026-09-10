@@ -34,11 +34,15 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.domains.backup.model import BackupRecord
 from app.domains.backup.service import TRIGGER_SOURCE_PRE_RESTORE
+from app.domains.backup.service import TRIGGER_SOURCE_SCHEDULED_REHEARSAL
 from app.domains.backup.service import BackupService
 from app.domains.backup.service import sha256_of_file
 from app.domains.restore.model import RESTORE_STATUS_FAILED
@@ -65,6 +69,22 @@ REQUIRED_CORE_TABLES = frozenset({
     "companies",
     "roles",
 })
+
+
+@dataclass
+class RehearsalResult:
+    """
+    2026-09-09 Phase 5 — run_weekly_rehearsal()의 결과. backup_record/
+    restore_attempt가 각각 None일 수 있다: 백업 생성 자체가 실패하면
+    restore_attempt뿐 아니라 backup_record도 없다(어떤 백업도 만들어지지
+    않았으므로) — 그 경우 실패 사실은 error_message와(성공적으로
+    전송됐다면) BACKUP_RESTORE_REHEARSAL_FAILED 알림에만 남는다.
+    """
+
+    success: bool
+    backup_record: BackupRecord | None
+    restore_attempt: RestoreAttempt | None
+    error_message: str | None
 
 
 def require_app_closed_confirmation(confirmed: bool) -> None:
@@ -426,10 +446,145 @@ class RestoreService:
 
         return self.repository.list_recent(limit)
 
+    def run_weekly_rehearsal(
+        self,
+        *,
+        company_id: int,
+        source_db_path: Path,
+        backups_dir: Path,
+        rehearsal_dir: Path,
+        triggered_by_user_id: int | None = None,
+    ) -> RehearsalResult:
+        """
+        2026-09-09 Phase 5(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+        "DB 복구 가능 여부를 매주 자동 또는 안내 기반으로 시험하고
+        결과를 기록한다")의 구현.
+
+        실제 운영 DB(source_db_path)는 읽기만 한다 — 절대 쓰지 않는다.
+        1) source_db_path를 새 백업으로 뜬다(trigger_source=
+           scheduled_rehearsal — backup/service.py 참고, 장기 보관
+           대상 아님).
+        2) 그 백업을 rehearsal_dir 아래 타임스탬프가 찍힌 "버릴
+           목적의" 임시 경로에만 복원해 본다 — target_db_path가
+           실제 homez.db가 아니므로 restore()의 사전 안전 백업도
+           필요 없다(target이 처음부터 존재하지 않는 새 경로).
+        3) 검증이 끝나면(성공이든 RestoreAttempt로 실패가 기록됐든)
+           그 임시 파일만 지운다 — 방금 만든 backup_record 자체는
+           backup/service.py의 보존 정책을 그대로 따라 남는다.
+
+        백업 생성 자체가 실패하면(디스크 오류, 손상된 원본 등)
+        RestoreAttempt조차 만들어지지 않는다 — 그 경우는
+        BACKUP_RESTORE_REHEARSAL_FAILED 알림과 반환값의
+        error_message로만 남는다(이 메서드가 예외를 던지지 않고
+        항상 RehearsalResult를 반환하는 이유 — 미래의 스케줄러
+        (Phase 6)가 예외 처리 없이 결과만 보고 판단할 수 있게 한다).
+
+        아직 스케줄러가 없으므로(Phase 6 예정) 지금은 관리자가
+        수동으로 호출한다.
+        """
+
+        source_db_path = Path(source_db_path)
+        backups_dir = Path(backups_dir)
+        rehearsal_dir = Path(rehearsal_dir)
+
+        try:
+            backup_service = BackupService(self.db)
+            backup_record = backup_service.create_backup(
+                source_db_path=source_db_path,
+                backups_dir=backups_dir,
+                trigger_source=TRIGGER_SOURCE_SCHEDULED_REHEARSAL,
+                triggered_by_user_id=triggered_by_user_id,
+                label="주간 복구 리허설",
+            )
+        except Exception as exc:  # noqa: BLE001 — 리허설 실패는 예외가 아니라 결과로 알린다
+            error_message = f"리허설용 백업 생성 실패: {exc}"
+            self._notify_rehearsal_failure(company_id, error_message)
+            return RehearsalResult(
+                success=False, backup_record=None, restore_attempt=None,
+                error_message=error_message,
+            )
+
+        rehearsal_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        throwaway_target = rehearsal_dir / f"rehearsal_{timestamp}.db"
+
+        try:
+            restore_attempt = self.restore(
+                source_backup_path=Path(backup_record.file_path),
+                target_db_path=throwaway_target,
+                expected_sha256=backup_record.sha256,
+                pre_restore_backups_dir=None,
+                triggered_by_user_id=triggered_by_user_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — restore()가 이미 RestoreAttempt(FAILED)를 남겼다
+            error_message = f"리허설 복원 실패: {exc}"
+            self._notify_rehearsal_failure(company_id, error_message)
+            return RehearsalResult(
+                success=False, backup_record=backup_record,
+                restore_attempt=None, error_message=error_message,
+            )
+        finally:
+            try:
+                if throwaway_target.exists():
+                    throwaway_target.unlink()
+            except OSError:
+                pass
+
+        return RehearsalResult(
+            success=True, backup_record=backup_record,
+            restore_attempt=restore_attempt, error_message=None,
+        )
+
+    def _notify_rehearsal_failure(
+        self, company_id: int, error_message: str,
+    ) -> None:
+
+        try:
+            from app.domains.notification_center.delivery_service import (
+                NotificationDeliveryService,
+            )
+            from app.domains.user.model import User
+
+            day_key = datetime.now().strftime("%Y%m%d")
+
+            for user in (
+                self.db.query(User)
+                .filter(
+                    User.company_id == company_id,
+                    User.is_active.is_(True),
+                )
+                .all()
+            ):
+                if (user.role or "").strip().upper() != "SUPER_ADMIN":
+                    continue
+
+                NotificationDeliveryService(self.db).dispatch(
+                    "BACKUP_RESTORE_REHEARSAL_FAILED",
+                    company_id=company_id, user_id=user.id,
+                    idempotency_key=(
+                        f"rehearsal-failed-{company_id}-{day_key}"
+                    ),
+                    title="주간 백업 복구 리허설이 실패했습니다.",
+                    message=(
+                        f"이번 주 백업 복구 리허설이 실패했습니다: "
+                        f"{error_message} 실제 복구가 필요한 상황에서 "
+                        "복구가 안 될 수 있습니다 — 가능한 빨리 백업·복구 "
+                        "설정을 확인해 주세요."
+                    ),
+                    link_path="backup-restore",
+                    entity_ref=f"company:{company_id}",
+                    to_email=user.email,
+                    reason="weekly_rehearsal_failed",
+                    console_url="/console#backup-restore",
+                )
+        except Exception:  # noqa: BLE001 — 알림 실패가 리허설 결과 반환을 막지 않는다
+            pass
+
 
 __all__ = [
     "RestoreService",
     "RestoreError",
+    "RehearsalResult",
     "require_app_closed_confirmation",
     "REQUIRED_CORE_TABLES",
 ]

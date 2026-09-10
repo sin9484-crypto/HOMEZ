@@ -217,6 +217,16 @@ class PurchaseTaskCandidate(Base):
         Boolean, nullable=False, default=False,
     )
 
+    # 2026-09-10 Phase 10 — 이 후보가 처음 평가돼 실질 매입비가 처음
+    # 계산된 시점의 값(가격 인상 감지 기준선). service.py::
+    # evaluate_and_prepare()가 이 값이 아직 None일 때만 채운다 — 한
+    # 번 채워지면 그 후보의 평가 이력 내내 불변이다. Phase 4에서
+    # 이 컬럼이 없어 PRICE_INCREASE_RATE_EXCEEDED 판정이 항상
+    # 건너뛰어지던 Critical 결함 #21을 여기서 해결한다.
+    expected_amount_at_creation: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False,
     )
@@ -746,6 +756,71 @@ class PurchaseOrderSubmissionAttempt(Base):
     )
 
 
+class PurchaseSalesApplicationAttempt(Base):
+    """2026-09-10 후속(온채널 공식 답변 — "발주 전 판매신청 필수"
+    확정) — 판매신청(POST seller/product/apply) 시도의 **현재 상태**.
+
+    PurchaseOrderSubmissionAttempt와 다르게 (company_id,
+    connection_id, product_code) UNIQUE다 — idempotency_key가 아니다.
+    이유: 판매신청은 발주와 달리 금전·중복 위험이 없다(요청 바디에
+    결제·금액 필드가 없다, docs/HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_
+    20260908.md 참고) — 그래서 "이 상품을 이 연결로 이미 신청한 적이
+    있는가"라는 사실 하나만 행 하나로 추적하면 충분하고, 실패했던
+    시도를 같은 행 위에서 다시 시도할 수 있어야 한다(발주처럼 새
+    idempotency_key를 매번 새로 발급할 이유가 없다).
+
+    `status`가 SUBMITTED라는 것은 "온채널이 접수를 확인했다"는
+    뜻일 뿐 "승인됐다"는 뜻이 아니다 — 승인 상태를 조회하는 API
+    자체가 없다고 공식 답변으로 확정됐으므로, 이 테이블에는 애초에
+    "승인 여부" 컬럼을 두지 않는다(없는 사실을 있는 것처럼 컬럼으로
+    만들지 않는다). 발주 전 게이트는 오직 이 status가 SUBMITTED인
+    행이 있는지만 확인한다(SalesApplicationStatus.SATISFIES_ORDER_
+    GATE 참고)."""
+
+    __tablename__ = "purchase_sales_application_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "connection_id", "product_code",
+            name="uq_purchase_sales_application_attempts_company_connection_product",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    connection_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    mall_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    product_code: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PENDING", index=True,
+    )
+    # 온채널이 실제로 돌려준 prd_code — 요청한 product_code와 항상
+    # 같아야 정상이지만(응답 형식 오류 검증은 client 계층이 이미
+    # 수행), 실제 관측값을 그대로 남겨 둔다.
+    applied_product_code: Mapped[str | None] = mapped_column(
+        String(100), nullable=True,
+    )
+    failure_detail: Mapped[str | None] = mapped_column(
+        String(500), nullable=True,
+    )
+
+    triggered_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
 __all__ = [
     "PurchaseTask",
     "PurchaseTaskCandidate",
@@ -760,4 +835,5 @@ __all__ = [
     "PurchaseChannelConnection",
     "PurchaseChannelConnectionEvent",
     "PurchaseOrderSubmissionAttempt",
+    "PurchaseSalesApplicationAttempt",
 ]

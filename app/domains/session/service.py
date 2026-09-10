@@ -15,12 +15,14 @@ JWT 자체 만료 검증에만 의존하도록 None을 반환한다 — 아래
 """
 
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from enum import Enum
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.domains.session.model import AuthSession
 from app.domains.session.repository import RefreshTokenRepository
 from app.domains.session.repository import SessionRepository
@@ -31,6 +33,11 @@ class SessionStatus(str, Enum):
     VALID = "VALID"
     REVOKED = "REVOKED"
     EXPIRED = "EXPIRED"
+    # 2026-09-09 Phase 2 — JWT/세션 자체는 아직 유효기간 안이지만
+    # `SESSION_TIMEOUT_MINUTES`(기본 3시간)만큼 아무 요청도 없었던
+    # 경우. REVOKED/EXPIRED와 원인이 달라 클라이언트가 다른 안내
+    # 문구를 보여줄 수 있도록 별도 값으로 둔다.
+    IDLE_TIMEOUT = "IDLE_TIMEOUT"
     NOT_FOUND = "NOT_FOUND"
     SCHEMA_NOT_READY = "SCHEMA_NOT_READY"
 
@@ -94,7 +101,36 @@ def get_session_status(db: Session, jti: str) -> SessionStatus:
     if session.expires_at <= _utcnow():
         return SessionStatus.EXPIRED
 
+    # 2026-09-09 Phase 2 — "마지막 사용"의 기준시각. 아직 한 번도
+    # touch되지 않은 갓 발급된 세션(last_seen_at이 NULL)은 issued_at을
+    # 기준으로 삼는다 — 그렇지 않으면 로그인 직후 첫 요청에서 곧바로
+    # IDLE_TIMEOUT으로 오판할 여지가 있다(NULL을 "아주 오래전"으로
+    # 취급하면 안 된다).
+    last_activity = session.last_seen_at or session.issued_at
+    idle_for = _utcnow() - last_activity
+
+    if idle_for > timedelta(minutes=settings.SESSION_TIMEOUT_MINUTES):
+        return SessionStatus.IDLE_TIMEOUT
+
     return SessionStatus.VALID
+
+
+def touch_session_last_seen(db: Session, jti: str) -> bool:
+    """
+    2026-09-09 Phase 2 — 인증된 요청마다 호출해 "마지막 사용 시각"을
+    갱신한다. 이 함수 자신이 커밋한다(호출자인 `app/core/auth.py`의
+    인증 의존성은 조회 전용 GET 요청에서는 별도 commit을 하지 않는
+    경우가 많다 — 여기서 커밋하지 않으면 세션 종료 시 롤백되어
+    "마지막 사용"이 전혀 갱신되지 않는다).
+    """
+
+    if not _schema_ready(db):
+        return False
+
+    SessionRepository(db).touch_last_seen(jti, _utcnow())
+    db.commit()
+
+    return True
 
 
 def _refresh_schema_ready(db: Session) -> bool:
@@ -206,6 +242,7 @@ __all__ = [
     "SessionStatus",
     "create_session",
     "get_session_status",
+    "touch_session_last_seen",
     "revoke_session",
     "revoke_all_sessions_for_user",
     "get_last_login_at",

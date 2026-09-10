@@ -185,9 +185,26 @@ class RouteAuthenticationContractTestCase(unittest.TestCase):
             "/brands", "/categories", "/suppliers", "/marketplaces",
             "/products",
         )
+        # 2026-09-10 Phase 9 — app/domains/supplier_capability/router.py
+        # 가 /suppliers/{supplier_id}/capability/* 경로를 새로
+        # 마운트했다. /orders·/purchases·/shipments(위 docstring의
+        # Gate 4 예외)와 정확히 같은 상황이다 — "우연히 같은 접두사가
+        # 다시 나타난 사고"가 아니라, 처음부터 SuperAdminGuard 전체
+        # 적용으로 새로 설계된 기능(공급처 능력 플래그, 옛 무인증
+        # supplier CRUD와 무관)이다. 이 라우트도 여전히 인증 없이는
+        # 절대 통과할 수 없다는 사실은 바로 위
+        # test_every_non_allowlisted_route_has_a_recognized_auth_
+        # dependency가 보장한다(tests/test_currency_and_supplier_
+        # capability_router_guard.py가 SuperAdminGuard 적용도 별도
+        # 확인). "/suppliers" 자체나 그 외 /suppliers/* 경로는 여전히
+        # 이 검사가 그대로 잡는다 — /capability/ 하위 경로만 제외한다.
         removed_but_present = [
             route.path for route in self.routes
             if route.path.startswith(removed_prefixes)
+            and not (
+                route.path.startswith("/suppliers/")
+                and "/capability/" in route.path
+            )
         ]
         self.assertEqual(
             removed_but_present, [],

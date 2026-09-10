@@ -22,6 +22,7 @@ from app.domains.automation_safety.model import EmergencyStop
 from app.domains.automation_safety.model import ExecutionLimit
 from app.domains.automation_safety.model import ExecutionPeriodUsage
 from app.domains.automation_safety.model import ExecutionUsage
+from app.domains.automation_safety.model import FunctionAutomationState
 
 
 class AutomationSafetyRepository:
@@ -51,6 +52,59 @@ class AutomationSafetyRepository:
         self,
         state: AutomationModeState,
     ) -> AutomationModeState:
+
+        self.db.add(state)
+        self.db.flush()
+
+        return state
+
+    # --------------------------------------------------
+    # Function Automation State (Phase 3, 회사×기능별)
+    # --------------------------------------------------
+
+    def get_current_function_mode_state(
+        self,
+        company_id: int,
+        function_code: str,
+    ) -> FunctionAutomationState | None:
+
+        return (
+            self.db.query(FunctionAutomationState)
+            .filter(
+                FunctionAutomationState.company_id == company_id,
+                FunctionAutomationState.function_code == function_code,
+            )
+            .order_by(FunctionAutomationState.id.desc())
+            .first()
+        )
+
+    def get_latest_function_mode_states_for_company(
+        self,
+        company_id: int,
+    ) -> list[FunctionAutomationState]:
+        """회사 안의 모든 기능코드 각각의 "가장 최근 행"만 반환한다
+        (기능마다 이력이 여러 건 쌓이므로 단순 전체 조회로는 안 된다).
+        기능 수가 10개 고정으로 작아 SQL 윈도우 함수 없이 Python에서
+        간단히 골라낸다."""
+
+        rows = (
+            self.db.query(FunctionAutomationState)
+            .filter(FunctionAutomationState.company_id == company_id)
+            .order_by(FunctionAutomationState.id.desc())
+            .all()
+        )
+
+        latest_by_function: dict[str, FunctionAutomationState] = {}
+        for row in rows:
+            if row.function_code not in latest_by_function:
+                latest_by_function[row.function_code] = row
+
+        return list(latest_by_function.values())
+
+    def add_function_mode_state_no_commit(
+        self,
+        state: FunctionAutomationState,
+    ) -> FunctionAutomationState:
 
         self.db.add(state)
         self.db.flush()

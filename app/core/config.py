@@ -295,12 +295,31 @@ class Settings(BaseSettings):
         default=30,
     )
 
+    # 2026-09-09 Phase 2(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+    # "프로그램이 계속 열려 있어도 마지막 사용 후 최대 3시간까지만
+    # 유지한다") — 기본값을 3시간(180분)으로 맞춘다. 이 설정 자체는
+    # 2026-07-30부터 존재했지만 실제로 참조하는 코드가 없는 죽은
+    # 설정값이었다(app/domains/session/service.py::get_session_status
+    # 에서 이번에 처음 연결). "마지막 사용"은 `auth_sessions.
+    # last_seen_at`(app/core/auth.py의 매 인증 요청마다 갱신)을
+    # 기준으로 판단한다.
     SESSION_TIMEOUT_MINUTES: int = Field(
-        default=60,
+        default=180,
     )
 
     DEVICE_LIMIT: int = Field(
         default=5,
+    )
+
+    # 2026-09-10 Phase 6(HOMEZ_USER_OPERATION_SETTINGS.md 11번 — "DB
+    # 복구 가능 여부를 매주 자동 또는 안내 기반으로 시험") — 주간
+    # 백업 복구 리허설 Job을 앱 기동 시 실제로 등록할지 여부.
+    # app/main.py::lifespan()이 이 값을 확인한다. 기본 True — 이
+    # Job은 로컬 파일만 다루고(원본 DB는 읽기 전용) 외부 호출이
+    # 전혀 없어 항상 켜둬도 안전하다고 판단했지만, 개인 베타 동안
+    # 문제가 생기면 재설치 없이 바로 끌 수 있도록 토글을 남겨둔다.
+    SCHEDULER_ENABLED: bool = Field(
+        default=True,
     )
 
     REMEMBER_ME_DAYS: int = Field(

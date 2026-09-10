@@ -32,22 +32,22 @@
 
 ### Critical
 
-1. **결제(`payment`) 도메인이 통째로 빈 스캐폴딩** — `app/domains/payment/{model,service,schema,router,gateway}.py` 전 파일 0줄. 문서 4번(결제수단 운영 방식) 대부분과 5번(자동결제 한도)의 절반, 11/13/14번의 "결제" 관련 항목 전부가 이 하나의 원인으로 검증 불가능하다. "카드번호를 저장하지 않는다"(4-11, 11-10)도 안전 설계의 결과가 아니라 결제 기능 자체가 없어서 생긴 결과다.
-2. **환불(`refund`) 도메인이 통째로 빈 스캐폴딩** — 반품(물류)은 잘 구현돼 있으나 고객·판매채널·매입처 환불(금액) 실행 코드가 전혀 없다. 섹션 9(반품·환불·정산)의 절반 가까이가 이 원인 하나로 미구현.
-3. **시스템 전체에 스케줄러가 없음** — `app/domains/scheduler/*` 전부 0줄, `app/core/scheduler_service.py`는 `app/main.py`에 미연결. "5분마다 주문 수집"(2-8), "주 1회 가격 검토"(2-5), "매일 자동 확인"(9-13, 10-17 등) 문구가 붙은 모든 운영 기준이 이 원인으로 "사람이 화면을 열어야만 실행됨"이라는 공통 제약을 갖는다.
+1. ~~**결제(`payment`) 도메인이 통째로 빈 스캐폴딩**~~ **[2026-09-10 Phase 7에서 부분 해결]** `app/domains/payment/{model,service,schema,router,gateway}.py`를 채웠다 — `PaymentMethod`(카드/PayPal/계좌이체/가상계좌, 카드번호·CVC 원문 컬럼 자체가 없음, Windows Credential Manager 참조만 저장), `PaymentAutoLimit`(건당/일일 한도, append-only), `FakePaymentProvider`(실제 네트워크 호출 없는 검증 전용 — 실제 Provider는 여전히 구현하지 않음), `SuperAdminGuard`+재인증(`X-Recent-Auth-Token`) 게이트, `FunctionCode.PAYMENT` 자동화 모드 연동까지 30개 테스트로 검증됨(`docs/HOMEZ_PROJECT_STATE.md` 2026-09-10 후속 18). **다만 실제 결제 실행 자체는 여전히 없다**(설계상 의도 — 실제 Provider 연동은 이 세션 절대 경계 밖) — 일일 누적 한도 집계도 실행 원장이 없어 아직 구현하지 않았다(건당 한도만 검사). "카드번호를 저장하지 않는다"(4-11, 11-10)는 이제 실제 안전 설계(토큰화+Credential Manager 참조)의 결과다.
+2. ~~**환불(`refund`) 도메인이 통째로 빈 스캐폴딩**~~ **[2026-09-10 Phase 8에서 부분 해결]** `app/domains/refund/{model,repository,service,schema,router}.py`+`executor.py`를 채웠다 — `Refund`(AWAITING_APPROVAL→APPROVED/REJECTED→EXECUTED 상태기계, return_order와 동일한 append-only 이력 패턴), "승인 후에만 진행"을 예외 없이 강제(자동 승인 경로 자체가 코드에 없음, `test_no_automatic_path_reaches_approved_status`로 검증), `FakeRefundExecutor`(실제 네트워크 호출 없음)까지 27개 테스트로 검증됨(`docs/HOMEZ_PROJECT_STATE.md` 2026-09-10 후속 19). **다만 실제 환불 실행 자체는 여전히 없다**(설계상 의도 — 절대 경계 밖)이고, CANCELLATION(취소)의 별도 상태 모델링은 이번에 손대지 않았다(order 도메인의 기존 `OrderCancelRequest` 등과 중복 방지 목적, 정밀 조사 미실시). 반품(물류)은 여전히 `app/domains/return_order`가 담당(변경 없음).
+3. **[2026-09-10 Phase 6에서 부분 해결] 시스템 전체에 스케줄러가 없음** — `app/domains/scheduler/*` 전부 0줄이던 것을 Phase 6에서 `app/domains/scheduler/jobs.py`로 채우고, `app/core/scheduler_service.py`(APScheduler 기반, 기존에도 있었으나 미연결)를 `app/main.py` lifespan에 실제로 연결했다(`settings.SCHEDULER_ENABLED` 토글 포함). **다만 실제로 등록한 Job은 백업 복구 리허설 1개뿐이다** — "5분마다 주문 수집"(2-8), "주 1회 가격 검토"(2-5) 등 나머지 주기 실행 대상은 여전히 스케줄러에 연결되지 않았다(주문 수집은 실행 코드는 있으나 Phase 3 자동화 모드 게이트가 어디서도 확인되지 않아 그대로 연결하면 위험 소지가 있고, 가격/재고 모니터링은 Adapter만 있고 Service/저장소 자체가 없다 — 상세 근거는 docs/HOMEZ_PROJECT_STATE.md Phase 6 절). 따라서 이 항목은 여전히 Critical로 유지하되, 스케줄러 인프라 자체의 부재는 해소됐다.
 4. **로그인 세션이 문서 요구와 정반대로 설계됨** — `app/core/desktop_console_session_store.py`가 Refresh Token(30일)을 Windows Credential Manager에 저장해 **프로그램 재시작 후에도 세션이 자동 복원**되도록 만들어져 있다. 문서 11-11 "로그인은 프로그램 종료 시 끝난다"와 정면 충돌. "3시간 idle" 정책 자체도 코드 어디에도 없다.
 5. **로그인 실패(무차별 대입) 방어가 완전히 죽어 있음** — `user/repository.py::increment_failed_login`이 명시적 no-op(관련 DB 컬럼 자체가 없음), `LOGIN_MAX_ATTEMPT`/`LOGIN_LOCK_MINUTES` 설정값이 코드 어디에서도 참조되지 않는 죽은 설정. 문서 11-18 완전 미구현.
-6. **자동모드가 전역 단일 구조 — 기능별 게이팅이 구조적으로 불가능** — `AutomationModeState.mode`는 회사 전체에 대해 하나의 값만 가진다(상품등록/가격변경/매입/결제/발주를 구분하는 컬럼 자체가 모델에 없음). 문서 13-10, 14-20~14-23이 요구하는 "기능별로 안전시험 통과 후 개별 개방"이 코드 구조상 불가능하다 — 지금 자동모드를 한 번 올리면 아직 검증 안 된 기능까지 전부 같이 열린다.
+6. ~~자동모드가 전역 단일 구조 — 기능별 게이팅이 구조적으로 불가능~~ **[2026-09-09 Phase 3에서 구조적으로 해결]** — 기존 `AutomationModeState.mode`(전역 단일)는 그대로 두고, 신규 `function_automation_states`(회사×기능별, 10개 기능 독립)를 추가해 기능별 게이팅이 코드 구조상 가능해졌다. 다만 "안전시험 통과 후에만 자동 개방"이라는 실행 게이트(14-22)와 "문제 감지 시 자동 강등"의 실제 감지 연결(14-23)은 아직 남아있다 — 구조는 갖춰졌지만 전부 배선되지는 않았다.
 7. **자동결제 한도 체계가 이중화돼 있고 한쪽은 죽은 코드** — `automation_safety.ExecutionLimit`(일 단위 전용, `set_limit()` 호출부 grep 0건=UI로 변경 불가)와 `purchase_task.PurchaseTaskPolicySetting`(건당/일/월 3단계, 실제 UI 존재하나 **기본값이 문서 수치로 채워지지 않음** — `per_order_max_amount` 등이 전부 None)가 서로 다른 개념으로 병존한다. 어느 쪽이 실제 실행 경로에서 최종 참조되는지 이번 감사에서 완전히 특정하지 못했다.
 
 ### High
 
-8. 환율(`currency`/`exchange`) 도메인이 완전히 빈 스캐폴딩 — DB 테이블조차 없어 환율 허용률(2%, 6-10/6-11)이 전혀 구현되지 않음.
-9. 마진율/원가상승률 입력 UI가 문서 지시(퍼센트 단위)와 반대로 구현됨 — `console.html`이 "최소 마진율(0~1)"로 소수 입력을 요구, 실수 입력 시 1500% 등으로 오해석될 위험.
+8. ~~환율(`currency`/`exchange`) 도메인이 완전히 빈 스캐폴딩~~ **[2026-09-10 Phase 9에서 해결]** `app/domains/currency`(`ExchangeRate`+`ExchangeRateToleranceSetting`, 수동 입력만·실외부 API 호출 없음)를 신설, 문서 원문 초기값 2%를 기본 허용률로 사용, 19개 테스트로 검증됨. **다만 허용률 판정(`check_rate_within_tolerance`)을 실제 후보평가 흐름에 연결하는 "기준 환율 기록" 지점은 아직 없다** — Phase 4의 가격 인상 감지가 겪은 것과 정확히 같은 한계(`docs/HOMEZ_PROJECT_STATE.md` 2026-09-10 후속 20 참고).
+9. ~~마진율/원가상승률 입력 UI가 문서 지시(퍼센트 단위)와 반대로 구현됨~~ **[2026-09-10 Phase 10에서 해결, Phase 13에서 브라우저 실측 확인]** `console.html`의 4개 입력(소매구매/구매작업 정책 화면 각각 최소마진율·최대가격상승률)을 `(0~1)`에서 `(%)` 0~100으로 바꾸고, `console.js`의 표시/저장/위험경고비교/읽기전용요약 로직 전부에 ×100·÷100 변환을 넣었다 — 백엔드 스키마(`ge=0, le=1`)는 그대로 두고 프론트엔드에서만 변환한다. Phase 13에서 격리 스크래치 서버로 실제 로그인해 두 화면의 입력 필드를 DOM에서 직접 확인(`min=0, max=100, step=0.1`) — 실제 브라우저 렌더링 검증 완료.
 10. 배송비를 확인하지 못해도 실제로는 발주가 막히지 않음 — 화면엔 "확인 안 됨"이라 정직하게 표시되지만 이 값이 실제 차단 목록(`blocked_reasons`)에 들어가지 않는다(코드로 직접 확인된 결함, 6-3/6-4/8-9/8-10 관련).
 11. 배송비/가격 정보의 TTL(문서: 가격 30분, 재고 10분)이 시스템 상수로 존재하지 않음 — TTL 캐시 레이어 자체가 없다.
-12. 백업 파일이 암호화되지 않음(평문 SQLite 그대로 로컬 보관) — 문서 11-16 위반.
-13. 주간 자동/안내 기반 복구 시험 기능이 없음 — 코드 주석이 스스로 "스케줄러가 없어 범위 밖"이라 인정.
+12. ~~백업 파일이 암호화되지 않음(평문 SQLite 그대로 로컬 보관) — 문서 11-16 위반.~~ **[2026-09-09 Phase 5에서 부분 해결]** `app/domains/backup/encryption.py`(HMAC-SHA256 기반 encrypt-then-MAC, 표준 stdlib만 사용 — `cryptography` 패키지 미설치 상태라 새 의존성 추가는 별도 승인 대상으로 남김) 신설, 16/16 단독 테스트로 왕복·변조감지·오탈키거부 검증됨. **다만 아직 `BackupService.create_backup()`/`RestoreService`에 실제로 연결되지 않았다** — 두 서비스는 약 15곳의 운영 호출부와 ~50곳의 기존 테스트에서 인자 없이(`BackupService(db)`) 생성되고 있어, 지금 강제 연결하면 그 전부를 건드리는 대규모 변경이 된다. 원시 모듈만 먼저 완성·검증하고 파이프라인 연결은 별도 단계로 분리했다(자세한 이유는 `docs/HOMEZ_PROJECT_STATE.md` Phase 5 절).
+13. ~~주간 자동/안내 기반 복구 시험 기능이 없음 — 코드 주석이 스스로 "스케줄러가 없어 범위 밖"이라 인정.~~ **[2026-09-09 Phase 5에서 해결]** `RestoreService.run_weekly_rehearsal()` 신설 — 대상 DB를 새로 백업(trigger_source=scheduled_rehearsal)한 뒤 그 백업을 버릴 목적의 임시 경로에 실제로 복원해 보고, 성공/실패를 `RestoreAttempt`/알림으로 남긴다(11/11 테스트 통과). 스케줄러(Phase 6)가 아직 없어 "매주 자동" 실행은 여전히 관리자가 수동으로 호출해야 한다 — "안내 기반" 절반만 충족.
 14. 긴급 중지(Emergency Stop) 발동 알림이 "서버 관리자/사용자 관리자" 역할 구분 없이 **활성화를 실행한 사람 1명에게만** 발송됨 — 문서 11-21/11-22 위반.
 15. "가상재고"(무재고 중개 특유의, 의도적으로 낮게 표시하는 재고) 개념이 시스템 어디에도 없음 — 대신 실물 창고형 `InventorySku` 모델만 존재해 사업 모델과 개념적으로 어긋남(7-7, 7-8, 8-17, 8-19).
 16. 매입처 반복 실패 시 자동 일시정지 로직 없음(3-11, 7-11, 7-15, 7-16) — 개념 자체 미구현.
@@ -55,9 +55,10 @@
 ### Medium
 
 17. `settlement_reconciliations.refund_amount` 컬럼이 DB에는 있으나 ORM/서비스 어디에도 매핑되지 않는 고아 컬럼(schema drift).
-18. 감사로그(`write_audit_log`)의 자유 텍스트 `description` 필드가 중앙 강제 마스킹을 거치지 않음 — 예: Emergency Stop 사유를 그대로 로그에 삽입, 사용자가 사유란에 개인정보를 적으면 그대로 새어나갈 수 있음.
+18. ~~감사로그(`write_audit_log`)의 자유 텍스트 `description` 필드가 중앙 강제 마스킹을 거치지 않음~~ **[2026-09-10 Phase 11에서 해결]** `write_audit_log()`가 저장 직전 `description`을 항상 `redact_free_text()`(전화번호·JWT 형태 패턴 치환)로 통과시킨다 — 일반 설명 문구는 영향 없음(패턴 매칭이라 오탐 없음), 4개 테스트로 검증. 감사로그를 쓰는 11개 파일 전체 회귀(168개) 영향 없음 확인.
 19. AI 판단 화면의 "근거 부족" 문구가 문서 요구 문구 "확인 필요"가 아니라 "데이터 부족"으로 다르게 표시됨(12-20, 경미하지만 명시적 요구사항 불일치).
 20. 한도 초과 시 `SafetyService.evaluate()`가 `DENY`만 반환하고 `REQUIRE_APPROVAL`(사용자 승인 요청)로 전환하지 않음(5-5) — "중지"는 되지만 "승인 요청" 워크플로로 이어지는지는 호출자 책임으로 남아있음.
+21. ~~**[2026-09-09 Phase 4에서 발견]** "가격이 기존 확인값보다 인상됐으면 자동발주를 중지한다"(8-2)는 정책 판정 코드... 그 판정에 필요한 기준값을 실제로 채우는 호출부가 저장소 어디에도 없다~~ **[2026-09-10 Phase 10에서 해결]** `PurchaseTaskCandidate.expected_amount_at_creation`(신규 컬럼) 추가 + `evaluate_and_prepare()`가 후보를 처음 평가할 때 1회만 기록 + 재평가 시 비교하도록 연결했다. `PriceIncreaseBaselineTestCase`(4개, `tests/test_purchase_task_service.py`)가 end-to-end로 검증: 첫 평가는 오탐 없음, 재평가해도 기준선 불변, 허용률 초과 인상은 실제로 BLOCK+PRICE_CHANGE 강등까지 발생, 허용률 이내는 통과. `build_order_submission_review()`(발주 전 최종 검토)가 이 기준선을 함께 쓰는지는 별도 확인 필요(미검증으로 남김).
 
 ---
 
@@ -74,7 +75,7 @@
 | 1-3 | 기본 통화·시간대·백업 위치·주기·보관기간 설정 완료 | NOT_IMPLEMENTED | `app/domains/settings/seed.py`에 `DEFAULT_TIMEZONE` 존재하나 이 도메인은 `app/main.py`에 미mount(죽은 코드로 코드 주석 스스로 명시). 실제 mount된 `user_settings`의 `ALLOWED_SETTING_KEYS`는 4개(locale/guide_progress/ui_preferences/notification_preferences)뿐 | 통화 설정 코드 전무, 백업 주기(스케줄러 부재), 보관기간은 코드 상수뿐 설정화면 없음 | — | GPT가 코드로 구현 가능 |
 | 1-4 | GitHub엔 코드·Migration·문서·테스트만 | IMPLEMENTED | `.gitignore`에 `*.db`/`.env`, `git ls-files`에 db/env 없음 | — | — | — |
 | 1-5 | 실제 DB·로그·API키·JWT·카드·개인정보 GitHub 미업로드 | IMPLEMENTED | 1-4와 동일 근거 | `storage/logs` 디렉터리 자체의 git 추적 여부 별도 미확인 | `storage/logs`/`storage/backups` 추적 여부 재확인 | — |
-| 1-6 | 실제 DB를 컴퓨터 내부에 별도 백업 | IMPLEMENTED | `BackupService.create_backup()` — SQLite 온라인 백업 API+integrity_check+이력. `backup_records` 실제 3건 존재 | 자동/주기 백업 없음(수동 트리거만) | — | 수동 완료, 자동화는 GPT 구현 가능 |
+| 1-6 | 실제 DB를 컴퓨터 내부에 별도 백업 | IMPLEMENTED | `BackupService.create_backup()` — SQLite 온라인 백업 API+integrity_check+이력. `backup_records` 실제 3건 존재. 2026-09-09 Phase 5: `RestoreService.run_weekly_rehearsal()`가 이 위에 백업+복구시험을 묶어 제공 | 자동/주기 백업 없음(스케줄러 부재로 여전히 수동 트리거만) | — | 수동 완료, 자동화는 Phase 6(스케줄러) 대상 |
 
 ### 2. 판매채널 운영 방식
 
@@ -84,7 +85,7 @@
 | 2-2 | 초기 상품등록은 사용자 확인 후 실행 | IMPLEMENTED | `ApprovalService` — 요청/승인/거절/취소 항상 별도 API, company 스코프 강제 | — | — | — |
 | 2-3 | 최종 목표: HOMEZ 자동등록+결과 통지 | NOT_IMPLEMENTED | 문서 자체가 "최종 목표"로 명시(의도된 미완료) | 자동화 모드 있어도 리스팅 제출은 여전히 승인 게이트 통과 필요 | — | 실제 주문·결제 데이터가 쌓여야 가능 |
 | 2-4 | 초기 가격변경은 변경안 표시 후 확인 | IMPLEMENTED | `PriceChangeRequest`+fingerprint(요청/승인 시점 지문 불일치 시 재요청 요구) | — | — | — |
-| 2-5 | 가격 주 1회 정기 검토 | NOT_IMPLEMENTED | `price_advisory_service.suggest()`는 수동 호출만 | 주기 실행 인프라 부재(스케줄러 전체 0줄) | — | GPT가 코드로 구현 가능 |
+| 2-5 | 가격 주 1회 정기 검토 | PARTIALLY_IMPLEMENTED | `price_advisory_service.suggest()`는 수동 호출만. 2026-09-10 Phase 10: `PriceReviewCycleSetting`(회사별 검토주기, 기본 7일) 신설 — 설정값 관리는 완료 | 스케줄러(Phase 6에서 인프라는 생김)에 실제로 연결해 매주 자동 실행하는 Job은 아직 없음 | `price_advisory_service.suggest()`를 스케줄러 Job으로 연결 | GPT가 코드로 구현 가능(스케줄러 연결) |
 | 2-6 | 매입원가 위험 시 정기검토 전 즉시 일시중지 | NOT_IMPLEMENTED | `MarketplaceListing.pause()` 존재하나 수동 admin API뿐 | 마진위험 감지→자동pause 연결 코드 없음 | — | GPT가 코드로 구현 가능 |
 | 2-7 | 품절 확인 시 즉시 자동 판매중지 | NOT_IMPLEMENTED | 품절 상태 모델링(OUT_OF_STOCK)은 존재, 읽기전용 집계만 | 자동 pause 실행 코드 없음(수동 admin API만) | — | GPT가 코드로 구현 가능 |
 | 2-8 | 신규 주문 5분마다 수집 | PARTIALLY_IMPLEMENTED | 주문 수집 로직·API 자체는 존재(`order/collection_service.py` 등) | 5분 주기 스케줄러 없음(수동 트리거만) | — | GPT가 코드로 구현 가능 |
@@ -121,7 +122,7 @@
 | 4-8 | 수동모드: HOMEZ 준비, 사용자 결제완료 | VERIFICATION_REQUIRED | 발주 준비 흐름 존재 | 결제를 사용자가 완료하는 화면까지 명시 확인 못함 | 수동모드 화면 전체 흐름 확인 | GPT가 코드로 구현 가능 |
 | 4-9 | 반자동모드: 결제 직전까지 준비, 사용자 승인 | PARTIALLY_IMPLEMENTED | REQUIRE_REVIEW/OPERATOR_APPROVAL 개념 존재 | 결제 직전 준비단계가 payment 도메인과 미연결 | — | GPT가 코드로 구현 가능 |
 | 4-10 | 자동모드: 검증된 결제토큰 또는 예치금, 한도 준수 | PARTIALLY_IMPLEMENTED | 예치금 기반 한도체크는 UI까지 구현 확인(5-4) | "검증된 결제 토큰" 경로 전무 | — | GPT가 코드로 구현 가능 |
-| 4-11 | 카드번호·보안코드 직접 저장 안 함 | IMPLEMENTED(단, 결제기능 부재로 인한 자동충족) | 카드 저장 코드 자체 없음 | 결제기능 구현 시 원칙 유지 여부 재검증 필요 | 카드결제 도메인 구현 시 재검증 | 향후 재검증 필요 |
+| 4-11 | 카드번호·보안코드 직접 저장 안 함 | IMPLEMENTED | 2026-09-10 Phase 7: `PaymentMethod` Model에 카드번호·CVC가 들어갈 컬럼 자체가 없음(구조적 강제) — `raw_details`는 `FakePaymentProvider.tokenize()`에만 잠깐 전달되고 버려지며, DB에는 `credential_target_name`(Windows Credential Manager 참조)만 남는다. `test_register_method_never_stores_raw_card_number_in_db`로 실제 DB 행을 읽어 확인 | 실제 Provider가 아직 없어 이 보장이 "진짜 카드결제"에서도 유지되는지는 실제 Provider 연동 시 재검증 필요(Fake로만 검증됨) | 실제 Provider 연동 시 동일 테스트 패턴 재적용 | GPT 구현 완료, 실제 Provider 연동은 별도 |
 | 4-12 | 카드 자동결제엔 PG토큰/저장카드/가상카드 사용 | NOT_IMPLEMENTED | — | 토큰/가상카드/저장카드 코드 전무 | — | 외부 업체의 공식 답변 필요(PG 계약·문서 선행) |
 | 4-13 | 토큰결제 미지원 매입처는 수동/반자동 운영 | NOT_IMPLEMENTED | — | 토큰지원 판단해 모드 강제하는 로직 없음(토큰결제 자체 없음) | — | 외부 업체의 공식 답변 필요 |
 | 4-14 | 자택 테스트발주 성공 후 소액한도로 자동결제 시작 | NOT_IMPLEMENTED [BLOCKED_BY_USER_APPROVAL] | — | "테스트발주 성공→자동모드 개방" 전용 게이트 없음(수동전환만 가능) | — | 사용자의 명시적 실행 승인 필요 |
@@ -155,12 +156,12 @@
 | 6-7 | 광고비는 초기 이익계산 제외 | IMPLEMENTED | `calculate_margin()`에 광고비 파라미터 자체 없음 | — | — | — |
 | 6-8 | 광고사용 상품엔 `광고비 미반영` 표시, 자동확대 안 함 | NOT_IMPLEMENTED | — | 상태 라벨/플래그, UI, 자동확대 방지 로직 모두 미발견 | — | GPT가 코드로 구현 가능 |
 | 6-9 | 반품 예상비는 수익계산 포함 | IMPLEMENTED | `return_risk_reserve` 파라미터가 net_profit 계산에 직접 반영, 회사별 기본값 필드 존재 | 실제 호출부가 항상 채우는지 추가확인 필요 | 실제 호출 시 인자 전달 여부 | — |
-| 6-10 | 초기 환율 변동 허용률 2% | NOT_IMPLEMENTED | `currency`/`exchange` 도메인 전부 0줄, DB 테이블 없음 | 도메인 자체 빈 스캐폴딩 | — | GPT가 코드로 구현 가능 |
-| 6-11 | 환율 자동 모니터링 추후 개발 | NOT_IMPLEMENTED | 위와 동일 | — | — | GPT가 코드로 구현 가능 |
+| 6-10 | 초기 환율 변동 허용률 2% | IMPLEMENTED(판정 로직, 실행 미연결) | 2026-09-10 Phase 9: `app/domains/currency`(`ExchangeRate`+`ExchangeRateToleranceSetting`, 기본 2%) 신설, `check_rate_within_tolerance()`로 판정 가능. 19개 테스트 통과 | 판정을 실제 후보평가 흐름에 연결하는 "기준 환율 기록" 지점이 없음(Phase 4 가격 인상 감지와 동일한 한계) | 기준 환율 기록 시점 설계 | GPT 구현 완료(메커니즘), 실제 흐름 연결은 별도 조사 |
+| 6-11 | 환율 자동 모니터링 추후 개발 | NOT_IMPLEMENTED | 수동 입력만 지원(의도적 — 절대 경계: 실제 외부 API 호출 금지) | 자동 모니터링(외부 환율 API 연동) 자체가 이 세션 범위 밖 | — | 외부 환율 API 선정·연동은 별도 승인 필요 |
 | 6-12 | 기준 미달 시 신규판매·자동발주 즉시중지+통지 | PARTIALLY_IMPLEMENTED | 마진율 미달 시 발주는 MIN_MARGIN_RATE_NOT_MET으로 BLOCK | 신규판매(리스팅) 쪽 동일 게이트 여부 미확인, 알림 dispatch 연결 미확인 | marketplace_listing 승인 흐름 재확인 | GPT가 코드로 구현 가능 |
 | 6-13 | 기존 주문은 자동취소 안 하고 확인대상 분리 | IMPLEMENTED(원칙만) | 반품/주문 자동취소 로직 전역 미발견(자동취소 금지 원칙 전역 일관) | 이 항목 전용 로직인지 특정 못함 | — | — |
 | 6-14 | 마진율/원가상승률/환율허용률 설정화면에서 변경 | PARTIALLY_IMPLEMENTED | 마진율/원가상승률 입력필드 존재(console.html/js) | 환율 허용률은 화면 자체 없음(도메인 부재) | — | 마진율·원가상승률: 완료 / 환율: GPT 구현 가능 |
-| 6-15 | 비율은 퍼센트(`15%`) 단위로 입력 | NOT_IMPLEMENTED | — | `console.html`이 "0~1" 소수 입력 요구 — 문서와 정반대 구현(High 결함 #9) | — | GPT가 코드로 구현 가능 |
+| 6-15 | 비율은 퍼센트(`15%`) 단위로 입력 | IMPLEMENTED | 2026-09-10 Phase 10: 마진율·가격상승률 4개 입력을 퍼센트로 수정(High 결함 #9 해결). Phase 13: 실제 브라우저 DOM에서 min=0/max=100/step=0.1 확인 완료 | — | — | — |
 
 ### 7. 상품·공급처 평가
 
@@ -172,7 +173,7 @@
 | 7-4 | 발주 직전 상품·옵션 판매가능 상태 자동확인 | IMPLEMENTED(사람 트리거 기준) | lookup_product() 호출 후 blocked_reasons 계산, send_blocked 연결 | "자동"이 스케줄러 아닌 사람이 화면을 여는 행위가 트리거(스케줄러 부재 공통제약) | — | — |
 | 7-5 | 정확한 수량 없고 판매가능여부만 제공되면 그 상태 사용 | IMPLEMENTED | `ChannelProductOption.in_stock: bool\|None` 설계 | — | — | — |
 | 7-6 | 재고/판매가능여부 확인불가 시 자동발주 안 함 | IMPLEMENTED | any_price_unknown 등이 조회실패 케이스도 포함해 차단 | — | — | — |
-| 7-7 | 판매채널 가상재고 기준 이하 시 신규판매 중지 | NOT_IMPLEMENTED | "가상재고" 개념 전역 미발견, `InventorySku`는 실물창고형(다른 개념) | 개념 자체 미구현 | — | GPT가 코드로 구현 가능 |
+| 7-7 | 판매채널 가상재고 기준 이하 시 신규판매 중지 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 10: `app/domains/price_stock_safety`(`VirtualStockThreshold`+게이트 판정 함수) 신설, `InventorySku`(실물창고)와 명확히 분리 | 판정 함수가 받는 "표시 재고 수치"를 실제 판매채널 리스팅에서 읽어오는 필드 자체가 없음(marketplace_listing 도메인에 새로 설계 필요) | 리스팅 표시재고 필드 설계 | GPT가 코드로 구현 가능(보강) |
 | 7-8 | 매입처 API 호출제한 준수 조회간격·캐시TTL | NOT_IMPLEMENTED | 429 사후방어만 존재, 사전 호출간격/캐시TTL 로직 없음 | — | — | GPT가 코드로 구현 가능 |
 | 7-9 | 모델명·옵션·수량·크기·제조사 일치 상품만 자동연결 | PARTIALLY_IMPLEMENTED | `min_match_confidence`(기본 0.98)+match_tier(BLOCKED/NEEDS_REVIEW) 존재 | 필드단위 개별비교인지 단일 스칼라 판단인지 매칭 알고리즘 소스 미확인 | 실제 매칭 서비스 파일 확인 | GPT가 코드로 구현 가능(부분) |
 | 7-10 | 배송기록 부족 공급처는 사용자 확인대상 | NOT_IMPLEMENTED | `CompanySupplierRelation`에 배송이력/신뢰도 필드 전무, approval_status만 존재 | 배송이력 기반 자동판단 없음 | — | GPT가 코드로 구현 가능 |
@@ -189,7 +190,7 @@
 | 번호 | 운영 기준 | 판정 | 구현 증거 | 빠진 부분 | 필요한 검증 | 담당 |
 |---:|---|---|---|---|---|---|
 | 8-1 | 발주 직전 매입처 현재가격 항상 자동확인 | IMPLEMENTED(사람 트리거 기준) | lookup_product() 실호출 경로 | 스케줄러 부재로 "항상"이 아니라 화면 여는 시점만 | — | — |
-| 8-2 | 가격 인상 시 자동발주 중지+통지 | PARTIALLY_IMPLEMENTED | PRICE_INCREASE_RATE_EXCEEDED가 생성시점 대비 인상률 검사 | "기존 확인값"의 정확한 스냅샷 기준 불명확, 알림연결 미확인 | 알림 dispatch 연결 재확인 | GPT가 코드로 구현 가능(보완) |
+| 8-2 | 가격 인상 시 자동발주 중지+통지 | IMPLEMENTED | 2026-09-10 Phase 10: `PurchaseTaskCandidate.expected_amount_at_creation`으로 기준선을 실제로 기록·비교(Critical 결함 #21 해결), PRICE_CHANGE 기능 강등+통지까지 end-to-end 검증(4개 테스트) | — | — | — |
 | 8-3 | 발주 직전 옵션 구매가능 상태 항상 자동확인 | IMPLEMENTED(사람 트리거 기준) | 7-4와 동일 근거 | 동일 제약 | — | — |
 | 8-4 | 판매가능·재고 확인불가 시 중지+통지 | PARTIALLY_IMPLEMENTED | 차단 로직 확인됨 | 실제 알림 dispatch까지 이어지는지 미확인 | notification_center 연결 확인 | GPT가 코드로 구현 가능(보완) |
 | 8-5 | 가격정보 기본TTL 30분, 설정변경 가능 | NOT_IMPLEMENTED | `price_valid_until`은 수동입력 필드일 뿐 | 자동TTL 개념 부재 | — | GPT가 코드로 구현 가능 |
@@ -215,20 +216,20 @@
 | 9-1 | 반품요청 시 요청내용·주문 정리+통지 | IMPLEMENTED | `create_return_order()`—주문/품목/송장 검증 후 알림 dispatch, DB 테이블 실존 | — | — | — |
 | 9-2 | 반품요청 자동승인 안 함 | IMPLEMENTED | approve()는 사람이 명시 호출해야 하는 별도 메서드, 자동호출 안 됨 | — | — | — |
 | 9-3 | 상품상태·사유 확인 후 승인, 반품절차 진행 | IMPLEMENTED | REQUESTED→APPROVED→RECEIVED→COMPLETED 조건부 전이 강제 | 구조화된 "상품상태" 전용필드는 못 찾음(reason 필드만) | — | — |
-| 9-4 | 실제 고객환불은 사용자 승인 후 실행 | NOT_IMPLEMENTED | `refund/` 전부 0줄 — 환불 실행 개념 자체 없음 | 고객환불 금액 실행코드 전무 | — | GPT가 코드로 구현 가능(이후 실행은 사용자 승인 필요) |
-| 9-5 | 고객·판매채널·매입처 환불 별도 상태·금액 기록 | NOT_IMPLEMENTED | 3분리 모델 전무. `settlement_reconciliations.refund_amount` 컬럼은 있으나 미사용(고아 컬럼) | 3종 분리 모델 전무 | — | GPT가 코드로 구현 가능 |
+| 9-4 | 실제 고객환불은 사용자 승인 후 실행 | IMPLEMENTED(메커니즘, 실행은 Fake) | 2026-09-10 Phase 8: `RefundService.approve_refund()`가 유일한 승인 진입점이고 항상 사람의 명시적 호출을 요구 — 자동 승인 경로 자체가 코드에 없음(`test_no_automatic_path_reaches_approved_status`). 승인 후 실행도 `FakeRefundExecutor`로만 검증 | 실제 Executor(진짜 환불 실행)는 아직 없음 — 절대 경계 | 실제 Executor 연동 시 재검증 | GPT 구현 완료(메커니즘), 실제 실행 연동은 사용자 승인 필요 |
+| 9-5 | 고객·판매채널·매입처 환불 별도 상태·금액 기록 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 8: `RefundType`으로 CUSTOMER_REFUND/SUPPLIER_RECLAIM 2종 분리(각각 상태·금액 독립 기록) | "판매채널" 환불(마켓플레이스 정산 조정)은 별도 타입으로 분리하지 않음 — 3종 중 2종만 구현. `settlement_reconciliations.refund_amount` 컬럼은 여전히 미사용(고아 컬럼, 별개 결함) | 판매채널 환불 타입 추가 여부 확인 | GPT가 코드로 구현 가능(보강) |
 | 9-6 | 반품배송비 부담주체는 사유+정책에 따라 계산 | NOT_IMPLEMENTED | 계산 로직/필드 미발견 | — | — | GPT가 코드로 구현 가능 |
 | 9-7 | 부담주체·금액 확인불가 시 사용자 선택요청 | NOT_IMPLEMENTED | 상동 | — | — | GPT가 코드로 구현 가능 |
 | 9-8 | 부분반품·부분환불 금액 HOMEZ 계산, 승인 후 실행 | NOT_IMPLEMENTED | 코드가 명시적으로 "부분반품 미지원(Gate4 범위 밖)"이라 차단 | 부분반품 자체가 시스템적으로 불가능 | — | GPT가 코드로 구현 가능 |
-| 9-9 | 매입처 환불완료 확인까지 미정산 표시 | NOT_IMPLEMENTED | 매입처 환불 개념 부재(9-5와 동일) | — | — | GPT가 코드로 구현 가능 |
-| 9-10 | 매입처 환불상태·환불액 조회기능 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
+| 9-9 | 매입처 환불완료 확인까지 미정산 표시 | NOT_IMPLEMENTED | 2026-09-10 Phase 8: `RefundType.SUPPLIER_RECLAIM`로 매입처 환불 개념 자체는 생겼지만, `settlement`/`funding` 도메인과 연동해 "미정산으로 표시"하는 로직은 아직 없음 | settlement/funding 연동 없음 | — | GPT가 코드로 구현 가능(보강) |
+| 9-10 | 매입처 환불상태·환불액 조회기능 | IMPLEMENTED | 2026-09-10 Phase 8: `GET /refunds?status=`+`RefundType.SUPPLIER_RECLAIM` 필터로 매입처 환불 상태·금액 조회 가능(`RefundService.list_for_company`) | — | — | — |
 | 9-11 | 판매채널 실입금액 vs HOMEZ예상액 자동대조 | PARTIALLY_IMPLEMENTED | `analyze()`가 total_amount vs gross_amount 비교, 허용오차 적용 | 서비스 자체 docstring이 "채널 정산명세서 원본 연동 아직 없음"이라 명시 — 수기입력인지 자동유입인지 미특정 | `MarketplaceSettlement` 실제 유입경로 확인 | 실제 채널 데이터 유입경로 확인 필요(VERIFICATION_REQUIRED 재분류 여지) |
 | 9-12 | 정산금액 차이 시 구성항목 표시+통지 | IMPLEMENTED(9-11 전제하) | `SettlementDifference`가 구성요소 반환(difference_type/evidence 등) | — | — | — |
 | 9-13 | 정산상태 매일 자동확인, 월말 재대조 | NOT_IMPLEMENTED | 스케줄러 부재 — analyze()는 수동호출 전용, 월말 재대조 로직도 미발견 | — | — | GPT가 코드로 구현 가능 |
 | 9-14 | 판매 직후엔 예상이익 표시 | IMPLEMENTED | `MarginType.EXPECTED`/`ACTUAL` 구분, `MarginSnapshot` 저장 | — | — | — |
 | 9-15 | 입금+반품가능기간 확인 후 최종손익 확정 | PARTIALLY_IMPLEMENTED | `SETTLEMENT_RECONCILED` 스냅샷 개념 존재 | 반품가능기간 경과를 조건화하는 로직 못 찾음 | 실제 확정 트리거 로직 확인 | GPT가 코드로 구현 가능(보완) |
-| 9-16 | 환불·정산결과 확인불가 시 자동재실행 안 함+통지 | IMPLEMENTED(원칙만) | `ReconciliationStatus.MISMATCH`는 자동보정 안 함 명시, 자동재실행 로직 미발견 | 환불 자체가 없어 "환불결과" 쪽은 해당없음 | — | — |
-| 9-17 | 같은 반품·환불 중복실행 항상 차단 | PARTIALLY_IMPLEMENTED | `ReturnOrder`가 (company_id, idempotency_key) UNIQUE — 반품(물류)은 확인 | 환불(금액) 실행 자체가 없어 검증대상 없음 | — | 환불 관련: GPT가 코드로 구현 가능 |
+| 9-16 | 환불·정산결과 확인불가 시 자동재실행 안 함+통지 | IMPLEMENTED(원칙만) | `ReconciliationStatus.MISMATCH`는 자동보정 안 함 명시, 자동재실행 로직 미발견. 2026-09-10 Phase 8: 환불도 실패 시 재시도를 자동으로 하지 않음(REJECTED/거부된 건을 다시 승인하려면 새 요청을 만들어야 함 — 상태기계가 REJECTED→APPROVED 전이를 허용하지 않음) | "확인불가 시 통지"는 환불 쪽에 아직 없음(별도 알림 미배선) | — | GPT가 코드로 구현 가능(통지 보강) |
+| 9-17 | 같은 반품·환불 중복실행 항상 차단 | IMPLEMENTED | `ReturnOrder`가 (company_id, idempotency_key) UNIQUE — 반품(물류) 확인. 2026-09-10 Phase 8: `Refund`도 동일하게 (company_id, idempotency_key) UNIQUE로 환불(금액) 중복 생성을 차단(`test_create_refund_enforces_idempotency_key_uniqueness`) | — | — | — |
 
 ### 10. 상품·이미지·규제 데이터
 
@@ -259,7 +260,7 @@
 | 번호 | 운영 기준 | 판정 | 구현 증거 | 빠진 부분 | 필요한 검증 | 담당 |
 |---:|---|---|---|---|---|---|
 | 11-1 | 고객 이름·전화·주소는 일반화면에서 일부 마스킹 | IMPLEMENTED | `sensitive_data.py`(mask_name/mask_phone/mask_address/mask_zipcode), 다수 실호출처 | — | 브라우저 렌더링 확인 | — |
-| 11-2 | 개인정보 조회권한 별도 설정 | VERIFICATION_REQUIRED | role_permission 권한 카탈로그 존재(타 세션 영역) | 전용 permission code 존재여부 미확인 | `permission_catalog.py` 전수 확인 | GPT가 코드로 구현 가능(또는 존재 시 확인만) |
+| 11-2 | 개인정보 조회권한 별도 설정 | IMPLEMENTED | 2026-09-10 Phase 11: 전용 `VIEW_SENSITIVE_DATA` 권한 코드 신설(`DEFAULT_PERMISSIONS`), `/orders/{id}/sensitive-detail`+`order-submission-review`(원문 요청 시) 양쪽에 게이트 삽입. SUPER_ADMIN은 자동 통과, 비-SUPER_ADMIN 역할은 명시적 부여 전까지 항상 거부(5개 테스트로 검증). 기존 role_permission 관리 화면이 이 코드를 자동으로 노출해 UI 작업 불필요 | Phase 13에서 콘솔 화면에 새 권한 코드가 나타나는지까지는 확인하지 못함(role_permission 관리 화면 자체를 이번 브라우저 검증 표적에 포함하지 않음) | role_permission 관리 화면에서 실제 클릭 부여 확인 | — |
 | 11-3 | 조회권한 있어도 비번 재인증 통과해야 원문 확인 | IMPLEMENTED | `recent_auth.py`(5분 TTL, 1회용, 5회실패 15분잠금), 12개 파일에서 사용 | — | 각 호출처가 실제로 개인정보조회에 걸려있는지 전수확인 | — |
 | 11-4 | 인증 후 원문 1회만 표시, 기본 5분 | PARTIALLY_IMPLEMENTED | `RECENT_AUTH_TTL_SECONDS=300`(토큰 유효시간) | 이는 "토큰 유효시간"이지 "화면표시시간" 아님 — 화면 자동종료(재마스킹) 로직 미확인 | console.js 원문표시 타이머 UI 확인 | GPT가 코드로 구현 가능 |
 | 11-5 | 원문표시시간 설정화면에서 변경 가능 | NOT_IMPLEMENTED | TTL은 코드 상수(하드코딩), DB 설정값 아님 | 설정화면 연동 코드 없음 | — | GPT가 코드로 구현 가능 |
@@ -267,15 +268,15 @@
 | 11-7 | 불필요한 상세정보 삭제·강한마스킹 | NOT_IMPLEMENTED | 자동삭제·재마스킹 배치/스케줄러 없음 | 삭제정책 실행코드 없음 | — | GPT가 코드로 구현 가능(법적기준 확정 후) |
 | 11-8 | 정확한 보관기간은 법적기준·정책조사로 별도확정 | NOT_IMPLEMENTED | 조사결과 문서·상수 없음 | — | — | 외부업체(판매채널) 정책+사용자 법적기준 조사 필요 |
 | 11-9 | API키·JWT는 Windows Credential Manager 저장 | IMPLEMENTED | `WindowsCredentialStore` — advapi32.dll 직접호출, non-Windows fail-closed | 실제 항목 존재여부는 원문조회 금지로 미확인(구조만) | — | — |
-| 11-10 | API키·JWT·카드정보 원문을 DB/문서/로그/GitHub 미저장 | PARTIALLY_IMPLEMENTED | `mask_secret()`/`redact_free_text()`, `.gitignore` 커버 | 카드정보는 저장코드 자체가 없음(payment 도메인 0줄 — 더 근본적 문제) | — | GPT가 코드로 구현 가능(결제도메인 구현 필요) |
-| 11-11 | 로그인은 프로그램 종료 시 종료, 최대 3시간 유지 | NOT_IMPLEMENTED | **Critical**: `ACCESS_TOKEN_EXPIRE_MINUTES=30`, `REFRESH_TOKEN_EXPIRE_DAYS=30`. `desktop_console_session_store.py`가 refresh token을 Credential Manager에 저장해 프로세스 재시작 후에도 세션 자동복원 — 문서요구와 정반대 설계. "3시간"/idle 타임아웃 상수 전무 | 3시간 idle 정책 전체 부재, 종료 시 파기로직 부재(오히려 반대) | — | GPT가 코드로 구현 가능(단, 설계의도 재확인 필요) |
-| 11-12 | 자동결제 설정 변경 전 비번 재확인 | PARTIALLY_IMPLEMENTED | retail_purchase 쪽 recent_auth 사용+위험변경 경고 UI | "결제"(카드/토큰) 자체가 없어 원 대상 없음, 매입 자동실행 정책만 커버 | — | GPT가 코드로 구현 가능(결제도메인 구현 후 재검증) |
-| 11-13 | 로그에 누가/언제/무엇, 전화·주소·API키·카드는 항상 가림 | PARTIALLY_IMPLEMENTED | `write_audit_log` 실행자/시각/action 기록, redact 함수 존재 | 자유텍스트 description 필드가 강제마스킹 안 거침(EStop reason 등 그대로 삽입 위험) | 감사로그 삽입경로 전수 그레핑 | GPT가 코드로 구현 가능(중앙 강제마스킹 게이트) |
+| 11-10 | API키·JWT·카드정보 원문을 DB/문서/로그/GitHub 미저장 | IMPLEMENTED | `mask_secret()`/`redact_free_text()`, `.gitignore` 커버. 2026-09-10 Phase 7: `payment_methods` 테이블에 카드정보 원문이 들어갈 컬럼 자체가 없음(4-11과 동일 근거). 2026-09-10 Phase 11: `mask_card_number()` 신설(이전에는 카드 마스킹 함수 자체가 없었음) | 실제 Provider 연동 시 재검증 필요(현재는 Fake Provider로만 검증) | 실제 Provider 연동 시 재검증 | GPT 구현 완료 |
+| 11-11 | 로그인은 프로그램 종료 시 종료, 최대 3시간 유지 | VERIFICATION_REQUIRED (2026-09-09 Phase 2로 코드·격리테스트 완료, 실사용 미확인) | Phase 2에서 구현 완료: `app/desktop/main.py`가 프로세스 시작마다(SingleInstanceGuard로 진짜 최초 실행일 때만) Credential Manager의 콘솔 세션을 무조건 삭제(종료 시 종료 충족). `AuthSession.last_seen_at`을 매 인증 요청마다 갱신(`app/core/auth.py`)하고 `SESSION_TIMEOUT_MINUTES`(기본 180분=3시간, 기존엔 죽은 설정값이었음) 초과 시 `SessionStatus.IDLE_TIMEOUT`으로 거부 — 일반 API 호출뿐 아니라 `/auth/refresh`(타이머 기반 자동갱신)도 동일하게 막음(`refresh_service.py::rotate()`). 부수적으로 발견·수정한 별개 Critical 결함: `AuthSession.expires_at`이 로그인 시 30분 TTL로 고정된 채 회전마다 갱신되지 않아, 실제로는 로그인 30분 후부터 모든 Refresh가 진짜 폐기와 구분 안 되는 오류로 거부되던 문제(`SessionRepository.extend_expiry` 신설로 수정) — 이게 없었다면 IDLE_TIMEOUT 여부와 무관하게 세션이 30분마다 끊겼을 것. 격리 테스트 `tests/test_session_lifecycle_phase2.py` 7개 전부 통과(결함 재현 포함), `tests/test_refresh_token_security.py` 기존 14개 회귀 통과 | 실제 Desktop 앱을 띄워 "종료 후 재실행 시 로그인 화면이 뜨는지", "3시간 방치 후 요청이 실제로 거부되는지"는 실행 검증 못함(코드 경로만 확인) | 실제 Desktop 실행 환경에서의 종료·idle 시나리오 수동 확인 | — |
+| 11-12 | 자동결제 설정 변경 전 비번 재확인 | IMPLEMENTED | retail_purchase 쪽 recent_auth 사용+위험변경 경고 UI. 2026-09-10 Phase 7: `app/domains/payment/router.py`의 결제수단 등록·비활성화·자동결제한도 변경 3개 엔드포인트 모두 X-Recent-Auth-Token 필수 | 실제 Provider 연동 시 재검증 필요(현재는 Fake Provider) | — | — |
+| 11-13 | 로그에 누가/언제/무엇, 전화·주소·API키·카드는 항상 가림 | IMPLEMENTED | `write_audit_log` 실행자/시각/action 기록, redact 함수 존재. 2026-09-10 Phase 11: `description`이 저장 직전 항상 `redact_free_text()`를 거치도록 중앙 게이트 추가(Medium 결함 #18 해결) | — | — | — |
 | 11-14 | 로그에 비밀값 원문저장 후 재표시 기능 금지 | IMPLEMENTED | `mask_secret()` 완전마스킹, 재표시 API 없음 | — | — | — |
 | 11-15 | 필요 원문은 별도 보안저장소+전용권한+재인증 조회 | VERIFICATION_REQUIRED | Credential은 별도저장소+recent_auth 구조 확인 | 개인정보(전화/주소) 원문에도 동일 분리 있는지 미확인(현재는 마스킹 함수로만 방어) | 개인정보 원문이 평문 DB테이블에 있는지 스키마 확인 | GPT가 코드로 구현 가능 |
-| 11-16 | 실DB 백업파일 암호화, GitHub 미업로드 | PARTIALLY_IMPLEMENTED | GitHub 미업로드 확인 | 암호화 미구현(평문 SQLite 그대로) | — | GPT가 코드로 구현 가능 |
-| 11-17 | DB복구 가능여부 매주 자동/안내기반 시험+기록 | NOT_IMPLEMENTED | 복구 메커니즘 자체는 실재(restore/service.py, test_restore_engine.py) | 스케줄러 부재로 주간 자동/안내 시험 기능 없음(코드 스스로 인정) | — | GPT가 코드로 구현 가능 |
-| 11-18 | 비번 반복오류·이상접근 시 로그인 차단+통지 | NOT_IMPLEMENTED | **Critical**: `increment_failed_login`이 명시적 no-op(DB컬럼 없음), `LOGIN_MAX_ATTEMPT`/`LOGIN_LOCK_MINUTES` 죽은 설정, 잠금·통지 로직 없음 | 실패카운트 저장컬럼 부재, 잠금로직 부재, 알림 부재 | — | GPT가 코드로 구현 가능(DB 컬럼 Migration 필요) |
+| 11-16 | 실DB 백업파일 암호화, GitHub 미업로드 | PARTIALLY_IMPLEMENTED | GitHub 미업로드 확인. 2026-09-09 Phase 5: `app/domains/backup/encryption.py`(HMAC 기반 encrypt-then-MAC, stdlib 전용) 구현+16/16 단독 테스트 통과 | 원시 모듈만 존재 — `BackupService.create_backup()`/`RestoreService` 파이프라인에는 아직 연결 안 됨(실제 생성되는 백업 파일은 여전히 평문) | 파이프라인 연결(약 15개 운영 호출부+~50개 기존 테스트 영향 분석 필요) | GPT가 코드로 구현 가능(범위가 커 별도 단계로 분리 권장) |
+| 11-17 | DB복구 가능여부 매주 자동/안내기반 시험+기록 | IMPLEMENTED(메커니즘, 실행 미검증) | 2026-09-09 Phase 5: `RestoreService.run_weekly_rehearsal()` 구현(11/11 테스트). 2026-09-10 Phase 6: `app/domains/scheduler/jobs.py::run_backup_rehearsal_job()`을 매주 일요일 04:00(Asia/Seoul) 크론으로 `app/main.py` lifespan에 실제 연결 — 이제 "매주 자동"이 코드상 실재함(19/19 테스트) | 실제 서버가 이 코드로 기동돼 실제로 한 번이라도 발화한 적은 없음(실 서버 기동 자체가 이번 세션 범위 밖 — Phase 1 Migration 미적용) | 실 서버 기동 후 최초 1회 실제 발화 확인 | GPT 코드 구현 완료, 실 서버 기동 검증은 사용자 승인 필요 |
+| 11-18 | 비번 반복오류·이상접근 시 로그인 차단+통지 | VERIFICATION_REQUIRED (2026-09-09 P0~P9 Phase 1로 코드·격리테스트 완료, 실 DB 미적용) | Phase 1에서 구현 완료: `migrations/20260909_00_add_login_lockout_columns.sql`(failed_login_count/locked_until/last_failed_login_at), `user/repository.py::increment_failed_login`(원자적 증가+조건부 잠금전환, 동시성 방어), `auth/service.py::login()`(잠금 시 비밀번호 검증 자체를 생략, 계정 열거 방지 위해 동일 오류 메시지 유지), `_notify_account_locked`(계정 소유자+같은 회사 SUPER_ADMIN에게 통지), `account_admin.py::unlock_user`(관리자 수동 해제). 감사기록: ACCOUNT_LOCKED/ACCOUNT_LOCKOUT_RESET/UNLOCK_USER. 격리 테스트 `tests/test_login_lockout.py` 13개 전부 통과(동시성 테스트 포함), 인접 인증 도메인 회귀 84개 전부 통과 | **실제 homez.db에는 아직 미적용**(별도 승인 대상) — 이 Migration이 실 DB에 적용되기 전까지, 실제 로그인 경로(`/auth/login`은 migration-restricted-mode 쓰기 화이트리스트라 항상 열려있음)가 `User` Model이 기대하는 새 컬럼을 실 DB에서 찾지 못해 즉시 깨질 수 있다 — 다른 pending Migration보다 우선순위 높게 적용 권장 | 실 homez.db에 이 Migration 적용(사용자 승인 필요) 후 실제 로그인 1회로 재검증 | 사용자의 명시적 실행 승인 필요(Migration 실제 DB 적용) |
 | 11-19 | 긴급잠금은 상품등록·가격변경·발주·결제 한번에 중지 | IMPLEMENTED(결제 제외) | `is_emergency_stop_active()`가 상품등록/가격변경/발주 실행부에 배선 | 결제 도메인 부재로 결제차단 검증불가 | 결제도메인 구현 후 재검증 | GPT가 코드로 구현 가능(결제) |
 | 11-20 | 긴급잠금 중에도 읽기·백업·진단 유지 | IMPLEMENTED | 조회성 엔드포인트가 EStop 게이트 미통과, "항상 조회가능해야 한다" 원칙 명시 | 백업 실행(생성) 자체가 잠금 중 가능한지 명시적 테스트 필요 | — | — |
 | 11-21 | 긴급잠금 시작 시 서버관리자·사용자관리자에게 통지 | NOT_IMPLEMENTED | 활성화 실행자 1인에게만 발송(`ESTOP_ACTIVATED`), 역할분리 개념 자체 없음 | 역할분리 알림대상 개념 전무 | — | GPT가 코드로 구현 가능(역할정의는 사용자 결정 필요) |
@@ -287,22 +288,22 @@
 |---:|---|---|---|---|---|---|
 | 12-1 | 초기 AI는 추천·분석·위험알림 담당 | IMPLEMENTED | `decision` 도메인(평가/점수/추천), event_catalog 위험알림 정의 | — | — | — |
 | 12-2 | 초기 AI가 자동결제·발주 안전규칙 스스로 못 바꿈 | IMPLEMENTED | `set_mode/set_limit` 호출부는 admin_guard 콘솔API 단 한 곳뿐, AI측 호출 없음 | — | — | — |
-| 12-3 | AI추천/사유/점수/승인거절/실판매량/실마진/품절/취소/반품/지연/예측차이 저장 | PARTIALLY_IMPLEMENTED | `DecisionEvaluation`/`DecisionScore`/`DecisionReview` 실재 | "실제 결과(판매량/마진/품절/취소/반품/지연/예측차이)" 사후추적 저장 필드·테이블 없음 | decision-order/return_order 간 outcome 연결 테이블 재확인 | GPT가 코드로 구현 가능 |
+| 12-3 | AI추천/사유/점수/승인거절/실판매량/실마진/품절/취소/반품/지연/예측차이 저장 | PARTIALLY_IMPLEMENTED | `DecisionEvaluation`/`DecisionScore`/`DecisionReview` 실재. 2026-09-10 Phase 12: `app/domains/ai_learning::DecisionOutcome`(실판매액·실마진액·품절·취소·반품·배송지연, evaluation_id로 연결) 신설+`record_outcome()` | "예측 차이"(예상값 대비 실제값 차이) 자체를 계산하는 코드는 없음(값만 나란히 저장, 차이 계산 로직 없음) | 예측차이 계산 로직 추가 | GPT가 코드로 구현 가능(보강) |
 | 12-4 | 사용자 수정 시 변경내용·이유 저장 | IMPLEMENTED | `DecisionReview.action="OVERRIDE"`+override_reason/previous/new value | — | — | — |
 | 12-5 | 변경이유는 짧은 선택항목+선택적메모 | PARTIALLY_IMPLEMENTED | override_reason이 자유텍스트(1000자) | enum형 "짧은 선택항목" 구조 미확인(자유텍스트만) | console.js 입력위젯 확인 | GPT가 코드로 구현 가능 |
-| 12-6 | 초기학습검토는 최소 50건 완료주문부터 시작가능 | NOT_IMPLEMENTED | "학습" 개념 자체 코드에 없음(전수검색 무매치) | 학습 파이프라인 자체 부재 | — | GPT가 코드로 구현 가능(신규 도메인) |
-| 12-7 | 50건 결과는 자동미적용, 후보생성·비교에만 사용 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
-| 12-8 | 누적1,000건 이상 시 최소학습건수 100건 상향 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
-| 12-9 | 1,000건 기준·최소학습건수 설정화면에서 변경 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
+| 12-6 | 초기학습검토는 최소 50건 완료주문부터 시작가능 | IMPLEMENTED | 2026-09-10 Phase 12: `app/domains/ai_learning`(`LearningDatasetRecord`+`check_learning_readiness()`, `INITIAL_MIN_SAMPLE_SIZE=50`) 신설, 21개 테스트 통과 | — | — | — |
+| 12-7 | 50건 결과는 자동미적용, 후보생성·비교에만 사용 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 12: `ModelCandidate` 상태기계 — 승인해도 실제 라이브 정책에 적용하는 코드가 어디에도 없음(자동미적용 원칙 구조적으로 충족) | "비교"는 사람이 쓰는 자유텍스트 요약(`regression_comparison_summary`)뿐 — 정량 비교 계산은 없음 | 정량 회귀비교 계산 로직 | GPT가 코드로 구현 가능(보강) |
+| 12-8 | 누적1,000건 이상 시 최소학습건수 100건 상향 | IMPLEMENTED | 2026-09-10 Phase 12: `RAISE_THRESHOLD_TOTAL_ORDERS=1000`+`RAISED_MIN_SAMPLE_SIZE=100`, 경계값 포함 테스트 통과 | — | — | — |
+| 12-9 | 1,000건 기준·최소학습건수 설정화면에서 변경 | NOT_IMPLEMENTED | 2026-09-10 Phase 12: 값 자체는 `app/domains/ai_learning/constants.py`에 코드 상수로 존재(12-8) | 설정화면에서 변경 가능한 DB 설정으로는 아직 안 옮김(하드코딩 상수) | — | GPT가 코드로 구현 가능(설정화면 연동) |
 | 12-10 | 정상/취소/반품/손실 사례가 평가에 충분히 포함됐는지 확인 | NOT_IMPLEMENTED | 학습 파이프라인 부재 | — | — | GPT가 코드로 구현 가능 |
 | 12-11 | 결과유형 부족하면 건수충족해도 학습적용 보류 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
-| 12-12 | 새 학습후보 생성가능하나 운영모델 자동교체 안 함 | NOT_IMPLEMENTED | 동일(단 "AI 스스로 안전규칙 못바꿈" 원칙은 12-2로 별도 충족) | — | — | GPT가 코드로 구현 가능 |
-| 12-13 | 새 모델은 과거데이터평가+사용자승인 통과해야 적용 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
+| 12-12 | 새 학습후보 생성가능하나 운영모델 자동교체 안 함 | IMPLEMENTED | 2026-09-10 Phase 12: `create_model_candidate()`로 후보 생성 가능. APPROVED까지 가도 실제 라이브 정책 교체 코드가 전혀 없어 자동교체가 구조적으로 불가능(`app/domains/ai_learning/service.py` 상단 주석에 명시) | — | — | — |
+| 12-13 | 새 모델은 과거데이터평가+사용자승인 통과해야 적용 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 12: DRAFT→OFFLINE_EVALUATED→REGRESSION_COMPARED→APPROVED 상태기계로 순서를 건너뛸 수 없게 강제(4개 테스트), 승인은 재인증(recent-auth) 필요 | "과거데이터평가"의 실제 정량 채점은 없음(요약 텍스트만) — 애초에 "적용" 자체가 이 세션 범위 밖이라 "적용 전 통과해야 하는 게이트"는 만들었지만 그 뒤의 "적용" 코드는 없음 | 정량 오프라인평가 계산+실제 적용 연결 | GPT가 코드로 구현 가능(보강, 적용 연결은 별도 승인 필요) |
 | 12-14 | 적중률·마진차이·예측·차단률·오차단률로 평가 | NOT_IMPLEMENTED | 평가지표 정의·계산 코드 없음 | — | — | GPT가 코드로 구현 가능 |
 | 12-15 | 새 모델은 기존보다 전체기준 좋아야 교체후보 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
 | 12-16 | 새 모델은 그림자모드로 최소2주 시험 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
 | 12-17 | 테스트상품/입력실수/API오류/결과불명 데이터는 학습제외 | NOT_IMPLEMENTED | 학습자체 없어 제외로직도 없음(RESULT_UNKNOWN 구분은 발주레벨에만 존재, 용도 다름) | — | — | GPT가 코드로 구현 가능 |
-| 12-18 | 모든 모델버전·평가 보관, 문제시 이전모델로 즉시복구 | NOT_IMPLEMENTED | 모델버전관리 자체 없음(DecisionPolicy는 가중치버전관리로 목적이 다름) | — | — | GPT가 코드로 구현 가능 |
+| 12-18 | 모든 모델버전·평가 보관, 문제시 이전모델로 즉시복구 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 12: `ModelCandidate`(version 필드)+`ModelCandidateStatusEvent`(append-only 이력)로 후보 모델 버전·상태 변화가 전부 보관됨 | "이전 모델로 즉시 복구"하는 실행 코드는 없음(애초에 "적용" 자체가 없으니 "복구"할 라이브 상태도 없음) | 실제 적용·복구 메커니즘(적용 연결 이후 과제) | GPT가 코드로 구현 가능(적용 연결 이후) |
 | 12-19 | AI화면에 점수·판단이유·데이터·자료시각·확신도 표시 | PARTIALLY_IMPLEMENTED | recommendation_reason/axis별 raw_score/weight/confidence/evidence_text 렌더링 확인 | "자료시각(데이터 기준시각)" 표시여부 미확인 | console.js decision 상세 timestamp 필드 확인 | GPT가 코드로 구현 가능(부분) |
 | 12-20 | 근거부족 판단은 `확인 필요`로 표시 | PARTIALLY_IMPLEMENTED | `data_sufficient=False` 시 "데이터 부족" 렌더링 — 개념은 있으나 **문구가 다름**(Medium 결함 #19) | 정확한 문구 불일치 | — | GPT가 코드로 구현 가능(문구 통일) |
 
@@ -319,13 +320,13 @@
 | 13-7 | 결제·발주·개인정보·시스템잠금은 긴급알림 | PARTIALLY_IMPLEMENTED | ESTOP_ACTIVATED=CRITICAL 확인(시스템잠금 충족) | 결제는 대상없음(도메인부재), 발주는 HIGH(최상위 아님) | — | GPT가 코드로 구현 가능 |
 | 13-8 | 가격변경·재고부족·배송지연은 주의알림 | VERIFICATION_REQUIRED | 등급체계 스케일이 달라 1:1 매핑 애매 | — | 사용자와 등급매핑표 재확인 | GPT가 코드로 구현 가능 |
 | 13-9 | 정상완료·정기보고는 정보알림 | VERIFICATION_REQUIRED | "정상완료 알림"에 해당하는 카탈로그 항목 자체를 못 찾음 | 정상완료 알림 이벤트 부재 가능성 | — | GPT가 코드로 구현 가능 |
-| 13-10 | 기능별 수동/반자동/자동/일시중지/오류 상태 항상표시 | NOT_IMPLEMENTED | `AutomationModeState`는 **전역 단일모드**만 존재 — 기능별 개념 자체 없음(Critical 결함 #6과 동일 근본원인) | 기능별 세분화 모드관리 자체 부재 | — | GPT가 코드로 구현 가능(모델확장 필요) |
+| 13-10 | 기능별 수동/반자동/자동/일시중지/오류 상태 항상표시 | IMPLEMENTED | 신규 `function_automation_states`(company_id×function_code, append-only) + `SafetyService.get_all_function_modes/set_function_mode/demote_function_to_error` + `/console/api/function-modes` 라우터 + console.js UI(표+선택+변경 버튼, 한국어 상태명+사유+변경시각). 10개 기능 독립 확인, 회사 격리 확인, 미설정 시 항상 "수동" 기본값 확인(테스트 14개 통과). **2026-09-10 Phase 13**: 격리 서버에 실제 로그인해 반자동/자동/일시중지/오류 4가지 상태가 정확한 한국어 라벨+설명+사유+변경시각으로 렌더링됨을 브라우저에서 직접 확인(모바일 375px에서도 가로스크롤 없이 카드형으로 정상 표시) | "항상 표시"가 안전 화면 밖(예: 대시보드 첫 화면)에서도 보이는지는 여전히 미확인 — 안전 화면 안에서만 확인함 | 대시보드 등 다른 화면에서의 노출 여부 확인 | — |
 | 13-11 | 오늘/이번달 결제액·잔여한도·API사용량·AI비용 구분표시 | PARTIALLY_IMPLEMENTED | 오늘 자금사용량/일한도 라벨 확인, `api_usage_tracker.py` 존재 | 월간 누적치, AI사용량·예상비용 확인 못함 | api_usage_tracker.py 상세 확인 | GPT가 코드로 구현 가능(부분) |
 | 13-12 | 주문번호/상품명/채널/매입처/상태/날짜로 검색·필터 | VERIFICATION_REQUIRED | 필터 관련 코드 다수 존재 | 6개 필드 전부가 한 화면에 걸려있는지 미확인 | 브라우저 주문목록 필터 UI 확인 | — |
 | 13-13 | 모바일에서 조회·알림확인·승인·긴급중지 지원 | VERIFICATION_REQUIRED | `mobile-nav-toggle` 반응형 네비 존재 | 실제 모바일 뷰포트 승인·긴급중지 동작 미확인 | 모바일 뷰포트 브라우저 테스트 | — |
 | 13-14 | 복잡한 설정변경·대량편집은 PC화면에서 진행 | VERIFICATION_REQUIRED | 반응형 존재 확인만 | "PC 전용 제한" 강제코드 확인 못함 | 모바일에서 설정화면 접근제한 확인 | — |
 | 13-15 | 주문별 작업기록+전체 작업기록 모두 제공 | PARTIALLY_IMPLEMENTED | `audit/router.py` 전체감사로그 존재 | "주문별" 필터뷰 별도존재 여부 미확인 | audit/router.py 쿼리파라미터 확인 | GPT가 코드로 구현 가능(부분) |
-| 13-16 | 작업기록에 실행자·시각·종류·결과, 비밀정보 미표시 | PARTIALLY_IMPLEMENTED | write_audit_log 구조 확인 | description 자유텍스트 강제마스킹 없음(11-13과 동일) | — | GPT가 코드로 구현 가능 |
+| 13-16 | 작업기록에 실행자·시각·종류·결과, 비밀정보 미표시 | IMPLEMENTED | write_audit_log 구조 확인. 2026-09-10 Phase 11에서 강제마스킹 게이트 추가(11-13과 동일 근거) | — | — | — |
 | 13-17 | 기술오류코드보다 사용자 행동을 먼저 표시 | VERIFICATION_REQUIRED | 사람이 읽을 문자열 반환 함수들 확인(좋은 신호) | 전체화면 일관성은 UX 전수확인 필요 | 주요 오류화면 전수 확인(브라우저) | — |
 
 ### 14. 실데이터 검증·출시 판정
@@ -333,7 +334,7 @@
 | 번호 | 운영 기준 | 판정 | 구현 증거 | 빠진 부분 | 필요한 검증 | 담당 |
 |---:|---|---|---|---|---|---|
 | 14-1 | 실데이터 시험 직전 실제업무DB 전체백업 | IMPLEMENTED(메커니즘)/VERIFICATION_REQUIRED(실행) | `create_backup` 메커니즘 확인, `backup_records` 실제 3건 존재 | 시험 직전 시점 실제 실행여부는 시험 시점 로그 필요 | 시험시점 백업 실행여부 확인 | 사용자의 명시적 실행 승인 필요(시험 자체 미실행) |
-| 14-2 | 시험 전 백업 무결성·복구가능 확인 | IMPLEMENTED(메커니즘) | `PRAGMA integrity_check` 강제, `test_restore_engine.py` 존재 | 최근 실행결과(pass/fail) 이 세션 미실행 | 실행결과 별도 검증 | GPT가 별도 세션에서 검증 가능 |
+| 14-2 | 시험 전 백업 무결성·복구가능 확인 | IMPLEMENTED(메커니즘) | `PRAGMA integrity_check` 강제, `test_restore_engine.py` 존재. 2026-09-09 Phase 5: `run_weekly_rehearsal()`이 임시 DB 기준으로 백업+복구+무결성 검증 전체 흐름을 실제로 통과시킴(11/11 테스트) | 이건 임시 DB 대상 검증이고, 실제 homez.db 대상 실행결과(pass/fail)는 여전히 이 세션에서 미실행(승인 대상) | 실제 DB 대상 1회 실행결과 별도 확인 | GPT가 임시 DB로는 검증 완료, 실 DB는 사용자 승인 필요 |
 | 14-3 | 등록된 상품 중 저가상품 찾아 위치·주문방법 안내 | NOT_IMPLEMENTED | 관련 산출물 없음(코드구현 대상 아니라 실행단계 성격) | — | — | 사용자의 명시적 실행 승인 필요 |
 | 14-4 | 승인없이 신규등록·실주문·결제·발주·취소·환불 금지 | IMPLEMENTED(설계원칙) | 이번 세션 포함 실행 이력 전무(자체준수), `is_onchannel_order_contract_fully_confirmed()` 하드게이트 | — | — | — |
 | 14-5 | 시험은 사전설명+승인 후 1회씩 실행 | NOT_IMPLEMENTED [BLOCKED_BY_USER_APPROVAL] | 실행이력 없음(당연) | — | — | 사용자의 명시적 실행 승인 필요 |
@@ -341,7 +342,7 @@
 | 14-7 | 1번 상품: 정상주문~정산·손익까지 검증 | NOT_IMPLEMENTED | 미실행 | — | — | 사용자의 명시적 실행 승인 필요 |
 | 14-8 | 2번 상품: 반품~환불대조·손익까지 검증 | NOT_IMPLEMENTED | 미실행 | — | — | 사용자의 명시적 실행 승인 필요 |
 | 14-9 | 배송지 원문 사용 전 표시+별도승인 | VERIFICATION_REQUIRED | recent_auth 재인증 패턴 존재 | "배송지 원문표시+별도승인" 전용흐름 구현여부 미확인 | 관련 라우터 확인 | GPT가 코드로 구현 가능 |
-| 14-10 | 12개 오류상황을 Fake Provider+격리DB에서 검증 | PARTIALLY_IMPLEMENTED | 개별 시나리오 테스트 다수 존재(여러 파일 분산) | 12개 항목 통합 매트릭스/단일 스위트 부재 | 12개 항목-테스트명 1:1 매핑 별도 감사 필요 | GPT가 코드로 구현 가능(테스트 매핑·보강) |
+| 14-10 | 12개 오류상황을 Fake Provider+격리DB에서 검증 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 14: 12개 항목 통합 매트릭스를 실제로 작성함(docs/HOMEZ_PROJECT_STATE.md 2026-09-10 후속 25 절) — 8/12(정상성공·품절·옵션불일치·중복주문·인증만료·타임아웃·결과불명·배송지연) 확실히 커버 확인 | 3/12(가격인상의 retail_purchase 쪽, API지연의 시간재현, 반품·부분환불의 "부분" 개념) 부분 커버, 1/12(중복 결제)는 결제 실행 메서드 자체가 없어 사실상 미커버 | 부족한 3.5개 시나리오 테스트 보강(중복결제는 결제실행 메서드 설계 선행 필요) | GPT가 코드로 구현 가능(보강, 성급히 하지 않기로 판단) |
 | 14-11 | 12개 전체통과를 베타시작 일괄조건에서 제외 | IMPLEMENTED(정책상) | 문서 정책 문장, 코드구현 대상 아님 | — | — | — |
 | 14-12 | 중복주문·결제/타임아웃/결과불명 미통과 기능은 자동모드로 안 엶 | VERIFICATION_REQUIRED | RESULT_UNKNOWN LOCKED 상태 확인 | 이 상태가 자동모드 개방여부와 실제 연동됐는지 미확인(전역단일모드라 기능별 게이팅 구조적 불가 — 13-10과 동일) | — | GPT가 코드로 구현 가능 |
 | 14-13 | 같은 주문 반복처리해도 결제·발주 각1회만 발생 | IMPLEMENTED(발주만) | idempotency UNIQUE+DUPLICATE_REQUEST DENY+LOCKED 상태 — 발주측 매우 견고 | 결제측은 도메인부재로 검증불가 | 결제도메인 구현 후 동일수준 검증 | GPT가 코드로 구현 가능(결제) |
@@ -351,12 +352,12 @@
 | 14-17 | 결제·발주·개인정보노출·중복처리 결함 허용 안 함 | VERIFICATION_REQUIRED(→해소됨) | 정책선언, Track A 최종 전체회귀 3835/3835 통과로 알려진 결함 0건 확정 | 결제 도메인 자체가 없어 "결제 결함 0건"은 검증대상 부재 상태 | — | — |
 | 14-18 | 화면문구·배치문제는 안전무관 시 베타중 수정가능 | IMPLEMENTED(정책상) | 문서 정책 문장 | — | — | — |
 | 14-19 | 베타시작조건=전체회귀+Migration정합성+백업복구시험+실제상품2건+긴급중지검증 | VERIFICATION_REQUIRED [BLOCKED_BY_USER_APPROVAL] | **전체회귀는 Track A에서 3835/3835 통과로 충족.** Migration 정합성도 Track A에서 확인·수정 완료. 백업/복구는 메커니즘만 존재(시험실행·기록 미확인), 실제상품 2건은 미실행 | 백업복구 "시험실행·기록", 실제상품2건 검증 미실행 | — | 사용자의 명시적 실행 승인 필요 + 실제 주문·결제 데이터 축적 필요 |
-| 14-20 | 12개 전체통과는 베타조건서 제외, 기능별 자동모드조건으로 관리 | NOT_IMPLEMENTED | 13-10/14-12와 동일 근본원인 — 기능별 관리구조 자체 없음 | — | — | GPT가 코드로 구현 가능 |
-| 14-21 | 조회/분석/등록/가격변경/결제/발주 각각 별도 자동모드 관리 | NOT_IMPLEMENTED | `mode`가 단일 전역 컬럼 — 기능구분 컬럼 자체 모델에 없음 | 기능별 automation mode 스키마 전체 부재 | — | GPT가 코드로 구현 가능(모델확장 Migration 필요) |
-| 14-22 | 각 기능은 안전시험 통과 후 소액한도로 자동모드 개방 | NOT_IMPLEMENTED | 14-21과 동일 근본원인 | — | — | GPT가 코드로 구현 가능 |
-| 14-23 | 문제발생 시 해당기능만 반자동/일시중지로 낮춤 | NOT_IMPLEMENTED | 전역모드만 있어 "해당기능만" 낮추는 것 구조적 불가 | — | — | GPT가 코드로 구현 가능 |
-| 14-24 | 화면에 `수동/반자동/자동/일시중지` 한국어 상태명+설명 표시 | NOT_IMPLEMENTED | ko-KR.js에서 이 4개 정확한 문구를 safety 키에서 못 찾음(영문상수 기반 표시로 보임) | 영문상수→한글상태명 매핑 UI 부재 | console.js safety 렌더링 재확인 | GPT가 코드로 구현 가능 |
-| 14-25 | 자동화단계는 토글/단계선택 컨트롤로 쉽게 조절 | PARTIALLY_IMPLEMENTED | "모드 변경" 버튼 존재(전역단일) | 기능별 컨트롤 부재(14-21 부재로 존재 불가) | — | GPT가 코드로 구현 가능 |
+| 14-20 | 12개 전체통과는 베타조건서 제외, 기능별 자동모드조건으로 관리 | PARTIALLY_IMPLEMENTED (Phase 3) | 기능별 관리구조는 이제 존재(FunctionCode×FunctionMode) | "12개 오류상황 통과"와 각 기능의 AUTOMATIC 전환을 실제로 연동하는 게이트는 아직 없음(그 12개 시나리오 자체가 아직 실행되지 않음, 14번 후반부 대상) | 12개 시나리오 실행 후 연동 | 사용자의 명시적 실행 승인 필요(12개 시나리오는 실데이터 인접) |
+| 14-21 | 조회/분석/등록/가격변경/결제/발주 각각 별도 자동모드 관리 | IMPLEMENTED (Phase 3) | `function_automation_states`가 회사×기능별 독립 컬럼 보유, 기능 간 완전 독립 확인(테스트: 한 기능 변경이 나머지 9개에 영향 없음) | — | — | — |
+| 14-22 | 각 기능은 안전시험 통과 후 소액한도로 자동모드 개방 | NOT_IMPLEMENTED | 모드 저장·조회 구조는 있으나 "안전시험 통과"를 전제조건으로 강제하는 게이트는 없음(현재는 관리자가 바로 AUTOMATIC으로 바꿀 수 있음 — 개인 베타 중에는 실질적 영향 없음, 2-10/6-12 등 다른 게이트가 이미 실행을 막고 있기 때문) | 안전시험 결과와 모드 전환을 연동하는 게이트 부재 | — | GPT가 코드로 구현 가능(14번 실데이터 시험 이후) |
+| 14-23 | 문제발생 시 해당기능만 반자동/일시중지로 낮춤 | PARTIALLY_IMPLEMENTED (Phase 3) | `SafetyService.demote_function_to_error()` 신설 — 호출되면 해당 기능만 ERROR로 낮아지고 나머지는 영향 없음(테스트로 확인). `set_by=0`으로 시스템 강등과 사람 조작을 감사에서 구분 | 이 메서드를 실제로 호출하는 감지 코드(가격 인상·재고 부족·인증 만료·API 오류·스키마 불일치 감지)는 아직 없음 — Phase 4(긴급 중지와 실행 게이트) 범위 | Phase 4에서 실제 감지 지점에 연결 | — |
+| 14-24 | 화면에 `수동/반자동/자동/일시중지` 한국어 상태명+설명 표시 | IMPLEMENTED (Phase 3) | `FunctionMode.LABELS_KO`/`DESCRIPTIONS_KO`가 정확히 이 4개 한국어 이름(+오류)과 설명을 갖고, `/console/api/function-modes` 응답과 console.js 렌더링에 그대로 노출됨 | 기존 전역 단일 모드 화면(`safety.mode_title`)은 여전히 영문 상수로 표시됨(그대로 둠 — 기능별 화면과 병존) | — | — |
+| 14-25 | 자동화단계는 토글/단계선택 컨트롤로 쉽게 조절 | PARTIALLY_IMPLEMENTED | 기능별 select+버튼 컨트롤 존재(Phase 3) | 토글 형태(더 간단한 UI)는 아님, select+버튼 방식 — Phase 13에서 UX 개선 여지 | — | — |
 
 ### 섹션별 요약 개수 — Phase 0 정합화 완료 (2026-09-09)
 
@@ -402,7 +403,7 @@
 전체 223건 중 약 130건 이상이 "GPT가 코드로 구현 가능"으로 분류됐다(위 표 참고, 순수 코드/스키마/UI 작업으로 외부 계약이나 실행 승인이 필요 없는 항목). 우선순위가 높은 대표 항목만 추리면:
 
 - **Critical/High 결함 수정**(2절 참고): 배송비 미확인 시 실제 차단(6-3), 마진율 UI 소수→퍼센트 통일(6-15), 로그인 실패 잠금 DB컬럼+로직 추가(11-18), 자동결제 한도 이중구조 정리(5-4), 감사로그 강제 마스킹 게이트(11-13/13-16)
-- **스케줄러 인프라 신설**: `app/domains/scheduler` 구현+`app/main.py` 연결 — 2-5, 2-8, 9-13, 10-17, 10-19, 11-17 등 수십 개 항목이 동시에 해소됨
+- ~~**스케줄러 인프라 신설**: `app/domains/scheduler` 구현+`app/main.py` 연결 — 2-5, 2-8, 9-13, 10-17, 10-19, 11-17 등 수십 개 항목이 동시에 해소됨~~ **[2026-09-10 Phase 6에서 인프라만 해소, 원래 예상은 과했음]** 인프라(`SchedulerService`+`app/main.py` 연결)는 실제로 완료됐고 11-17(백업 복구 리허설)은 그 위에서 실제로 연결·자동화됐다. 하지만 2-5(가격 검토)/2-8(주문 수집)/9-13/10-17/10-19처럼 **실제 외부 API를 호출하는 항목들은 인프라만으로 저절로 해소되지 않는다** — 각각 (a) 자동화 모드 게이트 연결, (b) 시스템-주체 감사 표현 방식 결정, (c) 일부는 저장소 계층 자체(가격/재고 모니터링)를 새로 설계해야 하는 별도 작업이 남아있다(상세 조사 결과: `docs/HOMEZ_PROJECT_STATE.md` 2026-09-10 후속 17). "인프라만 만들면 수십 개가 한 번에 풀린다"는 원래 감사의 이 추정은 과했다 — 항목별로 개별 배선이 필요하다.
 - **환불(refund) 도메인 신설**: 9-4~9-10 전체
 - **가상재고 개념 신설**: 7-7, 7-8, 8-17, 8-19
 - **환율(currency/exchange) 도메인 신설**: 6-10, 6-11
@@ -463,3 +464,40 @@
 - **결제(자동결제) 자동모드는 애초에 열 대상 자체가 없다** — `payment` 도메인이 존재하지 않으므로 코드로도 물리적으로 불가능하다(이는 역설적으로 "지금 당장 결제 자동모드가 잘못 열릴 위험은 없다"는 뜻이기도 하다).
 - 발주(구매) 쪽 멱등성·중복방지·긴급중지 연결은 이번 감사에서 확인된 항목 중 가장 견고하게 구현돼 있다(Critical/High 결함 목록에 발주 멱등성 관련 항목이 없다는 점 참고) — 다만 이 견고함이 "기능별 개방"이 아니라 "전역 모드 아래에서의 개별 안전장치"라는 한계는 그대로 남는다.
 - 권장: 8절의 "구조 기반 마련"(자동모드 기능별 스코프 확장)이 끝나기 전까지는 `LIMITED_AUTOMATION`으로 전환하지 말고 `RECOMMEND_ONLY`/`OPERATOR_APPROVAL` 단계에 머무를 것.
+
+---
+
+## 11. Phase 0~14 연속 구현 완료 후 갱신 (2026-09-10)
+
+이 감사 이후 진행된 Phase 0~14 연속 구현으로 이 문서의 일부 항목이
+실제로 바뀌었다(문서 자체는 감사 시점 기록을 보존하기 위해 위
+내용을 수정하지 않고, 변경 사항만 아래에 추가한다). 상세 근거는
+`docs/HOMEZ_PROJECT_STATE.md`의 Phase 0~14 및 "최종 회귀 검증"
+절 참고.
+
+- **9절 "로그인 잠금 완전 부재(11-18)"** — Phase 1에서 해소.
+  `migrations/20260909_00_add_login_lockout_columns.sql` +
+  `app/domains/user/model.py`(`failed_login_count`/`locked_until`/
+  `last_failed_login_at`) + 관련 서비스 로직. 단, 실제 homez.db에는
+  아직 미적용(승인 대기, Migration 자체는 임시 DB에서 검증 완료).
+- **4절 가격 인상 감지 dead trigger(Critical #21)** — Phase 10에서
+  해소. `expected_amount_at_creation` 기준선을 실제로 채워 넣어
+  가격 인상 감지가 실제로 동작하게 됨.
+- **결제(payment) 도메인 부재** — Phase 7에서 신규 생성(단, 실제
+  결제 실행 메서드·실 Provider 연동은 의도적으로 이번 범위 밖 —
+  `FakePaymentProvider`만 존재, 절대 실제 네트워크 호출 없음).
+- **10절 자동모드 전역 단일 컬럼 한계** — Phase 3의
+  `FunctionAutomationState`(기능별 자동화 상태)로 구조적 개선.
+  다만 실제 자동모드 개방 여부에 대한 이 문서 10절의 판정 자체를
+  뒤집을 근거는 이번 Phase 범위에서 마련되지 않았다(그대로 유지
+  권장 — 실행 계열 검증 미충족 상태는 변하지 않음).
+
+**전체 회귀(4070개 테스트) 최종 확인: 전부 통과(0 실패, 0 오류)**
+— `docs/HOMEZ_PROJECT_STATE.md`의 "최종 클린 전체 회귀" 절 참고.
+
+이 갱신은 위 9·10절의 "개인 베타 가능 여부"/"자동모드 개방 가능
+여부" **최종 판정 자체를 바꾸지 않는다** — 실데이터 실행 계열
+조건(백업 시험 기록, 실제 상품 2건 검증, 실제 발주·결제·반품·환불
+실행)은 이번 Phase 0~14에서도 전혀 실행되지 않았고(안전 경계상
+당연히 승인 없이는 할 수 없음), 그 조건들이 채워지기 전까지는
+9·10절의 판정이 유효하다.

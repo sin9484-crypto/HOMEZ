@@ -324,6 +324,38 @@ EVENT_CATALOG: dict[str, NotificationEventDefinition] = {
             description_ko="연속 로그인 실패로 계정이 잠시 잠겼습니다.",
             description_en="An account was temporarily locked after repeated login failures.",
         ),
+        # 2026-09-09 Phase 4(HOMEZ_USER_OPERATION_SETTINGS.md 13번 —
+        # "가격 인상, 재고부족, 배송지연, 반품·환불, 결제 한도 초과와
+        # AI 근거 부족 항목을 하나의 사용자 확인 목록에 모은다") —
+        # app/domains/purchase_task/service.py에서 가격 인상 감지 시
+        # 발생시킨다(wired=True). 다른 4개 트리거(재고부족·인증만료·
+        # API오류·스키마불일치)는 아직 이 이벤트를 발생시키지 않는다
+        # (감지 코드 자체가 다른 Domain에 흩어져 있어 이번 Phase
+        # 범위에서는 가격 인상 하나만 실제로 연결했다 — 정직하게
+        # 공개).
+        _e(
+            "FUNCTION_AUTOMATION_DEMOTED_TO_ERROR", NotificationCategory.SECURITY,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko="시스템이 감지한 문제로 특정 기능의 자동화가 오류 상태로 낮아졌습니다.",
+            description_en="A specific function's automation was demoted to an error state due to a system-detected issue.",
+        ),
+        # 2026-09-09 Phase 5(HOMEZ_USER_OPERATION_SETTINGS.md 1·11·14번
+        # — "DB 복구 가능 여부를 매주 자동 또는 안내 기반으로 시험하고
+        # 결과를 기록한다", "실패 알림") —
+        # app/domains/restore/service.py::RestoreService.
+        # run_weekly_rehearsal()에서 발생시킨다(wired=True). 기존
+        # BACKUP_RESTORE_CONFIRMATION_NEEDED(대화형 복원 확인 프롬프트
+        # 용, 아직 그 화면 자체가 없어 wired=False로 남아있음)와는
+        # 성격이 다른 별개 이벤트다 — 이건 "복구가 되는지 정기적으로
+        # 확인해봤더니 실패했다"는 경보다.
+        _e(
+            "BACKUP_RESTORE_REHEARSAL_FAILED", NotificationCategory.SECURITY,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko="주간 백업 복구 리허설이 실패했습니다 — 실제 복구가 안 될 수 있습니다.",
+            description_en="The weekly backup restore rehearsal failed — real recovery may not work.",
+        ),
     ]
 }
 

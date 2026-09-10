@@ -393,18 +393,72 @@ class OnchannelOrderContractItemStatus:
         )
 
 
-# 2026-09-09 후속("계약 상태 세분화") — 온채널 문의는 이미 발송됐고
-# 공식 답변 대기 중이다(사용자 조치 대기 아님). 답변이 하나씩
-# 도착할 때마다 이 딕셔너리의 **해당 항목만** 갱신한다(나머지는
-# 손대지 않는다) — confirmed=True와 함께 official_basis·confirmed_at
-# 을 반드시 함께 채운다. 갱신 근거는 항상 docs/HOMEZ_PROJECT_STATE.md
-# 에도 남긴다. 셋 다 채워야 그 항목이 "제대로 확인됨"으로 인정된다
-# (OnchannelOrderContractItemStatus.is_properly_confirmed).
+# 2026-09-10 — 온채널 공식 답변 도착, 4개 항목 전부 갱신(사용자가
+# 온채널에 직접 문의해 받은 답변을 대화로 전달 — docs/HOMEZ_
+# ONCHANNEL_OPENAPI_FINDINGS_20260908.md의 "온채널 문의할 질문" 절
+# 6개 질문 중 1~5번에 대응, 6번(인증키 발급 상태 조회)은 이번 답변에
+# 포함되지 않아 여전히 미확인 — 이 항목의 판정 대상이 아님).
+#
+# 잔존 세부 불확실성(각 항목 official_basis에도 명시): (1) 판매신청
+# "승인 여부"를 직접 조회하는 별도 API는 없다 — 이건 확인 안 된 게
+# 아니라 "그런 API가 없다"는 것 자체가 확인된 사실이다(product/apply
+# 응답과 실제 order/regist 결과로만 간접 판단 가능, Phase 3 구현이
+# 이 판단 로직을 정확히 그렇게 만든다). (2) 잔액 부족 시 온채널이
+# 정확히 어떤 오류 코드를 주는지는 답변에 없으나, HOMEZ 자체 사전
+# 포인트 검사(Phase 4)가 그 응답을 받기 전에 항상 먼저 차단하므로
+# 실제 위험으로 이어지지 않는다. 이 두 잔존 불확실성은 "그래서 이
+# 항목을 계속 미확인으로 둔다"가 아니라 "그래서 이렇게 구현한다"는
+# 설계 근거로 이미 반영됐다 — 자세한 내용은 각 basis 문자열과
+# docs/HOMEZ_PROJECT_STATE.md 2026-09-10 절 참고.
 ONCHANNEL_ORDER_CONTRACT_STATUS: dict[str, OnchannelOrderContractItemStatus] = {
-    item: OnchannelOrderContractItemStatus(
-        confirmed=False, official_basis=None, confirmed_at=None,
-    )
-    for item in OnchannelOrderContractItem.ALL
+    OnchannelOrderContractItem.SALES_APPLICATION: OnchannelOrderContractItemStatus(
+        confirmed=True,
+        official_basis=(
+            "온채널 공식 답변(2026-09-10, 사용자 문의): 발주 전 판매신청이 "
+            "필수다. 판매신청 승인 여부를 조회하는 별도 API는 없다(product/"
+            "apply 응답과 이후 실제 order/regist 호출 결과로만 간접 판단) "
+            "— '없다'는 사실이 확인된 답이며 추측으로 대체하지 않는다."
+        ),
+        confirmed_at=datetime(2026, 9, 10, 23, 0, 0),
+    ),
+    OnchannelOrderContractItem.PAYMENT_SOURCE: OnchannelOrderContractItemStatus(
+        confirmed=True,
+        official_basis=(
+            "온채널 공식 답변(2026-09-10, 사용자 문의): 발주는 사전 충전된 "
+            "포인트(예치금) 차감 방식이다. GET /openapi/common/member/point"
+            "의 point 필드가 발주 가능 잔액이다. 잔액 부족 시 온채널 서버의 "
+            "정확한 오류 코드는 답변에 없으나, HOMEZ가 발주 전 point를 먼저 "
+            "조회해 소요 예상 금액과 비교·차단하므로(Phase 4) 그 응답을 "
+            "받을 필요 자체가 없도록 설계했다."
+        ),
+        confirmed_at=datetime(2026, 9, 10, 23, 0, 0),
+    ),
+    OnchannelOrderContractItem.DUPLICATE_PREVENTION: OnchannelOrderContractItemStatus(
+        confirmed=True,
+        official_basis=(
+            "온채널 공식 답변(2026-09-10, 사용자 문의): 동일 sale_code로 "
+            "중복 발주해도 온채널 서버가 제한하지 않는다(서버측 멱등성 "
+            "보장 없음, 명확히 확인). 따라서 HOMEZ 자체 (company_id, "
+            "idempotency_key) UNIQUE 제약(PurchaseOrderSubmissionAttempt, "
+            "Gate PT-3에서 이미 구현·검증됨)이 유일한 중복 방지 수단임이 "
+            "확정됐다."
+        ),
+        confirmed_at=datetime(2026, 9, 10, 23, 0, 0),
+    ),
+    OnchannelOrderContractItem.RESULT_RECONCILIATION: OnchannelOrderContractItemStatus(
+        confirmed=True,
+        official_basis=(
+            "온채널 공식 답변(2026-09-10, 사용자 문의): 주문 생성 확인 "
+            "기준은 HTTP 200 + order_code 존재다. sale_code로 이후 주문을 "
+            "재조회하는 기능은 없다(명확히 확인 — '없다'는 사실 자체가 "
+            "답). 따라서 타임아웃 등 결과 불명 상황에서 안전하게 자동 "
+            "재조회할 방법이 없다는 것이 확정됐다 — RESULT_UNKNOWN은 "
+            "영구적으로 사람이 온채널 자체 주문내역에서 직접 대조해 수동 "
+            "해소해야 하며, 자동 재시도·자동 재조회는 선택이 아니라 "
+            "구조적으로 불가능함이 공식적으로 확정됐다."
+        ),
+        confirmed_at=datetime(2026, 9, 10, 23, 0, 0),
+    ),
 }
 
 
@@ -496,6 +550,43 @@ class OrderSubmissionStatus:
     LOCKED = (PENDING, IN_FLIGHT, SUCCEEDED, REJECTED, RESULT_UNKNOWN)
 
 
+class SalesApplicationStatus:
+    """2026-09-10 후속(온채널 공식 답변 — "발주 전 판매신청 필수"
+    확정) — PurchaseSalesApplicationAttempt.status. OrderSubmissionStatus와
+    같은 이유로 같은 5단계 상태를 쓰지만, 이름은 SUCCEEDED가 아니라
+    SUBMITTED다 — "성공"이라는 말이 "승인됐다"로 오독될 위험이
+    있어서다. 이 상태가 표현하는 것은 정확히 "온채널이 신청 접수를
+    HTTP 200으로 확인했다"는 사실 하나뿐이다 — 실제 승인 여부는
+    이 상태만으로 알 수 없고(승인 상태 조회 API 자체가 없다고
+    공식 답변으로 확정됨), 이 저장소는 그 사실을 추측으로 메우지
+    않는다.
+
+    상태 전이는 OrderSubmissionStatus와 동일하다: PENDING ->
+    IN_FLIGHT -> 정확히 하나로 종결(SUBMITTED/REJECTED/RESULT_
+    UNKNOWN). 다만 발주와 달리 판매신청은 "같은 상품을 다시 신청해도
+    금전적 중복 위험이 없다"(스펙상 요청 바디에 결제·금액 필드가
+    아예 없다) — 그래서 이 상태는 OrderSubmissionStatus.LOCKED처럼
+    "같은 키로 재시도 금지"를 강제하지 않는다. REJECTED/RESULT_
+    UNKNOWN이었던 행은 (company_id, connection_id, product_code)
+    UNIQUE 제약 위에서 같은 행을 갱신하며 재시도할 수 있다(append-only
+    잠금이 아니라 PurchaseChannelConnection과 같은 현재상태 갱신형
+    행이다)."""
+
+    PENDING = "PENDING"
+    IN_FLIGHT = "IN_FLIGHT"
+    SUBMITTED = "SUBMITTED"
+    REJECTED = "REJECTED"
+    RESULT_UNKNOWN = "RESULT_UNKNOWN"
+
+    ALL = (PENDING, IN_FLIGHT, SUBMITTED, REJECTED, RESULT_UNKNOWN)
+
+    # 발주 전 게이트를 통과시켜도 되는 유일한 상태 — SUBMITTED만
+    # "접수 확인됨"이다. PENDING/IN_FLIGHT(아직 끝나지 않음)는 물론
+    # REJECTED/RESULT_UNKNOWN도 통과시키지 않는다(둘 다 "접수됐다"는
+    # 사실을 확인하지 못한 상태이기 때문 — 추측으로 통과시키지 않는다).
+    SATISFIES_ORDER_GATE = (SUBMITTED,)
+
+
 __all__ = [
     "PurchaseTaskStatus",
     "ShoppingMallCode",
@@ -518,4 +609,5 @@ __all__ = [
     "ChannelConnectionEventType",
     "EmailSendStatus",
     "OrderSubmissionStatus",
+    "SalesApplicationStatus",
 ]

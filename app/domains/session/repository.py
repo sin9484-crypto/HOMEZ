@@ -79,6 +79,28 @@ class SessionRepository:
             .values(last_seen_at=now),
         )
 
+    def extend_expiry(self, jti: str, new_expires_at: datetime) -> None:
+        """
+        2026-09-09 Phase 2 — 사전 발견 결함 수정: `rotate()`(Refresh
+        Token 회전)는 새 Access Token JWT는 발급하지만, family가
+        가리키는 원래 `AuthSession` 행(`access_session_jti`)의
+        `expires_at`은 로그인 시점(최초 Access Token의 30분 TTL)에
+        고정된 채 한 번도 갱신되지 않았다. `get_session_status()`의
+        EXPIRED 판정은 실제 벽시계 시각으로 이 값을 비교하므로, 실제
+        운영에서는 로그인 후 정확히 30분이 지나면 그 뒤의 모든 Refresh
+        요청이 진짜 만료·폐기와 구분되지 않는 SESSION_REVOKED로
+        거부됐다 — 30일짜리 Refresh Token을 발급하는 설계 의도 전체가
+        무력화되는 결함이었다(fixed here — 회전마다 이 만료 시각도
+        함께 앞으로 민다). 오직 회전에 성공했을 때만 호출된다 — 이
+        메서드 자체는 세션 유효성을 판단하지 않는다.
+        """
+
+        self.db.execute(
+            update(AuthSession)
+            .where(AuthSession.jti == jti)
+            .values(expires_at=new_expires_at),
+        )
+
     def revoke_all_for_user(self, user_id: int, reason: str, now: datetime) -> int:
         """
         특정 사용자의 활성 세션을 전부 취소한다 — 본인 비밀번호 변경,

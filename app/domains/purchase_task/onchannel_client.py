@@ -458,6 +458,35 @@ class OnchannelApiClient:
                 f"온채널 주문 리스트 응답에 필수 필드가 없습니다: {exc}",
             ) from exc
 
+    def apply_for_sale(self, product_code: str) -> str:
+        """POST /openapi/seller/product/apply — 판매신청. 2026-09-10
+        온채널 공식 답변으로 "발주 전 판매신청 필수"가 확정됐다(docs/
+        HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_20260908.md 참고). 요청 바디는
+        `{"prd_code": product_code}` 하나뿐(스펙 원본 확인, 2026-09-08
+        다운로드본 기준), 응답도 `result.prd_code`만 돌려준다 — 판매
+        신청이 실제로 승인됐는지 알려주는 필드는 없다(승인 상태 조회
+        API 자체가 없다는 것도 공식 답변으로 확정됨). 그래서 이 메서드가
+        성공(HTTP 200)했다는 사실은 "신청이 접수됐다"는 뜻이지 "승인
+        됐다"는 뜻이 아니다 — 그 차이를 호출자가 반드시 유지해야 한다.
+
+        409는 스펙상 "이미 신청된 상품 재신청" 정황으로 추정되지만
+        (docs 재조사 절 참고) 공식 답변으로 확정된 사실은 아니다 —
+        이 메서드는 그 추정을 하지 않는다. 다른 명시적 거부(400/401/
+        403/404/409)와 똑같이 예외로 던질 뿐이며, "409니까 이미
+        신청된 것으로 간주해도 된다"는 해석은 호출자도 하지 않는다
+        (미확인을 확인으로 바꾸지 않는다는 이 세션 원칙)."""
+
+        body = self._post(
+            "/openapi/seller/product/apply", json_body={"prd_code": product_code},
+        )
+        result = body["result"]
+        try:
+            return result["prd_code"]
+        except KeyError as exc:
+            raise OnchannelResponseFormatError(
+                f"온채널 판매신청 응답에 필수 필드가 없습니다: {exc}",
+            ) from exc
+
     def register_order(
         self, request: OnchannelOrderRegistrationRequest,
     ) -> str:
@@ -467,12 +496,15 @@ class OnchannelApiClient:
         찍는 습관을 만들지 않기 위함, 스펙 응답 자체엔 PII가 없지만
         원칙을 통일한다).
 
-        이 메서드 자체는 멱등하지 않다 — 같은 요청을 두 번 보내면
-        온채널 서버가 중복을 막아주는지 이 세션은 확인하지 못했다
-        (docs/HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_20260908.md 참고).
-        그래서 이 메서드를 몇 번 호출하느냐의 책임은 전부 호출자
-        (order_submission_service.py의 DB 잠금)에 있다 — 이 클라이언트
-        스스로는 재시도하지 않고, 몇 번 불렸는지도 기억하지 않는다."""
+        이 메서드 자체는 멱등하지 않다 — 2026-09-10 온채널 공식
+        답변으로 "동일 sale_code로 중복 발주해도 온채널 서버가
+        제한하지 않는다"가 확정됐다(더 이상 "미확인"이 아니라 확인된
+        사실이다, docs/HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_20260908.md
+        참고). 그래서 이 메서드를 몇 번 호출하느냐의 책임은 전부
+        호출자(order_submission_service.py의 (company_id,
+        idempotency_key) UNIQUE 제약 기반 DB 잠금)에 있다 — 이
+        클라이언트 스스로는 재시도하지 않고, 몇 번 불렸는지도
+        기억하지 않는다."""
 
         body = self._post(
             "/openapi/seller/order/regist", json_body=request.to_request_body(),

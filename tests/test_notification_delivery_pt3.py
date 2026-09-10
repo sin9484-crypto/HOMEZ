@@ -649,6 +649,15 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             "NOTIFICATION_EMAIL_DELIVERY_FAILED",
             "CHANNEL_POLICY_VIOLATION",
             "MARGIN_BELOW_MINIMUM",
+            # 2026-09-10 최종 회귀에서 발견 — HOMEZ V7 개인 베타 Phase
+            # 1/4/5(로그인 잠금 알림, 자동화 오류강등 알림, 백업
+            # 리허설 실패 알림)가 event_catalog.py에 wired=True로
+            # 추가했는데 이 하드코딩 목록을 갱신하지 않아 실패했다.
+            # 이 파일에서 이미 여러 번 겪은 "새 항목 추가 시 이 집합도
+            # 매번 갱신해야 한다"는 유지보수 규칙과 동일한 패턴이다.
+            "LOGIN_ACCOUNT_LOCKED",
+            "FUNCTION_AUTOMATION_DEMOTED_TO_ERROR",
+            "BACKUP_RESTORE_REHEARSAL_FAILED",
         }
         actual_wired = {code for code, row in by_code.items() if row.wired}
         self.assertEqual(actual_wired, expected_wired)
@@ -667,6 +676,14 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             Path("app/domains/store_connection/service.py"),
             Path("app/domains/retail_purchase/service.py"),
             Path("app/domains/marketplace_listing/submission_service.py"),
+            # 2026-09-10 최종 회귀에서 발견 — 위 expected_wired 수정과
+            # 같은 원인. Phase 1(LOGIN_ACCOUNT_LOCKED)·Phase 4
+            # (FUNCTION_AUTOMATION_DEMOTED_TO_ERROR)·Phase 5
+            # (BACKUP_RESTORE_REHEARSAL_FAILED)가 실제로 발생시키는
+            # 코드 위치를 이 목록에 추가한다.
+            Path("app/domains/auth/service.py"),
+            Path("app/domains/purchase_task/service.py"),
+            Path("app/domains/restore/service.py"),
         ]
         source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
         for event_code, definition in EVENT_CATALOG.items():

@@ -88,6 +88,30 @@ def mask_secret(value: str | None) -> str | None:
     return "***REDACTED***"
 
 
+def mask_card_number(value: str | None) -> str | None:
+    """
+    2026-09-10 Phase 11(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+    "로그에는... 카드정보는 항상 가린다") — 카드번호 전용 마스킹.
+    이 저장소에는 지금까지 카드번호 마스킹 함수 자체가 없었다(카드
+    원문을 저장하는 코드 자체가 없었기 때문 — app/domains/payment
+    Phase 7 참고). 마지막 4자리만 남기고 나머지를 가린다
+    (mask_phone과 동일한 등급 — CVC는 이 함수로 다루지 않는다,
+    CVC는 애초에 어디에도 저장·표시하지 않아야 하므로 마스킹
+    대상이 아니라 mask_secret()로 완전히 가려야 하는 값이다).
+    """
+
+    if not value:
+        return value
+    if "*" in value:
+        return value
+
+    digits = re.sub(r"\D", "", value)
+    if len(digits) < 4:
+        return "*" * len(digits)
+
+    return "*" * (len(digits) - 4) + digits[-4:]
+
+
 def redact_free_text(text: str | None) -> str | None:
     """로그·오류 메시지처럼 구조화되지 않은 자유 텍스트에서 알려진
     민감정보 패턴(전화번호 형태, JWT 형태)을 찾아 마스킹한다. 이
@@ -183,6 +207,7 @@ __all__ = [
     "mask_address",
     "mask_zipcode",
     "mask_secret",
+    "mask_card_number",
     "redact_free_text",
     "redact_dict",
     "KNOWN_CONTACT_ADDRESS_KEYS",

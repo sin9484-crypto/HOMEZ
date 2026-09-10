@@ -124,9 +124,25 @@ class User(Base):
     # DB 컬럼으로 저장한다. locked_until이 과거 시각이거나 NULL이면
     # 잠긴 상태가 아니다(app/domains/user/repository.py::is_locked_out
     # 참고) — 별도 "잠금 해제" 배치 없이 시간 경과만으로 자연 해제된다.
+    # 2026-09-10 최종 회귀에서 발견·수정 — server_default가 없으면
+    # (Python 쪽 default=0만 있으면) Base.metadata.create_all()로 만든
+    # 테이블에는 이 컬럼에 SQL 레벨 DEFAULT가 전혀 안 붙는다(ORM의
+    # default=는 SQLAlchemy가 INSERT할 때만 채우는 값이지, CREATE
+    # TABLE DDL 자체에는 반영되지 않는다) — 반면 실제 Migration
+    # (migrations/20260909_00_add_login_lockout_columns.sql)은
+    # `ALTER TABLE ... DEFAULT 0`으로 SQL 레벨 기본값을 명시적으로
+    # 붙였다. 이 불일치 때문에, ORM 메타데이터로 만든 임시 테이블에
+    # 이 컬럼을 명시하지 않고 raw SQL INSERT하면(예:
+    # app/core/first_admin_setup.py::atomic_create_first_admin())
+    # NOT NULL 제약 위반(sqlite3.IntegrityError)이 나고, 그 호출부가
+    # IntegrityError를 "이미 계정이 있다"로 오해석해 ALREADY_COMPLETED
+    # 를 잘못 반환했다(tests/test_desktop_first_admin_setup.py 전체
+    # 회귀에서 실제로 재현됨). server_default를 Migration과 동일한
+    # 값으로 맞춰 이 드리프트 자체를 없앤다.
     failed_login_count: Mapped[int] = mapped_column(
         Integer,
         default=0,
+        server_default="0",
         nullable=False,
     )
 

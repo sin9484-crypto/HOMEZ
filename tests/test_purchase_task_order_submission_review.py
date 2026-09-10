@@ -56,6 +56,7 @@ from app.domains.purchase_task.constants import ConnectionMethod
 from app.domains.purchase_task.model import (
     PurchaseChannelConnection,
     PurchaseChannelConnectionEvent,
+    PurchaseSalesApplicationAttempt,
     PurchaseRecord,
     PurchaseTask,
     PurchaseTaskBudgetReservation,
@@ -110,6 +111,7 @@ class OrderSubmissionReviewTestCaseBase(unittest.TestCase):
                 PurchaseTaskCsvImportLog.__table__,
                 PurchaseChannelConnection.__table__,
                 PurchaseChannelConnectionEvent.__table__,
+                PurchaseSalesApplicationAttempt.__table__,
                 AutomationModeState.__table__, EmergencyStop.__table__,
                 ExecutionLimit.__table__, ExecutionUsage.__table__,
                 ExecutionPeriodUsage.__table__, Role.__table__, User.__table__,
@@ -250,13 +252,36 @@ class OrderSubmissionReviewTestCaseBase(unittest.TestCase):
 
     def _install_fake_connection_adapter(
         self, *, lookup_product_result=None, lookup_product_error=None,
+        check_member_point_result=None, check_member_point_error=None,
     ):
+        """2026-09-10 후속(Phase 4 — 이 검토 화면이 포인트 잔액도
+        함께 보여주게 됨) — `check_member_point_result`를 넘기지
+        않으면 "잔액 충분"을 뜻하는 합성 성공 결과를 기본값으로
+        쓴다. 이 파일의 대다수 테스트는 포인트 게이트 자체를
+        검증하려는 게 아니므로, 기본값으로 그 관심사를 격리한다
+        (포인트 게이트 자체의 세부 동작은 PointBalanceReviewTestCase
+        전담)."""
+
+        if check_member_point_result is None and check_member_point_error is None:
+            from app.domains.purchase_task.channel_adapter import (
+                CapabilitySupport, MemberPointCheckResult,
+            )
+            check_member_point_result = MemberPointCheckResult(
+                support=CapabilitySupport.SUPPORTED, member_id_masked="t***",
+                point=999_999_999, point_interpretable=True,
+                observed_fields=("member_id", "point"), detail="FAKE — 잔액 충분",
+            )
 
         class _FakeAdapter:
             def lookup_product(self_inner, external_product_id):
                 if lookup_product_error is not None:
                     raise lookup_product_error
                 return lookup_product_result
+
+            def check_member_point(self_inner):
+                if check_member_point_error is not None:
+                    raise check_member_point_error
+                return check_member_point_result
 
             def check_connection(self_inner, account_label, *, verified_at=None):
                 from datetime import timedelta as _td
@@ -720,8 +745,39 @@ class CrossCompanyIsolationTestCase(OrderSubmissionReviewTestCaseBase):
 
 
 class ContractGateAlwaysBlocksTestCase(OrderSubmissionReviewTestCaseBase):
-    """실제 전송 버튼은 계약 4개가 모두 확인되기 전까지 서버·UI
-    양쪽에서 차단된다 — 여기서는 서버(검토 응답) 쪽을 확인한다."""
+    """실제 전송 버튼은 계약 4개가 모두 확인되지 않은 상태에서는
+    서버·UI 양쪽에서 차단된다 — 여기서는 서버(검토 응답) 쪽을
+    확인한다.
+
+    2026-09-10 후속 — 온채널 공식 답변으로 계약 4항목이 전부
+    confirmed=True로 갱신됐다(constants.py의 ONCHANNEL_ORDER_
+    CONTRACT_STATUS 참고). 이 클래스는 "메커니즘"(미확인 상태면
+    항상 차단됨)을 테스트하는 것이지 "지금 이 순간의 실제 값"을
+    테스트하는 것이 아니다 — 그래서 `setUp`에서 합성 미확인
+    baseline으로 강제 리셋한다(tests/test_purchase_channel_
+    connection_service.py의 OnchannelOrderContractStatusTestCase와
+    동일한 패턴). 실제 현재값(전부 확인됨)은 별도 테스트 클래스
+    (ContractGateRealCurrentValueTestCase)가 전담한다."""
+
+    def setUp(self):
+
+        super().setUp()
+
+        from app.domains.purchase_task import constants as contract_constants
+
+        self._contract_patchers = [
+            mock.patch.object(
+                contract_constants, "is_onchannel_order_contract_fully_confirmed",
+                return_value=False,
+            ),
+            mock.patch.object(
+                contract_constants, "unconfirmed_onchannel_order_contract_items",
+                return_value=("SALES_APPLICATION", "PAYMENT_SOURCE"),
+            ),
+        ]
+        for patcher in self._contract_patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_send_blocked_true_and_contract_items_listed(self):
 
@@ -765,6 +821,178 @@ class ContractGateAlwaysBlocksTestCase(OrderSubmissionReviewTestCaseBase):
         self.assertNotIn("submit_order", code_only)
         self.assertNotIn("PurchaseOrderSubmissionService", code_only)
         self.assertNotIn("confirm_real_submission", code_only)
+
+
+class ContractGateRealCurrentValueTestCase(OrderSubmissionReviewTestCaseBase):
+    """2026-09-10 신규 — 온채널 공식 답변 반영 이후 실제 현재값으로는
+    계약 미확인 사유가 더 이상 차단 목록에 나타나지 않음을 고정한다
+    (패치 없음, 이 파일의 다른 테스트와 달리 실제 모듈 상태 그대로
+    검증). 이 테스트가 실패한다면 계약 confirmed 상태가 실제로
+    되돌아갔다는 뜻이므로, ONCHANNEL_ORDER_CONTRACT_STATUS를 다시
+    확인해야 한다."""
+
+    def test_contract_reason_absent_when_all_four_items_confirmed(self):
+
+        order = self._create_order()
+        item = self._create_order_item(order)
+        task = self._create_task(order=order, order_item=item)
+        connection = self._create_ready_connection()
+        self.service.assign_channel_connection(task.id, self.company_a.id, connection.id)
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+        )
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1",
+            options=[{"id": "OPT1", "qty": 1}], triggered_by=1,
+        )
+        self.assertFalse(
+            any("계약" in r for r in review["blocked_reasons"]),
+            "온채널 공식 답변으로 계약 4항목이 전부 확인됐으므로, 계약 "
+            "미확인을 사유로 한 차단은 더 이상 나타나면 안 된다.",
+        )
+
+
+class SalesApplicationAndPointBalanceReviewTestCase(OrderSubmissionReviewTestCaseBase):
+    """2026-09-10 신규(Phase 3~4 — 판매신청·포인트 잔액 게이트를 이
+    검토 화면에도 반영) — submit_order()가 실제로 적용하는 게이트와
+    이 화면의 예고가 어긋나지 않는지 확인한다."""
+
+    def _make_ready_task_and_connection(self):
+
+        order = self._create_order()
+        item = self._create_order_item(order)
+        task = self._create_task(order=order, order_item=item)
+        connection = self._create_ready_connection()
+        self.service.assign_channel_connection(task.id, self.company_a.id, connection.id)
+        return task, connection
+
+    def test_sales_application_not_confirmed_is_reported_and_blocks(self):
+
+        task, connection = self._make_ready_task_and_connection()
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+        )
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1234567",
+            options=[{"id": "OPT1", "qty": 1}], triggered_by=1,
+        )
+
+        self.assertFalse(review["sales_application"]["confirmed"])
+        self.assertTrue(
+            any("판매신청" in r for r in review["blocked_reasons"]),
+        )
+
+    def test_sales_application_confirmed_is_not_blocked_for_that_reason(self):
+
+        from app.domains.purchase_task.constants import SalesApplicationStatus
+        from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
+
+        task, connection = self._make_ready_task_and_connection()
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+        )
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            status=SalesApplicationStatus.SUBMITTED,
+            applied_product_code="CH1234567",
+        ))
+        self.db.commit()
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1234567",
+            options=[{"id": "OPT1", "qty": 1}], triggered_by=1,
+        )
+
+        self.assertTrue(review["sales_application"]["confirmed"])
+        self.assertFalse(
+            any("판매신청" in r for r in review["blocked_reasons"]),
+        )
+
+    def test_point_balance_shown_and_insufficient_balance_blocks(self):
+
+        from app.domains.purchase_task.channel_adapter import (
+            CapabilitySupport, MemberPointCheckResult,
+        )
+
+        task, connection = self._make_ready_task_and_connection()
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+            check_member_point_result=MemberPointCheckResult(
+                support=CapabilitySupport.SUPPORTED, member_id_masked="t***",
+                point=100, point_interpretable=True,
+                observed_fields=("member_id", "point"), detail="FAKE — 잔액 부족",
+            ),
+        )
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1234567",
+            options=[{"id": "OPT1", "qty": 1}], triggered_by=1,
+        )
+
+        self.assertEqual(review["point_balance"]["point"], 100)
+        self.assertTrue(
+            any("보다 적습니다" in r for r in review["blocked_reasons"]),
+        )
+
+    def test_point_balance_unclear_response_blocks(self):
+
+        from app.domains.purchase_task.channel_adapter import (
+            CapabilitySupport, MemberPointCheckResult,
+        )
+
+        task, connection = self._make_ready_task_and_connection()
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+            check_member_point_result=MemberPointCheckResult(
+                support=CapabilitySupport.SUPPORTED, member_id_masked="t***",
+                point=None, point_interpretable=False,
+                observed_fields=(), detail="FAKE — 해석 불가",
+            ),
+        )
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1234567",
+            options=[{"id": "OPT1", "qty": 1}], triggered_by=1,
+        )
+
+        self.assertFalse(review["point_balance"]["point_interpretable"])
+        self.assertTrue(
+            any("해석할 수 없습니다" in r for r in review["blocked_reasons"]),
+        )
+
+    def test_shipping_unconfirmed_always_blocks_even_when_everything_else_is_ready(self):
+        """이 게이트의 핵심 회귀 테스트 — 판매신청·포인트·상품가가
+        전부 정상이어도, 배송비를 사전에 확인할 방법이 없다는 사실
+        때문에 이 화면도 항상 차단 사유를 보여준다(submit_order()의
+        Gate D와 일치시킨다 — 화면과 실제 게이트가 어긋나지 않게)."""
+
+        from app.domains.purchase_task.constants import SalesApplicationStatus
+        from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
+
+        task, connection = self._make_ready_task_and_connection()
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+        )
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            status=SalesApplicationStatus.SUBMITTED,
+            applied_product_code="CH1234567",
+        ))
+        self.db.commit()
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1234567",
+            options=[{"id": "OPT1", "qty": 1}], triggered_by=1,
+        )
+
+        self.assertTrue(review["send_blocked"])
+        self.assertTrue(
+            any("배송비" in r for r in review["blocked_reasons"]),
+        )
 
 
 if __name__ == "__main__":

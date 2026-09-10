@@ -412,6 +412,16 @@ class AuthService(
                 "SESSION_REVOKED", "Session has been revoked.",
             )
 
+        if result.outcome == RefreshOutcome.IDLE_TIMEOUT:
+            # rotate()가 이미 family/access 세션을 폐기했다 — 그
+            # 쓰기가 반영되게 커밋한다(위 REUSE_DETECTED와 동일 패턴).
+            self.db.commit()
+            raise RefreshTokenError(
+                "SESSION_IDLE_TIMEOUT",
+                f"Session idle for more than {settings.SESSION_TIMEOUT_MINUTES} "
+                "minutes; re-authentication required.",
+            )
+
         if result.outcome == RefreshOutcome.REUSE_DETECTED:
             # rotate()가 이미 family/access 세션을 폐기했다 — 그
             # 쓰기가 실제로 반영되게 커밋한다(재사용 탐지를 감사·

@@ -33,6 +33,7 @@ from app.core.exceptions import NotFoundException
 from app.core.exceptions import ServiceUnavailableException
 from app.core.exceptions import TooManyRequestsException
 from app.core.exceptions import UnauthorizedException
+from app.core.permission_check import require_permission
 from app.core.guard import AdminGuard
 from app.core.guard import StaffGuard
 from app.core.recent_auth import consume_recent_auth_token
@@ -55,6 +56,7 @@ from app.domains.purchase_task.schema import ChannelConnectionRename
 from app.domains.purchase_task.schema import ChannelConnectionResponse
 from app.domains.purchase_task.schema import MemberPointCheckResponse
 from app.domains.purchase_task.schema import OrderLookupResponse
+from app.domains.purchase_task.schema import TrackingLookupResponse
 from app.domains.purchase_task.schema import OrderSubmissionReviewRequest
 from app.domains.purchase_task.schema import OrderSubmissionReviewResponse
 from app.domains.purchase_task.schema import ProductLookupResponse
@@ -789,6 +791,34 @@ def lookup_channel_connection_order(
 
 
 @router.get(
+    "/channel-connections/{connection_id}/orders/{external_order_number}/tracking",
+    response_model=TrackingLookupResponse,
+)
+def lookup_channel_connection_tracking(
+    connection_id: int, external_order_number: str,
+    current_user: User = Depends(AdminGuard),
+    service: PurchaseChannelConnectionService = Depends(get_purchase_channel_connection_service),
+):
+    """실제 매입처 API로 배송·송장 정보를 조회한다(2026-09-10 후속,
+    Phase 7) — 호출 시점에 실제 네트워크 요청이 나간다. 복수 송장이
+    감지되면 자동으로 하나를 고르지 않는다(단일 송장 정책 —
+    응답의 multiple_deliveries_detected 참고)."""
+
+    from app.domains.purchase_task.onchannel_client import OnchannelApiError
+
+    try:
+        result = service.lookup_tracking(
+            connection_id, current_user.company_id, external_order_number,
+            triggered_by=current_user.id,
+        )
+    except OnchannelApiError as exc:
+        _translate_onchannel_error(exc)
+    except PurchaseChannelAdapterError as exc:
+        raise BadRequestException(str(exc)) from exc
+    return result
+
+
+@router.get(
     "/channel-connections/{connection_id}/point",
     response_model=MemberPointCheckResponse,
 )
@@ -880,7 +910,17 @@ def review_order_submission(
     않는다(PurchaseOrderSubmissionService.submit_order()를 호출하는
     코드가 없다). 수취정보 원문은 X-Recent-Auth-Token(현재 비밀번호
     재확인, /orders/{id}/sensitive-detail과 동일한 계약)이 없으면
-    마스킹된 값만 내려간다."""
+    마스킹된 값만 내려간다.
+
+    2026-09-10 Phase 11(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+    "개인정보 조회 권한을 별도로 설정한다") — 원문(unmasked)을
+    시도하는 요청(X-Recent-Auth-Token이 실려 온 경우)만
+    VIEW_SENSITIVE_DATA 권한을 요구한다. 마스킹된 값만 보는 일반
+    발주 검토 흐름은 이 권한이 없어도 그대로 동작한다 — 원문 조회
+    시도에만 추가 게이트를 건다."""
+
+    if recent_auth_token:
+        require_permission(db, current_user, "VIEW_SENSITIVE_DATA")
 
     service = PurchaseTaskService(db)
     return service.build_order_submission_review(

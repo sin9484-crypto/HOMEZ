@@ -534,6 +534,27 @@ def run() -> int:
             )
             console_session_store = None
 
+        # 2026-09-09 Phase 2(HOMEZ_USER_OPERATION_SETTINGS.md 11번 —
+        # "HOMEZ 로그인은 프로그램 종료 시 끝낸다") — 이 프로세스가 새로
+        # 시작할 때마다(=이전 실행이 종료됐다가 다시 열린 것) 무조건
+        # 이전 세션을 지운다. Windows Credential Manager는 프로세스가
+        # 완전히 죽어도 값이 그대로 남는 영속 저장소이므로(애초에 그게
+        # 이 모듈의 존재 이유 — "무작위 포트 재시작에도 토큰이
+        # 사라지지 않게"), 아무 조치가 없으면 사용자가 프로그램을 완전히
+        # 종료했다가 며칠 뒤 다시 열어도 로그인 화면 없이 곧바로 이전
+        # 세션으로 복원된다 — 정확히 이 운영 기준이 금지하는 동작이다.
+        # 여기서 무조건 지우면 JS의 restoreDesktopConsoleSessionIfNeeded()
+        # (app/web/console.js)가 항상 빈 손으로 돌아가 로그인 화면을
+        # 보여준다. 같은 프로세스가 계속 떠 있는 동안의 세션 유지(최대
+        # 3시간, 자동 갱신)는 이 삭제와 무관하게 그대로 동작한다 — 이건
+        # "프로세스 시작 시 1회"만 실행되고 그 이후의 로그인/갱신 흐름은
+        # 건드리지 않는다.
+        if console_session_store is not None:
+            try:
+                console_session_store.clear()
+            except Exception:  # noqa: BLE001 — 삭제 실패가 앱 시작을 막지 않는다
+                logger.warning("이전 콘솔 세션 정리 실패(계속 진행)", exc_info=True)
+
         # target=_blank/새 창 요청은 기본값이 이미 True라 이 줄이 없어도
         # 시스템 기본 브라우저로 열리지만, 의도를 명시적으로 고정한다.
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True

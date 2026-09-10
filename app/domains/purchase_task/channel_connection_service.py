@@ -785,6 +785,33 @@ class PurchaseChannelConnectionService:
         )
         return result
 
+    def lookup_tracking(
+        self, connection_id: int, company_id: int, external_order_number: str,
+        *, triggered_by: int | None = None,
+    ):
+        """2026-09-10 후속(Phase 7) — 실제 매입처 API로 배송·송장
+        정보를 조회한다(온채널은 GET seller/order/{code}의 deliverys
+        배열을 재사용 — 별도 배송조회 엔드포인트가 스펙에 없음).
+        lookup_order()와 동일한 승인 전제 및 연결 확인 기록 규칙."""
+
+        connection = self.get_connection_or_404(connection_id, company_id)
+        credential_fingerprint_before = self._read_credential_fingerprint(connection)
+        adapter = get_purchase_channel_adapter(
+            connection.mall_code, credential_reference=connection.credential_reference,
+            credential_store=self._credential_store,
+        )
+        try:
+            result = adapter.lookup_tracking(external_order_number)
+        except Exception as exc:
+            self._record_real_check_failure(connection, exc, triggered_by=triggered_by)
+            raise
+        self._record_real_check_success(
+            connection, detail="실제 배송·송장 조회 성공으로 연결 확인 기록",
+            triggered_by=triggered_by,
+            credential_fingerprint_before=credential_fingerprint_before,
+        )
+        return result
+
     def _read_credential_fingerprint(
         self, connection: PurchaseChannelConnection,
     ) -> str | None:
