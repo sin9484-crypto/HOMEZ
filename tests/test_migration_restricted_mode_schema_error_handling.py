@@ -87,6 +87,8 @@ EXCLUDED_FROM_PRIOR_STATE = {
     # 반복한다: 다음에 이 파일을 다시 만지게 되면 날짜 문자열 하드코딩
     # 대신 자동 계산 방식으로 바꾸는 편이 낫다.
     "20260911_00_create_purchase_order_approval_schema.sql",
+    # 2026-09-11 후속(운영 전 최종 검증 라운드) — 동일한 이유로 추가.
+    "20260911_01_add_unknown_resolution_and_tracking_refresh.sql",
 }
 
 

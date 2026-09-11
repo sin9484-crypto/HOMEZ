@@ -641,6 +641,52 @@ class PurchaseOrderApprovalStatus:
     SATISFIES_ORDER_GATE = (ACTIVE,)
 
 
+class UnknownResolutionStatus:
+    """2026-09-11 후속(운영 전 최종 검증 라운드, 지시문 5번) —
+    PurchaseOrderSubmissionAttempt.unknown_resolution_status.
+    RESULT_UNKNOWN 상태의 발주 시도를 사람이 온채널 관리자 화면에서
+    직접 확인해 확정하는 절차의 결과값. 온채널은 sale_code 조회를
+    지원하지 않으므로 이 확인은 항상 사람이 수행한다 — HOMEZ가
+    자동으로 UNKNOWN을 FAILED나 SUCCEEDED로 바꾸는 경로는 어디에도
+    없다."""
+
+    # 기본값 — 아직 아무도 확인하지 않음.
+    UNRESOLVED = "UNRESOLVED"
+    # 온채널 관리자 화면에서 실제 주문이 생성된 것을 확인함
+    # (order_code 필수 입력).
+    ORDER_CONFIRMED = "ORDER_CONFIRMED"
+    # 온채널 관리자 화면에서 주문이 생성되지 않은 것을 확인함
+    # (근거 메모 필수 입력). 확정 후에도 같은 idempotency_key로는
+    # 여전히 재발주할 수 없다 — 사용자가 새 발주안을 만들어야 한다.
+    ORDER_NOT_CONFIRMED = "ORDER_NOT_CONFIRMED"
+    # 사용자가 확인을 시도했으나 아직 판단할 수 없음 — 이 상태도
+    # UNRESOLVED와 마찬가지로 후속 발주를 계속 차단한다.
+    STILL_UNCLEAR = "STILL_UNCLEAR"
+
+    ALL = (UNRESOLVED, ORDER_CONFIRMED, ORDER_NOT_CONFIRMED, STILL_UNCLEAR)
+
+    # 이 상태들 중 하나인 동안은 해당 PurchaseTask의 모든 새 발주
+    # 시도를 차단한다(order_submission_service.py::
+    # _has_unresolved_unknown_attempt).
+    BLOCKS_RETRY = (UNRESOLVED, STILL_UNCLEAR)
+
+
+class TrackingRefreshResult:
+    """2026-09-11 후속(운영 전 최종 검증 라운드, 지시문 6번) —
+    PurchaseTaskTrackingInfo.last_live_refresh_result. 실제 매입처
+    API로 송장을 다시 조회한 결과 — 조회 실패는 배송조회 실패로만
+    기록하고 기존에 저장된 실제 발주 성공 상태(PurchaseTask.status
+    등)는 절대 바꾸지 않는다."""
+
+    UPDATED = "UPDATED"
+    UNCHANGED = "UNCHANGED"
+    MULTIPLE_DELIVERIES = "MULTIPLE_DELIVERIES"
+    NOT_FOUND = "NOT_FOUND"
+    LOOKUP_FAILED = "LOOKUP_FAILED"
+
+    ALL = (UPDATED, UNCHANGED, MULTIPLE_DELIVERIES, NOT_FOUND, LOOKUP_FAILED)
+
+
 # 2026-09-11 후속(Phase 7) — 사용자 지시 원문의 "권장 시작 기준".
 # PurchaseTaskPolicySetting에 회사가 명시적으로 값을 설정하지
 # 않았으면(None) 이 상수를 대신 쓴다 — 기존 후보 평가 단계
@@ -681,6 +727,8 @@ __all__ = [
     "SalesApplicationStatus",
     "ShippingCostConfirmationSource",
     "PurchaseOrderApprovalStatus",
+    "UnknownResolutionStatus",
+    "TrackingRefreshResult",
     "RECOMMENDED_PER_ORDER_MAX_AMOUNT",
     "RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT",
     "RECOMMENDED_MIN_MARGIN_RATE",

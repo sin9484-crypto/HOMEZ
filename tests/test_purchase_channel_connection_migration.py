@@ -70,6 +70,9 @@ EXCLUDED_FROM_PRIOR_STATE = {
     # 대신 "이 디렉터리의 모든 .sql 중 NEW_MIGRATION보다 사전순으로
     # 뒤인 파일 전부"를 자동으로 계산하는 방식으로 바꾸는 편이 낫다.
     "20260911_00_create_purchase_order_approval_schema.sql",
+    # 2026-09-11 후속(운영 전 최종 검증 라운드) — UNKNOWN 수동
+    # 확정·송장 재조회 컬럼/테이블. 동일한 이유로 추가.
+    "20260911_01_add_unknown_resolution_and_tracking_refresh.sql",
 }
 
 

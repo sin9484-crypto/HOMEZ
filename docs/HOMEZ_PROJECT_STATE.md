@@ -11164,3 +11164,162 @@ attempts`/`purchase_sales_application_attempts` 신규 테이블은
 **아직 보류 중**: 실제 온채널 판매신청 POST, 첫 실제 발주(포인트
 차감 포함) — 사용자가 명시적으로 "보류"를 선택함. GitHub push는
 별도로 확인 예정.
+
+### 운영 전 최종 검증 라운드 (2026-09-11)
+
+이전 라운드(커밋 `8058945`/`1133236`, push 완료, 실 DB Migration
+12건 적용 완료)를 재확인 승인 절차로 재개했다. Git 기준선(HEAD·
+origin·브랜치·5개 커밋 로그·워킹트리·`.gitignore`)을 읽기 전용으로
+다시 확인 — 보고된 값과 실제 값이 전부 일치해 이번에는 정정할
+내용이 없었다.
+
+**Migration 승인 범위 재감사**: 실 `homez.db`의 `schema_migrations`
+이력 테이블에서 12개 Migration 각각의 checksum·적용시각을 직접
+조회해, 이번 세션이 계산한 파일 checksum과 전부 정확히 일치함을
+재확인했다(단순 "적용됨" 보고가 아니라 실제 DB 부기 테이블
+대조). 12개 전부의 대상 테이블·컬럼이 실 DB에 존재함을 개별
+확인(`exchange_rates`/`virtual_stock_thresholds`/`decision_
+outcomes` 등). `users` 테이블 로그인 잠금 컬럼(`failed_login_
+count` 등)이 기존 행에 안전한 기본값(0/NULL)으로만 추가됐음을
+재확인. 두 백업 파일(수동 백업 + bootstrap 자체 백업)은 raw
+copy와 SQLite backup API의 내부 페이지 배치 차이로 서로 다른
+SHA-256을 갖지만, 테이블 목록·행 수가 완전히 동일함을 확인해
+둘 다 진짜 적용 전 스냅샷임을 검증했다(단순 checksum 불일치를
+손상으로 오판하지 않음). 최초 승인 요청이 "20260911_00 1개"로
+좁게 제시됐다가 실제로는 12개가 밀려 있음을 발견해 즉시 멈추고
+재승인을 받은 과거 판단은 `APPROVAL_SCOPE_EXPANDED`(무단 확대)가
+아니라 "발견 즉시 중단 → 정확한 범위로 재승인 → 그 승인과
+정확히 일치하는 파일 목록으로만 적용"이었음을 절차 기록으로
+재확인했다.
+
+**반자동 잔여 기능 3종 신규 구현**(이전까지 `NOT_IMPLEMENTED`):
+
+1. **UNKNOWN 발주 수동 확인·확정** — `PurchaseOrderSubmissionAttempt`
+   에 `unknown_resolution_status`(UNRESOLVED/ORDER_CONFIRMED/
+   ORDER_NOT_CONFIRMED/STILL_UNCLEAR) 등 5개 컬럼 추가 + 신규
+   append-only 테이블 `PurchaseOrderUnknownResolutionEvent`(확정을
+   번복해도 이전 이벤트를 지우지 않음). `order_submission_
+   service.py::_has_unresolved_unknown_attempt()`가 UNRESOLVED/
+   STILL_UNCLEAR인 동안 해당 PurchaseTask의 **모든** 새 발주
+   시도를 idempotency_key와 무관하게 작업 단위로 차단한다.
+   `resolve_unknown_attempt()`는 ORDER_CONFIRMED 시 order_code
+   필수, ORDER_NOT_CONFIRMED 시 근거 필수, RESULT_UNKNOWN 상태만
+   확정 가능, 다른 회사는 조회조차 불가(NotFoundException)를
+   강제한다. 라우터 `POST /{task_id}/order-approval/attempts/
+   {attempt_id}/resolve-unknown` + 콘솔 UI(3지선다 라디오 + order_
+   code/근거 입력 + 제출).
+2. **발주 시도 이력 조회** — `list_attempts()` + 라우터
+   `GET /{task_id}/order-approval/attempts`(회사 격리, 시각순
+   정렬, 판매신청·배송비확인·발주승인 상태를 "지금" 기준으로
+   조인해 참고용 표시, 원본 응답·PII·Credential 없음) + 콘솔 UI
+   (접었다 펼치는 이력 표, RESULT_UNKNOWN 행에 확정 버튼 인라인
+   배치).
+3. **송장 다시 조회** — `PurchaseTaskService.refresh_tracking_live()`
+   신규: 이 작업의 SUCCEEDED 발주 시도(또는 ORDER_CONFIRMED로
+   확정된 UNKNOWN 시도)의 order_code로 기존
+   `PurchaseChannelConnectionService.lookup_tracking()`을 재사용해
+   실제 조회한다. 복수 송장 감지 시 기존 값을 그대로 두고
+   예외상태만 기록(임의 선택 금지), 조회 실패는
+   `PurchaseTaskTrackingInfo`의 표시용 필드만 갱신하고 `PurchaseTask.
+   status`나 Shipment 연결은 절대 건드리지 않는다(실제 발주 성공
+   상태 비변경). 반복 클릭 방지(10초 최소 간격), 외부 401을
+   HOMEZ 로그인 만료로 오인하지 않는 기존 `_translate_onchannel_
+   error()` 헬퍼를 그대로 재사용. `last_live_refresh_at`/
+   `last_live_refresh_result` 컬럼으로 "값이 안 바뀐 재조회"도
+   조회 시각을 보여준다.
+
+새 Migration `20260911_01_add_unknown_resolution_and_tracking_
+refresh.sql`(컬럼 7개 ALTER + 신규 테이블 1개) — 임시 SQLite
+전체 체인 재생·재적용 실패·Model↔DDL 일치·기존 데이터 보존 검증
+7/7 OK. **실 homez.db에는 적용하지 않았다.**
+
+**idempotency_key 서버측 결정론적 계산으로 재설계**: 클라이언트가
+더 이상 idempotency_key를 직접 보내지 않는다(`SubmitRealOrderRequest`
+에서 필드 제거). `PurchaseOrderSubmissionService.compute_
+idempotency_key()`가 (회사, 연결, 작업, 상품코드, 옵션) 조합의
+기존 시도 개수+1을 키에 반영해 계산한다 — 같은 조합의 반복
+클릭·중복 탭은 같은 개수를 보고 충돌하도록(DB UNIQUE가 최종
+방어선), 이전 시도가 종결된 뒤에는 자연히 새 키를 받도록
+설계했다. `submit_order()`가 모든 fail-closed 게이트(confirm_
+real_submission·비상정지·PAUSED/ERROR·미해소 UNKNOWN)를 통과한
+**뒤에만** 이 계산을 수행하도록 라우터가 아니라 서비스 내부로
+옮겨, 거부될 요청이 발주시도 테이블을 불필요하게 조회하지
+않게 했다(라우터에 먼저 넣었다가 기존 테스트 1건이 "no such
+table"로 실패해 발견·수정).
+
+**발견·수정한 결함(이번 라운드)**:
+
+1. 프론트엔드 신규 코드 — `<table class="responsive-cards">`의
+   모바일 카드 CSS(`table.responsive-cards tr { display: ... }`)가
+   `[hidden]`의 기본 `display:none`보다 명시도가 높아 UNKNOWN
+   확정 폼이 `hidden` 속성이 붙어 있어도 실제로는 계속 보이는
+   버그를 **실제 브라우저로 재현해** 발견했다. `<tr hidden>` 대신
+   표 바깥의 독립된 `<div hidden>`으로 옮겨 이 CSS 충돌 자체를
+   피하도록 수정 — computed style로 `display:none` 정상 적용 재확인.
+2. 새 라우터 endpoint가 idempotency_key를 미리 계산해 넘기던
+   초안이 `confirm_real_submission=False`로 즉시 거부될 요청에도
+   `purchase_order_submission_attempts` 테이블을 조회해, 그 테이블이
+   없는 기존 테스트 1건을 깼다 — 계산 시점을 서비스 내부(모든
+   게이트 통과 후)로 옮겨 해결.
+3. 기존 하드코딩 목록 테스트 5건이 신규 Migration 파일 때문에
+   또 깨졌다(이번 라운드에서만). `test_purchase_task_migration.py`
+   (policy_settings 이어 tracking_infos용 later-migration-fragment
+   추가), `test_purchase_order_submission_migration.py`(원본 base
+   Migration 파일 하나만 비교하는 canonical-diff 테스트에 처음으로
+   later-migration-fragment 패턴 도입), `test_purchase_order_
+   approval_migration.py`(이 파일 자체가 "사전순 마지막 파일"이라는
+   전제가 깨져 `name == NEW_MIGRATION` 비교를 `name >= NEW_MIGRATION`
+   자동 계산으로 정정 — 이전 세션들이 "다음에 바꾸는 게 낫다"고
+   남긴 메모를 실제로 실행), `test_purchase_channel_connection_
+   migration.py`·`test_migration_restricted_mode_schema_error_
+   handling.py`(기존 EXCLUDED_FROM_PRIOR_STATE 집합에 신규 파일명
+   추가) — 이 패턴이 이번 세션까지 총 9개 파일 인스턴스에서
+   반복됐다.
+
+**브라우저 실제 검증(격리 UI-검증 서버, 실 homez.db 아님)**:
+`storage`가 아니라 세션 scratchpad 전용 SQLite(`ui_shipment_
+verify.db`)에 Migration을 적용하고 테스트 작업·연결·발주시도
+행을 직접 시딩해, 로그인 → 매입 작업 상세 → "발주 시도 이력
+보기/숨기기" 토글(정상 작동, 위 CSS 결함을 이 과정에서 발견) →
+"결과불명 확정하기" 폼 열기 → "주문 미생성 확인함" + 근거 입력
+→ 제출 → DB에 정확한 상태·append-only 이벤트 기록 확인 →
+화면이 "결과불명 확정: 미생성 확인됨"으로 정확히 재렌더링됨을
+실제 클릭으로 확인했다. "송장 다시 조회" 버튼도 클릭해 성공
+경로(값 갱신)와 실패 경로(자격증명 없음 → 400, 기존 값 보존,
+task 상태 불변) 둘 다 확인했다.
+
+**승인 없는 실 온채널 API 호출 1건 발생(중요, 투명 기록)**: 이
+브라우저 검증 중 테스트 연결의 `credential_reference`를 `None`
+으로 남겨뒀는데, `channel_adapter.py`가 `None`을 "레거시 단일
+연결 자격증명"(`OnchannelSupplierOrderProvider.CREDENTIAL_
+REFERENCE = "homez_onchannel_api"`)으로 자동 대체하는 기존
+설계(다중연결 모델 이전부터 있던 하위호환 경로)가 있음을 몰랐다.
+이 Windows 머신의 Credential Manager에 그 이름으로 저장된 **실제
+유효한 온채널 자격증명**이 있어, 조회 버튼 클릭 한 번이 실제
+인증된 GET 요청(`https://api.onch3.co.kr/openapi/seller/order/
+OC-UI-VERIFY-1`, 가상의 order_code)으로 이어졌다 — 응답은 실제
+404(주문 없음), 부작용 없음(읽기 전용, 생성·수정 없음). 사용자에게
+즉시 보고했고, 계속 진행 승인을 받은 뒤 테스트 연결의 credential_
+reference를 Credential Manager에 존재하지 않는 문자열로 바꿔
+같은 조회가 실제 네트워크 호출 전에 `PurchaseChannelAdapterError`
+로 안전하게 막히는 것을 Python 직접 호출로 먼저 검증한 뒤에만
+브라우저에서 재시도했다. **코드 결함이 아니다** — 의도된 하위호환
+동작이며, 원인은 이번 세션이 `create_connection()`을 거치지 않고
+연결 행을 직접 INSERT하며 `credential_reference`를 명시하지
+않은 테스트 방법론에 있었다.
+
+**테스트(최종)**: 신규 파일 3개(`test_order_unknown_resolution_
+and_tracking_refresh.py` 20/20, `test_unknown_resolution_and_
+tracking_refresh_migration.py` 7/7, 기존 `test_purchase_order_
+approval_migration.py`/`test_purchase_order_submission_migration.py`
+재검증 포함) + `test_purchase_task_router.py`에 신규 6개 추가
+(24/24) + `tests/test_purchase_*.py` 전체 372/372 OK.
+
+**전체 저장소 회귀(처음부터 새로 실행, 작은 결합 실행으로
+대체하지 않음)**: **4229개 테스트, 6120.8초(약 102분), 전부 OK
+(실패 0건)** — 이번 라운드는 첫 실행에 바로 통과했다(지난
+라운드는 1건 발견·수정 후 통과). 로그 끝의 한글 깨짐 줄은 지난
+라운드와 동일한 `test_homez_desktop.py`의 의도된 fault-injection
+진단 출력(인코딩 표시 문제일 뿐, 실패 아님)임을 재확인. 회귀
+전후 `homez.db` 수정시각·SHA-256이 완전히 동일함을 재확인(실
+DB 무접촉).

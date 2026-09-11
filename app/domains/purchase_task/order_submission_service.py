@@ -71,6 +71,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
+from app.core.exceptions import NotFoundException
 from app.domains.automation_safety.constants import FunctionCode
 from app.domains.automation_safety.constants import FunctionMode
 from app.domains.automation_safety.service import SafetyService
@@ -80,7 +81,9 @@ from app.domains.purchase_task.channel_connection_service import (
 )
 from app.domains.purchase_task.constants import OrderSubmissionStatus
 from app.domains.purchase_task.constants import SalesApplicationStatus
+from app.domains.purchase_task.constants import UnknownResolutionStatus
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
+from app.domains.purchase_task.model import PurchaseOrderUnknownResolutionEvent
 from app.domains.purchase_task.sales_application_service import (
     PurchaseSalesApplicationService,
 )
@@ -119,11 +122,157 @@ class PurchaseOrderSubmissionService:
             .first()
         )
 
+    def list_attempts(
+        self, purchase_task_id: int, company_id: int,
+    ) -> list[PurchaseOrderSubmissionAttempt]:
+        """이 PurchaseTask에 대한 발주 시도 이력을 오래된 순으로
+        반환한다(부작용 없음). 회사 격리는 company_id 필터로 강제한다
+        — 다른 회사의 시도는 애초에 쿼리 결과에 나타나지 않는다."""
+
+        return (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(
+                PurchaseOrderSubmissionAttempt.purchase_task_id == purchase_task_id,
+                PurchaseOrderSubmissionAttempt.company_id == company_id,
+            )
+            .order_by(PurchaseOrderSubmissionAttempt.started_at.asc())
+            .all()
+        )
+
+    def compute_idempotency_key(
+        self, company_id: int, connection_id: int,
+        purchase_task_id: int | None, product_code: str, options: list[dict],
+    ) -> str:
+        """호출부(라우터)가 클라이언트로부터 idempotency_key를 직접
+        받지 않고 이 메서드로 서버가 결정론적으로 계산하게 한다 —
+        클라이언트가 임의 문자열(특히 타임스탬프)을 실어 보내면 같은
+        조합의 반복 클릭·중복 탭이 서로 다른 키를 받아 DB UNIQUE
+        중복방지가 무력화되는 결함이 2026-09-11 세션에서 실제로
+        발견된 적이 있다(재발 방지).
+
+        같은 (company, connection, task, product_code, options) 조합에
+        대해 이미 있는 시도 행 개수 + 1을 키에 반영한다 — 그래서:
+        - 정확히 같은 조합으로 거의 동시에 두 번 호출하면(더블클릭·
+          중복 탭) 둘 다 같은 개수를 보고 같은 키를 계산할 가능성이
+          높고, 설령 계산이 달라도 DB INSERT 시점의 UNIQUE 제약이
+          최종 방어선이다.
+        - 이전 시도가 REJECTED/RESULT_UNKNOWN(해소됨)으로 종결된
+          뒤에는 카운트가 늘어나 있으므로 자연히 새 키를 받는다 —
+          "새 idempotency_key로 다시 시도해야 한다"(OrderSubmissionStatus
+          docstring)는 기존 설계를 그대로 따른다."""
+
+        options_json = json.dumps(options, ensure_ascii=False)
+        prior_count = (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(
+                PurchaseOrderSubmissionAttempt.company_id == company_id,
+                PurchaseOrderSubmissionAttempt.connection_id == connection_id,
+                PurchaseOrderSubmissionAttempt.purchase_task_id == purchase_task_id,
+                PurchaseOrderSubmissionAttempt.product_code == product_code,
+                PurchaseOrderSubmissionAttempt.options_json == options_json,
+            )
+            .count()
+        )
+        import hashlib
+        options_fingerprint = hashlib.sha256(
+            options_json.encode("utf-8"),
+        ).hexdigest()[:12]
+        return (
+            f"pt-{purchase_task_id}-{connection_id}-{product_code}-"
+            f"{options_fingerprint}-a{prior_count + 1}"
+        )
+
+    def _has_unresolved_unknown_attempt(
+        self, purchase_task_id: int, company_id: int,
+    ) -> bool:
+
+        row = (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(
+                PurchaseOrderSubmissionAttempt.purchase_task_id == purchase_task_id,
+                PurchaseOrderSubmissionAttempt.company_id == company_id,
+                PurchaseOrderSubmissionAttempt.status == OrderSubmissionStatus.RESULT_UNKNOWN,
+                PurchaseOrderSubmissionAttempt.unknown_resolution_status.in_(
+                    UnknownResolutionStatus.BLOCKS_RETRY,
+                ),
+            )
+            .first()
+        )
+        return row is not None
+
+    # ---------------- UNKNOWN 수동 확인·확정 ----------------
+
+    def resolve_unknown_attempt(
+        self, attempt_id: int, company_id: int, *,
+        resolution: str, order_code: str | None = None,
+        basis: str | None = None, resolved_by: int,
+    ) -> PurchaseOrderSubmissionAttempt:
+        """RESULT_UNKNOWN 발주 시도 1건을 사람이 온채널 관리자 화면을
+        직접 확인한 결과로 확정한다. 이 메서드 자신은 온채널에 어떤
+        네트워크 호출도 하지 않는다 — 사람이 이미 확인한 사실을
+        기록할 뿐이다. 확정 결과는 attempt 행(현재 상태 1개)과
+        `PurchaseOrderUnknownResolutionEvent`(append-only 이력) 양쪽에
+        남긴다 — 나중에 다시 확정하더라도 이전 이벤트 행은 지우거나
+        덮어쓰지 않는다."""
+
+        if resolution not in UnknownResolutionStatus.ALL:
+            raise BadRequestException(f"알 수 없는 확정 결과입니다: {resolution}")
+
+        attempt = (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(
+                PurchaseOrderSubmissionAttempt.id == attempt_id,
+                PurchaseOrderSubmissionAttempt.company_id == company_id,
+            )
+            .first()
+        )
+        if attempt is None:
+            raise NotFoundException("발주 시도를 찾을 수 없습니다.")
+        if attempt.status != OrderSubmissionStatus.RESULT_UNKNOWN:
+            raise ConflictException(
+                "결과불명(RESULT_UNKNOWN) 상태의 발주 시도만 수동으로 "
+                f"확정할 수 있습니다(현재 상태: {attempt.status}).",
+            )
+
+        if resolution == UnknownResolutionStatus.ORDER_CONFIRMED:
+            if not order_code or not order_code.strip():
+                raise BadRequestException(
+                    "주문 생성을 확인했다면 온채널 관리자 화면에서 읽은 "
+                    "실제 order_code를 함께 입력해야 합니다.",
+                )
+        elif resolution == UnknownResolutionStatus.ORDER_NOT_CONFIRMED:
+            if not basis or not basis.strip():
+                raise BadRequestException(
+                    "주문 미생성을 확인했다면 근거(무엇을 어떻게 확인했는지)를 "
+                    "함께 입력해야 합니다.",
+                )
+
+        attempt.unknown_resolution_status = resolution
+        attempt.unknown_resolved_order_code = (
+            order_code.strip() if resolution == UnknownResolutionStatus.ORDER_CONFIRMED else None
+        )
+        attempt.unknown_resolution_basis = basis.strip() if basis else None
+        attempt.unknown_resolved_by = resolved_by
+        attempt.unknown_resolved_at = datetime.utcnow()
+
+        event = PurchaseOrderUnknownResolutionEvent(
+            company_id=company_id, connection_id=attempt.connection_id,
+            purchase_task_id=attempt.purchase_task_id, attempt_id=attempt.id,
+            resolution_status=resolution,
+            order_code=attempt.unknown_resolved_order_code,
+            basis=attempt.unknown_resolution_basis, resolved_by=resolved_by,
+        )
+        self.db.add(event)
+
+        self.db.commit()
+        self.db.refresh(attempt)
+        return attempt
+
     # ---------------- 실제 발주 실행 ----------------
 
     def submit_order(
         self, connection_id: int, company_id: int, *,
-        idempotency_key: str, product_code: str,
+        idempotency_key: str | None = None, product_code: str,
         options: list[dict], recv_name: str, recv_tell: str,
         recv_mobile: str, zipcode: str, address: str,
         address_detail: str = "", comment: str = "", site_name: str = "",
@@ -162,11 +311,40 @@ class PurchaseOrderSubmissionService:
                 "시작하지 않습니다.",
             )
 
+        # 2026-09-11 후속(운영 전 최종 검증 라운드, 지시문 5번) — 이
+        # PurchaseTask에 아직 해소되지 않은 RESULT_UNKNOWN 발주 시도가
+        # 있으면(사람이 온채널 관리자 화면에서 직접 확인해 확정하기
+        # 전까지) 새 idempotency_key로도 새 시도 자체를 만들지 않는다
+        # — "해당 PurchaseTask 후속 자동화 중지"를 작업 단위로 강제한다
+        # (개별 idempotency_key 잠금과는 별개의, 더 넓은 차단이다).
+        if purchase_task_id is not None and self._has_unresolved_unknown_attempt(
+            purchase_task_id, company_id,
+        ):
+            raise ConflictException(
+                "이 매입 작업에 아직 해소되지 않은 결과불명(RESULT_UNKNOWN) "
+                "발주 시도가 있습니다 — 온채널 관리자 화면에서 실제 주문 "
+                "생성 여부를 먼저 확인하고 확정해야 새 발주를 시도할 수 "
+                "있습니다.",
+            )
+
         self._validate_inputs(
             product_code=product_code, options=options,
             recv_name=recv_name, recv_tell=recv_tell, recv_mobile=recv_mobile,
             zipcode=zipcode, address=address,
         )
+
+        # 2026-09-11 정정 — idempotency_key를 라우터가 미리 계산해
+        # 넘기지 않고 여기서(모든 fail-closed 게이트를 통과한 뒤)
+        # 계산한다 — 그래야 confirm_real_submission=False 등으로
+        # 즉시 거부될 요청이 purchase_order_submission_attempts
+        # 테이블을 불필요하게 조회하지 않는다("이 승인 게이트가 이
+        # 메서드의 첫 줄이다"라는 위 docstring의 전제를 실제로
+        # 지킨다). 호출부가 이미 특정 키를 알고 있다면(테스트 등)
+        # 그대로 쓴다.
+        if idempotency_key is None:
+            idempotency_key = self.compute_idempotency_key(
+                company_id, connection_id, purchase_task_id, product_code, options,
+            )
 
         # 2026-09-08 재정정 — "매입 작업 배정 가능 판정"과 별개의
         # 발주 전용 게이트. 이 검사는 select_connection_for_task()를

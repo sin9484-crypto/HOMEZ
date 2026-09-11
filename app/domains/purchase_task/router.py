@@ -64,6 +64,9 @@ from app.domains.purchase_task.schema import FinalizeOrderApprovalRequest
 from app.domains.purchase_task.schema import PurchaseOrderApprovalResponse
 from app.domains.purchase_task.schema import SubmitRealOrderRequest
 from app.domains.purchase_task.schema import PurchaseOrderSubmissionAttemptResponse
+from app.domains.purchase_task.schema import PurchaseOrderSubmissionAttemptHistoryItemResponse
+from app.domains.purchase_task.schema import ResolveUnknownAttemptRequest
+from app.domains.purchase_task.schema import OrderSubmissionReviewOptionInput
 from app.domains.purchase_task.schema import ProductLookupResponse
 from app.domains.purchase_task.schema import CandidateCreate
 from app.domains.purchase_task.schema import CandidateResponse
@@ -1108,11 +1111,18 @@ def submit_real_order(
     task_service.get_task(task_id, current_user.company_id)
 
     service = PurchaseOrderSubmissionService(db)
+    options_dicts = [opt.model_dump() for opt in data.options]
+    # 2026-09-11 정정 — idempotency_key를 클라이언트로부터 받지 않는다
+    # (SubmitRealOrderRequest docstring 참고 — 타임스탬프 기반 키가 DB
+    # UNIQUE 중복방지를 무력화했던 실제 결함의 재발 방지). None을
+    # 넘기면 submit_order()가 모든 fail-closed 게이트를 통과한 뒤에만
+    # compute_idempotency_key()로 직접 계산한다 — 그래야 거부될
+    # 요청이 그 테이블을 불필요하게 조회하지 않는다.
     try:
         attempt = service.submit_order(
             data.connection_id, current_user.company_id,
-            idempotency_key=data.idempotency_key, product_code=data.product_code,
-            options=[opt.model_dump() for opt in data.options],
+            idempotency_key=None, product_code=data.product_code,
+            options=options_dicts,
             recv_name=data.recv_name, recv_tell=data.recv_tell,
             recv_mobile=data.recv_mobile, zipcode=data.zipcode,
             address=data.address, address_detail=data.address_detail,
@@ -1125,13 +1135,165 @@ def submit_real_order(
     except PurchaseChannelAdapterError as exc:
         raise BadRequestException(str(exc)) from exc
 
+    return _attempt_to_response(attempt)
+
+
+def _attempt_to_response(attempt) -> PurchaseOrderSubmissionAttemptResponse:
+
     return PurchaseOrderSubmissionAttemptResponse(
         id=attempt.id, status=attempt.status,
         external_order_code=attempt.external_order_code,
         failure_detail=attempt.failure_detail,
         idempotency_key=attempt.idempotency_key,
         started_at=attempt.started_at, finished_at=attempt.finished_at,
+        unknown_resolution_status=attempt.unknown_resolution_status,
+        unknown_resolved_order_code=attempt.unknown_resolved_order_code,
+        unknown_resolution_basis=attempt.unknown_resolution_basis,
+        unknown_resolved_by=attempt.unknown_resolved_by,
+        unknown_resolved_at=attempt.unknown_resolved_at,
     )
+
+
+@router.get(
+    "/{task_id}/order-approval/attempts",
+    response_model=list[PurchaseOrderSubmissionAttemptHistoryItemResponse],
+)
+def list_order_submission_attempts(
+    task_id: int,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-11 신규(운영 전 최종 검증 라운드, 지시문 6번) — 이
+    작업의 발주 시도 이력을 오래된 순으로 반환한다(부작용 없음).
+    원본 응답·수취인 개인정보·JWT·API 키는 이 테이블 자체에 저장된
+    적이 없으므로(Gate PT-3 설계) 이 응답에도 나타나지 않는다.
+    판매신청·배송비 확인·승인 상태는 "지금" 상태를 조회해 참고용으로
+    붙인다."""
+
+    import json as _json
+
+    from app.domains.purchase_task.order_approval_service import (
+        PurchaseOrderApprovalService,
+    )
+    from app.domains.purchase_task.order_submission_service import (
+        PurchaseOrderSubmissionService,
+    )
+    from app.domains.purchase_task.sales_application_service import (
+        PurchaseSalesApplicationService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    task_service.get_task(task_id, current_user.company_id)
+
+    service = PurchaseOrderSubmissionService(db)
+    attempts = service.list_attempts(task_id, current_user.company_id)
+
+    sales_service = PurchaseSalesApplicationService(db)
+    approval_service = PurchaseOrderApprovalService(db)
+
+    results = []
+    for attempt in attempts:
+        application = sales_service.get_attempt(
+            attempt.connection_id, current_user.company_id, attempt.product_code,
+        )
+        approval = approval_service.get_approval(
+            attempt.connection_id, current_user.company_id, task_id,
+        )
+        try:
+            options = [
+                OrderSubmissionReviewOptionInput(**o)
+                for o in _json.loads(attempt.options_json)
+            ]
+        except (ValueError, TypeError):
+            options = []
+
+        results.append(
+            PurchaseOrderSubmissionAttemptHistoryItemResponse(
+                id=attempt.id, status=attempt.status,
+                external_order_code=attempt.external_order_code,
+                failure_detail=attempt.failure_detail,
+                idempotency_key=attempt.idempotency_key,
+                started_at=attempt.started_at, finished_at=attempt.finished_at,
+                unknown_resolution_status=attempt.unknown_resolution_status,
+                unknown_resolved_order_code=attempt.unknown_resolved_order_code,
+                unknown_resolution_basis=attempt.unknown_resolution_basis,
+                unknown_resolved_by=attempt.unknown_resolved_by,
+                unknown_resolved_at=attempt.unknown_resolved_at,
+                connection_id=attempt.connection_id,
+                product_code=attempt.product_code, options=options,
+                sales_application_status=(
+                    application.status if application is not None else None
+                ),
+                shipping_cost_confirmed=bool(
+                    approval is not None and approval.shipping_cost_amount is not None,
+                ),
+                order_approval_status=(
+                    approval.status if approval is not None else None
+                ),
+            ),
+        )
+    return results
+
+
+@router.post(
+    "/{task_id}/order-approval/attempts/{attempt_id}/resolve-unknown",
+    response_model=PurchaseOrderSubmissionAttemptResponse,
+)
+def resolve_unknown_attempt(
+    task_id: int, attempt_id: int, data: ResolveUnknownAttemptRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-11 신규(운영 전 최종 검증 라운드, 지시문 5번) —
+    RESULT_UNKNOWN 발주 시도를 사람이 온채널 관리자 화면에서 직접
+    확인한 결과로 확정한다. 이 호출 자체는 온채널에 어떤 네트워크
+    요청도 보내지 않는다. company_id로 스코프되므로 다른 회사의
+    시도는 애초에 조회조차 되지 않는다(권한 없는 확정을 구조적으로
+    차단)."""
+
+    from app.domains.purchase_task.order_submission_service import (
+        PurchaseOrderSubmissionService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    task_service.get_task(task_id, current_user.company_id)
+
+    service = PurchaseOrderSubmissionService(db)
+    attempt = service.resolve_unknown_attempt(
+        attempt_id, current_user.company_id,
+        resolution=data.resolution, order_code=data.order_code,
+        basis=data.basis, resolved_by=current_user.id,
+    )
+    return _attempt_to_response(attempt)
+
+
+@router.post(
+    "/{task_id}/tracking/refresh",
+    response_model=TrackingResponse,
+)
+def refresh_tracking(
+    task_id: int,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-11 신규(운영 전 최종 검증 라운드, 지시문 6번) — 실제
+    매입처 API로 이 작업의 배송·송장 정보를 다시 조회한다(호출
+    시점에 실제 네트워크 요청이 나간다). 실제 발주 성공 상태는
+    절대 바꾸지 않는다 — 복수 송장이 감지되면 아무 필드도 덮어쓰지
+    않고 예외 상태로만 기록한다(단일 송장 정책)."""
+
+    from app.domains.purchase_task.onchannel_client import OnchannelApiError
+
+    service = PurchaseTaskService(db)
+    try:
+        tracking = service.refresh_tracking_live(
+            task_id, current_user.company_id, triggered_by=current_user.id,
+        )
+    except OnchannelApiError as exc:
+        _translate_onchannel_error(exc)
+    except PurchaseChannelAdapterError as exc:
+        raise BadRequestException(str(exc)) from exc
+    return tracking
 
 
 @router.get("/{task_id}/candidates", response_model=list[CandidateResponse])

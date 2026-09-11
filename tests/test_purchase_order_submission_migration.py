@@ -197,7 +197,24 @@ class FullChainReplayTestCase(unittest.TestCase):
 class ModelDdlCanonicalDiffTestCase(unittest.TestCase):
     """homez-migration-safety 원칙 — SQLAlchemy CreateTable을 sqlite
     dialect로 컴파일한 canonical DDL과 이 Migration 파일 안의 CREATE
-    TABLE 문을 공백만 정규화해 비교한다."""
+    TABLE 문을 공백만 정규화해 비교한다.
+
+    2026-09-11 후속(운영 전 최종 검증 라운드) —
+    migrations/20260911_01_add_unknown_resolution_and_tracking_refresh.sql
+    이 이 테이블에 컬럼 5개(unknown_resolution_status 등)를 ALTER
+    TABLE로 추가했다. 이 테스트는 원본 CREATE TABLE 파일 하나만 놓고
+    비교하므로, 그 이후 정당하게 추가된 컬럼은 canonical DDL
+    문자열에서 제거하고 비교한다(별도 테스트
+    tests/test_unknown_resolution_and_tracking_refresh_migration.py가
+    이 컬럼들의 실제 추가를 이미 검증한다) — purchase_tasks 등
+    기존 테이블에 이미 쓰인 것과 동일한 패턴."""
+
+    _LATER_MIGRATION_COLUMN_FRAGMENT = (
+        ", unknown_resolution_status VARCHAR(30) NOT NULL, "
+        "unknown_resolved_order_code VARCHAR(200), "
+        "unknown_resolution_basis VARCHAR(500), "
+        "unknown_resolved_by INTEGER, unknown_resolved_at DATETIME"
+    )
 
     @staticmethod
     def _normalize(sql: str) -> str:
@@ -223,7 +240,10 @@ class ModelDdlCanonicalDiffTestCase(unittest.TestCase):
         end = migration_sql.index(");", start) + 1
         actual = migration_sql[start:end]
 
-        self.assertEqual(self._normalize(actual), self._normalize(canonical))
+        normalized_canonical = self._normalize(canonical).replace(
+            self._LATER_MIGRATION_COLUMN_FRAGMENT, "",
+        )
+        self.assertEqual(self._normalize(actual), normalized_canonical)
 
 
 if __name__ == "__main__":

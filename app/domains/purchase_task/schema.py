@@ -206,6 +206,11 @@ class TrackingResponse(BaseModel):
     return_status: Optional[str]
     refund_status: Optional[str]
     refund_amount: Optional[float]
+    # 2026-09-11 후속(운영 전 최종 검증 라운드, "송장 다시 조회") —
+    # 값이 바뀌지 않은 재조회도 시각을 남겨 UI가 "마지막으로 언제
+    # 확인했는지"를 보여줄 수 있게 한다.
+    last_live_refresh_at: Optional[datetime] = None
+    last_live_refresh_result: Optional[str] = None
 
 
 class CancelRequest(BaseModel):
@@ -589,10 +594,17 @@ class SubmitRealOrderRequest(BaseModel):
     PurchaseOrderSubmissionService.submit_order()가 실제로 온채널에
     HTTP 요청을 보낸다. 수취인 개인정보는 이 요청 안에서만 잠시
     존재하고 DB에는 product_code·options만 남는다(기존 Gate PT-3
-    설계 그대로)."""
+    설계 그대로).
+
+    2026-09-11 정정(운영 전 최종 검증 라운드) — `idempotency_key`를
+    더 이상 클라이언트가 보내지 않는다. 프론트엔드가 타임스탬프를
+    실어 보내 같은 조합의 반복 클릭·중복 탭이 서로 다른 키를 받아
+    DB UNIQUE 중복방지가 무력화되는 결함이 실제로 발견된 적이 있다
+    (재발 방지) — 이제 라우터가
+    `PurchaseOrderSubmissionService.compute_idempotency_key()`로
+    서버에서 결정론적으로 계산한다."""
 
     connection_id: int
-    idempotency_key: str
     product_code: str
     options: list[OrderSubmissionReviewOptionInput]
     recv_name: str
@@ -615,6 +627,39 @@ class PurchaseOrderSubmissionAttemptResponse(BaseModel):
     idempotency_key: str
     started_at: datetime
     finished_at: Optional[datetime]
+    unknown_resolution_status: str = "UNRESOLVED"
+    unknown_resolved_order_code: Optional[str] = None
+    unknown_resolution_basis: Optional[str] = None
+    unknown_resolved_by: Optional[int] = None
+    unknown_resolved_at: Optional[datetime] = None
+
+
+class PurchaseOrderSubmissionAttemptHistoryItemResponse(
+    PurchaseOrderSubmissionAttemptResponse,
+):
+    """2026-09-11 후속(운영 전 최종 검증 라운드, 지시문 6번) — 발주
+    시도 이력 화면 전용. 원본 응답·주소·전화번호·JWT·API 키는
+    어디에도 없다 — product_code/옵션(id·qty만, PII 아님)까지만
+    보여준다. 판매신청·배송비 확인·승인 상태는 이 시도가 만들어질
+    당시가 아니라 "지금" 상태를 그대로 조회해 붙인다(별도 스냅샷을
+    저장하지 않는다 — 표시 전용 정보이기 때문)."""
+
+    connection_id: int
+    product_code: str
+    options: list[OrderSubmissionReviewOptionInput]
+    sales_application_status: Optional[str]
+    shipping_cost_confirmed: bool
+    order_approval_status: Optional[str]
+
+
+class ResolveUnknownAttemptRequest(BaseModel):
+    """2026-09-11 신규(운영 전 최종 검증 라운드, 지시문 5번) —
+    RESULT_UNKNOWN 발주 시도를 사람이 온채널 관리자 화면에서 직접
+    확인한 결과로 확정한다."""
+
+    resolution: str
+    order_code: Optional[str] = None
+    basis: Optional[str] = Field(default=None, max_length=500)
 
 
 class PurchaseOrderApprovalResponse(BaseModel):
@@ -666,4 +711,6 @@ __all__ = [
     "PurchaseOrderApprovalResponse",
     "SubmitRealOrderRequest",
     "PurchaseOrderSubmissionAttemptResponse",
+    "PurchaseOrderSubmissionAttemptHistoryItemResponse",
+    "ResolveUnknownAttemptRequest",
 ]

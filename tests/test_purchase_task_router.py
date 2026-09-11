@@ -41,8 +41,13 @@ from app.domains.notification_center.model import NotificationRead
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.purchase_task.model import (
+    PurchaseChannelConnection,
+    PurchaseChannelConnectionEvent,
     PurchaseOrderApproval,
+    PurchaseOrderSubmissionAttempt,
+    PurchaseOrderUnknownResolutionEvent,
     PurchaseRecord,
+    PurchaseSalesApplicationAttempt,
     PurchaseTask,
     PurchaseTaskBudgetReservation,
     PurchaseTaskCandidate,
@@ -65,11 +70,13 @@ from app.domains.purchase_task.router import (
     get_policy,
     get_task,
     import_csv,
+    list_order_submission_attempts,
     list_tasks,
     open_payment_page,
     preview_csv_upload,
     record_purchase,
     reconcile_orders,
+    resolve_unknown_attempt,
     run_match_check,
     submit_real_order,
     update_email_preference,
@@ -87,13 +94,16 @@ from app.domains.purchase_task.schema import (
     PolicySettingUpdate,
     PurchaseTaskCreate,
     RecordPurchaseRequest,
+    ResolveUnknownAttemptRequest,
     ShippingCostConfirmationRequest,
     SourceAttributesInput,
     SubmitRealOrderRequest,
 )
 from app.domains.purchase_task.constants import (
+    OrderSubmissionStatus,
     PurchaseOrderApprovalStatus,
     ShippingCostConfirmationSource,
+    UnknownResolutionStatus,
 )
 from app.domains.role.model import Role
 from app.domains.user.model import User
@@ -450,6 +460,11 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
                 Role.__table__, User.__table__,
                 Order.__table__, OrderItem.__table__,
                 PurchaseOrderApproval.__table__,
+                PurchaseChannelConnection.__table__,
+                PurchaseChannelConnectionEvent.__table__,
+                PurchaseOrderSubmissionAttempt.__table__,
+                PurchaseOrderUnknownResolutionEvent.__table__,
+                PurchaseSalesApplicationAttempt.__table__,
             ],
         )
         with self.engine.begin() as conn:
@@ -477,6 +492,14 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
             company_id=self.company_a.id, total_funding=1000000.0,
         )
         self.db.add(self.account_a)
+        self.db.commit()
+
+        self.connection_a = PurchaseChannelConnection(
+            company_id=self.company_a.id, mall_code="ONCHANNEL",
+            account_label="테스트 계정", status="CONNECTED",
+            connection_method="CREDENTIAL", idempotency_key="conn:a",
+        )
+        self.db.add(self.connection_a)
         self.db.commit()
 
         self.user_a = _FakeUser(1, self.company_a.id)
@@ -634,6 +657,94 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
                 task.id, self._submit_request(confirm_real_submission=True),
                 current_user=admin_b, db=self.db, recent_auth_token=token,
             )
+
+    def _insert_attempt(
+        self, task, *, status=OrderSubmissionStatus.RESULT_UNKNOWN,
+        idempotency_key="hist-1",
+    ):
+
+        attempt = PurchaseOrderSubmissionAttempt(
+            company_id=self.company_a.id, connection_id=self.connection_a.id,
+            purchase_task_id=task.id, idempotency_key=idempotency_key,
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            options_json='[{"id": "OPT1", "qty": 1}]', status=status,
+        )
+        self.db.add(attempt)
+        self.db.commit()
+        self.db.refresh(attempt)
+        return attempt
+
+    def test_list_attempts_returns_history_for_own_task(self):
+
+        task = self._create(self.user_a, key="hist:own")
+        self._insert_attempt(task, idempotency_key="hist-own-1")
+
+        results = list_order_submission_attempts(
+            task.id, current_user=self.user_a, db=self.db,
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].idempotency_key, "hist-own-1")
+        self.assertEqual(results[0].connection_id, self.connection_a.id)
+
+    def test_other_company_cannot_list_attempts(self):
+
+        task = self._create(self.user_a, key="hist:isolated")
+        self._insert_attempt(task, idempotency_key="hist-isolated-1")
+
+        with self.assertRaises(NotFoundException):
+            list_order_submission_attempts(
+                task.id, current_user=self.user_b, db=self.db,
+            )
+
+    def test_resolve_unknown_requires_result_unknown_status(self):
+
+        task = self._create(self.user_a, key="resolve:not-unknown")
+        attempt = self._insert_attempt(
+            task, status=OrderSubmissionStatus.SUCCEEDED,
+            idempotency_key="resolve-not-unknown-1",
+        )
+
+        with self.assertRaises(ConflictException):
+            resolve_unknown_attempt(
+                task.id, attempt.id,
+                ResolveUnknownAttemptRequest(
+                    resolution=UnknownResolutionStatus.ORDER_NOT_CONFIRMED,
+                    basis="확인함",
+                ),
+                current_user=self.user_a, db=self.db,
+            )
+
+    def test_other_company_cannot_resolve_unknown_attempt(self):
+
+        task = self._create(self.user_a, key="resolve:isolated")
+        attempt = self._insert_attempt(task, idempotency_key="resolve-isolated-1")
+
+        with self.assertRaises(NotFoundException):
+            resolve_unknown_attempt(
+                task.id, attempt.id,
+                ResolveUnknownAttemptRequest(
+                    resolution=UnknownResolutionStatus.ORDER_NOT_CONFIRMED,
+                    basis="확인함",
+                ),
+                current_user=self.user_b, db=self.db,
+            )
+
+    def test_resolve_unknown_records_confirmed_order_code(self):
+
+        task = self._create(self.user_a, key="resolve:confirmed")
+        attempt = self._insert_attempt(task, idempotency_key="resolve-confirmed-1")
+
+        result = resolve_unknown_attempt(
+            task.id, attempt.id,
+            ResolveUnknownAttemptRequest(
+                resolution=UnknownResolutionStatus.ORDER_CONFIRMED,
+                order_code="OC-CONFIRMED-ROUTER-1",
+            ),
+            current_user=self.user_a, db=self.db,
+        )
+        self.assertEqual(result.unknown_resolution_status, UnknownResolutionStatus.ORDER_CONFIRMED)
+        self.assertEqual(result.unknown_resolved_order_code, "OC-CONFIRMED-ROUTER-1")
+        self.assertEqual(result.unknown_resolved_by, self.user_a.id)
 
 
 if __name__ == "__main__":

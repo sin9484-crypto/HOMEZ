@@ -1149,6 +1149,154 @@ class PurchaseTaskService:
             triggered_by,
         )
 
+    # ---------------- 송장 다시 조회(운영 전 최종 검증 라운드) ----------------
+
+    _TRACKING_REFRESH_MIN_INTERVAL_SECONDS = 10
+
+    def _find_order_code_for_task(
+        self, task_id: int, company_id: int,
+    ) -> tuple[str, int] | None:
+        """이 작업의 "지금 조회할 수 있는" order_code와 연결 ID를
+        찾는다. 실제 발주 성공(SUCCEEDED)이 가장 신뢰할 수 있는
+        출처이고, 없으면 UNKNOWN을 사람이 ORDER_CONFIRMED로 확정하며
+        직접 입력한 order_code를 그 다음으로 신뢰한다. 둘 다 없으면
+        None — 조회할 대상 자체가 없다는 뜻이다."""
+
+        from app.domains.purchase_task.constants import OrderSubmissionStatus
+        from app.domains.purchase_task.constants import UnknownResolutionStatus
+        from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
+
+        succeeded = (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(
+                PurchaseOrderSubmissionAttempt.purchase_task_id == task_id,
+                PurchaseOrderSubmissionAttempt.company_id == company_id,
+                PurchaseOrderSubmissionAttempt.status == OrderSubmissionStatus.SUCCEEDED,
+                PurchaseOrderSubmissionAttempt.external_order_code.isnot(None),
+            )
+            .order_by(PurchaseOrderSubmissionAttempt.started_at.desc())
+            .first()
+        )
+        if succeeded is not None:
+            return succeeded.external_order_code, succeeded.connection_id
+
+        confirmed = (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(
+                PurchaseOrderSubmissionAttempt.purchase_task_id == task_id,
+                PurchaseOrderSubmissionAttempt.company_id == company_id,
+                PurchaseOrderSubmissionAttempt.unknown_resolution_status
+                == UnknownResolutionStatus.ORDER_CONFIRMED,
+                PurchaseOrderSubmissionAttempt.unknown_resolved_order_code.isnot(None),
+            )
+            .order_by(PurchaseOrderSubmissionAttempt.unknown_resolved_at.desc())
+            .first()
+        )
+        if confirmed is not None:
+            return confirmed.unknown_resolved_order_code, confirmed.connection_id
+        return None
+
+    def refresh_tracking_live(
+        self, task_id: int, company_id: int, *, triggered_by: int | None = None,
+    ) -> PurchaseTaskTrackingInfo:
+        """실제 매입처 API로 이 작업의 배송·송장 정보를 다시 조회한다
+        (지시문 6번). 실제 발주 성공 상태는 절대 바꾸지 않는다 —
+        `record_tracking()`과 달리 task.status나 Shipment 연결을 다시
+        만들지 않고, `PurchaseTaskTrackingInfo`의 표시용 필드만
+        갱신한다. 복수 송장이 감지되면 아무 필드도 덮어쓰지 않고
+        예외 상태로만 기록한다(단일 송장 정책)."""
+
+        from app.domains.purchase_task.channel_connection_service import (
+            PurchaseChannelConnectionService,
+        )
+        from app.domains.purchase_task.constants import CapabilitySupport
+        from app.domains.purchase_task.constants import TrackingRefreshResult
+
+        task = self._get_task_required(task_id, company_id)
+
+        tracking = self.repository.get_tracking(task_id, company_id)
+        if tracking is None:
+            tracking = PurchaseTaskTrackingInfo(
+                company_id=company_id, purchase_task_id=task_id,
+            )
+            self.repository.add_tracking(tracking)
+
+        # 반복 클릭 방지 — 마지막 조회로부터 최소 간격이 지나지
+        # 않았으면 새 네트워크 호출을 만들지 않고 마지막 결과를
+        # 그대로 반환한다.
+        if tracking.last_live_refresh_at is not None:
+            elapsed = (datetime.utcnow() - tracking.last_live_refresh_at).total_seconds()
+            if elapsed < self._TRACKING_REFRESH_MIN_INTERVAL_SECONDS:
+                raise ConflictException(
+                    "방금 조회했습니다 — "
+                    f"{int(self._TRACKING_REFRESH_MIN_INTERVAL_SECONDS - elapsed)}초 "
+                    "후 다시 시도하세요.",
+                )
+
+        found = self._find_order_code_for_task(task_id, company_id)
+        if found is None:
+            raise ConflictException(
+                "이 작업에는 아직 실제 성공한 발주 또는 확정된 order_code가 "
+                "없어 송장을 조회할 대상이 없습니다.",
+            )
+        order_code, connection_id = found
+
+        connection_service = PurchaseChannelConnectionService(self.db)
+        result = connection_service.lookup_tracking(
+            connection_id, company_id, order_code, triggered_by=triggered_by,
+        )
+
+        tracking.last_live_refresh_at = datetime.utcnow()
+
+        if result.support != CapabilitySupport.SUPPORTED:
+            tracking.last_live_refresh_result = TrackingRefreshResult.LOOKUP_FAILED
+            self.db.commit()
+            self.db.refresh(tracking)
+            return tracking
+
+        if result.multiple_deliveries_detected:
+            # 조회 실패는 배송조회 실패로만 기록한다 — 기존에 저장된
+            # 값은 그대로 둔다(임의 선택 금지).
+            tracking.last_live_refresh_result = TrackingRefreshResult.MULTIPLE_DELIVERIES
+            self.db.commit()
+            self.db.refresh(tracking)
+            return tracking
+
+        if not result.tracking_number:
+            tracking.last_live_refresh_result = TrackingRefreshResult.NOT_FOUND
+            self.db.commit()
+            self.db.refresh(tracking)
+            return tracking
+
+        changed = (
+            tracking.tracking_number != result.tracking_number
+            or tracking.courier != result.courier
+        )
+        if changed:
+            old_courier, old_number = tracking.courier, tracking.tracking_number
+            tracking.courier = result.courier
+            tracking.tracking_number = result.tracking_number
+            if result.delivery_status:
+                tracking.delivery_status = result.delivery_status
+            tracking.last_live_refresh_result = TrackingRefreshResult.UPDATED
+            _audit(
+                self.db, company_id=company_id, user_id=triggered_by,
+                action="PURCHASE_TASK_TRACKING_REFRESH_CHANGED", entity_id=task_id,
+                description=(
+                    f"송장 재조회로 값 변경: 택배사 {old_courier or '(없음)'}→"
+                    f"{result.courier or '(없음)'}, 송장번호 "
+                    f"{old_number or '(없음)'}→{result.tracking_number or '(없음)'}"
+                ),
+            )
+        else:
+            tracking.last_live_refresh_result = TrackingRefreshResult.UNCHANGED
+            if result.delivery_status:
+                tracking.delivery_status = result.delivery_status
+
+        self.db.commit()
+        self.db.refresh(tracking)
+        return tracking
+
     def mark_delivered(
         self, task_id: int, company_id: int, marked_by: int | None = None,
     ) -> PurchaseTask:

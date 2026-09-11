@@ -3767,7 +3767,14 @@
           ${tracking.cancel_status ? `<dt>${escapeHtml(HomezI18n.t("purchase_task.field_cancel_status"))}</dt><dd>${escapeHtml(tracking.cancel_status)}</dd>` : ""}
           ${tracking.return_status ? `<dt>${escapeHtml(HomezI18n.t("purchase_task.field_return_status"))}</dt><dd>${escapeHtml(tracking.return_status)}</dd>` : ""}
           ${tracking.refund_status ? `<dt>${escapeHtml(HomezI18n.t("purchase_task.field_refund_status"))}</dt><dd>${escapeHtml(tracking.refund_status)} (${tracking.refund_amount ?? "—"})</dd>` : ""}
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.tracking_refresh_last_checked"))}</dt>
+          <dd>${tracking.last_live_refresh_at
+            ? `${fmtDate(tracking.last_live_refresh_at)}${tracking.last_live_refresh_result ? ` — ${escapeHtml(HomezI18n.t(`purchase_task.tracking_refresh_result.${tracking.last_live_refresh_result.toLowerCase()}`))}` : ""}`
+            : escapeHtml(HomezI18n.t("purchase_task.tracking_refresh_never"))}</dd>
         </dl>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="pt-tracking-refresh-btn">${escapeHtml(HomezI18n.t("purchase_task.tracking_refresh_btn"))}</button>
+        </div>
       </div>
     ` : "";
 
@@ -3830,6 +3837,15 @@
       ${candidatesHtml}
       ${reviewCardHtml}
       ${trackingHtml}
+      ${task.channel_connection_id ? `
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <h2>${escapeHtml(HomezI18n.t("purchase_task.attempt_history_heading"))}</h2>
+            <button type="button" class="btn btn-ghost btn-sm" id="pt-attempt-history-toggle-btn">${escapeHtml(HomezI18n.t("purchase_task.attempt_history_toggle"))}</button>
+          </div>
+          <div id="pt-attempt-history-body" hidden></div>
+        </div>
+      ` : ""}
       ${actionButtons.length ? `<div class="dialog-actions">${actionButtons.join("")}</div>` : ""}
       <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.action_hint"))}</p>
     `;
@@ -3862,6 +3878,181 @@
     wireIfExists("pt-request-return-btn", () => ptOpenCancelReturnDialog(task, "return"));
 
     wireIfExists("pt-review-run-btn", () => ptRunOrderSubmissionReview(task));
+    wireIfExists("pt-tracking-refresh-btn", () => ptRefreshTracking(task));
+
+    const historyToggleBtn = el("pt-attempt-history-toggle-btn");
+    if (historyToggleBtn) {
+      let loaded = false;
+      historyToggleBtn.addEventListener("click", () => withButtonGuard(historyToggleBtn, async () => {
+        const historyBody = el("pt-attempt-history-body");
+        if (!loaded) {
+          await ptLoadAttemptHistory(task, historyBody);
+          loaded = true;
+        }
+        historyBody.hidden = !historyBody.hidden;
+      }));
+    }
+  }
+
+  // 2026-09-11 신규(운영 전 최종 검증 라운드, 지시문 6번) — 토글을
+  // 처음 열 때만 조회한다(페이지 로드 시 자동 조회 없음). 원본
+  // 응답·수취인 개인정보·JWT·API 키는 이 화면 어디에도 나타나지
+  // 않는다(백엔드 응답 자체에 없음).
+  async function ptLoadAttemptHistory(task, container) {
+
+    container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+    let attempts;
+    try {
+      attempts = await apiFetch(`/purchase-tasks/${task.id}/order-approval/attempts`);
+    } catch (err) {
+      renderErrorState(container, err);
+      return;
+    }
+    ptRenderAttemptHistory(task, container, attempts);
+  }
+
+  function ptRenderAttemptHistory(task, container, attempts) {
+
+    if (!attempts.length) {
+      container.innerHTML = `<p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.attempt_history_empty"))}</p>`;
+      return;
+    }
+
+    const rows = attempts.map((a) => {
+      const statusKey = a.status.toLowerCase();
+      const needsResolution = a.status === "RESULT_UNKNOWN"
+        && (a.unknown_resolution_status === "UNRESOLVED" || a.unknown_resolution_status === "STILL_UNCLEAR");
+      return `
+        <tr>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_started"))}">${fmtDate(a.started_at)}</td>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_status"))}"><span class="pill ${a.status === "SUCCEEDED" ? "ok" : (a.status === "RESULT_UNKNOWN" ? "warn" : "neutral")}">${escapeHtml(HomezI18n.t(`purchase_task.attempt_status.${statusKey}`))}</span></td>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_order_code"))}">${escapeHtml(a.external_order_code || a.unknown_resolved_order_code || "—")}</td>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_sales_application"))}">${escapeHtml(a.sales_application_status || "—")}</td>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_shipping"))}">${a.shipping_cost_confirmed ? "✓" : "—"}</td>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_approval"))}">${escapeHtml(a.order_approval_status || "—")}</td>
+          <td data-label="${escapeHtml(HomezI18n.t("purchase_task.attempt_col_unknown_resolution"))}">
+            ${a.status === "RESULT_UNKNOWN" ? escapeHtml(HomezI18n.t(`purchase_task.unknown_resolution.${a.unknown_resolution_status.toLowerCase()}`)) : "—"}
+            ${needsResolution ? `<button type="button" class="btn btn-primary btn-sm" data-attempt-id="${a.id}" id="pt-resolve-unknown-btn-${a.id}">${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_btn"))}</button>` : ""}
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    // 2026-09-11 후속 — 확정 폼은 <table class="responsive-cards">의
+    // <tr> 안에 두지 않는다. 이 표의 모바일 카드 CSS(`table.
+    // responsive-cards tr { display: ... }`)가 `[hidden]`의 기본
+    // `display:none`보다 명시도가 높아 실제로 숨겨지지 않는 버그를
+    // 브라우저로 직접 재현해 발견했다 — 표 바깥의 독립된 <div>로
+    // 옮겨 이 충돌 자체를 피한다.
+    const forms = attempts
+      .filter((a) => a.status === "RESULT_UNKNOWN"
+        && (a.unknown_resolution_status === "UNRESOLVED" || a.unknown_resolution_status === "STILL_UNCLEAR"))
+      .map((a) => `<div id="pt-resolve-unknown-form-row-${a.id}" hidden>${ptUnknownResolveFormHtml(a.id)}</div>`)
+      .join("");
+
+    container.innerHTML = `
+      <div class="table-wrap"><table class="responsive-cards">
+        <thead><tr>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_started"))}</th>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_status"))}</th>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_order_code"))}</th>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_sales_application"))}</th>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_shipping"))}</th>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_approval"))}</th>
+          <th>${escapeHtml(HomezI18n.t("purchase_task.attempt_col_unknown_resolution"))}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${forms}
+    `;
+
+    attempts
+      .filter((a) => a.status === "RESULT_UNKNOWN"
+        && (a.unknown_resolution_status === "UNRESOLVED" || a.unknown_resolution_status === "STILL_UNCLEAR"))
+      .forEach((a) => {
+        const toggleBtn = document.getElementById(`pt-resolve-unknown-btn-${a.id}`);
+        toggleBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+          const row = document.getElementById(`pt-resolve-unknown-form-row-${a.id}`);
+          row.hidden = !row.hidden;
+        }));
+        ptWireUnknownResolveForm(task, container, a.id);
+      });
+  }
+
+  function ptUnknownResolveFormHtml(attemptId) {
+
+    return `
+      <div class="detail-panel">
+        <h3>${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_heading"))}</h3>
+        <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_hint"))}</p>
+        <form class="pt-cc-inline-form" style="display:flex" id="pt-resolve-unknown-form-${attemptId}">
+          <label><input type="radio" name="resolution-${attemptId}" value="ORDER_CONFIRMED" checked> ${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_option_confirmed"))}</label>
+          <label><input type="radio" name="resolution-${attemptId}" value="ORDER_NOT_CONFIRMED"> ${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_option_not_confirmed"))}</label>
+          <label><input type="radio" name="resolution-${attemptId}" value="STILL_UNCLEAR"> ${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_option_unclear"))}</label>
+          <label>${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_order_code_label"))}
+            <input type="text" class="pt-cc-form-input" id="pt-resolve-order-code-${attemptId}"></label>
+          <label>${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_basis_label"))}
+            <textarea class="pt-cc-form-input" id="pt-resolve-basis-${attemptId}" maxlength="500"></textarea></label>
+          <p class="field-error" id="pt-resolve-error-${attemptId}"></p>
+          <div class="pt-cc-inline-form-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="pt-resolve-submit-${attemptId}">${escapeHtml(HomezI18n.t("purchase_task.unknown_resolve_submit_btn"))}</button>
+          </div>
+        </form>
+      </div>
+    `;
+  }
+
+  function ptWireUnknownResolveForm(task, historyContainer, attemptId) {
+
+    const submitBtn = document.getElementById(`pt-resolve-submit-${attemptId}`);
+    submitBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const errEl = document.getElementById(`pt-resolve-error-${attemptId}`);
+      errEl.textContent = "";
+      const form = document.getElementById(`pt-resolve-unknown-form-${attemptId}`);
+      const resolution = form.querySelector(`input[name="resolution-${attemptId}"]:checked`).value;
+      const orderCode = document.getElementById(`pt-resolve-order-code-${attemptId}`).value.trim();
+      const basis = document.getElementById(`pt-resolve-basis-${attemptId}`).value.trim();
+
+      if (resolution === "ORDER_CONFIRMED" && !orderCode) {
+        errEl.textContent = HomezI18n.t("purchase_task.unknown_resolve_missing_input");
+        return;
+      }
+      if (resolution === "ORDER_NOT_CONFIRMED" && !basis) {
+        errEl.textContent = HomezI18n.t("purchase_task.unknown_resolve_missing_input");
+        return;
+      }
+
+      try {
+        await apiFetch(`/purchase-tasks/${task.id}/order-approval/attempts/${attemptId}/resolve-unknown`, {
+          method: "POST",
+          body: JSON.stringify({
+            resolution,
+            order_code: resolution === "ORDER_CONFIRMED" ? orderCode : null,
+            basis: basis || null,
+          }),
+        });
+        toast(HomezI18n.t("purchase_task.unknown_resolve_success"), "success");
+        await ptLoadAttemptHistory(task, historyContainer);
+      } catch (err) {
+        errEl.textContent = (err && err.message) || HomezI18n.t("purchase_task.action_error");
+      }
+    }));
+  }
+
+  // 2026-09-11 후속(운영 전 최종 검증 라운드, "송장 다시 조회") —
+  // 실제 매입처 API 호출이 나간다. 성공하든 실패하든 화면을 다시
+  // 그려 마지막 조회시각·결과를 반영한다.
+  async function ptRefreshTracking(task) {
+
+    try {
+      await apiFetch(`/purchase-tasks/${task.id}/tracking/refresh`, {
+        method: "POST",
+      });
+      toast(HomezI18n.t("purchase_task.tracking_refresh_btn"), "success");
+    } catch (err) {
+      toast((err && err.message) || HomezI18n.t("purchase_task.action_error"), "error");
+    }
+    loadPurchaseTaskDetail({ id: task.id });
   }
 
   // 2026-09-09 후속("발주 전 최종 검토 화면") — 검토 결과는 이

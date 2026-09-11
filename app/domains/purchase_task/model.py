@@ -370,6 +370,17 @@ class PurchaseTaskTrackingInfo(Base):
     refund_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     refund_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # 2026-09-11 후속(운영 전 최종 검증 라운드, "송장 다시 조회") —
+    # 값이 바뀌지 않은 재조회도 시각을 남겨야 UI가 "마지막으로 언제
+    # 확인했는지"를 보여줄 수 있다. updated_at은 실제 컬럼 값이
+    # 바뀔 때만 갱신되므로 별도 컬럼이 필요하다.
+    last_live_refresh_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+    )
+    last_live_refresh_result: Mapped[str | None] = mapped_column(
+        String(30), nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False,
     )
@@ -758,12 +769,67 @@ class PurchaseOrderSubmissionAttempt(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # 2026-09-11 후속(운영 전 최종 검증 라운드) — status=RESULT_UNKNOWN인
+    # 시도에만 의미가 있다. 기본값 UNRESOLVED는 "아직 사람이 확인하지
+    # 않음"을 뜻하며, 이 값이 UNRESOLVED나 STILL_UNCLEAR인 동안은
+    # order_submission_service.py가 이 purchase_task_id에 대한 모든
+    # 새 발주 시도를 차단한다(개별 idempotency_key와 무관하게 작업
+    # 단위로 차단 — "해당 PurchaseTask 후속 자동화 중지" 요구사항).
+    unknown_resolution_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="UNRESOLVED",
+    )
+    # ORDER_CONFIRMED로 확정할 때만 채운다(온채널 관리자 화면에서
+    # 사람이 직접 읽어 옮긴 값 — HOMEZ가 추측하지 않는다).
+    unknown_resolved_order_code: Mapped[str | None] = mapped_column(
+        String(200), nullable=True,
+    )
+    # ORDER_NOT_CONFIRMED로 확정할 때 근거를 남긴다(개인정보 없음).
+    unknown_resolution_basis: Mapped[str | None] = mapped_column(
+        String(500), nullable=True,
+    )
+    unknown_resolved_by: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    unknown_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
         nullable=False,
+    )
+
+
+class PurchaseOrderUnknownResolutionEvent(Base):
+    """append-only 감사 로그 — RESULT_UNKNOWN 발주 시도를 사람이
+    확인·확정한 이력. `PurchaseOrderSubmissionAttempt.unknown_
+    resolution_status`(현재 상태 1값)와 달리 이 테이블은 매 확정
+    시도를 전부 별도 행으로 남긴다 — 나중에 확정을 번복하더라도
+    이전 기록을 지우거나 덮어쓰지 않는다(지시문 5번, "기존 UNKNOWN
+    기록을 삭제하거나 덮어쓰지 않음")."""
+
+    __tablename__ = "purchase_order_unknown_resolution_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    connection_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    purchase_task_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True,
+    )
+    attempt_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, index=True,
+    )
+
+    resolution_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    order_code: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    basis: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolved_by: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
     )
 
 
@@ -937,6 +1003,7 @@ __all__ = [
     "PurchaseChannelConnection",
     "PurchaseChannelConnectionEvent",
     "PurchaseOrderSubmissionAttempt",
+    "PurchaseOrderUnknownResolutionEvent",
     "PurchaseSalesApplicationAttempt",
     "PurchaseOrderApproval",
 ]

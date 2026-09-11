@@ -305,6 +305,9 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 에서 동일 원인으로 재발했다. 실제 운영 DB에는 아직
             # 미적용이다.
             "20260911_00_create_purchase_order_approval_schema.sql",
+            # 2026-09-11 후속(운영 전 최종 검증 라운드) — 동일한
+            # 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260911_01_add_unknown_resolution_and_tracking_refresh.sql",
         ]
 
         all_files = sorted(

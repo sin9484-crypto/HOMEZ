@@ -204,6 +204,17 @@ class SchemaMigrationStaticTestCase(unittest.TestCase):
         ", min_residual_points INTEGER, order_approval_validity_minutes INTEGER"
     )
 
+    # 2026-09-11 운영 전 최종 검증 라운드 추가 — migrations/20260911_01_
+    # add_unknown_resolution_and_tracking_refresh.sql이
+    # purchase_task_tracking_infos에 last_live_refresh_at·
+    # last_live_refresh_result를 더했다(송장 다시 조회 결과 표시).
+    # 동일한 이유로 canonical DDL 문자열에서 제거하고 비교한다(별도
+    # 테스트 tests/test_unknown_resolution_and_tracking_refresh_
+    # migration.py가 이 컬럼들의 실제 추가를 이미 검증한다).
+    _LATER_MIGRATION_TRACKING_INFO_COLUMN_FRAGMENT = (
+        ", last_live_refresh_at DATETIME, last_live_refresh_result VARCHAR(30)"
+    )
+
     def test_migration_matches_sqlalchemy_model_ddl(self):
 
         dialect = sqlite_dialect.dialect()
@@ -225,6 +236,10 @@ class SchemaMigrationStaticTestCase(unittest.TestCase):
             if table.name == "purchase_task_policy_settings":
                 normalized = normalized.replace(
                     self._LATER_MIGRATION_POLICY_SETTING_COLUMN_FRAGMENT, "",
+                )
+            if table.name == "purchase_task_tracking_infos":
+                normalized = normalized.replace(
+                    self._LATER_MIGRATION_TRACKING_INFO_COLUMN_FRAGMENT, "",
                 )
             canonical_statements.append(normalized)
             for index in sorted(table.indexes, key=lambda ix: ix.name):
