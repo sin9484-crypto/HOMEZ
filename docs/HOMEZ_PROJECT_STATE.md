@@ -11121,3 +11121,46 @@ fail-closed 오류 경로(포트 충돌, DB 경로 불일치, 강제 주입
 걸쳐 실제 `homez.db`의 수정 시각은 `Sep 9 15:01`로 실행 전후
 동일함을 재확인했다(이 회귀가 실 DB를 전혀 건드리지 않았다는
 증거).
+
+### Phase 14 — 커밋 + 실 DB Migration 적용 (2026-09-11, 사용자 승인)
+
+사용자가 두 건을 개별적으로 승인했다: (1) 이번 라운드 변경분(25개
+파일)을 새 커밋으로 생성 — `8058945`(기존 `5f1753e`/`16fe5b4`는
+건드리지 않음, `git status` 클린 확인). (2) 실 `homez.db`에
+Migration 적용.
+
+(2)를 실행하기 직전 `MigrationRunner.diagnose()`로 실 DB를
+읽기전용 점검한 결과, **20260911_00 하나가 아니라 12개**가 밀려
+있음을 발견했다(20260908_01·20260909_00/01·20260910_00~07·
+20260911_00 — 전부 이전 세션들에서 "임시 DB로만 검증, 실 DB에는
+아직 미적용"으로 기록돼 있던 것들이 그대로 누적된 상태였다).
+원래 승인 범위(신규 Migration 1개)를 벗어나는 발견이라 즉시
+멈추고 사용자에게 재확인 — "12개 전부 함께 적용"으로 승인받은
+뒤 진행했다.
+
+**절차**: (a) 수동 백업 1건(`storage/backups/homez_pre_order_
+approval_migration_20260911_180535.db`, SHA-256 원본과 일치 확인,
+`PRAGMA integrity_check` ok) → (b) 공식 프로덕션 진입점
+`app/database/bootstrap.bootstrap_environment()`를
+`approved_migration_files=diagnose()가 보여준 12개 파일명 그대로`
+로 호출(승인 시점에 실제로 보여준 집합과 정확히 일치해야만
+적용하는 기존 안전장치 그대로 사용, 직접 `apply_pending()`을
+호출하지 않음) → 내부적으로 자체 백업 1건 추가 생성(`homez_pre_
+bootstrap_migration_20260911_180849.db`) 후 12개 전부 적용,
+`integrity_check=ok`, `foreign_key_check` 위반 0건.
+
+**적용 후 독립 재검증**(bootstrap 자체 검증과 별개로 직접 재확인):
+`diagnose()` 재실행 결과 `pending=[]`(완전 적용 확인),
+`integrity_check=ok`, `foreign_key_check=[]`, 기존 데이터 보존
+확인(`users` 1행·`companies` 1행·`purchase_task_policy_settings`
+1행 그대로, 새로 추가된 `min_residual_points`/`order_approval_
+validity_minutes` 컬럼은 **추측 기본값이 아니라 `NULL`**로
+들어가 있음 — "설정 안 함≠무제한"이 실 데이터에서도 그대로
+성립). `purchase_order_approvals`/`purchase_order_submission_
+attempts`/`purchase_sales_application_attempts` 신규 테이블은
+전부 0행으로 시작(백필 없음). `homez.db` 크기 2,990,080→
+3,391,488바이트, 수정시각 `Sep 9 15:01`→`Sep 11 18:08`.
+
+**아직 보류 중**: 실제 온채널 판매신청 POST, 첫 실제 발주(포인트
+차감 포함) — 사용자가 명시적으로 "보류"를 선택함. GitHub push는
+별도로 확인 예정.
