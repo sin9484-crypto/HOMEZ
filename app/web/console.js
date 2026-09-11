@@ -3964,10 +3964,9 @@
           <ul class="dash-todo-list">${review.blocked_reasons.map((r) => `<li class="field-error">${escapeHtml(r)}</li>`).join("")}</ul>
         </div>
       ` : ""}
-      <div class="dialog-actions">
-        <button type="button" class="btn btn-primary" id="pt-review-send-btn" disabled title="${escapeHtml(HomezI18n.t("purchase_task.review_send_disabled_hint"))}">${escapeHtml(HomezI18n.t("purchase_task.review_send_btn"))}</button>
-      </div>
-      <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_send_disabled_hint"))}</p>
+      ${ptOrderApprovalPanelHtml(review)}
+      ${ptOrderSubmitSectionHtml(review)}
+      <div id="pt-review-attempt-result"></div>
     `;
 
     if (!recipient.unmasked) {
@@ -3977,10 +3976,233 @@
         await ptRunOrderSubmissionReview(task, token);
       }));
     }
-    // "실제 전송" 버튼은 항상 disabled다 — 이 버튼에는 클릭 핸들러
-    // 자체를 절대 달지 않는다(달아도 disabled라 브라우저가 클릭
-    // 이벤트를 보내지 않지만, 핸들러가 아예 없다는 사실 자체를
-    // 이 화면의 안전성 증거로 남긴다).
+
+    ptWireOrderApprovalHandlers(task, review);
+  }
+
+  // 2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 유효한(ACTIVE,
+  // 가격 일치) 승인이 있으면 그 스냅샷(확인된 배송비·최종 필요
+  // 포인트·예상 잔액·마진·만료 시각)을 보여준다. 승인이 있지만
+  // 가격이 어긋났다면(matches_current_price=false) 재승인이
+  // 필요하다는 경고만 보여준다 — 낡은 승인 값을 신뢰 가능한 것처럼
+  // 표시하지 않는다.
+  function ptOrderApprovalPanelHtml(review) {
+    const a = review.order_approval;
+    if (!a) return "";
+
+    const statusLabel = HomezI18n.t(`purchase_task.approval_status.${a.status.toLowerCase()}`);
+    const shippingText = a.shipping_cost_amount === null || a.shipping_cost_amount === undefined
+      ? "—"
+      : (a.shipping_cost_amount === 0 && a.shipping_cost_is_free_confirmed
+        ? HomezI18n.t("purchase_task.review_shipping_free_label")
+        : fmtMoney(a.shipping_cost_amount));
+
+    return `
+      <div class="detail-panel">
+        <h3>${escapeHtml(HomezI18n.t("purchase_task.review_approval_heading"))}</h3>
+        ${!a.matches_current_price ? `<p class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_approval_stale_warning"))}</p>` : ""}
+        <dl class="detail-grid">
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_approval_status_label"))}</dt>
+          <dd><span class="pill ${a.status === "ACTIVE" && a.matches_current_price ? "ok" : "neutral"}">${escapeHtml(statusLabel)}</span></dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_approval_shipping_label"))}</dt>
+          <dd>${shippingText}</dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_approval_required_points_label"))}</dt>
+          <dd>${a.required_points === null || a.required_points === undefined ? "—" : fmtMoney(a.required_points)}</dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_approval_residual_points_label"))}</dt>
+          <dd>${a.projected_residual_points === null || a.projected_residual_points === undefined ? "—" : fmtMoney(a.projected_residual_points)}</dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_approval_margin_label"))}</dt>
+          <dd>${a.margin_amount === null || a.margin_amount === undefined ? "—" : `${fmtMoney(a.margin_amount)} (${(a.margin_rate * 100).toFixed(1)}%)`}</dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_approval_expires_label"))}</dt>
+          <dd>${a.expires_at ? new Date(a.expires_at).toLocaleString() : "—"}</dd>
+        </dl>
+      </div>
+    `;
+  }
+
+  // 실제 전송 버튼을 강조(primary)로 보여줄지, 아니면 배송비 입력/
+  // 최종 승인 폼을 보여줄지는 정확히 하나의 조건으로만 갈린다 —
+  // "지금 눌러야 할 행동 하나만 강조" 원칙(이 화면의 다른 곳과
+  // 동일). 세 상태를 섞어 한 화면에 전부 펼쳐두지 않는다.
+  function ptOrderSubmitSectionHtml(review) {
+    const a = review.order_approval;
+    const ready = !review.send_blocked && a && a.status === "ACTIVE" && a.matches_current_price
+      && review.recipient.unmasked;
+
+    if (ready) {
+      return `
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-primary" id="pt-review-send-btn">${escapeHtml(HomezI18n.t("purchase_task.review_send_btn"))}</button>
+        </div>
+      `;
+    }
+
+    const needsShippingInput = !a || ["PENDING_SHIPPING_COST", "EXPIRED", "INVALIDATED_PRICE_CHANGE", "INVALIDATED_SHIPPING_CHANGE"].includes(a.status) || !a.matches_current_price;
+    const priceAndPointsKnown = review.product.estimated_item_amount !== null && review.product.estimated_item_amount !== undefined
+      && review.point_balance.point_interpretable;
+    const canFinalize = a && a.shipping_cost_amount !== null && a.shipping_cost_amount !== undefined
+      && a.matches_current_price && priceAndPointsKnown;
+
+    return `
+      <div class="detail-panel">
+        <h3>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_form_heading"))}</h3>
+        <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_form_hint"))}</p>
+        <form id="pt-shipping-cost-form" class="pt-cc-inline-form" style="display:flex">
+          <label>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_amount_label"))}
+            <input type="number" class="pt-cc-form-input" id="pt-shipping-amount" min="0" step="1" required>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="pt-shipping-free"> ${escapeHtml(HomezI18n.t("purchase_task.review_shipping_free_label"))}
+          </label>
+          <label>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_source_label"))}
+            <select class="pt-cc-form-input" id="pt-shipping-source">
+              <option value="ONCHANNEL_PRODUCT_PAGE">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_source_onchannel_page"))}</option>
+              <option value="SUPPLIER_NOTICE">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_source_supplier_notice"))}</option>
+              <option value="ONCHANNEL_SUPPORT_ANSWER">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_source_onchannel_support"))}</option>
+              <option value="OTHER_USER_CONFIRMED">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_source_other"))}</option>
+            </select>
+          </label>
+          <label>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_memo_label"))}
+            <input type="text" class="pt-cc-form-input" id="pt-shipping-memo" maxlength="500">
+          </label>
+          <p class="field-error" id="pt-shipping-form-error"></p>
+          <div class="pt-cc-inline-form-actions">
+            <button type="button" class="btn ${needsShippingInput ? "btn-primary" : "btn-secondary"} btn-sm" id="pt-shipping-submit-btn">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_submit_btn"))}</button>
+          </div>
+        </form>
+        <div class="dialog-actions">
+          <button type="button" class="btn ${canFinalize && !needsShippingInput ? "btn-primary" : "btn-secondary"} btn-sm" id="pt-finalize-btn" ${canFinalize ? "" : "disabled"}>${escapeHtml(HomezI18n.t("purchase_task.review_finalize_btn"))}</button>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-secondary" id="pt-review-send-btn" disabled title="${escapeHtml(HomezI18n.t("purchase_task.review_send_disabled_hint"))}">${escapeHtml(HomezI18n.t("purchase_task.review_send_btn"))}</button>
+      </div>
+      <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_send_disabled_hint"))}</p>
+    `;
+  }
+
+  function ptWireOrderApprovalHandlers(task, review) {
+    const productCode = el("pt-review-product-code").value.trim();
+    const optionId = el("pt-review-option-id").value.trim();
+    const qty = Number(el("pt-review-qty").value) || 1;
+
+    const shippingBtn = document.getElementById("pt-shipping-submit-btn");
+    if (shippingBtn) {
+      shippingBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const errEl = el("pt-shipping-form-error");
+        errEl.textContent = "";
+        const amountRaw = el("pt-shipping-amount").value;
+        const isFree = el("pt-shipping-free").checked;
+        const source = el("pt-shipping-source").value;
+        const memo = el("pt-shipping-memo").value.trim();
+        if (amountRaw === "") {
+          errEl.textContent = HomezI18n.t("purchase_task.review_missing_input");
+          return;
+        }
+        try {
+          await apiFetch(`/purchase-tasks/${task.id}/order-approval/shipping-cost`, {
+            method: "POST",
+            body: JSON.stringify({
+              shipping_cost_amount: Number(amountRaw),
+              is_free_shipping_confirmed: isFree,
+              source, basis_memo: memo || null,
+              external_product_id: productCode, connection_id: review.connection_id,
+            }),
+          });
+          toast(HomezI18n.t("purchase_task.review_shipping_submit_success"), "success");
+          await ptRunOrderSubmissionReview(task, null);
+        } catch (err) {
+          errEl.textContent = err.message || HomezI18n.t("purchase_task.cc_action_error");
+        }
+      }));
+    }
+
+    const finalizeBtn = document.getElementById("pt-finalize-btn");
+    if (finalizeBtn && !finalizeBtn.disabled) {
+      finalizeBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        try {
+          await apiFetch(`/purchase-tasks/${task.id}/order-approval/finalize`, {
+            method: "POST",
+            body: JSON.stringify({
+              connection_id: review.connection_id,
+              item_amount: Math.round(review.product.estimated_item_amount),
+              current_points: review.point_balance.point,
+            }),
+          });
+          toast(HomezI18n.t("purchase_task.review_finalize_success"), "success");
+          await ptRunOrderSubmissionReview(task, null);
+        } catch (err) {
+          toast(err.message || HomezI18n.t("purchase_task.cc_action_error"), "error");
+        }
+      }));
+    }
+
+    const sendBtn = document.getElementById("pt-review-send-btn");
+    if (sendBtn && !sendBtn.disabled) {
+      sendBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const recipient = review.recipient;
+        const { confirmed } = await confirmDialog({
+          title: HomezI18n.t("purchase_task.review_send_btn"),
+          body: HomezI18n.t("purchase_task.review_submit_confirm_dialog", {
+            product: review.product.title || productCode,
+            name: recipient.name || "—",
+            address: `${recipient.address || "—"} (${recipient.zipcode || "—"})`,
+          }),
+          okLabel: HomezI18n.t("purchase_task.review_send_btn"),
+        });
+        if (!confirmed) return;
+
+        const token = await promptRecentAuthToken();
+        if (token === null) return;
+
+        const resultEl = el("pt-review-attempt-result");
+        resultEl.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+        try {
+          const attempt = await apiFetch(`/purchase-tasks/${task.id}/order-approval/submit`, {
+            method: "POST",
+            headers: { "X-Recent-Auth-Token": token },
+            body: JSON.stringify({
+              connection_id: review.connection_id,
+              // 시각을 넣지 않는다 — 같은 작업·연결·상품·옵션에
+              // 대한 반복 클릭·페이지 재로드·중복 탭이 항상 같은
+              // idempotency_key를 만들어야 DB UNIQUE 제약이 실제
+              // 중복 발주를 막을 수 있다(지시문 8번, "company+
+              // connection+PurchaseTask+sale_code 기반 안정적 키").
+              // 이미 한 번 시도된 조합은 재시도 시 서버가 명시적
+              // 오류로 거부한다 — 새 시도가 필요하면 사람이 근거를
+              // 확인한 뒤 옵션을 바꾸거나 별도 절차로 새 키를 받아야
+              // 한다(자동으로 새 시각 기반 키를 발급하지 않는다).
+              idempotency_key: `pt-${task.id}-${review.connection_id}-${productCode}-${optionId}-${qty}`,
+              product_code: productCode,
+              options: [{ id: optionId, qty }],
+              recv_name: recipient.name, recv_tell: recipient.phone,
+              recv_mobile: recipient.phone, zipcode: recipient.zipcode,
+              address: recipient.address,
+              confirm_real_submission: true,
+            }),
+          });
+          ptRenderOrderSubmissionAttemptResult(resultEl, attempt);
+          toast(HomezI18n.t("purchase_task.review_submit_success", { status: attempt.status }), "success");
+        } catch (err) {
+          renderErrorState(resultEl, err);
+        }
+      }));
+    }
+  }
+
+  function ptRenderOrderSubmissionAttemptResult(resultEl, attempt) {
+    const isUnknown = attempt.status === "RESULT_UNKNOWN";
+    resultEl.innerHTML = `
+      <div class="detail-panel">
+        <dl class="detail-grid">
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_attempt_status_label"))}</dt>
+          <dd><span class="pill ${attempt.status === "SUCCEEDED" ? "ok" : (isUnknown ? "warn" : "danger")}">${escapeHtml(attempt.status)}</span></dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.review_order_code_label"))}</dt>
+          <dd>${escapeHtml(attempt.external_order_code || "—")}</dd>
+        </dl>
+        ${isUnknown ? `<p class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_submit_unknown_warning"))}</p>` : ""}
+        ${attempt.failure_detail ? `<p class="field-hint">${escapeHtml(attempt.failure_detail)}</p>` : ""}
+      </div>
+    `;
   }
 
   async function ptShowSearchLinks(taskId) {

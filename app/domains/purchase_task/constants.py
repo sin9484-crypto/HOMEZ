@@ -587,6 +587,75 @@ class SalesApplicationStatus:
     SATISFIES_ORDER_GATE = (SUBMITTED,)
 
 
+class ShippingCostConfirmationSource:
+    """2026-09-11 후속(반자동 완료 라운드, Phase 5) — 온채널에
+    배송비를 사전 확정할 공식 API가 없다는 사실이 확정됐으므로
+    (docs/HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_20260908.md "정정
+    (2026-09-11)" 절), 사용자가 외부 화면에서 직접 확인한 값을
+    근거와 함께 입력하는 반자동 보완책의 출처 종류. 이 값 자체가
+    "배송비를 안다"는 증거가 아니다 — "사람이 어디서 확인했다고
+    주장하는지"만 기록한다(감사 목적)."""
+
+    ONCHANNEL_PRODUCT_PAGE = "ONCHANNEL_PRODUCT_PAGE"
+    SUPPLIER_NOTICE = "SUPPLIER_NOTICE"
+    ONCHANNEL_SUPPORT_ANSWER = "ONCHANNEL_SUPPORT_ANSWER"
+    OTHER_USER_CONFIRMED = "OTHER_USER_CONFIRMED"
+
+    ALL = (
+        ONCHANNEL_PRODUCT_PAGE, SUPPLIER_NOTICE,
+        ONCHANNEL_SUPPORT_ANSWER, OTHER_USER_CONFIRMED,
+    )
+
+    LABELS_KO = {
+        ONCHANNEL_PRODUCT_PAGE: "온채널 상품 화면 확인",
+        SUPPLIER_NOTICE: "공급사 안내 확인",
+        ONCHANNEL_SUPPORT_ANSWER: "온채널 고객센터 답변",
+        OTHER_USER_CONFIRMED: "기타 사용자 확인",
+    }
+
+
+class PurchaseOrderApprovalStatus:
+    """2026-09-11 후속(Phase 5·7) — PurchaseOrderApproval.status.
+    "발주 최종 승인" 1건의 현재 상태. ACTIVE만 실제 발주(Gate D/E)를
+    통과시킨다. 승인 유효시간(기본 10분)이 지나거나, 배송비·가격이
+    확인 시점과 달라지면 즉시 무효화한다 — 무효화된 승인을 그대로
+    두고 재확인만 나중에 하는 것을 금지한다(그 사이 실제 발주가
+    끼어들 여지를 구조적으로 없앤다)."""
+
+    # 배송비를 아직 확인하지 않은 초기 상태(행은 생성됐지만 승인
+    # 절차가 시작되지 않음) — 이 상태에서는 "발주 버튼"이 비활성이다.
+    PENDING_SHIPPING_COST = "PENDING_SHIPPING_COST"
+    ACTIVE = "ACTIVE"
+    EXPIRED = "EXPIRED"
+    INVALIDATED_PRICE_CHANGE = "INVALIDATED_PRICE_CHANGE"
+    INVALIDATED_SHIPPING_CHANGE = "INVALIDATED_SHIPPING_CHANGE"
+    CONSUMED = "CONSUMED"
+    SUPERSEDED = "SUPERSEDED"
+
+    ALL = (
+        PENDING_SHIPPING_COST, ACTIVE, EXPIRED, INVALIDATED_PRICE_CHANGE,
+        INVALIDATED_SHIPPING_CHANGE, CONSUMED, SUPERSEDED,
+    )
+
+    # 실제 발주를 허용하는 유일한 상태.
+    SATISFIES_ORDER_GATE = (ACTIVE,)
+
+
+# 2026-09-11 후속(Phase 7) — 사용자 지시 원문의 "권장 시작 기준".
+# PurchaseTaskPolicySetting에 회사가 명시적으로 값을 설정하지
+# 않았으면(None) 이 상수를 대신 쓴다 — 기존 후보 평가 단계
+# (policy_service.py)의 "설정 없으면 무제한"과 다른 규칙이다.
+# 이유: 이 게이트는 실제 온채널 발주(되돌릴 수 없는 금전 행동)
+# 직전이므로, 설정을 안 했다는 사실을 "무제한 허용"으로 읽지 않고
+# 안전한 시작값으로 읽는다.
+RECOMMENDED_PER_ORDER_MAX_AMOUNT = 100_000
+RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT = 300_000
+RECOMMENDED_MIN_MARGIN_RATE = 0.15
+RECOMMENDED_MIN_NET_PROFIT = 5_000
+RECOMMENDED_MIN_RESIDUAL_POINTS = 100_000
+RECOMMENDED_APPROVAL_VALIDITY_MINUTES = 10
+
+
 __all__ = [
     "PurchaseTaskStatus",
     "ShoppingMallCode",
@@ -610,4 +679,12 @@ __all__ = [
     "EmailSendStatus",
     "OrderSubmissionStatus",
     "SalesApplicationStatus",
+    "ShippingCostConfirmationSource",
+    "PurchaseOrderApprovalStatus",
+    "RECOMMENDED_PER_ORDER_MAX_AMOUNT",
+    "RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT",
+    "RECOMMENDED_MIN_MARGIN_RATE",
+    "RECOMMENDED_MIN_NET_PROFIT",
+    "RECOMMENDED_MIN_RESIDUAL_POINTS",
+    "RECOMMENDED_APPROVAL_VALIDITY_MINUTES",
 ]

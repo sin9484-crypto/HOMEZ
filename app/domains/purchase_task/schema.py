@@ -237,6 +237,8 @@ class PolicySettingResponse(BaseModel):
     default_additional_shipping_fee: float
     default_return_risk_reserve: float
     budget_reservation_hours: int
+    min_residual_points: Optional[int]
+    order_approval_validity_minutes: Optional[int]
     updated_at: datetime
 
 
@@ -256,6 +258,12 @@ class PolicySettingUpdate(BaseModel):
     default_additional_shipping_fee: Optional[float] = Field(default=None, ge=0)
     default_return_risk_reserve: Optional[float] = Field(default=None, ge=0)
     budget_reservation_hours: Optional[int] = Field(default=None, gt=0, le=720)
+    # 2026-09-11 후속(반자동 완료 라운드 Phase 7) — 실제 온채널 발주
+    # 직전 게이트 전용. gt=0 대신 ge=0을 쓴다 — "회사가 명시적으로
+    # 0을 선택"과 "설정 안 함(None)"을 구분해야 하기 때문이다(0을
+    # 금지하면 그 구분을 영원히 표현할 수 없다).
+    min_residual_points: Optional[int] = Field(default=None, ge=0)
+    order_approval_validity_minutes: Optional[int] = Field(default=None, gt=0, le=120)
 
 
 class EmailPreferenceResponse(BaseModel):
@@ -499,11 +507,31 @@ class OrderSubmissionReviewPointBalanceResponse(BaseModel):
     detail: str
 
 
+class OrderSubmissionReviewApprovalResponse(BaseModel):
+    """2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 이 작업에
+    유효한(ACTIVE, 미만료) 사용자 최종 승인이 있을 때만 채워진다.
+    `matches_current_price=False`면 승인은 있지만 지금 조회한
+    가격과 어긋나 실제로는 신뢰할 수 없는 상태다(재승인 필요)."""
+
+    status: str
+    shipping_cost_amount: Optional[int]
+    shipping_cost_is_free_confirmed: bool
+    shipping_cost_source: Optional[str]
+    shipping_cost_basis_memo: Optional[str]
+    required_points: Optional[int]
+    projected_residual_points: Optional[int]
+    margin_amount: Optional[int]
+    margin_rate: Optional[float]
+    expires_at: Optional[datetime]
+    matches_current_price: bool
+
+
 class OrderSubmissionReviewResponse(BaseModel):
     """읽기 전용 검토 결과 — 이 응답을 만드는 과정에서 실제 발주
     API는 절대 호출되지 않는다(온채널 상품 조회만 실제 호출). 실제
-    "전송" 여부는 이 응답과 완전히 별개의, 아직 어디에도 배선되지
-    않은 PurchaseOrderSubmissionService.submit_order()가 담당한다."""
+    "전송"은 이 응답과 완전히 별개의 PurchaseOrderSubmissionService.
+    submit_order()가 담당하며, 그 메서드는 여전히 confirm_real_
+    submission=True를 명시적으로 받아야만 동작한다."""
 
     task_id: int
     source_order_id: int
@@ -516,6 +544,7 @@ class OrderSubmissionReviewResponse(BaseModel):
     recipient: OrderSubmissionReviewRecipientResponse
     sales_application: OrderSubmissionReviewSalesApplicationResponse
     point_balance: OrderSubmissionReviewPointBalanceResponse
+    order_approval: Optional[OrderSubmissionReviewApprovalResponse]
     shipping_fee_known: bool
     shipping_fee_detail: str
     product_title_mismatch_warning: bool
@@ -523,6 +552,92 @@ class OrderSubmissionReviewResponse(BaseModel):
     send_blocked: bool
     blocked_reasons: list[str]
     checked_at: datetime
+
+
+class ShippingCostConfirmationRequest(BaseModel):
+    """2026-09-11 후속(반자동 완료 라운드 Phase 5) — 배송비를
+    추정하지 않는다. 사용자가 외부 화면에서 확인한 값을 증거와
+    함께 입력한다. `shipping_cost_amount`가 정수가 아니면(bool·
+    float·문자열) pydantic이 먼저 거부한다 — 서비스 계층의 검증은
+    그 다음 방어선이다(이중 검증, 하나가 뚫려도 다른 하나가 막는다)."""
+
+    shipping_cost_amount: int = Field(ge=0)
+    is_free_shipping_confirmed: bool = False
+    source: str
+    basis_memo: Optional[str] = Field(default=None, max_length=500)
+    external_product_id: str
+    connection_id: int
+
+
+class FinalizeOrderApprovalRequest(BaseModel):
+    """2026-09-11 후속(Phase 7) — 이미 배송비 확인이 끝난 승인을
+    최종 승인으로 전환한다. 이 요청 자체는 온채널에 네트워크 호출을
+    하지 않는다 — item_amount/current_points는 호출부(프론트엔드)가
+    직전에 /order-submission-review로 이미 실측한 값을 그대로
+    넘긴다(같은 값을 두 번 조회하지 않는다)."""
+
+    connection_id: int
+    item_amount: int = Field(ge=0)
+    current_points: int
+
+
+class SubmitRealOrderRequest(BaseModel):
+    """2026-09-11 후속(반자동 완료 라운드 목표 1 — 실제 발주 실행
+    배선) — 이 스키마가 존재한다는 사실 자체는 승인이 아니다.
+    `confirm_real_submission` 기본값은 여전히 False(fail-closed) —
+    호출부가 명시적으로 True를 보내야만
+    PurchaseOrderSubmissionService.submit_order()가 실제로 온채널에
+    HTTP 요청을 보낸다. 수취인 개인정보는 이 요청 안에서만 잠시
+    존재하고 DB에는 product_code·options만 남는다(기존 Gate PT-3
+    설계 그대로)."""
+
+    connection_id: int
+    idempotency_key: str
+    product_code: str
+    options: list[OrderSubmissionReviewOptionInput]
+    recv_name: str
+    recv_tell: str
+    recv_mobile: str
+    zipcode: str
+    address: str
+    address_detail: str = ""
+    comment: str = ""
+    site_name: str = ""
+    confirm_real_submission: bool = False
+
+
+class PurchaseOrderSubmissionAttemptResponse(BaseModel):
+
+    id: int
+    status: str
+    external_order_code: Optional[str]
+    failure_detail: Optional[str]
+    idempotency_key: str
+    started_at: datetime
+    finished_at: Optional[datetime]
+
+
+class PurchaseOrderApprovalResponse(BaseModel):
+
+    id: int
+    purchase_task_id: int
+    product_code: str
+    status: str
+    shipping_cost_amount: Optional[int]
+    shipping_cost_is_free_confirmed: bool
+    shipping_cost_source: Optional[str]
+    shipping_cost_basis_memo: Optional[str]
+    shipping_cost_confirmed_by: Optional[int]
+    shipping_cost_confirmed_at: Optional[datetime]
+    item_amount_snapshot: Optional[int]
+    required_points_snapshot: Optional[int]
+    current_points_snapshot: Optional[int]
+    margin_amount_snapshot: Optional[int]
+    margin_rate_snapshot: Optional[float]
+    approved_by: Optional[int]
+    approved_at: Optional[datetime]
+    expires_at: Optional[datetime]
+    invalidated_reason: Optional[str]
 
 
 __all__ = [
@@ -545,4 +660,10 @@ __all__ = [
     "OrderSubmissionReviewSalesApplicationResponse",
     "OrderSubmissionReviewPointBalanceResponse",
     "OrderSubmissionReviewResponse",
+    "OrderSubmissionReviewApprovalResponse",
+    "ShippingCostConfirmationRequest",
+    "FinalizeOrderApprovalRequest",
+    "PurchaseOrderApprovalResponse",
+    "SubmitRealOrderRequest",
+    "PurchaseOrderSubmissionAttemptResponse",
 ]

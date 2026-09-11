@@ -487,6 +487,17 @@ class PurchaseTaskPolicySetting(Base):
     default_return_risk_reserve: Mapped[float] = mapped_column(
         Float, nullable=False, default=0,
     )
+    # 2026-09-11 후속(반자동 완료 라운드, Phase 7) — 온채널 실제
+    # 발주 직전 게이트 전용 필드. None이면 constants.py의
+    # RECOMMENDED_* 상수를 대신 쓴다(이 두 필드가 회사별로 아직
+    # 설정된 적이 없다는 뜻 — "무제한"으로 읽지 않는다, 위 필드들과
+    # 규칙이 다르다는 점을 주석으로 명시해 둔다).
+    min_residual_points: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    order_approval_validity_minutes: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
     # 사람이 결제하는 동안 예산 예약을 얼마나 유지할지(작업 H) —
     # 기본 24시간.
     budget_reservation_hours: Mapped[int] = mapped_column(
@@ -821,6 +832,97 @@ class PurchaseSalesApplicationAttempt(Base):
     )
 
 
+class PurchaseOrderApproval(Base):
+    """2026-09-11 후속(반자동 완료 라운드, Phase 5·7) — 실제 온채널
+    발주 직전 "사용자 최종 승인" 1건의 현재 상태. 배송비를 사전
+    확정할 공식 API가 없다는 사실이 확정됐으므로(docs/HOMEZ_
+    ONCHANNEL_OPENAPI_FINDINGS_20260908.md), 사용자가 외부 화면에서
+    직접 확인한 배송비를 근거와 함께 입력하는 반자동 보완책 + 가격/
+    포인트/한도/마진 최종 재확인을 한 행에 함께 기록한다.
+
+    (company_id, connection_id, purchase_task_id) UNIQUE — 작업
+    1건당 승인 1건만 "현재 상태"로 존재한다(append-only가 아니라
+    PurchaseSalesApplicationAttempt와 같은 현재상태 갱신형 — 배송비
+    재입력·재승인은 같은 행을 갱신한다, 매번 새 행을 만들지 않는다).
+    이 행 자체는 실제 온채널 발주를 실행하지 않는다 — order_
+    submission_service.py의 Gate D/E가 이 행의 status가 ACTIVE이고
+    아직 만료되지 않았을 때만 그 값을 신뢰해 통과시킨다.
+
+    개인정보는 이 테이블 어디에도 없다 — product_code·금액·시각·
+    사용자ID(논리 참조)만 저장한다."""
+
+    __tablename__ = "purchase_order_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "connection_id", "purchase_task_id",
+            name="uq_purchase_order_approvals_company_connection_task",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    connection_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    purchase_task_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    product_code: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="PENDING_SHIPPING_COST", index=True,
+    )
+
+    # ---- Phase 5: 배송비 수동 확인(증거 기반) ----
+    shipping_cost_amount: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    shipping_cost_is_free_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
+    shipping_cost_source: Mapped[str | None] = mapped_column(
+        String(40), nullable=True,
+    )
+    shipping_cost_basis_memo: Mapped[str | None] = mapped_column(
+        String(500), nullable=True,
+    )
+    shipping_cost_confirmed_by: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    shipping_cost_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+    )
+
+    # ---- Phase 7: 최종 승인 시점 스냅샷(재확인 기준값) ----
+    item_amount_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    required_points_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    current_points_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    margin_amount_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    margin_rate_snapshot: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+
+    approved_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    invalidated_reason: Mapped[str | None] = mapped_column(
+        String(200), nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
 __all__ = [
     "PurchaseTask",
     "PurchaseTaskCandidate",
@@ -836,4 +938,5 @@ __all__ = [
     "PurchaseChannelConnectionEvent",
     "PurchaseOrderSubmissionAttempt",
     "PurchaseSalesApplicationAttempt",
+    "PurchaseOrderApproval",
 ]

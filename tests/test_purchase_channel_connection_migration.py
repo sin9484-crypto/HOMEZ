@@ -62,6 +62,14 @@ EXCLUDED_FROM_PRIOR_STATE = {
     "20260910_06_create_ai_learning_schema.sql",
     # 2026-09-10 Phase 3(판매신청 게이트) — 동일한 이유로 추가.
     "20260910_07_create_purchase_sales_application_schema.sql",
+    # 2026-09-11 반자동 완료 라운드(Phase 5·7, 발주 승인) — 동일한
+    # 이유로 추가. 이 패턴이 파일이 추가될 때마다 반복해서 깨지는
+    # 것으로 보아, 이 테스트가 "새 Migration 파일이 추가되면 이 집합도
+    # 함께 갱신해야 한다"는 사실을 구조적으로 강제하지 못하고 있다는
+    # 뜻이다 — 다음에 이 파일을 다시 만지게 되면 날짜 문자열 하드코딩
+    # 대신 "이 디렉터리의 모든 .sql 중 NEW_MIGRATION보다 사전순으로
+    # 뒤인 파일 전부"를 자동으로 계산하는 방식으로 바꾸는 편이 낫다.
+    "20260911_00_create_purchase_order_approval_schema.sql",
 }
 
 

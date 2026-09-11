@@ -144,6 +144,75 @@ class SuccessParsingTestCase(unittest.TestCase):
         self.assertEqual(product.options[0].option_id, 111)
         self.assertEqual(product.options[0].price, 10000)
 
+    def test_get_product_parses_extends_info_shipping_fields(self):
+        """2026-09-11 후속(반자동 완료 라운드, Phase 3 재감사) —
+        이전 조사가 놓쳤던 extends_info(배송비 제안값)를 실제로
+        파싱하는지 확인한다."""
+
+        body = {
+            "status": 200,
+            "result": {
+                "id": 1, "prd_code": "CH1234567", "product_nm": "테스트 상품",
+                "prd_state": 1, "options": [],
+                "extends_info": {
+                    "send_type": "개별 배송비", "quantity": 1,
+                    "send_price": 3000, "jeju_send_price": 5000,
+                    "etc_send_price": 6000,
+                },
+            },
+        }
+        fake_get = _fake_get_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1234567")
+
+        self.assertIsNotNone(product.shipping_info)
+        self.assertEqual(product.shipping_info.send_type, "개별 배송비")
+        self.assertEqual(product.shipping_info.quantity_threshold, 1)
+        self.assertEqual(product.shipping_info.base_shipping_cost, 3000)
+        self.assertEqual(product.shipping_info.jeju_shipping_cost, 5000)
+        self.assertEqual(product.shipping_info.remote_area_shipping_cost, 6000)
+
+    def test_get_product_missing_extends_info_leaves_shipping_info_none(self):
+        """extends_info 자체가 없는 상품 응답 — 0으로 추측하지 않고
+        None으로 남긴다."""
+
+        fake_get = _fake_get_factory(_FakeResponse(200, PRODUCT_DETAIL_SUCCESS_BODY))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1234567")
+
+        self.assertIsNone(product.shipping_info)
+
+    def test_get_product_malformed_extends_info_fields_become_none_not_zero(self):
+        """send_price가 정수가 아니거나(null·문자열) 필드 자체가
+        없으면 그 항목만 None — 다른 정상 필드까지 버리지 않고,
+        그 항목을 0으로 대체하지도 않는다."""
+
+        body = {
+            "status": 200,
+            "result": {
+                "id": 1, "prd_code": "CH1", "product_nm": "x",
+                "prd_state": 1, "options": [],
+                "extends_info": {
+                    "send_type": "수량별 배송비",
+                    "send_price": None,
+                    "jeju_send_price": "확인불가",
+                    # etc_send_price 필드 자체가 없음
+                },
+            },
+        }
+        fake_get = _fake_get_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1")
+
+        self.assertEqual(product.shipping_info.send_type, "수량별 배송비")
+        self.assertIsNone(product.shipping_info.base_shipping_cost)
+        self.assertIsNone(product.shipping_info.jeju_shipping_cost)
+        self.assertIsNone(product.shipping_info.remote_area_shipping_cost)
+        self.assertIsNone(product.shipping_info.quantity_threshold)
+
     def test_get_product_sends_bearer_auth_header(self):
 
         fake_get = _fake_get_factory(_FakeResponse(200, PRODUCT_DETAIL_SUCCESS_BODY))

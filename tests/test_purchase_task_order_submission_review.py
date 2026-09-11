@@ -56,6 +56,7 @@ from app.domains.purchase_task.constants import ConnectionMethod
 from app.domains.purchase_task.model import (
     PurchaseChannelConnection,
     PurchaseChannelConnectionEvent,
+    PurchaseOrderApproval,
     PurchaseSalesApplicationAttempt,
     PurchaseRecord,
     PurchaseTask,
@@ -112,6 +113,7 @@ class OrderSubmissionReviewTestCaseBase(unittest.TestCase):
                 PurchaseChannelConnection.__table__,
                 PurchaseChannelConnectionEvent.__table__,
                 PurchaseSalesApplicationAttempt.__table__,
+                PurchaseOrderApproval.__table__,
                 AutomationModeState.__table__, EmergencyStop.__table__,
                 ExecutionLimit.__table__, ExecutionUsage.__table__,
                 ExecutionPeriodUsage.__table__, Role.__table__, User.__table__,
@@ -993,6 +995,58 @@ class SalesApplicationAndPointBalanceReviewTestCase(OrderSubmissionReviewTestCas
         self.assertTrue(
             any("배송비" in r for r in review["blocked_reasons"]),
         )
+
+    def test_valid_active_approval_matching_price_unblocks_shipping_reason(self):
+        """2026-09-11 신규(반자동 완료 라운드 Phase 5·7) — 유효한
+        사용자 최종 승인이 있고 그 가격 스냅샷이 지금 조회한 가격과
+        일치하면, 이 화면의 배송비 차단 사유가 사라지고
+        order_approval이 채워진다(submit_order()의 Gate D와 동일한
+        판정이어야 한다)."""
+
+        from datetime import timedelta
+
+        from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
+        from app.domains.purchase_task.constants import SalesApplicationStatus
+        from app.domains.purchase_task.model import PurchaseOrderApproval
+        from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
+
+        task, connection = self._make_ready_task_and_connection()
+        self._install_fake_connection_adapter(
+            lookup_product_result=self._make_lookup_result(),
+        )
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            status=SalesApplicationStatus.SUBMITTED,
+            applied_product_code="CH1234567",
+        ))
+        self.db.add(PurchaseOrderApproval(
+            company_id=self.company_a.id, connection_id=connection.id,
+            purchase_task_id=task.id, product_code="CH1234567",
+            status=PurchaseOrderApprovalStatus.ACTIVE,
+            shipping_cost_amount=3000, shipping_cost_is_free_confirmed=False,
+            shipping_cost_source="ONCHANNEL_PRODUCT_PAGE",
+            item_amount_snapshot=50000,  # _make_lookup_result() 기본값과 일치
+            required_points_snapshot=53000, current_points_snapshot=999_999_999,
+            margin_amount_snapshot=10000, margin_rate_snapshot=0.2,
+            approved_by=1, approved_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(minutes=10),
+        ))
+        self.db.commit()
+
+        review = self.service.build_order_submission_review(
+            task.id, self.company_a.id, external_product_id="CH1234567",
+            options=[{"id": "OPT1", "qty": 2}], triggered_by=1,
+        )
+
+        self.assertTrue(review["shipping_fee_known"])
+        self.assertFalse(
+            any("배송비" in r for r in review["blocked_reasons"]),
+        )
+        self.assertIsNotNone(review["order_approval"])
+        self.assertEqual(review["order_approval"]["status"], PurchaseOrderApprovalStatus.ACTIVE)
+        self.assertEqual(review["order_approval"]["shipping_cost_amount"], 3000)
+        self.assertTrue(review["order_approval"]["matches_current_price"])
 
 
 if __name__ == "__main__":

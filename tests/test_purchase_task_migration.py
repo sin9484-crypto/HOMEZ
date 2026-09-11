@@ -190,6 +190,20 @@ class SchemaMigrationStaticTestCase(unittest.TestCase):
         ", expected_amount_at_creation FLOAT"
     )
 
+    # 2026-09-11 반자동 완료 라운드 추가 — migrations/20260911_00_
+    # create_purchase_order_approval_schema.sql이 purchase_task_
+    # policy_settings에 min_residual_points·order_approval_validity_
+    # minutes를 더했다(최소 잔여 포인트·발주 승인 유효시간 설정). 위와
+    # 동일한 이유로 이 컬럼들도 canonical DDL 문자열에서 제거하고
+    # 비교한다(별도 테스트 tests/test_purchase_order_approval_
+    # migration.py::FullChainReplayTestCase.
+    # test_policy_settings_gains_two_new_nullable_columns이 이 컬럼의
+    # 실제 추가를 이미 검증한다). 인덱스는 만들지 않는 컬럼이라
+    # _LATER_MIGRATION_INDEX_NAMES에는 추가할 것이 없다.
+    _LATER_MIGRATION_POLICY_SETTING_COLUMN_FRAGMENT = (
+        ", min_residual_points INTEGER, order_approval_validity_minutes INTEGER"
+    )
+
     def test_migration_matches_sqlalchemy_model_ddl(self):
 
         dialect = sqlite_dialect.dialect()
@@ -207,6 +221,10 @@ class SchemaMigrationStaticTestCase(unittest.TestCase):
             if table.name == "purchase_task_candidates":
                 normalized = normalized.replace(
                     self._LATER_MIGRATION_CANDIDATE_COLUMN_FRAGMENT, "",
+                )
+            if table.name == "purchase_task_policy_settings":
+                normalized = normalized.replace(
+                    self._LATER_MIGRATION_POLICY_SETTING_COLUMN_FRAGMENT, "",
                 )
             canonical_statements.append(normalized)
             for index in sorted(table.indexes, key=lambda ix: ix.name):

@@ -81,6 +81,12 @@ EXCLUDED_FROM_PRIOR_STATE = {
     "20260910_06_create_ai_learning_schema.sql",
     # 2026-09-10 Phase 3(판매신청 게이트) — 동일한 이유로 추가.
     "20260910_07_create_purchase_sales_application_schema.sql",
+    # 2026-09-11 반자동 완료 라운드(Phase 5·7, 발주 승인) — 동일한
+    # 이유로 추가. tests/test_purchase_channel_connection_migration.py
+    # 와 완전히 같은 패턴 — 그 파일에 남긴 것과 동일한 메모를 그대로
+    # 반복한다: 다음에 이 파일을 다시 만지게 되면 날짜 문자열 하드코딩
+    # 대신 자동 계산 방식으로 바꾸는 편이 낫다.
+    "20260911_00_create_purchase_order_approval_schema.sql",
 }
 
 

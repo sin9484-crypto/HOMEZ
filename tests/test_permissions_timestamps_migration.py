@@ -294,6 +294,17 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 2026-09-10 Phase 3(판매신청 게이트, 온채널 공식 답변
             # 반영) — 동일한 이유로 추가.
             "20260910_07_create_purchase_sales_application_schema.sql",
+            # 2026-09-11 반자동 완료 라운드(Phase 5·7, 사용자 발주
+            # 최종 승인 — purchase_order_approvals 신규 테이블 +
+            # purchase_task_policy_settings ADD COLUMN 2건) — 동일한
+            # 이유로 추가. 전체 회귀(4197개) 중 재발견된 것과 똑같은
+            # "새 Migration 추가 시 이 목록도 함께 갱신해야 한다"는
+            # 패턴 — 이번 라운드에서만 3개 파일(이 파일,
+            # test_purchase_channel_connection_migration.py,
+            # test_migration_restricted_mode_schema_error_handling.py)
+            # 에서 동일 원인으로 재발했다. 실제 운영 DB에는 아직
+            # 미적용이다.
+            "20260911_00_create_purchase_order_approval_schema.sql",
         ]
 
         all_files = sorted(

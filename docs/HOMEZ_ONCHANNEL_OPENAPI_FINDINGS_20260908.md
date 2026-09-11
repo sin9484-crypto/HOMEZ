@@ -269,3 +269,65 @@ id=4 "sin945" 연결로 `GET /openapi/common/member/point` **1회**
 비교·차단하도록 설계하므로(Phase 4, 구현 예정) 그 응답 자체를 받을
 필요가 없도록 우회했다 — 이것은 "확인"이 아니라 "그 정보가 굳이
 필요 없게 설계"한 것임을 구분해 기록한다.
+
+## 정정(2026-09-11, 반자동 완료 라운드 Phase 3 재감사) — "배송비
+확인 API 없음"은 스펙 전수조사 누락으로 인한 오판정이었다
+
+**이전 결론이 틀렸다.** 2026-09-08~10 세션들은 스펙을 "shipping",
+"delivery", "fee" 같은 **영문 키워드**로만 훑었다. 그런데
+`GET seller/product/{code}` 응답의 `result.extends_info` 객체 안에
+배송비 필드가 실제로 존재한다 — 영문 키 이름(`send_price` 등)이
+"ship/deliver/fee" 패턴에 안 걸려서 그 전수조사에서 빠졌을 뿐,
+한글 `description`에는 "배송비"가 명시돼 있었다. 이번 라운드에서
+스펙 JSON 전체를 재귀적으로 순회해(키워드 매칭이 아니라 모든
+description 필드를 직접 읽는 방식으로) 다시 확인해 찾아냈다.
+
+`extends_info` 스키마(원문):
+
+| 필드 | 타입 | description | 예시 |
+|---|---|---|---|
+| `send_type` | string | 배송비 타입(개별 배송비, 수량별 배송비) | "개별 배송비" |
+| `quantity` | integer | 수량별 배송비 기준 수량(개별 배송비 시 1) | 1 |
+| `send_price` | integer | 기본 배송비 | 105 |
+| `jeju_send_price` | integer | 제주도 배송비 | 105 |
+| `etc_send_price` | integer | 도서산간 배송비 | 105 |
+
+또한 `GET seller/order/{code}`(발주 후 주문 상세) 응답에
+`sum_delivery_price`(배송비 합계, integer) 필드도 있다 — 이것은
+발주 **후** 실제 청구된 배송비 합계다(발주 전 조회 아님).
+
+**그래도 여전히 자동으로 신뢰해 Gate D를 통과시키지 않는다.** 이유
+3가지(코드에도 동일하게 기록 — `onchannel_client.py::
+OnchannelShippingInfo`, `channel_adapter.py::ChannelShippingInfo`
+docstring 참고):
+
+1. `extends_info`의 사전 제시값과 실제 발주 후 `sum_delivery_price`
+   가 항상 일치한다는 것을 **실제 주문으로 검증한 적이 없다**(가격
+   필드와 마찬가지로 상품 상세 조회 시점과 발주 시점 사이에 값이
+   바뀔 수 있는 "가격 인상" 류 드리프트 위험이 배송비에도 있을 수
+   있음 — 미확인이면 확인된 것처럼 단정하지 않는다).
+2. `send_type="수량별 배송비"`일 때 `quantity` 구간을 넘는 수량에는
+   정확히 어떤 계산 규칙이 적용되는지 스펙에 명시돼 있지 않다(예:
+   2배수마다 추가 부과인지, 최초 구간 초과분에 한 번만 적용인지
+   등 — 추측하지 않는다).
+3. `jeju_send_price`/`etc_send_price`가 적용되는 정확한 우편번호
+   범위를 HOMEZ가 보유하고 있지 않다 — 배송지 주소만 보고 "제주/
+   도서산간 여부"를 자동 판정하지 않는다(오판정하면 실제보다 적은
+   금액으로 발주해 포인트 부족·발주 실패로 이어질 위험).
+
+**실제로 반영한 것**: `onchannel_client.py::get_product()`가
+`extends_info`를 파싱해 `OnchannelShippingInfo`로 노출하고,
+`channel_adapter.py::OnchannelChannelAdapter.lookup_product()`가
+이를 `ProductLookupResult.shipping_info`로 그대로 전달한다(신규
+테스트 3개, `tests/test_onchannel_client.py`). 이 값은 Phase 5의
+배송비 수동 입력 화면에서 사용자에게 "온채널 API 제안값"으로
+참고 표시하는 용도로만 쓴다 — 자동 채택하지 않는다. Gate D
+(`order_submission_service.py::_verify_point_balance_or_block`)의
+"배송비 미확인이므로 항상 차단" 로직 자체는 이번 라운드에서는
+변경하지 않는다(위 3가지 불확실성이 남아 있는 한 그대로 유지가
+안전한 선택).
+
+**교훈**: 스펙 전수조사를 "예상 키워드로 grep"하면 그 키워드와
+안 겹치는 실제 필드를 놓친다 — 이후 유사한 계약 조사에서는 항상
+스키마 트리를 재귀적으로 전부 순회하고 description을 직접 읽는
+방식을 우선한다.

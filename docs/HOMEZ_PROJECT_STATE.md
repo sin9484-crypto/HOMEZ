@@ -10658,6 +10658,64 @@ DB만 사용.
 PAUSED/ERROR/비상정지 존중은 Gate D와 무관하게 독립적으로 필요한
 안전장치이므로 그대로 구현해 두었다.
 
+### 반자동화 완료 라운드 — Phase 5·7 핵심 구현: 사용자 발주 승인 체계 (2026-09-11)
+
+Phase 3 재감사(위 "정정" 절)에서 온채널 상품 상세 응답에 배송비
+"제안값"(`extends_info`)이 실제로 존재함을 재발견했지만, 실제
+청구액과의 일치가 검증된 적이 없어 여전히 자동으로 신뢰하지 않기로
+했다. 대신 사용자가 직접 확인한 배송비를 증거와 함께 입력해 최종
+승인하는 반자동 체계를 신규 구현했다:
+
+- `constants.py`: `ShippingCostConfirmationSource`(4종 출처),
+  `PurchaseOrderApprovalStatus`(6종), `RECOMMENDED_*` 6개 상수
+  (건당 10만원/일일 30만원/최소마진율 15%/최소순이익 5천원/최소
+  잔여포인트 10만pt/승인유효 10분 — 회사가 명시적으로 설정하지
+  않았을 때만 쓰는 안전한 시작값, "설정 안 함=무제한"으로 읽지
+  않는다).
+- `model.py::PurchaseOrderApproval`(신규 테이블, (company_id,
+  connection_id, purchase_task_id) UNIQUE, 현재상태 갱신형) +
+  `PurchaseTaskPolicySetting`에 `min_residual_points`/`order_
+  approval_validity_minutes` 컬럼 2개 추가. Migration:
+  `migrations/20260911_00_create_purchase_order_approval_schema.sql`
+  (임시 SQLite만 검증, 실제 homez.db 미적용 — 신규 테스트 7/7 OK,
+  기존 정책 설정 행 보존 확인 포함).
+- `order_approval_service.py`(신규) — `PurchaseOrderApprovalService`:
+  `confirm_shipping_cost()`(원 단위 정수만 허용, bool/float/문자열/
+  음수 거부, 0원은 "무료배송 확인" 명시 필수, confirmed_by 없이는
+  기록 자체 불가 — 자동 모드가 이 경로를 쓸 수 없는 구조적 이유),
+  `finalize_approval()`(건당·일일 한도, 최소 잔여포인트, 마진율·
+  마진금액을 기존 `margin_calculator.calculate_margin()`으로
+  재계산해 전부 통과해야 ACTIVE+만료시각 부여, 하나라도 실패하면
+  구체적 사유와 함께 차단), `revalidate_before_submission()`(발주
+  직전 가격·배송비 재대조), `mark_consumed()`(실제 성공 시에만).
+  하루 한도 집계는 `PurchaseOrderSubmissionAttempt`가 금액을
+  저장하지 않으므로 CONSUMED 승인 행 자체가 유일한 금액 출처.
+  신규 테스트 23/23 OK.
+- `order_submission_service.py::submit_order()` Gate D 재작성 —
+  `_verify_point_balance_or_block()`(구, 항상 차단)을 `_verify_
+  point_balance_and_shipping_or_block()`으로 교체. 이제 유효한
+  ACTIVE 승인(가격 일치·미만료)이 있으면 통과, 없으면 여전히
+  차단한다. 성공 시 승인을 CONSUMED로 표시(하루 한도 집계용) —
+  REJECTED/RESULT_UNKNOWN은 승인을 건드리지 않아(같은 배송비·가격
+  사실은 여전히 유효할 수 있음) 새 idempotency_key로 재시도할 때
+  배송비를 다시 입력할 필요가 없다. 신규 Gate 통합 테스트 4개
+  포함 43/43 OK(기존 패치 헬퍼도 새 반환값에 맞춰 갱신).
+- `build_order_submission_review()`에 `order_approval` 필드 추가 —
+  submit_order()의 Gate D와 반드시 같은 판정을 내리도록 유효한
+  승인이 있고 가격이 일치하면 "배송비 미확인" 차단 사유를
+  제거하고 `shipping_fee_known=True`로 전환. 신규 테스트 1개 포함
+  26/26 OK.
+- 라우터 3종 신규: `GET/POST .../order-approval`,
+  `POST .../order-approval/shipping-cost`,
+  `POST .../order-approval/finalize` — 전부 `PurchaseTaskService.
+  get_task()`로 회사 소유 확인을 먼저 거친다. `PolicySettingResponse/
+  Update`에도 신규 컬럼 2개 반영(기존 generic setattr 갱신 로직이
+  그대로 처리). 신규 라우터 테스트 5개 포함 16/16 OK.
+
+테스트 총계(이 절 신규분): 7+23+43(중 신규 4)+26(중 신규 1)+16(중
+신규 5) — 전부 격리 DB만 사용, 실제 온채널 서버·homez.db 어느
+쪽도 건드리지 않았다.
+
 ### Phase 0~9 종합 회귀 검증 (2026-09-10~11)
 
 이번 라운드(Phase 0~9) 전체를 마무리하며 4단계로 회귀를 확인했다:
@@ -10854,3 +10912,212 @@ Refund/Currency/SupplierCapability/PriceStockSafety/AiLearning
 체크포인트로 커밋"을 명시적으로 승인 — commit `5f1753e`(133개
 경로, 21305 추가/347 삭제, 워킹트리 클린 확인). **push는 아직
 하지 않았다** — 별도 승인 대상이며 아직 요청받지 않았다.
+
+### 반자동화 완료 라운드 착수 (2026-09-11) — 기존 판정 재대조
+
+사용자가 새 지시로 체크포인트(`5f1753e`/`16fe5b4`)에서 이어서
+반자동 발주 흐름(수집→검토안 생성→사용자 최종 승인→실제 발주→
+order_code/송장 추적) 완성을 지시했다. **정정**: 지시문은 두
+커밋을 "승인 경계 위반"으로 전제했으나, 실제로는 커밋 전
+AskUserQuestion으로 명시적 승인을 받았다(대화 기록에 그대로
+남아 있음) — 소급 해석이 아니라 실제 사실이다. 커밋 삭제·수정은
+하지 않았다.
+
+Phase 1(git 감사): HEAD `16fe5b4`, origin/main `0cfe239`(3개 앞섬,
+push 안 됨), 워킹트리 클린, 133개 파일 전부 코드/테스트/문서/
+Migration만 포함(DB·백업·로그·Credential 없음), 비밀정보·PII
+패턴 스캔 이상 없음, `.gitignore` 정상 적용, 실제 `homez.db`
+마지막 수정 2026-09-09 15:01(기준선 커밋보다도 이전 — 오늘 작업이
+실DB를 전혀 건드리지 않았음을 타임스탬프로 재확인).
+
+Phase 2(구현 재대조): 판매신청·포인트게이트·onchannel client·
+channel adapter·connection service·order submission review 관련
+229개 테스트 재실행 — 229/229 OK(ISOLATED_VERIFIED 재확인).
+
+### Phase 3 재감사 — 배송비 사전확인 계약, 이전 결론 정정
+
+**중요한 재발견**: 이전 세션들이 "shipping/delivery/fee" 같은
+영문 키워드로만 스펙을 훑어 실제 존재하는 배송비 필드를
+놓쳤다. `GET seller/product/{code}` 응답의 `extends_info` 객체에
+`send_type`/`quantity`/`send_price`/`jeju_send_price`/
+`etc_send_price`가 실제로 존재한다(스펙 원문 확인). `GET seller/
+order/{code}`(발주 후) 응답에도 `sum_delivery_price`(배송비
+합계)가 있다.
+
+**그래도 Gate D는 자동 통과시키지 않는다** — (1) 사전 제시값과
+발주 후 실제 청구액이 일치한다는 것을 실제 주문으로 검증한 적이
+없음(가격 드리프트와 동일한 위험), (2) 수량별 배송비 구간 계산
+규칙이 스펙에 없음, (3) 제주/도서산간 우편번호 판정 기준을
+HOMEZ가 보유하지 않음 — 세 불확실성이 전부 "추측 금지" 원칙에
+걸린다. 상세 근거는 `docs/HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_
+20260908.md`의 "정정(2026-09-11)" 절.
+
+**실제로 반영한 것**: `onchannel_client.py::OnchannelShippingInfo`
+(신규 dataclass) + `get_product()` 파싱, `channel_adapter.py::
+ChannelShippingInfo` + `lookup_product()` 전달. 이 값은 Phase 5의
+배송비 수동 입력 화면에서 "온채널 API 제안값" 참고용으로만
+쓴다. `tests/test_onchannel_client.py` 3개 신규(extends_info 정상
+파싱/부재/부분관측) — 관련 4개 파일 133/133 OK.
+
+### Phase 4 — 온채널 추가 문의(발송 대기, 2026-09-11)
+
+아래 문의문을 **작성만 하고 발송하지 않았다** — 사용자가 실제
+발송하기 전까지는 "발송 대기" 상태로만 기록한다.
+
+> **제목**: 판매사 주문 등록 전 배송비 확인 방법 문의
+>
+> 판매사 Open API를 이용해 `POST /openapi/seller/order/regist` 호출
+> 전에 해당 상품·옵션·수량·배송지 기준의 최종 배송비를 확인할 수
+> 있는 API 또는 계산 규칙이 있는지 문의드립니다.
+>
+> 1. `seller/product` 상세 응답의 `extends_info`(`send_price`/
+>    `jeju_send_price`/`etc_send_price`)가 실제 발주 시 청구되는
+>    배송비와 항상 일치합니까?
+> 2. `send_type="수량별 배송비"`일 때 `quantity` 기준 수량을 넘는
+>    구간의 정확한 계산 규칙은 무엇입니까?
+> 3. `jeju_send_price`/`etc_send_price`가 적용되는 정확한 우편번호
+>    또는 지역 판정 기준을 확인할 방법이 있습니까?
+> 4. 발주 요청 전 예상 결제 포인트(상품가+배송비 합계)를 조회하는
+>    API가 있습니까?
+> 5. `order/regist` 성공 응답에서 실제 차감 포인트와 최종 배송비를
+>    함께 제공합니까(현재는 `GET order/{code}`의
+>    `sum_delivery_price`로만 발주 후 조회 가능한 것으로 확인됨)?
+> 6. 위 방법으로도 배송비를 사전에 확정할 수 없다면, 테스트 또는
+>    견적 목적의 API가 별도로 있습니까?
+>
+> HOMEZ는 배송비가 확정되지 않은 주문을 발주하지 않도록 설계
+> 중입니다. 공식적으로 사용할 수 있는 확인 방법을 안내
+> 부탁드립니다.
+
+**상태**: 발송 대기(DRAFT_PENDING_USER_SEND). 답변이 오지 않아도
+다음 Phase는 계속 진행한다 — 답변이 오면 이 절의 문의문 아래에
+"실제 답변(일시)" 절을 추가하되 이 초안은 삭제하지 않는다.
+
+### 반자동화 완료 라운드 — Phase 9: UI-5 프론트엔드 배선 (2026-09-11)
+
+앞서 이미 구현된 `PurchaseOrderApprovalService`(Phase 5·7)와
+`submit_real_order` 라우터를, 실제로 사람이 클릭할 수 있는 화면에
+연결했다. `app/web/console.js`의 발주 검토 화면
+(`ptRenderOrderSubmissionReview`)에 다음을 추가:
+
+- **배송비 확인 입력 폼**(`ptOrderSubmitSectionHtml`) — 금액·무료배송
+  체크박스·출처 select(4종)·근거 메모 → `POST .../order-approval/
+  shipping-cost`.
+- **최종 승인 버튼** → `POST .../order-approval/finalize`(직전
+  `/order-submission-review` 응답의 `estimated_item_amount`·
+  `point_balance.point`를 그대로 전달 — 재조회 없음). 상품가·포인트
+  잔액이 해석 불가능한 상태면(`point_interpretable=false` 등) 버튼을
+  비활성화한다.
+- **승인 상태 패널**(`ptOrderApprovalPanelHtml`) — 상태·확인된
+  배송비·최종 필요 포인트·예상 잔여·마진·만료시각을 표시. 승인은
+  있지만 `matches_current_price=false`면(가격 변동) 경고만 띄우고
+  "재확인 필요" 상태로 취급한다.
+- **"실제 발주" 버튼**을 영구 비활성에서, `send_blocked=false &&
+  order_approval.status==="ACTIVE" && matches_current_price &&
+  recipient.unmasked`일 때만 활성화되도록 변경. 클릭 시
+  `confirmDialog()`(상품·수령인·주소 표시) → 별도의 새
+  `promptRecentAuthToken()` → `POST .../order-approval/submit`
+  (confirm_real_submission=true) 순서로 게이트가 두 번 겹친다.
+  발주 시도 결과(성공/거부/RESULT_UNKNOWN)를 별도 패널로 표시하고,
+  RESULT_UNKNOWN이면 "온채널 관리자 화면에서 직접 확인" 경고 문구를
+  보여준다(자동 재시도 없음).
+
+**작업 중 자체 발견·수정한 결함 3건**(전부 이 세션이 직접 작성한
+새 코드에서 발견 — 기존 코드 결함 아님):
+
+1. **재인증 토큰 재사용 시도** — 배송비 입력/최종 승인 후 화면을
+   다시 그릴 때 "이미 소비된" recent-auth 토큰을 재사용하려 했다.
+   `consume_recent_auth_token()`은 정확히 1회용이라(재사용 시 그냥
+   조용히 마스킹 상태로 fallback, 에러는 아님) 실제로는 안전하게
+   실패했겠지만, 의도를 명확히 하기 위해 재사용 시도 자체를
+   제거하고 매 재조회마다 `null`을 넘기도록 정정 — 수령인 정보가
+   필요한 시점(실제 발주 직전)에는 사용자가 "인증 후 보기"를 다시
+   눌러야 한다.
+2. **idempotency_key에 타임스탬프 포함** — 초안이
+   `pt-{task_id}-{Date.now()}`로 키를 만들어, 페이지 재로드·중복
+   탭에서 같은 발주를 다른 키로 재시도할 수 있었다(지시문 8번이
+   요구하는 "company+connection+PurchaseTask+sale_code 기반 안정적
+   키" 원칙 위반 — DB UNIQUE 잠금이 사실상 무력화됨). `pt-{task_id}-
+   {connection_id}-{productCode}-{optionId}-{qty}`로 정정해, 같은
+   조합의 반복 시도가 항상 같은 키로 수렴해 서버 UNIQUE 제약에
+   막히도록 했다.
+3. **`order_submission_service.py` 모듈 docstring이 낡음** — "이
+   파일은 어떤 라우터·UI에도 연결돼 있지 않다"는 문구가 이번
+   배선으로 더 이상 사실이 아니게 됐는데도 그대로 남아 있었다 —
+   실제 연결 상태와 남은 승인 게이트(가격 일치·재인증·확인
+   대화상자)를 명시하도록 정정.
+
+**회귀 중 발견한 기존 테스트 결함 2건**(내 새 코드가 아니라, 새
+Model 컬럼/Migration 파일을 추가할 때 함께 갱신해야 했던 기존
+테스트의 하드코딩 목록이 낡아서 발생 — 이 프로젝트에서 반복적으로
+나타난 동일 패턴, 커밋 이력에 최소 3번 더 있었음):
+
+1. `tests/test_purchase_task_migration.py::
+   test_migration_matches_sqlalchemy_model_ddl` — `model.py`에
+   `min_residual_points`/`order_approval_validity_minutes`를
+   추가했지만 원본 base Migration 파일은 그대로라, "모델 컬럼 vs
+   원본 CREATE TABLE" 정적 비교가 깨졌다. 기존 관례(`purchase_tasks`/
+   `purchase_records`/`purchase_task_candidates`에 이미 쓰던
+   `_LATER_MIGRATION_*_COLUMN_FRAGMENT` 패턴)를 그대로 따라
+   `_LATER_MIGRATION_POLICY_SETTING_COLUMN_FRAGMENT`를 추가해 해결.
+2. `tests/test_purchase_channel_connection_migration.py` +
+   `tests/test_migration_restricted_mode_schema_error_handling.py`
+   — 두 파일 모두 "20260908 Migration 하나만 있던 시절"을 재현하는
+   임시 DB를 만들 때 그 이후 추가된 모든 Migration 파일명을
+   `EXCLUDED_FROM_PRIOR_STATE` 집합에 수동으로 나열해야 하는데, 새로
+   만든 `20260911_00_create_purchase_order_approval_schema.sql`이
+   빠져 있어 `OrderInversionError`로 실패했다. 두 파일 모두 이미
+   같은 사유로 3번(2026-09-09, 2026-09-10 두 번) 이렇게 깨졌던
+   이력이 코드 주석에 그대로 남아 있다 — 두 파일에 신규 파일명을
+   추가해 해결하면서, 다음에 또 같은 방식으로 깨지지 않도록 "차라리
+   날짜순 자동 계산으로 바꾸는 게 낫다"는 메모를 남겨뒀다(이번
+   라운드에서 직접 바꾸지는 않음 — 범위 밖 리팩터링).
+
+**재확인된 남은 공백(신규 기능 추가는 하지 않음, 사실만 기록)**:
+발주 시도 이력(`PurchaseOrderSubmissionAttempt`)을 조회하는 GET
+엔드포인트가 없다 — 중복/RESULT_UNKNOWN 발생 시 "온채널 관리자
+화면에서 직접 확인 후 수동 해소"를 사람이 온채널 쪽에서 직접
+해야 하고, HOMEZ 화면에는 방금 시도한 결과 1건만 세션 내에서
+보여줄 수 있다(새로고침하면 사라짐). 지시문 8번의 "사용자가
+UNKNOWN을 수동으로 해소하는 절차"는 여전히 화면 기능으로는 없다
+— 이번 라운드 범위(핵심 반자동 흐름 완성)에서는 별도 GET
+엔드포인트+UI를 새로 만들지 않았다.
+
+**테스트**: `tests/test_purchase_*.py` 전체(367개) — 위 두 결함
+수정 전 1 FAIL + 1 ERROR, 수정 후 367/367 OK.
+
+### Phase 12 — 전체 저장소 회귀 (2026-09-11, 처음부터 새로 실행)
+
+지시문 12번의 명시적 요구("이전 4,128개 전체 회귀가 실패했고 일부
+하드코딩 목록 테스트만 고쳐 재확인한 386개 결합 실행을 전체 회귀로
+대체하지 말라")에 따라, `python -m unittest discover -s tests -p
+"test_*.py"`로 저장소 전체(292개 파일)를 처음부터 새로 실행했다.
+
+**결과**: 4197개 테스트, 6207.8초(약 103분) 소요, **1개 FAIL**
+(그 외 정상 통과). 실패 원인은 세 번째로 재발한 동일 패턴:
+`tests/test_permissions_timestamps_migration.py::
+MigrationStaticContractTestCase::
+test_migration_directory_contains_only_expected_files`의 하드코딩된
+`SUBSEQUENT_MIGRATIONS` 목록에도 이번에 만든 신규 Migration 파일이
+빠져 있었다(위 2건과 같은 클래스의 결함, 이 파일로는 처음 발생 —
+주석에 남은 이력상 이 정확한 실패는 이 파일에서는 처음이지만 같은
+"새 Migration 추가 시 하드코딩 목록도 갱신해야 한다"는 유지보수
+부담이 이번 라운드에서만 총 3개 파일에서 재발했다). 동일한 관례로
+파일명 1줄을 목록에 추가해 해결 — 수정 후 해당 파일 단독
+재실행 13/13 OK. 이 수정은 정적 문자열 목록에 원소 하나를
+추가하는 것뿐이고 다른 테스트의 상태·순서·DB에 어떤 영향도 주지
+않으므로(다른 92분+짜리 전체 회귀를 처음부터 다시 돌리는 비용 대비
+실익이 없다고 판단), **전체 4197개 재실행은 하지 않았다** — 이
+사실을 그대로 기록한다(작은 재확인을 전체 회귀로 위장하지 않는다는
+같은 원칙을 스스로도 지킨다).
+
+로그에 나타난 그 외의 "ERROR"/실패처럼 보이는 줄은 전부 의도된
+Fault-injection 테스트의 정상 동작이었음을 원인까지 추적해
+확인했다: `tests/test_homez_desktop.py`가 `app/desktop/main.py`의
+fail-closed 오류 경로(포트 충돌, DB 경로 불일치, 강제 주입
+예외)를 mock으로 직접 유발해 검증하는 과정에서 그 경로의
+`print()`/`logger.error()` 호출이 표준출력에 그대로 노출된
+것뿐이며, 전부 뒤이어 "."(테스트 통과)로 이어졌다. 이 회귀 전체에
+걸쳐 실제 `homez.db`의 수정 시각은 `Sep 9 15:01`로 실행 전후
+동일함을 재확인했다(이 회귀가 실 DB를 전혀 건드리지 않았다는
+증거).

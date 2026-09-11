@@ -9,8 +9,18 @@ Gate PT-3(2026-09-08 후속, "확인된 발주 계약 구현") — 온채널 실
 사실 자체는 승인이 아니다** — `submit_order()`는 `confirm_real_
 submission=True`를 명시적으로 넘기지 않으면 항상 거부한다(기본값
 False가 fail-closed). 실제 발주·결제 실행은 여전히 별도 승인
-대상이며, 이 파일은 현재 어떤 라우터·UI에도 연결돼 있지 않다 —
-호출은 오직 개발 담당자가 직접 스크립트로 구성해 실행한다.
+대상이다.
+
+(2026-09-11 정정) 이 서비스는 이제 실제로 라우터·UI에 연결돼
+있다 — `router.py`의 `POST /{task_id}/order-approval/submit`
+(`submit_real_order`)이 `submit_order()`를 호출하고, `console.js`의
+발주 검토 화면 "실제 전송" 버튼이 그 엔드포인트를 호출한다. 다만
+그 버튼은 여전히 다음 조건을 모두 만족해야만 활성화된다: 유효한
+(ACTIVE, 현재 가격과 일치하는) `PurchaseOrderApproval`이 있고,
+`send_blocked`가 아니며, 수취인 정보가 재인증을 거쳐 마스킹
+해제된 상태. 버튼 클릭 자체도 확인 대화상자 + 별도의 새
+재인증(X-Recent-Auth-Token)을 다시 요구한다 — "연결돼 있다"가
+"승인 없이 실행된다"를 뜻하지 않는다.
 
 핵심 원칙(사용자 지시 원문):
 1. 확인된 스펙 필드·타입·필수값만 사용한다(onchannel_client.py의
@@ -41,10 +51,13 @@ False가 fail-closed). 실제 발주·결제 실행은 여전히 별도 승인
    않는다"는 뜻이다(docs/HOMEZ_USER_OPERATION_SETTINGS.md,
    FunctionMode.DESCRIPTIONS_KO 참고). MANUAL/SEMI_AUTOMATIC/
    AUTOMATIC 세 모드의 차이(누가·언제 이 메서드를 호출하는가)는
-   아직 이 메서드를 자동으로 호출하는 오케스트레이션 코드 자체가
-   없어(UI-5의 "실제 전송" 버튼도 여전히 비활성) 이 메서드 안에서
-   추가로 분기하지 않는다 — 세 모드 모두 여전히 confirm_real_
-   submission=True라는 동일한 명시적 승인을 요구한다.
+   이 메서드를 자동으로 호출하는 오케스트레이션 코드 자체가 아직
+   없어(2026-09-11 현재 유일한 호출부는 UI-5의 "실제 전송" 버튼
+   →/order-approval/submit이며, 사람이 매번 직접 클릭해야 한다 —
+   AUTOMATIC 모드에서 이 메서드를 호출하는 배경 실행기는 여전히
+   존재하지 않는다) 이 메서드 안에서 추가로 분기하지 않는다 — 세
+   모드 모두 여전히 confirm_real_submission=True라는 동일한 명시적
+   승인을 요구한다.
 =========================================================
 """
 
@@ -192,11 +205,14 @@ class PurchaseOrderSubmissionService:
                     "않습니다. 판매신청 결과를 먼저 확인하세요.",
                 )
 
-        # 2026-09-10 후속(Phase 4 — 포인트 잔액 사전 확인) — 발주 직전
-        # 시점의 최신 포인트·상품가를 다시 조회한다(캐시·이전 조회값
-        # 재사용 금지 — 잔액은 매 호출마다 달라질 수 있는 사실이다).
-        self._verify_point_balance_or_block(
-            adapter, product_code=product_code, options=options,
+        # 2026-09-10 Phase 4 + 2026-09-11 반자동 완료 라운드 Phase 5·7
+        # — 발주 직전 시점의 최신 포인트·상품가를 다시 조회하고
+        # (캐시·이전 조회값 재사용 금지), 유효한 사용자 최종 승인이
+        # 있는지 확인한다.
+        approval = self._verify_point_balance_and_shipping_or_block(
+            adapter, connection_id=connection.id, company_id=company_id,
+            product_code=product_code, options=options,
+            purchase_task_id=purchase_task_id,
         )
 
         attempt = self._create_locked_attempt(
@@ -273,6 +289,21 @@ class PurchaseOrderSubmissionService:
             attempt, status=OrderSubmissionStatus.SUCCEEDED,
             external_order_code=order_code,
         )
+
+        # 2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 실제 발주가
+        # 확실히 성공했을 때만 승인을 CONSUMED로 남긴다(하루 한도
+        # 집계의 유일한 금액 출처 — Order_approval_service.py::
+        # _sum_consumed_amount_today 참고). REJECTED/RESULT_UNKNOWN은
+        # 건드리지 않는다 — 승인 자체(배송비·가격·마진 사실)는 그
+        # 시도의 성패와 무관하게 여전히 유효할 수 있어, 새
+        # idempotency_key로 재시도할 때 다시 쓸 수 있어야 한다(다시
+        # 배송비부터 입력하게 만들면 불필요한 반복이다).
+        from app.domains.purchase_task.order_approval_service import (
+            PurchaseOrderApprovalService,
+        )
+
+        PurchaseOrderApprovalService(self.db).mark_consumed(approval)
+
         return attempt
 
     # ---------------- 내부 ----------------
@@ -313,31 +344,33 @@ class PurchaseOrderSubmissionService:
                 f"필수 항목이 비어 있습니다: {', '.join(missing)}",
             )
 
-    def _verify_point_balance_or_block(
-        self, adapter, *, product_code: str, options: list[dict],
-    ) -> None:
-        """2026-09-10 후속(Phase 4) — 발주 전 포인트(예치금) 잔액
-        사전 확인. 온채널 공식 답변으로 `GET common/member/point`의
-        `point`가 발주 가능 잔액 그 자체임이 확정됐다(constants.py의
-        ONCHANNEL_ORDER_CONTRACT_STATUS PAYMENT_SOURCE 항목 참고).
+    def _verify_point_balance_and_shipping_or_block(
+        self, adapter, *, connection_id: int, company_id: int,
+        product_code: str, options: list[dict], purchase_task_id: int | None,
+    ):
+        """2026-09-10 Phase 4(포인트) + 2026-09-11 반자동 완료 라운드
+        Phase 5·7(배송비 수동 승인) 통합 게이트. 온채널 공식 답변으로
+        `GET common/member/point`의 `point`가 발주 가능 잔액 그
+        자체임이 확정됐다(constants.py의 ONCHANNEL_ORDER_CONTRACT_
+        STATUS PAYMENT_SOURCE 항목 참고).
 
-        이 메서드가 실제로 계산할 수 있는 것은 "상품가×수량" 소계
-        (`GET seller/product/{code}`로 매 호출 새로 조회 — 캐시된
-        과거 값을 재사용하지 않는다, 가격 인상을 놓치지 않기 위해)
-        뿐이다. **배송비를 사전에 확인할 방법이 온채널 스펙 어디에도
-        없다**(`order/regist` 요청 바디에 배송비 필드가 없고, 별도
-        배송비 견적 API도 없다 — docs/HOMEZ_ONCHANNEL_OPENAPI_
-        FINDINGS_20260908.md 참고, `build_order_submission_review()`
-        의 "배송비 미확인" 고지와 동일한 근거).
+        이 메서드가 실측할 수 있는 것은 "상품가×수량" 소계(`GET
+        seller/product/{code}`로 매 호출 새로 조회 — 캐시된 과거
+        값을 재사용하지 않는다, 가격 인상을 놓치지 않기 위해)와
+        포인트 잔액뿐이다. **배송비를 사전에 확정할 공식 API는
+        여전히 없다**(docs/HOMEZ_ONCHANNEL_OPENAPI_FINDINGS_
+        20260908.md "정정(2026-09-11)" 절 — 상품 상세의 extends_info
+        에 배송비 "제안값"은 있지만 실제 청구액과의 일치가 검증된
+        적이 없어 자동으로 신뢰하지 않는다).
 
-        그래서 이 메서드는 포인트·상품가가 전부 정상 확인되어도
-        **항상 마지막에 차단한다** — "상품가만으로는 충분해 보여도
-        배송비가 더해지면 잔액이 부족해질 수 있는지 확인할 방법이
-        없다"는 사실 자체가 구조적 차단 사유다. 추측으로 "배송비
-        포함 최종 금액이 잔액 이내일 것"이라고 넘기지 않는다 — 이
-        차단은 온채널이 배송비 사전 확인 방법을 제공하기 전까지는
-        구조적으로 풀리지 않는다(임시 결함이 아니라 현재 확인된
-        사실 그 자체)."""
+        그래서 이 메서드는 여전히 "배송비를 모르면 차단"이 기본
+        이지만, 이제는 **유효한 사용자 최종 승인(PurchaseOrderApproval,
+        status=ACTIVE, 미만료, 이 상품가와 일치)이 있으면 그 승인에
+        기록된 배송비를 신뢰해 통과시킨다** — 이 승인은 오직 사람이
+        `PurchaseOrderApprovalService.confirm_shipping_cost()` +
+        `finalize_approval()`을 거쳐야만 만들어진다(자동 모드는 이
+        경로를 쓸 수 없다 — 구조적으로 confirmed_by가 실제 사용자
+        ID를 요구한다)."""
 
         from app.domains.purchase_task.channel_adapter import CapabilitySupport
 
@@ -379,15 +412,32 @@ class PurchaseOrderSubmissionService:
                 "이미 부족) — 발주를 시도하지 않습니다.",
             )
 
-        # 상품가 소계까지는 잔액이 충분해 보이지만, 배송비를 더하면
-        # 부족해질 수 있는지 확인할 방법이 없다 — 이 사실 자체가
-        # 항상 최종 차단 사유다(위 클래스 docstring 참고).
-        raise ConflictException(
-            "온채널 배송비를 발주 전에 확인할 수 있는 API가 없어, 배송비를 "
-            "포함한 최종 필요 포인트를 확정할 수 없습니다 — 상품가 소계 "
-            f"({item_subtotal})만으로는 잔액 충분 여부를 확정할 수 없으므로 "
-            "발주를 차단합니다(추측으로 통과시키지 않습니다).",
+        if purchase_task_id is None:
+            raise ConflictException(
+                "온채널 배송비를 발주 전에 확인할 수 있는 API가 없어, "
+                "purchase_task_id 없이는 사용자의 배송비 최종 승인을 조회할 "
+                "방법도 없습니다 — 발주를 차단합니다.",
+            )
+
+        from app.domains.purchase_task.order_approval_service import (
+            PurchaseOrderApprovalService,
         )
+
+        approval_service = PurchaseOrderApprovalService(self.db)
+        approval = approval_service.revalidate_before_submission(
+            connection_id, company_id, purchase_task_id,
+            current_item_amount=item_subtotal, current_shipping_cost_hint=None,
+        )
+
+        required_points = item_subtotal + (approval.shipping_cost_amount or 0)
+        if point_result.point < required_points:
+            raise ConflictException(
+                f"배송비 포함 최종 필요 포인트({required_points})가 현재 잔액"
+                f"({point_result.point})보다 많습니다 — 발주를 시도하지 "
+                "않습니다.",
+            )
+
+        return approval
 
     def _create_locked_attempt(
         self, *, connection_id, company_id, purchase_task_id, idempotency_key,

@@ -115,12 +115,43 @@ class OnchannelProductOption:
 
 
 @dataclass(frozen=True)
+class OnchannelShippingInfo:
+    """2026-09-11 후속(반자동 완료 라운드, Phase 3 배송비 계약 재감사) —
+    `GET seller/product/{code}` 응답의 `extends_info` 객체를 그대로
+    옮긴 것. 이전 조사(2026-09-08~10)는 이 필드를 놓쳤다 —
+    "shipping"/"delivery"/"fee" 같은 영문 키워드로만 스펙을 훑어서
+    실제로는 `send_price` 등 영문 키 이름이 그 패턴에 안 걸렸기
+    때문이다(한글 description에만 "배송비"가 있었다). 이 필드가
+    존재한다는 사실 자체가 "배송비를 사전에 확정할 수 있다"는
+    뜻은 아니다 — 아래 3가지 이유로 여전히 미확정으로 다룬다:
+    1. 실제 발주 후 받는 `sum_delivery_price`(주문 상세 응답)와
+       이 사전 조회값이 항상 일치한다는 것을 실제 주문으로
+       검증한 적이 없다(가격 필드와 마찬가지로 드리프트 가능성).
+    2. `send_type`이 "수량별 배송비"일 때 정확한 계산 규칙(구간
+       단위)이 스펙에 명시돼 있지 않다.
+    3. `jeju_send_price`/`etc_send_price`가 적용되는 정확한 우편번호
+       범위를 HOMEZ가 갖고 있지 않다 — "제주/도서산간 여부"를
+       주소만 보고 자동 판정하지 않는다(오판정 시 실제보다 적은
+       금액으로 발주해 포인트 부족 위험).
+    그래서 이 값은 Gate D를 자동으로 통과시키는 데 쓰지 않고,
+    사용자가 배송비를 수동 확인할 때 참고할 "제안값"으로만 노출한다
+    (사용자 확인 없이 자동 채택 금지)."""
+
+    send_type: str | None
+    quantity_threshold: int | None
+    base_shipping_cost: int | None
+    jeju_shipping_cost: int | None
+    remote_area_shipping_cost: int | None
+
+
+@dataclass(frozen=True)
 class OnchannelProduct:
 
     product_code: str
     title: str
     status: str | None
     options: tuple[OnchannelProductOption, ...]
+    shipping_info: OnchannelShippingInfo | None = None
 
 
 @dataclass(frozen=True)
@@ -346,9 +377,31 @@ class OnchannelApiClient:
                 )
                 for opt in (result.get("options") or [])
             )
+            shipping_info = None
+            extends = result.get("extends_info")
+            if isinstance(extends, dict):
+                # 필드 하나라도 없거나 정수가 아니면 그 항목만 None —
+                # 나머지 항목까지 통째로 버리지 않는다(부분 관측도
+                # 그대로 남긴다, 0으로 대체하지 않는다).
+                def _int_or_none(value):
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        return value
+                    return None
+
+                shipping_info = OnchannelShippingInfo(
+                    send_type=(
+                        extends.get("send_type")
+                        if isinstance(extends.get("send_type"), str) else None
+                    ),
+                    quantity_threshold=_int_or_none(extends.get("quantity")),
+                    base_shipping_cost=_int_or_none(extends.get("send_price")),
+                    jeju_shipping_cost=_int_or_none(extends.get("jeju_send_price")),
+                    remote_area_shipping_cost=_int_or_none(extends.get("etc_send_price")),
+                )
             return OnchannelProduct(
                 product_code=result["prd_code"], title=result.get("product_nm", ""),
                 status=result.get("prd_state"), options=options,
+                shipping_info=shipping_info,
             )
         except KeyError as exc:
             raise OnchannelResponseFormatError(
@@ -531,6 +584,7 @@ __all__ = [
     "OnchannelResponseFormatError",
     "OnchannelNetworkError",
     "OnchannelProductOption",
+    "OnchannelShippingInfo",
     "OnchannelProduct",
     "OnchannelOrderOption",
     "OnchannelOrderRegistrationRequest",

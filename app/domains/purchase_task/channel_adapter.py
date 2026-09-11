@@ -131,6 +131,21 @@ class ChannelProductOption:
 
 
 @dataclass(frozen=True)
+class ChannelShippingInfo:
+    """2026-09-11 후속(반자동 완료 라운드) — 매입처가 상품 상세
+    응답에서 제공하는 배송비 "제안값"일 뿐, 확정값이 아니다. Gate D
+    (order_submission_service.py::_verify_point_balance_or_block)는
+    이 값을 자동으로 신뢰해 통과시키지 않는다 — 사용자가 발주 검토
+    화면에서 배송비를 직접 확인·입력할 때 참고 자료로만 보여준다."""
+
+    send_type: str | None
+    quantity_threshold: int | None
+    base_shipping_cost: int | None
+    jeju_shipping_cost: int | None
+    remote_area_shipping_cost: int | None
+
+
+@dataclass(frozen=True)
 class ProductLookupResult:
 
     support: str
@@ -138,6 +153,7 @@ class ProductLookupResult:
     title: str | None
     options: tuple[ChannelProductOption, ...]
     detail: str
+    shipping_info: ChannelShippingInfo | None = None
 
 
 @dataclass(frozen=True)
@@ -655,10 +671,20 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
             )
             for opt in product.options
         )
+        shipping_info = None
+        if product.shipping_info is not None:
+            shipping_info = ChannelShippingInfo(
+                send_type=product.shipping_info.send_type,
+                quantity_threshold=product.shipping_info.quantity_threshold,
+                base_shipping_cost=product.shipping_info.base_shipping_cost,
+                jeju_shipping_cost=product.shipping_info.jeju_shipping_cost,
+                remote_area_shipping_cost=product.shipping_info.remote_area_shipping_cost,
+            )
         return ProductLookupResult(
             support=CapabilitySupport.SUPPORTED,
             external_product_id=product.product_code, title=product.title,
             options=options, detail="온채널 실 API 조회 결과.",
+            shipping_info=shipping_info,
         )
 
     def list_products(
@@ -883,6 +909,7 @@ __all__ = [
     "ConnectionCheckResult",
     "LoginRequirementResult",
     "ChannelProductOption",
+    "ChannelShippingInfo",
     "ProductLookupResult",
     "ChannelProductSummary",
     "ProductListLookupResult",

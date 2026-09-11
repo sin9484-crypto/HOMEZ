@@ -59,6 +59,11 @@ from app.domains.purchase_task.schema import OrderLookupResponse
 from app.domains.purchase_task.schema import TrackingLookupResponse
 from app.domains.purchase_task.schema import OrderSubmissionReviewRequest
 from app.domains.purchase_task.schema import OrderSubmissionReviewResponse
+from app.domains.purchase_task.schema import ShippingCostConfirmationRequest
+from app.domains.purchase_task.schema import FinalizeOrderApprovalRequest
+from app.domains.purchase_task.schema import PurchaseOrderApprovalResponse
+from app.domains.purchase_task.schema import SubmitRealOrderRequest
+from app.domains.purchase_task.schema import PurchaseOrderSubmissionAttemptResponse
 from app.domains.purchase_task.schema import ProductLookupResponse
 from app.domains.purchase_task.schema import CandidateCreate
 from app.domains.purchase_task.schema import CandidateResponse
@@ -184,6 +189,8 @@ def _policy_to_response(setting) -> PolicySettingResponse:
         default_additional_shipping_fee=setting.default_additional_shipping_fee,
         default_return_risk_reserve=setting.default_return_risk_reserve,
         budget_reservation_hours=setting.budget_reservation_hours,
+        min_residual_points=setting.min_residual_points,
+        order_approval_validity_minutes=setting.order_approval_validity_minutes,
         updated_at=setting.updated_at,
     )
 
@@ -929,6 +936,201 @@ def review_order_submission(
         options=[opt.model_dump() for opt in data.options],
         recent_auth_token=recent_auth_token,
         triggered_by=current_user.id,
+    )
+
+
+def _order_approval_to_response(approval) -> PurchaseOrderApprovalResponse:
+
+    return PurchaseOrderApprovalResponse(
+        id=approval.id, purchase_task_id=approval.purchase_task_id,
+        product_code=approval.product_code, status=approval.status,
+        shipping_cost_amount=approval.shipping_cost_amount,
+        shipping_cost_is_free_confirmed=approval.shipping_cost_is_free_confirmed,
+        shipping_cost_source=approval.shipping_cost_source,
+        shipping_cost_basis_memo=approval.shipping_cost_basis_memo,
+        shipping_cost_confirmed_by=approval.shipping_cost_confirmed_by,
+        shipping_cost_confirmed_at=approval.shipping_cost_confirmed_at,
+        item_amount_snapshot=approval.item_amount_snapshot,
+        required_points_snapshot=approval.required_points_snapshot,
+        current_points_snapshot=approval.current_points_snapshot,
+        margin_amount_snapshot=approval.margin_amount_snapshot,
+        margin_rate_snapshot=approval.margin_rate_snapshot,
+        approved_by=approval.approved_by, approved_at=approval.approved_at,
+        expires_at=approval.expires_at,
+        invalidated_reason=approval.invalidated_reason,
+    )
+
+
+@router.get(
+    "/{task_id}/order-approval",
+    response_model=PurchaseOrderApprovalResponse | None,
+)
+def get_order_approval(
+    task_id: int, connection_id: int | None = None,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 이 작업의
+    현재 발주 승인 상태를 조회한다(부작용 없음). 아직 승인 절차를
+    시작하지 않았으면 null을 반환한다. `connection_id`를 생략하면
+    이 작업에 이미 배정된 연결(task.channel_connection_id)을 쓴다 —
+    /shipping-cost·/finalize는 항상 connection_id를 명시적으로
+    받으므로, 호출부가 같은 값을 여기도 넘기면 배정 여부와 무관하게
+    정확히 그 승인을 조회할 수 있다."""
+
+    from app.domains.purchase_task.order_approval_service import (
+        PurchaseOrderApprovalService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    task = task_service.get_task(task_id, current_user.company_id)
+    effective_connection_id = connection_id or task.channel_connection_id
+    if effective_connection_id is None:
+        return None
+
+    approval_service = PurchaseOrderApprovalService(db)
+    approval = approval_service.get_approval(
+        effective_connection_id, current_user.company_id, task_id,
+    )
+    if approval is None:
+        return None
+    return _order_approval_to_response(approval)
+
+
+@router.post(
+    "/{task_id}/order-approval/shipping-cost",
+    response_model=PurchaseOrderApprovalResponse,
+)
+def confirm_order_shipping_cost(
+    task_id: int, data: ShippingCostConfirmationRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-11 후속(Phase 5) — 배송비를 추정하지 않는다. 사용자가
+    외부 화면에서 직접 확인한 값을 증거(출처·메모)와 함께 기록한다.
+    이 호출만으로는 발주가 열리지 않는다 — 반드시 /finalize를 거쳐야
+    ACTIVE로 전환된다."""
+
+    from app.domains.purchase_task.order_approval_service import (
+        PurchaseOrderApprovalService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    # get_task()가 회사 소유가 아니면 NotFoundException을 던진다 —
+    # 다른 회사의 작업에 승인 행을 만드는 것을 이 시점에서 차단한다.
+    task_service.get_task(task_id, current_user.company_id)
+
+    approval_service = PurchaseOrderApprovalService(db)
+    approval = approval_service.confirm_shipping_cost(
+        data.connection_id, current_user.company_id, task_id,
+        data.external_product_id,
+        shipping_cost_amount=data.shipping_cost_amount,
+        is_free_shipping_confirmed=data.is_free_shipping_confirmed,
+        source=data.source, basis_memo=data.basis_memo,
+        confirmed_by=current_user.id,
+    )
+    return _order_approval_to_response(approval)
+
+
+@router.post(
+    "/{task_id}/order-approval/finalize",
+    response_model=PurchaseOrderApprovalResponse,
+)
+def finalize_order_approval(
+    task_id: int, data: FinalizeOrderApprovalRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-11 후속(Phase 7) — 배송비 확인이 끝난 승인에 대해
+    한도·잔여포인트·마진을 최종 재확인하고, 전부 통과하면 ACTIVE로
+    전환한다(유효시간 기본 10분). 이 엔드포인트 자체는 온채널에
+    네트워크 호출을 하지 않는다 — item_amount/current_points는
+    호출부가 직전 /order-submission-review에서 이미 실측한 값을
+    그대로 넘긴다."""
+
+    from app.domains.purchase_task.order_approval_service import (
+        PurchaseOrderApprovalService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    task_service.get_task(task_id, current_user.company_id)
+
+    approval_service = PurchaseOrderApprovalService(db)
+    approval = approval_service.finalize_approval(
+        data.connection_id, current_user.company_id, task_id,
+        item_amount=data.item_amount, current_points=data.current_points,
+        triggered_by=current_user.id,
+    )
+    return _order_approval_to_response(approval)
+
+
+@router.post(
+    "/{task_id}/order-approval/submit",
+    response_model=PurchaseOrderSubmissionAttemptResponse,
+)
+def submit_real_order(
+    task_id: int, data: SubmitRealOrderRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    recent_auth_token: str | None = Header(
+        default=None, alias="X-Recent-Auth-Token",
+    ),
+):
+    """2026-09-11 후속(반자동 완료 라운드 목표 1) — 실제 온채널
+    발주를 실행한다. **이 엔드포인트가 존재한다는 사실 자체는
+    승인이 아니다.** `data.confirm_real_submission`이 True가
+    아니면 PurchaseOrderSubmissionService.submit_order()가 그
+    시점에서 즉시 거부한다(연결 조회조차 하지 않는다 — 기존
+    fail-closed 설계 그대로). 이 요청 바디는 수취인 개인정보를
+    담으므로(발주 실행에 필요) 재인증(X-Recent-Auth-Token)과
+    VIEW_SENSITIVE_DATA 권한을 둘 다 요구한다 — 단순 조회보다
+    엄격한 게이트다(실제 금전·개인정보 전송이 걸려 있기 때문).
+
+    이 메서드를 호출해도 Gate A(연결 인증)·Gate B(계약 확인)·
+    Gate C(판매신청)·Gate D(포인트·배송비 승인)가 전부 그대로
+    적용된다 — 이 엔드포인트는 그 게이트들을 우회하는 새 경로가
+    아니라, 이미 있던 submit_order()를 최초로 라우터에 연결하는
+    것뿐이다."""
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise UnauthorizedException(
+            "PURCHASE_ORDER_SUBMIT_RECENT_AUTH_REQUIRED: 실제 발주를 "
+            "실행하려면 현재 비밀번호를 다시 확인해야 합니다.",
+        )
+    require_permission(db, current_user, "VIEW_SENSITIVE_DATA")
+
+    from app.domains.purchase_task.onchannel_client import OnchannelApiError
+    from app.domains.purchase_task.order_submission_service import (
+        PurchaseOrderSubmissionService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    task_service.get_task(task_id, current_user.company_id)
+
+    service = PurchaseOrderSubmissionService(db)
+    try:
+        attempt = service.submit_order(
+            data.connection_id, current_user.company_id,
+            idempotency_key=data.idempotency_key, product_code=data.product_code,
+            options=[opt.model_dump() for opt in data.options],
+            recv_name=data.recv_name, recv_tell=data.recv_tell,
+            recv_mobile=data.recv_mobile, zipcode=data.zipcode,
+            address=data.address, address_detail=data.address_detail,
+            comment=data.comment, site_name=data.site_name,
+            purchase_task_id=task_id, triggered_by=current_user.id,
+            confirm_real_submission=data.confirm_real_submission,
+        )
+    except OnchannelApiError as exc:
+        _translate_onchannel_error(exc)
+    except PurchaseChannelAdapterError as exc:
+        raise BadRequestException(str(exc)) from exc
+
+    return PurchaseOrderSubmissionAttemptResponse(
+        id=attempt.id, status=attempt.status,
+        external_order_code=attempt.external_order_code,
+        failure_detail=attempt.failure_detail,
+        idempotency_key=attempt.idempotency_key,
+        started_at=attempt.started_at, finished_at=attempt.finished_at,
     )
 
 

@@ -1613,14 +1613,54 @@ class PurchaseTaskService:
             point_detail = str(exc)
             blocked_reasons.append(f"포인트(예치금) 조회 실패: {exc}")
 
-        # Gate D(order_submission_service.py::_verify_point_balance_or_block)
-        # 와 동일한 이유로 항상 추가한다 — 온채널에 배송비 사전 확인
-        # API가 없어 배송비 포함 최종 필요 금액을 확정할 수 없다.
-        # 위 포인트 확인이 전부 정상이어도 이 사유는 빠지지 않는다.
-        blocked_reasons.append(
-            "온채널 배송비를 발주 전에 확인할 방법이 없어 실제 발주는 "
-            "현재 항상 차단됩니다(추가 온채널 공식 답변 필요).",
+        # 2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 온채널에
+        # 배송비 사전 확인 API가 없다는 사실은 여전하지만, 이제는
+        # 유효한 사용자 최종 승인(PurchaseOrderApproval, status=
+        # ACTIVE, 이 상품가와 일치)이 있으면 Gate D와 동일하게 통과
+        # 시킨다 — order_submission_service.py::_verify_point_
+        # balance_and_shipping_or_block()와 반드시 같은 판정을
+        # 내려야 한다(화면이 "보낼 수 있다"고 하고 실제 호출은
+        # 막히는 어긋남을 만들지 않기 위해).
+        from app.domains.purchase_task.order_approval_service import (
+            PurchaseOrderApprovalService,
         )
+
+        approval_service = PurchaseOrderApprovalService(self.db)
+        approval = approval_service.get_active_approval_or_none(
+            connection.id, company_id, task.id,
+        )
+        approval_matches_current_price = (
+            approval is not None
+            and estimated_item_amount is not None
+            and approval.item_amount_snapshot == int(estimated_item_amount)
+        )
+        if not approval_matches_current_price:
+            blocked_reasons.append(
+                "배송비 사전 확인 API가 없어, 사용자가 직접 확인한 배송비로 "
+                "최종 승인을 받기 전까지 실제 발주는 차단됩니다(배송비 확인 "
+                "화면에서 진행하세요).",
+            )
+
+        order_approval_summary = None
+        if approval is not None:
+            order_approval_summary = {
+                "status": approval.status,
+                "shipping_cost_amount": approval.shipping_cost_amount,
+                "shipping_cost_is_free_confirmed": approval.shipping_cost_is_free_confirmed,
+                "shipping_cost_source": approval.shipping_cost_source,
+                "shipping_cost_basis_memo": approval.shipping_cost_basis_memo,
+                "required_points": approval.required_points_snapshot,
+                "projected_residual_points": (
+                    (approval.current_points_snapshot - approval.required_points_snapshot)
+                    if approval.current_points_snapshot is not None
+                    and approval.required_points_snapshot is not None
+                    else None
+                ),
+                "margin_amount": approval.margin_amount_snapshot,
+                "margin_rate": approval.margin_rate_snapshot,
+                "expires_at": approval.expires_at,
+                "matches_current_price": approval_matches_current_price,
+            }
 
         _audit(
             self.db, company_id=company_id, user_id=triggered_by,
@@ -1675,12 +1715,15 @@ class PurchaseTaskService:
                 "point_interpretable": point_interpretable,
                 "detail": point_detail,
             },
-            "shipping_fee_known": False,
+            "shipping_fee_known": approval_matches_current_price,
             "shipping_fee_detail": (
-                "온채널 공식 배송비 견적 방법이 아직 확인되지 않았습니다 "
-                "— 추정하지 않습니다. 이 때문에 실제 발주는 현재 항상 "
-                "차단됩니다."
+                "사용자가 확인한 배송비로 최종 승인됨(아래 order_approval 참고)."
+                if approval_matches_current_price else
+                "온채널 공식 배송비 견적 방법이 아직 확인되지 않았습니다 — "
+                "추정하지 않습니다. 배송비 확인 화면에서 사용자가 직접 확인한 "
+                "값을 증거와 함께 입력해야 실제 발주가 열립니다."
             ),
+            "order_approval": order_approval_summary,
             "product_title_mismatch_warning": title_mismatch,
             "quantity_mismatch_warning": quantity_mismatch,
             "send_blocked": len(blocked_reasons) > 0,

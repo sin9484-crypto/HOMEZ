@@ -35,8 +35,10 @@ from app.domains.purchase_task.model import PurchaseChannelConnection
 from app.domains.purchase_task.model import PurchaseChannelConnectionEvent
 from app.domains.automation_safety.model import EmergencyStop
 from app.domains.automation_safety.model import FunctionAutomationState
+from app.domains.purchase_task.model import PurchaseOrderApproval
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
 from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
+from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
 from app.domains.purchase_task.order_submission_service import (
     PurchaseOrderSubmissionService,
 )
@@ -84,6 +86,7 @@ class OrderSubmissionServiceTestCaseBase(unittest.TestCase):
                 PurchaseChannelConnectionEvent.__table__,
                 PurchaseOrderSubmissionAttempt.__table__,
                 PurchaseSalesApplicationAttempt.__table__,
+                PurchaseOrderApproval.__table__,
                 EmergencyStop.__table__, FunctionAutomationState.__table__,
             ],
         )
@@ -174,22 +177,25 @@ class OrderSubmissionServiceTestCaseBase(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def _patch_point_balance_gate_passes(self):
-        """2026-09-10 신규(Phase 4) — `_verify_point_balance_or_block()`
-        는 온채널에 배송비 사전 확인 API가 없다는 확인된 사실 때문에
-        현재 구현상 **항상** 차단한다(상품가·포인트가 전부 정상이어도
-        마지막에 "배송비 미확인"으로 막는다 — order_submission_
-        service.py의 클래스 docstring 참고). 이 저장소의 다른 게이트
-        (발주 실행 자체, 매입 작업 배정)를 테스트하는 대다수 기존
-        테스트는 그 게이트들의 로직만 격리해서 보고 싶어하므로, 이
-        헬퍼는 Gate D(포인트·배송비)만 이 테스트 범위 안에서 통과한
-        것으로 바꿔치기한다 — 실제 배송비 확인 방법이 생겼다는 뜻이
-        절대 아니다. Gate D 자체의 (현재 항상 차단하는) 진짜 동작은
-        PointBalanceGateTestCase가 패치 없이 별도로 증명한다."""
+        """2026-09-10 Phase 4 + 2026-09-11 반자동 완료 라운드 Phase
+        5·7 갱신 — `_verify_point_balance_and_shipping_or_block()`
+        는 이제 유효한 사용자 최종 승인(PurchaseOrderApproval)이
+        없으면 차단한다(더 이상 "항상" 차단이 아니다 — order_
+        submission_service.py의 메서드 docstring 참고). 이 저장소의
+        다른 게이트(발주 실행 자체, 매입 작업 배정)를 테스트하는
+        대다수 기존 테스트는 그 게이트들의 로직만 격리해서 보고
+        싶어하므로, 이 헬퍼는 Gate D(포인트·배송비 승인)만 이 테스트
+        범위 안에서 통과한 것으로 바꿔치기한다 — 실제 승인이 생겼다는
+        뜻이 절대 아니다. `mark_consumed()`가 이 반환값의 `.status`
+        속성을 설정하므로 단순 Mock을 반환한다(무해 — 실제 DB 행이
+        아니다). Gate D 자체의 진짜 동작(승인 없으면 차단, 있으면
+        통과)은 PointBalanceGateTestCase/OrderApprovalGateTestCase가
+        패치 없이 별도로 증명한다."""
 
         patcher = mock.patch(
             "app.domains.purchase_task.order_submission_service."
-            "PurchaseOrderSubmissionService._verify_point_balance_or_block",
-            return_value=None,
+            "PurchaseOrderSubmissionService._verify_point_balance_and_shipping_or_block",
+            return_value=mock.Mock(),
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -1168,12 +1174,16 @@ class _FakeProductResult:
 
 
 class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
-    """2026-09-10 신규(Phase 4) — `_verify_point_balance_or_block()`의
-    실제(패치 없는) 동작을 증명한다. 온채널에 배송비 사전 확인 API가
-    없다는 확인된 사실 때문에, 포인트·상품가가 전부 정상이어도
-    **항상 마지막에 차단**한다는 것이 이 게이트의 현재 진짜 동작이다
-    — 다른 클래스들이 쓰는 `_patch_point_balance_gate_passes()`는
-    이 클래스에서는 절대 호출하지 않는다."""
+    """2026-09-10 Phase 4 + 2026-09-11 반자동 완료 라운드 Phase 5·7
+    갱신 — `_verify_point_balance_and_shipping_or_block()`의 실제
+    (패치 없는) 동작을 증명한다. 온채널에 배송비 사전 확인 API가
+    없다는 확인된 사실은 그대로지만, 이제는 유효한 사용자 최종
+    승인(PurchaseOrderApproval)이 있으면 통과한다 — "항상 차단"이던
+    옛 동작은 더 이상 사실이 아니다. 이 클래스는 여전히 승인이 없을
+    때의 차단 동작을 전담하고, 승인이 있을 때 실제로 통과하는지는
+    `OrderApprovalGateIntegrationTestCase`가 별도로 증명한다. 다른
+    클래스들이 쓰는 `_patch_point_balance_gate_passes()`는 이
+    클래스에서는 절대 호출하지 않는다."""
 
     def _install_point_and_product_adapter(
         self, *, point_result=None, product_result=None,
@@ -1287,10 +1297,9 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
             )
         self.assertIn("보다 적습니다", str(ctx.exception))
 
-    def test_sufficient_balance_and_price_still_blocks_on_unconfirmed_shipping(self):
-        """이 게이트의 핵심 회귀 테스트 — 포인트·상품가가 전부 정상
-        이어도, 배송비를 사전에 확인할 방법이 없다는 사실 때문에
-        여전히 차단된다(추측으로 통과시키지 않는다)."""
+    def test_no_purchase_task_id_blocks_since_approval_cannot_be_looked_up(self):
+        """purchase_task_id 없이는 어떤 승인을 조회해야 할지조차
+        알 수 없다 — 발주를 차단한다."""
 
         from decimal import Decimal
 
@@ -1312,6 +1321,180 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
             self.db.query(PurchaseOrderSubmissionAttempt).count(), 0,
             "Gate D를 통과 못 했으면 발주 시도 행 자체가 생기면 안 된다.",
         )
+
+    def test_purchase_task_id_without_any_approval_blocks(self):
+
+        from decimal import Decimal
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+            product_result=_FakeProductResult(
+                options=(_FakeProductOption("1", Decimal("10000")),),
+            ),
+        )
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-no-approval",
+                purchase_task_id=999, confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("승인", str(ctx.exception))
+
+
+class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
+    """2026-09-11 신규(반자동 완료 라운드 Phase 5·7) — 유효한 사용자
+    최종 승인(PurchaseOrderApproval, status=ACTIVE)이 있으면 Gate D를
+    실제로 통과해 발주 Adapter까지 도달하는지 증명한다. 승인 행은
+    여기서 직접 DB에 삽입한다(PurchaseOrderApprovalService의 전체
+    확인·finalize 흐름은 tests/test_purchase_order_approval_service.py
+    가 전담 — 이 클래스는 order_submission_service.py가 그 결과를
+    올바르게 "소비"하는지만 본다)."""
+
+    def _install_point_and_product_adapter_with_submit(
+        self, *, point=1_000_000, price=10000, call_log=None,
+    ):
+
+        from decimal import Decimal
+
+        class _FakeAdapter:
+            def check_member_point(self_inner):
+                return _FakePointResult(point=point)
+
+            def lookup_product(self_inner, external_product_id):
+                return _FakeProductResult(
+                    options=(_FakeProductOption("1", Decimal(str(price))),),
+                )
+
+            def apply_for_sale(self_inner, external_product_id):
+                return _FakeSalesApplicationResult(
+                    applied_product_code=external_product_id,
+                )
+
+            def submit_order(self_inner, request):
+                if call_log is not None:
+                    call_log.append(request)
+                return "ORDER-VIA-APPROVAL"
+
+        patcher = mock.patch(
+            "app.domains.purchase_task.order_submission_service.get_purchase_channel_adapter",
+            return_value=_FakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _insert_active_approval(
+        self, *, connection_id, product_code, item_amount_snapshot,
+        shipping_cost_amount, purchase_task_id=1,
+    ):
+
+        from datetime import datetime, timedelta
+
+        approval = PurchaseOrderApproval(
+            company_id=self.company_a.id, connection_id=connection_id,
+            purchase_task_id=purchase_task_id, product_code=product_code,
+            status=PurchaseOrderApprovalStatus.ACTIVE,
+            shipping_cost_amount=shipping_cost_amount,
+            shipping_cost_is_free_confirmed=(shipping_cost_amount == 0),
+            item_amount_snapshot=item_amount_snapshot,
+            approved_by=1, approved_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(minutes=10),
+        )
+        self.db.add(approval)
+        self.db.commit()
+        self.db.refresh(approval)
+        return approval
+
+    def test_valid_active_approval_reaches_adapter_and_gets_consumed(self):
+
+        connection = self._make_ready_connection()
+        call_log = []
+        self._install_point_and_product_adapter_with_submit(
+            point=1_000_000, price=10000, call_log=call_log,
+        )
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=42,
+        )
+
+        attempt = self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-approval-ok",
+            purchase_task_id=42, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
+        self.assertEqual(len(call_log), 1)
+
+        approval = (
+            self.db.query(PurchaseOrderApproval)
+            .filter(PurchaseOrderApproval.purchase_task_id == 42)
+            .first()
+        )
+        self.assertEqual(approval.status, PurchaseOrderApprovalStatus.CONSUMED)
+
+    def test_approval_with_mismatched_price_blocks(self):
+        """승인 시점 가격 스냅샷과 지금 조회한 가격이 다르면(가격
+        인상 등) 승인을 신뢰하지 않는다."""
+
+        connection = self._make_ready_connection()
+        call_log = []
+        self._install_point_and_product_adapter_with_submit(
+            point=1_000_000, price=12000, call_log=call_log,  # 승인 당시 10000에서 인상됨
+        )
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=43,
+        )
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-approval-stale",
+                purchase_task_id=43, confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("가격", str(ctx.exception))
+        self.assertEqual(call_log, [], "가격이 어긋나면 발주 Adapter가 호출되면 안 된다.")
+
+    def test_expired_approval_blocks(self):
+
+        from datetime import datetime, timedelta
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        approval = self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=44,
+        )
+        approval.expires_at = datetime.utcnow() - timedelta(seconds=1)
+        self.db.commit()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-approval-expired",
+                purchase_task_id=44, confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("승인", str(ctx.exception))
+
+    def test_insufficient_points_including_shipping_blocks(self):
+        """상품가만으로는 충분해 보여도(포인트>상품가), 승인된
+        배송비를 더하면 부족한 경우를 정확히 잡아낸다."""
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=12000, price=10000)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=45,
+        )
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-approval-insufficient",
+                purchase_task_id=45, confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("배송비 포함 최종 필요 포인트", str(ctx.exception))
 
 
 class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):

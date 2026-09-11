@@ -41,6 +41,7 @@ from app.domains.notification_center.model import NotificationRead
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.purchase_task.model import (
+    PurchaseOrderApproval,
     PurchaseRecord,
     PurchaseTask,
     PurchaseTaskBudgetReservation,
@@ -54,10 +55,13 @@ from app.domains.purchase_task.model import (
 )
 from app.domains.purchase_task.router import (
     add_candidate,
+    confirm_order_shipping_cost,
     create_task,
     evaluate_and_prepare,
+    finalize_order_approval,
     get_email_preference,
     get_email_provider_setting,
+    get_order_approval,
     get_policy,
     get_task,
     import_csv,
@@ -67,6 +71,7 @@ from app.domains.purchase_task.router import (
     record_purchase,
     reconcile_orders,
     run_match_check,
+    submit_real_order,
     update_email_preference,
     update_email_provider_setting,
     update_policy,
@@ -76,11 +81,19 @@ from app.domains.purchase_task.schema import (
     EmailPreferenceUpdate,
     EmailProviderSettingUpdate,
     EvaluateRequest,
+    FinalizeOrderApprovalRequest,
     MatchCheckRequest,
+    OrderSubmissionReviewOptionInput,
     PolicySettingUpdate,
     PurchaseTaskCreate,
     RecordPurchaseRequest,
+    ShippingCostConfirmationRequest,
     SourceAttributesInput,
+    SubmitRealOrderRequest,
+)
+from app.domains.purchase_task.constants import (
+    PurchaseOrderApprovalStatus,
+    ShippingCostConfirmationSource,
 )
 from app.domains.role.model import Role
 from app.domains.user.model import User
@@ -100,9 +113,15 @@ AUDIT_LOGS_DDL = (
 
 class _FakeUser:
 
-    def __init__(self, user_id, company_id):
+    def __init__(self, user_id, company_id, role=None):
         self.id = user_id
         self.company_id = company_id
+        # 2026-09-11 후속(반자동 완료 라운드) — require_permission()이
+        # is_super_admin()을 거쳐 getattr(user, "role", None)만
+        # 읽는다(DB role_id 조인 없이) — role="super_admin"이면
+        # 어떤 permission 코드든 통과한다. 기존 테스트는 role=None
+        # 기본값을 그대로 쓰므로 영향 없다.
+        self.role = role
 
 
 class _FakeUploadFile:
@@ -151,6 +170,7 @@ class PurchaseTaskRouterTestCase(unittest.TestCase):
                 User.__table__,
                 Notification.__table__, NotificationRead.__table__,
                 Order.__table__, OrderItem.__table__,
+                PurchaseOrderApproval.__table__,
             ],
         )
         with self.engine.begin() as conn:
@@ -396,6 +416,224 @@ class PurchaseTaskRouterTestCase(unittest.TestCase):
         ))
         self.assertEqual(result.success_rows, 1)
         self.assertEqual(result.failure_rows, 0)
+
+
+class OrderApprovalRouterTestCase(unittest.TestCase):
+    """2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — /order-approval
+    라우터 3종의 배선·회사 격리만 확인한다(세부 게이트 로직 자체는
+    tests/test_purchase_order_approval_service.py가 격리 단위로
+    전담 — 여기서는 라우터가 그 서비스를 올바르게 호출하고 회사
+    경계를 지키는지만 본다). PurchaseTaskRouterTestCase를 상속하지
+    않는다 — unittest가 상속받은 test_ 메서드까지 다시 discover해
+    같은 테스트가 두 클래스 이름으로 중복 실행되는 것을 피하기
+    위해, 필요한 setUp만 이 클래스 안에 그대로 옮겨 둔다."""
+
+    def setUp(self):
+
+        reset_recent_auth_state_for_tests()
+        self.addCleanup(reset_recent_auth_state_for_tests)
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.db_path = path
+        self.engine = create_engine(f"sqlite:///{path}")
+
+        Base.metadata.create_all(
+            bind=self.engine,
+            tables=[
+                Company.__table__, FundingAccount.__table__,
+                FundingLedger.__table__, PurchaseTask.__table__,
+                PurchaseTaskCandidate.__table__,
+                PurchaseTaskBudgetReservation.__table__,
+                PurchaseRecord.__table__, PurchaseTaskTrackingInfo.__table__,
+                PurchaseTaskPolicySetting.__table__,
+                Role.__table__, User.__table__,
+                Order.__table__, OrderItem.__table__,
+                PurchaseOrderApproval.__table__,
+            ],
+        )
+        with self.engine.begin() as conn:
+            conn.execute(text(AUDIT_LOGS_DDL))
+
+        self.SessionLocal = sessionmaker(
+            autocommit=False, autoflush=False, bind=self.engine,
+        )
+        self.db = self.SessionLocal()
+
+        self.company_a = Company(
+            name="회사 A", business_number="111-11-11111",
+            ceo="대표A", phone="02-000-0001",
+            email="a@example.com", address="서울",
+        )
+        self.company_b = Company(
+            name="회사 B", business_number="222-22-22222",
+            ceo="대표B", phone="02-000-0002",
+            email="b@example.com", address="서울",
+        )
+        self.db.add_all([self.company_a, self.company_b])
+        self.db.commit()
+
+        self.account_a = FundingAccount(
+            company_id=self.company_a.id, total_funding=1000000.0,
+        )
+        self.db.add(self.account_a)
+        self.db.commit()
+
+        self.user_a = _FakeUser(1, self.company_a.id)
+        self.user_b = _FakeUser(2, self.company_b.id)
+
+    def tearDown(self):
+
+        self.db.close()
+        self.engine.dispose()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+    def _create(self, user, key="pt:1"):
+
+        return create_task(
+            PurchaseTaskCreate(
+                source_order_id=1, product_title="무선이어폰",
+                brand="브랜드A", manufacturer="브랜드A", model_name="MODEL-1",
+                gtin="1111111111111", capacity="100ml", quantity=1,
+                color_or_scent="블랙", options=["기본"],
+                coupang_sale_amount=30000, coupang_fee_amount=3000,
+                purchase_deadline=NOW + timedelta(days=3),
+                idempotency_key=key,
+            ),
+            current_user=user, db=self.db,
+        )
+
+    def test_get_order_approval_returns_none_when_not_started(self):
+
+        task = self._create(self.user_a, key="oa:none")
+
+        result = get_order_approval(task.id, current_user=self.user_a, db=self.db)
+        self.assertIsNone(result)
+
+    def test_confirm_then_finalize_then_get_reflects_active_state(self):
+
+        task = self._create(self.user_a, key="oa:flow")
+
+        confirmed = confirm_order_shipping_cost(
+            task.id,
+            ShippingCostConfirmationRequest(
+                shipping_cost_amount=1000, is_free_shipping_confirmed=False,
+                source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+                basis_memo="상품 상세 화면 캡처", external_product_id="CH1",
+                connection_id=4,
+            ),
+            current_user=self.user_a, db=self.db,
+        )
+        self.assertEqual(confirmed.status, PurchaseOrderApprovalStatus.PENDING_SHIPPING_COST)
+        self.assertEqual(confirmed.shipping_cost_amount, 1000)
+
+        finalized = finalize_order_approval(
+            task.id,
+            FinalizeOrderApprovalRequest(
+                connection_id=4, item_amount=5000, current_points=1_000_000,
+            ),
+            current_user=self.user_a, db=self.db,
+        )
+        self.assertEqual(finalized.status, PurchaseOrderApprovalStatus.ACTIVE)
+        self.assertIsNotNone(finalized.expires_at)
+
+        fetched = get_order_approval(
+            task.id, connection_id=4, current_user=self.user_a, db=self.db,
+        )
+        self.assertEqual(fetched.status, PurchaseOrderApprovalStatus.ACTIVE)
+        self.assertEqual(fetched.id, finalized.id)
+
+    def test_other_company_cannot_confirm_shipping_cost_for_task(self):
+
+        task = self._create(self.user_a, key="oa:isolated")
+
+        with self.assertRaises(NotFoundException):
+            confirm_order_shipping_cost(
+                task.id,
+                ShippingCostConfirmationRequest(
+                    shipping_cost_amount=1000, is_free_shipping_confirmed=False,
+                    source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+                    external_product_id="CH1", connection_id=4,
+                ),
+                current_user=self.user_b, db=self.db,
+            )
+
+    def test_other_company_cannot_get_order_approval_for_task(self):
+
+        task = self._create(self.user_a, key="oa:isolated2")
+
+        with self.assertRaises(NotFoundException):
+            get_order_approval(task.id, current_user=self.user_b, db=self.db)
+
+    def test_invalid_shipping_cost_source_rejected_by_pydantic_schema(self):
+        """스키마 자체는 자유 문자열을 허용하므로(source: str), 서비스
+        계층의 검증이 실제로 걸어지는지 라우터 경유로도 확인한다."""
+
+        task = self._create(self.user_a, key="oa:badsource")
+
+        with self.assertRaises(BadRequestException):
+            confirm_order_shipping_cost(
+                task.id,
+                ShippingCostConfirmationRequest(
+                    shipping_cost_amount=1000, is_free_shipping_confirmed=False,
+                    source="NOT_A_REAL_SOURCE", external_product_id="CH1",
+                    connection_id=4,
+                ),
+                current_user=self.user_a, db=self.db,
+            )
+
+    def _submit_request(self, *, confirm_real_submission=False):
+
+        return SubmitRealOrderRequest(
+            connection_id=4, idempotency_key="submit-test-1",
+            product_code="CH1234567",
+            options=[OrderSubmissionReviewOptionInput(id="OPT1", qty=1)],
+            recv_name="홍길동", recv_tell="02-000-0000", recv_mobile="010-0000-0000",
+            zipcode="00000", address="서울시 어딘가",
+            confirm_real_submission=confirm_real_submission,
+        )
+
+    def test_submit_without_recent_auth_rejected(self):
+        """실제 발주 엔드포인트는 단순 조회보다 엄격하다 — 재인증
+        토큰이 없으면 permission 검사·submit_order() 어느 쪽도
+        건드리지 않고 즉시 거부한다."""
+
+        task = self._create(self.user_a, key="submit:no-auth")
+
+        with self.assertRaises(UnauthorizedException):
+            submit_real_order(
+                task.id, self._submit_request(),
+                current_user=self.user_a, db=self.db, recent_auth_token=None,
+            )
+
+    def test_submit_without_confirm_flag_rejected_by_underlying_service(self):
+        """재인증·권한은 전부 통과해도, confirm_real_submission이
+        기본값(False)이면 submit_order() 자신의 fail-closed 게이트가
+        여전히 막는다 — 이 라우터가 그 게이트를 대신 열어주지
+        않는다."""
+
+        admin = _FakeUser(9, self.company_a.id, role="super_admin")
+        task = self._create(admin, key="submit:no-confirm")
+        token, _ = issue_recent_auth_token(admin.id)
+
+        with self.assertRaises(BadRequestException):
+            submit_real_order(
+                task.id, self._submit_request(confirm_real_submission=False),
+                current_user=admin, db=self.db, recent_auth_token=token,
+            )
+
+    def test_other_company_cannot_submit_order_for_task(self):
+
+        admin_b = _FakeUser(10, self.company_b.id, role="super_admin")
+        task = self._create(self.user_a, key="submit:isolated")
+        token, _ = issue_recent_auth_token(admin_b.id)
+
+        with self.assertRaises(NotFoundException):
+            submit_real_order(
+                task.id, self._submit_request(confirm_real_submission=True),
+                current_user=admin_b, db=self.db, recent_auth_token=token,
+            )
 
 
 if __name__ == "__main__":
