@@ -33,6 +33,8 @@ submission_service.py의 Gate D를 통과시킨다 — 그 외에는 여전히
 
 from __future__ import annotations
 
+import functools
+import threading
 from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
@@ -49,10 +51,37 @@ from app.domains.purchase_task.constants import (
     RECOMMENDED_MIN_MARGIN_RATE,
     RECOMMENDED_MIN_NET_PROFIT,
     RECOMMENDED_MIN_RESIDUAL_POINTS,
+    RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT,
     RECOMMENDED_PER_ORDER_MAX_AMOUNT,
     ShippingCostConfirmationSource,
 )
 from app.domains.purchase_task.model import PurchaseOrderApproval
+
+# 2026-09-12 후속(V7 기준선 정리, Phase 4 잔여 격차 해소) — HOMEZ는
+# 단일 프로세스 Modular Monolith다(여러 워커 프로세스로 분리되지
+# 않음). `finalize_approval()`이 일간·월간 한도를 "이미 CONSUMED된
+# 합계"로 재확인하지만, 그 합계 조회와 이후 결정 사이에 잠금이
+# 없었다 — 같은 프로세스 안에서 두 요청(예: 같은 사용자의 두 탭)이
+# 동시에 이 메서드에 들어오면 둘 다 서로의 아직 커밋되지 않은
+# 변경을 못 본 채 통과할 수 있는 경쟁조건이 이론적으로 존재했다.
+# 이 락은 그 경쟁조건을 프로세스 내에서 완전히 닫는다(같은
+# 프로세스 안에서는 finalize_approval·mark_consumed가 서로 겹쳐
+# 실행되지 않음을 보장) — 다만 finalize_approval()의 승인과 실제
+# 온채널 발주(별도 외부 API 호출) 사이의 간격은 이 락의 범위 밖이며,
+# 그 간격은 승인 유효시간(기본 10분) 만료로 별도 처리된다.
+_finalize_approval_lock = threading.Lock()
+
+
+def _synchronized(lock: threading.Lock):
+
+    def decorator(func):
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with lock:
+                return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 class PurchaseOrderApprovalService:
@@ -184,6 +213,7 @@ class PurchaseOrderApprovalService:
 
     # ---------------- Phase 7: 최종 승인 ----------------
 
+    @_synchronized(_finalize_approval_lock)
     def finalize_approval(
         self, connection_id: int, company_id: int, purchase_task_id: int,
         *, item_amount: int, current_points: int, triggered_by: int,
@@ -245,6 +275,25 @@ class PurchaseOrderApprovalService:
                 f"{spent_today}원 발주, 이번 건 {required_points}원 추가 시 초과.",
             )
 
+        # 2026-09-12 후속(V7 기준선 정리, Phase 4) — per_order_max·
+        # daily_limit과 같은 이유로 여기서도 재확인해야 하는데 빠져
+        # 있었다. PurchaseTask 생성 시점의 PurchaseTaskPolicyService.
+        # evaluate()가 monthly_purchase_budget_amount를 한 번 확인하지만,
+        # 그 시점과 실제 발주(되돌릴 수 없는 금전 행동) 시점 사이에
+        # 이미 다른 작업들이 소비했을 수 있으므로 이 최종 게이트에서
+        # 다시 확인하지 않으면 월간 한도가 실질적으로 강제되지 않는다.
+        monthly_limit = (
+            setting.monthly_purchase_budget_amount
+            if setting.monthly_purchase_budget_amount is not None
+            else RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT
+        )
+        spent_this_month = self._sum_consumed_amount_this_month(company_id)
+        if spent_this_month + required_points > monthly_limit:
+            blocked_reasons.append(
+                f"월간 발주 한도({int(monthly_limit)}원) 초과 — 이번 달 이미 "
+                f"{spent_this_month}원 발주, 이번 건 {required_points}원 추가 시 초과.",
+            )
+
         min_residual = (
             setting.min_residual_points
             if setting.min_residual_points is not None
@@ -256,6 +305,33 @@ class PurchaseOrderApprovalService:
                 f"발주 후 예상 잔여 포인트({projected_residual})가 최소 잔여 "
                 f"기준({min_residual}) 미달.",
             )
+
+        # 2026-09-12 후속(V7 기준선 정리, Phase 4 잔여 격차 해소) —
+        # policy_service.evaluate()(작업 생성 시점 평가)는 동시 진행
+        # 작업 수를 확인하는데, 이 최종 게이트는 재확인하지 않았다.
+        # 작업 생성 이후 다른 작업들이 이미 동시 한도를 소진했을 수
+        # 있으므로 여기서도 재확인한다.
+        #
+        # 펀딩(운영자금) 잔액 재확인은 **이번 라운드에서 의도적으로
+        # 보류한다** — 실 homez.db를 읽기전용으로 확인한 결과
+        # `funding_accounts` 테이블이 아직 0행이다(회사 1도 계좌가
+        # 없음). policy_service.evaluate()가 이미 같은 이유로 계좌가
+        # 없으면 BUDGET_INSUFFICIENT로 차단하지만, 그건 작업 "생성"을
+        # 막을 뿐이다. 여기(발주 직전 최종 게이트)에 같은 검사를
+        # 그대로 추가하면 이미 생성돼 배송비 확인 단계까지 진행된
+        # 모든 실제 작업의 최종 승인이 오늘부터 전부 막히는 운영상
+        # 결과가 생긴다 — 이건 코드 결함 수정이 아니라 사업 운영
+        # 방침(펀딩 계좌를 실제로 언제 만들지) 결정이 필요한
+        # 사안이므로, 사실만 기록하고 사용자 판단을 기다린다.
+        if setting.max_concurrent_tasks is not None:
+            from app.domains.purchase_task.repository import PurchaseTaskRepository
+
+            open_count = PurchaseTaskRepository(self.db).count_open_tasks(company_id)
+            if open_count > setting.max_concurrent_tasks:
+                blocked_reasons.append(
+                    f"동시 진행 작업 한도({setting.max_concurrent_tasks}건) 초과 "
+                    f"— 현재 진행 중 {open_count}건.",
+                )
 
         margin_amount = None
         margin_rate = None
@@ -352,6 +428,28 @@ class PurchaseOrderApprovalService:
             for row in rows
         )
 
+    def _sum_consumed_amount_this_month(self, company_id: int) -> int:
+        """2026-09-12 후속(Phase 4 자동결제 한도 실행경로 감사) —
+        `_sum_consumed_amount_today()`와 같은 방식으로, 최근 30일간
+        실제 발주로 이어진(CONSUMED) 승인들의 금액 합계를 월간 한도
+        판정 기준으로 쓴다(policy_service.py::evaluate()가 후보
+        평가 시점에 쓰는 것과 같은 30일 창을 맞췄다)."""
+
+        since = datetime.utcnow() - timedelta(days=30)
+        rows = (
+            self.db.query(PurchaseOrderApproval)
+            .filter(
+                PurchaseOrderApproval.company_id == company_id,
+                PurchaseOrderApproval.status == PurchaseOrderApprovalStatus.CONSUMED,
+                PurchaseOrderApproval.updated_at >= since,
+            )
+            .all()
+        )
+        return sum(
+            (row.item_amount_snapshot or 0) + (row.shipping_cost_amount or 0)
+            for row in rows
+        )
+
     # ---------------- 실제 발주 직전 재대조 ----------------
 
     def revalidate_before_submission(
@@ -391,6 +489,7 @@ class PurchaseOrderApprovalService:
             raise ConflictException(approval.invalidated_reason)
         return approval
 
+    @_synchronized(_finalize_approval_lock)
     def mark_consumed(self, approval: PurchaseOrderApproval) -> None:
 
         approval.status = PurchaseOrderApprovalStatus.CONSUMED

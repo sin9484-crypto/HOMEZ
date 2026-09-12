@@ -263,6 +263,40 @@ class FinalizeApprovalGateTestCase(OrderApprovalServiceTestCaseBase):
             )
         self.assertIn("최소 잔여", str(ctx.exception))
 
+    def test_max_concurrent_tasks_exceeded_blocks(self):
+        """2026-09-12 후속(Phase 4 잔여 격차 해소 — policy_service.
+        evaluate()는 동시 진행 작업 수를 확인하지만 이 최종 게이트는
+        재확인하지 않던 결함). BUDGET_HOLDING 상태의 작업 2건이 이미
+        있는데 한도를 1건으로 설정하면 세 번째 작업의 최종 승인이
+        막혀야 한다."""
+
+        from app.domains.purchase_task.constants import PurchaseTaskStatus
+
+        setting = PurchaseTaskPolicySetting(
+            company_id=self.company_a.id,
+            min_net_profit=0, min_margin_rate=0,
+            max_price_increase_rate=0.05, require_return_allowed=True,
+            min_match_confidence=0.98, budget_reservation_hours=24,
+            max_concurrent_tasks=1,
+        )
+        self.db.add(setting)
+
+        open_task_1 = self._create_task(key="open-1")
+        open_task_1.status = PurchaseTaskStatus.PURCHASE_READY
+        open_task_2 = self._create_task(key="open-2")
+        open_task_2.status = PurchaseTaskStatus.PURCHASE_READY
+        self.db.commit()
+
+        task = self._create_task(key="finalizing")
+        self._confirm_shipping(task, amount=1000)
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.finalize_approval(
+                4, self.company_a.id, task.id,
+                item_amount=5000, current_points=1_000_000, triggered_by=1,
+            )
+        self.assertIn("동시 진행 작업 한도", str(ctx.exception))
+
     def test_missing_coupang_amounts_blocks_as_evidence_required(self):
         """원 주문 판매금액·수수료가 없으면 마진을 0으로 추정하지
         않고 차단한다."""
@@ -490,6 +524,96 @@ class DailyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
                 item_amount=89000, current_points=10_000_000, triggered_by=1,
             )
         self.assertIn("하루 발주 한도", str(ctx.exception))
+
+
+class MonthlyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
+    """2026-09-12 후속(V7 기준선 정리, Phase 4 자동결제 한도 실행경로
+    감사) — monthly_purchase_budget_amount가 PurchaseTask 생성 시점의
+    policy_service.evaluate()에서만 확인되고 실제 발주 직전 게이트
+    (finalize_approval)에서는 재확인되지 않던 결함을 수정한 회귀
+    테스트. per_order_max·daily_limit은 넉넉하게(또는 기본값 그대로)
+    두어 월간 한도만 단독으로 검증한다."""
+
+    def test_monthly_limit_exceeded_blocks(self):
+
+        setting = PurchaseTaskPolicySetting(
+            company_id=self.company_a.id,
+            min_net_profit=0, min_margin_rate=0,
+            max_price_increase_rate=0.05, require_return_allowed=True,
+            min_match_confidence=0.98, budget_reservation_hours=24,
+            per_order_max_amount=10_000_000,
+            daily_purchase_limit_amount=10_000_000,
+            monthly_purchase_budget_amount=150_000,
+        )
+        self.db.add(setting)
+        self.db.commit()
+
+        task1 = self._create_task(
+            key="t1", coupang_sale_amount=200000.0, coupang_fee_amount=20000.0,
+        )
+        self.service.confirm_shipping_cost(
+            4, self.company_a.id, task1.id, "CH1", shipping_cost_amount=1000,
+            source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+            confirmed_by=1,
+        )
+        approval1 = self.service.finalize_approval(
+            4, self.company_a.id, task1.id,
+            item_amount=90000, current_points=10_000_000, triggered_by=1,
+        )
+        self.service.mark_consumed(approval1)  # 이번 달 소비: 91000원
+
+        task2 = self._create_task(
+            key="t2", coupang_sale_amount=200000.0, coupang_fee_amount=20000.0,
+        )
+        self.service.confirm_shipping_cost(
+            4, self.company_a.id, task2.id, "CH1", shipping_cost_amount=1000,
+            source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+            confirmed_by=1,
+        )
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.finalize_approval(
+                4, self.company_a.id, task2.id,
+                # 91000(이번 달 이미 소비) + 90000(이번 건) = 181000 > 150000
+                item_amount=89000, current_points=10_000_000, triggered_by=1,
+            )
+        self.assertIn("월간 발주 한도", str(ctx.exception))
+
+    def test_monthly_limit_uses_recommended_default_when_unset(self):
+        """monthly_purchase_budget_amount만 설정하지 않았으면(None)
+        '무제한'이 아니라 RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT
+        (300만원)를 기본 상한으로 강제해야 한다. per_order_max·
+        daily_limit은 이 건 하나가 절대 걸리지 않도록 넉넉히 열어
+        둬서, 월간 기본값만 단독으로 검증한다."""
+
+        setting = PurchaseTaskPolicySetting(
+            company_id=self.company_a.id,
+            min_net_profit=0, min_margin_rate=0,
+            max_price_increase_rate=0.05, require_return_allowed=True,
+            min_match_confidence=0.98, budget_reservation_hours=24,
+            per_order_max_amount=10_000_000,
+            daily_purchase_limit_amount=10_000_000,
+            monthly_purchase_budget_amount=None,
+        )
+        self.db.add(setting)
+        self.db.commit()
+
+        task = self._create_task(
+            coupang_sale_amount=40_000_000.0, coupang_fee_amount=1_000_000.0,
+        )
+        self.service.confirm_shipping_cost(
+            4, self.company_a.id, task.id, "CH1", shipping_cost_amount=1000,
+            source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+            confirmed_by=1,
+        )
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.finalize_approval(
+                4, self.company_a.id, task.id,
+                # per_order_max·daily_limit(각 1000만원)는 통과하지만
+                # RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT(300만원)는
+                # 초과 — 이 값이 실제로 강제됨을 증명한다.
+                item_amount=3_500_000, current_points=100_000_000, triggered_by=1,
+            )
+        self.assertIn("월간 발주 한도", str(ctx.exception))
 
 
 if __name__ == "__main__":
