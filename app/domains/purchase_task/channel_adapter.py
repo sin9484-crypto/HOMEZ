@@ -541,11 +541,28 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
     않았다** — 코드는 준비됐지만 실행은 사용자의 명시적 승인(정확한
     호출 1회, 재시도 없음)을 기다린다.
 
-    자격증명은 더 이상 전역 단일 슬롯을 쓰지 않는다 — 회사가 온채널
-    계정을 여러 개 연결해도 서로 섞이지 않도록, 호출자(서비스 계층)가
-    해당 PurchaseChannelConnection.credential_reference를 넘겨준다.
-    넘기지 않으면(예: 구버전 호출부·격리 테스트) 이전 전역 슬롯으로
-    안전하게 대체(fallback)한다."""
+    자격증명은 전역 단일 슬롯을 쓰지 않는다 — 회사가 온채널 계정을
+    여러 개 연결해도 서로 섞이지 않도록, 호출자(서비스 계층)가 해당
+    PurchaseChannelConnection.credential_reference를 반드시 넘겨야
+    한다.
+
+    2026-09-11 정정(운영 전 최종 검증 라운드, Credential 격리 결함
+    수정) — 이전에는 `credential_reference`를 넘기지 않으면
+    `OnchannelSupplierOrderProvider.CREDENTIAL_REFERENCE`("homez_
+    onchannel_api", app/domains/purchase 레거시 단일연결 도메인이
+    소유한 이름)로 "안전하게" 대체한다고 문서화돼 있었다 — 실제로는
+    안전하지 않았다. 이 머신의 Credential Manager에 그 이름으로
+    실제 유효한 온채널 자격증명이 있어, 브라우저 UI 검증 중
+    `credential_reference=None`으로 만든 테스트 연결 하나가 그
+    레거시 자격증명을 그대로 빌려 실제 인증된 GET 요청을 온채널
+    운영 서버로 보낸 사고가 실제로 발생했다(부작용 없는 읽기
+    실패였지만, 승인 없는 라이브 호출이었다). 이제
+    `credential_reference`가 없으면 절대 다른 자격증명으로 대체하지
+    않는다 — `_read_credential()`이 즉시 None을 반환해(Credential
+    Store 자체를 조회하지 않음) 이후 모든 실제 호출 메서드가
+    `PurchaseChannelAdapterError`로 막힌다. `app/domains/store_
+    connection/service.py::verify_existing()`이 이미 쓰고 있던
+    "참조 없음 = 즉시 차단" 패턴과 동일하게 맞췄다."""
 
     mall_code = "ONCHANNEL"
 
@@ -559,11 +576,10 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
             credential_store = WindowsCredentialStore()
         self._credential_store = credential_store
 
-        if credential_reference is None:
-            from app.domains.purchase.supplier_order_providers import (
-                OnchannelSupplierOrderProvider,
-            )
-            credential_reference = OnchannelSupplierOrderProvider.CREDENTIAL_REFERENCE
+        # 2026-09-11 정정 — None을 다른 이름으로 대체하지 않는다(위
+        # 클래스 docstring 참고). 이 연결에 배정된 credential_
+        # reference가 정확히 없으면, 이 Adapter는 어떤 자격증명도
+        # 갖지 않은 것으로 취급한다.
         self._credential_reference = credential_reference
 
         # 테스트 전용 주입 지점 — 실제 코드 경로는 절대 이 값들을
@@ -573,6 +589,15 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
         self._http_post = http_post
 
     def _read_credential(self) -> dict | None:
+        """credential_reference가 없으면 Credential Store 자체를
+        절대 조회하지 않는다(어떤 target_name으로도 None을 넘기지
+        않는다) — 스토어 구현체가 None을 예상치 못한 방식으로
+        처리할 가능성 자체를 차단한다(2026-09-11 정정 — 실제로
+        `WindowsCredentialStore.read(None)`이 어떻게 동작하는지
+        검증된 적이 없었다는 사실이 이번 사고 조사에서 드러났다)."""
+
+        if self._credential_reference is None:
+            return None
 
         from app.core.windows_credential_store import (
             CredentialNotFoundError, CredentialStoreError,
@@ -876,8 +901,13 @@ def get_purchase_channel_adapter(
 ) -> PurchaseChannelAdapter:
     """credential_reference는 CREDENTIAL 방식 매입처(현재 온채널)에만
     의미가 있다 — 넘기면 그 특정 연결(PurchaseChannelConnection)의
-    자격증명 슬롯을 쓰고, 넘기지 않으면 Adapter마다의 기본값을
-    쓴다(온채널은 이전 전역 슬롯으로 대체).
+    자격증명 슬롯을 쓴다. 넘기지 않으면(2026-09-11 정정, Credential
+    격리 결함 수정) 온채널 Adapter는 **어떤 자격증명도 갖지 않은
+    것으로 취급한다** — 예전처럼 이전 전역 슬롯(`homez_onchannel_
+    api`)으로 조용히 대체하지 않는다. 이 대체가 실제로 안전하지
+    않았다는 사실이 브라우저 UI 검증 중 실 온채널 운영 서버로의
+    승인 없는 라이브 호출로 드러났다(app/domains/purchase_task/
+    channel_adapter.py::OnchannelChannelAdapter docstring 참고).
 
     2026-09-08 후속(격리 검증 중 실제 Credential Manager 오염 사고
     재발 방지) — credential_store를 넘기지 않으면 OnchannelChannelAdapter가

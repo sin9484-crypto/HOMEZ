@@ -149,7 +149,17 @@ class OnchannelChannelAdapterTestCase(unittest.TestCase):
     def setUp(self):
 
         self.store = InMemoryCredentialStore()
-        self.adapter = OnchannelChannelAdapter(credential_store=self.store)
+        # 2026-09-11 정정(Credential 격리 결함 수정) — 예전에는
+        # credential_reference를 생략하면 OnchannelChannelAdapter가
+        # 자동으로 OnchannelSupplierOrderProvider.CREDENTIAL_REFERENCE
+        # ("homez_onchannel_api")로 대체했다. 이제는 그 대체가
+        # 사라졌으므로, 이 테스트 클래스가 실제로 검증하려는 것
+        # (특정 참조 이름 아래 자격증명이 있을 때의 상태 판정 로직)을
+        # 위해 참조를 명시적으로 넘긴다.
+        self.adapter = OnchannelChannelAdapter(
+            credential_store=self.store,
+            credential_reference=OnchannelSupplierOrderProvider.CREDENTIAL_REFERENCE,
+        )
 
     def test_reports_not_connected_when_no_credential_saved(self):
         """2026-09-08 재정정(id=3/4 사고) — CREDENTIAL 방식은
@@ -743,6 +753,161 @@ class SalesApplicationAdapterTestCase(unittest.TestCase):
 
         with self.assertRaises(OnchannelValidationError):
             adapter.apply_for_sale("CH1")
+
+
+class _ReadSpyCredentialStore(InMemoryCredentialStore):
+    """실제 스토어 구현을 그대로 감싸되, `.read()` 호출 여부와
+    호출된 target_name을 기록한다 — "credential_reference가 없으면
+    Credential Store 자체를 절대 조회하지 않는다"는 주장을 실제로
+    증명하기 위한 스파이(2026-09-11 정정, Credential 격리 결함
+    수정 라운드)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_calls: list[str] = []
+
+    def read(self, target_name: str) -> dict:
+        self.read_calls.append(target_name)
+        return super().read(target_name)
+
+
+class CredentialReferenceIsolationTestCase(unittest.TestCase):
+    """2026-09-11 정정(운영 전 최종 검증 라운드) — 브라우저 UI
+    검증 중 `credential_reference=None`으로 만든 테스트 연결이
+    레거시 공유 자격증명(`homez_onchannel_api`)을 그대로 빌려 실제
+    온채널 운영 서버에 인증된 GET 요청을 보낸 사고가 있었다. 이
+    클래스는 그 대체 경로가 완전히 제거됐음을 직접 증명한다:
+    credential_reference가 없으면 Credential Store를 조회조차
+    하지 않고, 어떤 실제 호출 메서드도 네트워크에 닿기 전에
+    PurchaseChannelAdapterError로 막힌다."""
+
+    def setUp(self):
+
+        self.store = _ReadSpyCredentialStore()
+        # 사고를 그대로 재현하는 조건 — 레거시 이름 아래 실제
+        # "유효해 보이는" 자격증명이 이미 저장돼 있어도:
+        self.store.save(
+            OnchannelSupplierOrderProvider.CREDENTIAL_REFERENCE,
+            {"auth_key": "leaked-if-fallback-still-exists", "allowed_ip": ""},
+        )
+        # 다른 회사·다른 연결의 자격증명도 함께 존재해도:
+        self.store.save("conn-other-company", {"auth_key": "other-companys-jwt", "allowed_ip": ""})
+
+    def _network_call_should_never_happen(self, *args, **kwargs):
+
+        raise AssertionError(
+            "credential_reference가 없는 Adapter가 실제 네트워크 호출을 "
+            "시도했다 — Credential 격리가 다시 깨졌다.",
+        )
+
+    def test_none_reference_never_queries_credential_store(self):
+
+        adapter = OnchannelChannelAdapter(credential_store=self.store)
+        self.assertIsNone(adapter._read_credential())
+        self.assertEqual(
+            self.store.read_calls, [],
+            "credential_reference가 없으면 Credential Store를 조회조차 "
+            "하지 않아야 한다(어떤 target_name으로도).",
+        )
+
+    def test_lookup_product_blocked_before_any_network_call(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_get=self._network_call_should_never_happen,
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.lookup_product("CH1")
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_list_products_blocked_before_any_network_call(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_get=self._network_call_should_never_happen,
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.list_products(page=1, page_size=1)
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_lookup_order_blocked_before_any_network_call(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_get=self._network_call_should_never_happen,
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.lookup_order("ORDER-1")
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_lookup_tracking_blocked_before_any_network_call(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_get=self._network_call_should_never_happen,
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.lookup_tracking("ORDER-1")
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_check_member_point_blocked_before_any_network_call(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_get=self._network_call_should_never_happen,
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.check_member_point()
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_apply_for_sale_blocked_before_any_network_call(self):
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_post=self._network_call_should_never_happen,
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.apply_for_sale("CH1")
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_submit_order_blocked_before_any_network_call(self):
+
+        from app.domains.purchase_task.onchannel_client import (
+            OnchannelOrderOption, OnchannelOrderRegistrationRequest,
+        )
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, http_post=self._network_call_should_never_happen,
+        )
+        request = OnchannelOrderRegistrationRequest(
+            product_code="CH1", recv_name="홍길동", recv_tell="02-0000-0000",
+            recv_mobile="010-0000-0000", zipcode="00000", address="서울",
+            options=(OnchannelOrderOption(id="OPT1", qty=1),), sale_code="k-1",
+        )
+        with self.assertRaises(PurchaseChannelAdapterError):
+            adapter.submit_order(request)
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_check_connection_with_no_reference_never_reports_registered(self):
+        """이 사고의 실질적 위험 — credential_reference가 없는 연결이
+        레거시 자격증명 존재를 "이 연결에 등록된 자격증명"으로
+        착각해 보여주면 안 된다."""
+
+        adapter = OnchannelChannelAdapter(credential_store=self.store)
+        result = adapter.check_connection(account_label="자격증명 미배정 연결")
+        self.assertEqual(result.status, ChannelConnectionStatus.NOT_CONNECTED)
+        self.assertFalse(result.credential_registered)
+        self.assertEqual(self.store.read_calls, [])
+
+    def test_explicit_reference_never_reads_a_different_connections_credential(self):
+        """참조가 있어도 정확히 그 이름만 조회한다 — 다른 연결의
+        자격증명(레거시 이름 포함)을 곁다리로 읽지 않는다."""
+
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-mine",
+        )
+        self.store.save("conn-mine", {"auth_key": "jwt-mine", "allowed_ip": ""})
+
+        credential = adapter._read_credential()
+        self.assertEqual(credential["auth_key"], "jwt-mine")
+        self.assertEqual(
+            self.store.read_calls, ["conn-mine"],
+            "이 연결에 배정된 이름 외에는 어떤 target_name도 조회하지 않아야 한다.",
+        )
 
 
 if __name__ == "__main__":

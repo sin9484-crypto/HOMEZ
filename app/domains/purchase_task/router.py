@@ -676,7 +676,14 @@ def get_channel_connection_capabilities(
 
     connection = service.get_connection_or_404(connection_id, current_user.company_id)
     try:
-        adapter = get_purchase_channel_adapter(connection.mall_code)
+        # 2026-09-11 정정(Credential 격리 결함 수정) — capability_
+        # matrix()는 애초에 자격증명을 절대 읽지 않지만(정적 조회,
+        # 네트워크 없음), 이 연결의 credential_reference를 명시적으로
+        # 넘겨 "이 Adapter가 다른 연결의 자격증명을 빌릴 여지가 있는
+        # 모양새" 자체를 없앤다(방어적 일관성).
+        adapter = get_purchase_channel_adapter(
+            connection.mall_code, credential_reference=connection.credential_reference,
+        )
     except PurchaseChannelAdapterError:
         return {"mall_code": connection.mall_code, "capabilities": {}}
     return {
