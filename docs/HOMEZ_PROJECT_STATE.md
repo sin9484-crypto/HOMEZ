@@ -11323,3 +11323,186 @@ approval_migration.py`/`test_purchase_order_submission_migration.py`
 진단 출력(인코딩 표시 문제일 뿐, 실패 아님)임을 재확인. 회귀
 전후 `homez.db` 수정시각·SHA-256이 완전히 동일함을 재확인(실
 DB 무접촉).
+
+### Credential 격리 결함 수정 (2026-09-11)
+
+직전 라운드에서 발견한 "승인 없는 실 온채널 API 호출 1건" 사고의
+근본 원인(`credential_reference=None`이면 레거시 전역 슬롯
+`homez_onchannel_api`로 조용히 대체하던 `OnchannelChannelAdapter`
+의 fallback)을 코드 수준에서 제거했다.
+
+**전수 감사 결과**: `get_purchase_channel_adapter()`의 실제 프로덕션
+호출부 8곳 중 7곳은 이미 항상 `connection.credential_reference`를
+명시적으로 넘기고 있었다 — 유일하게 안전하지 않았던 곳은
+`router.py::get_channel_connection_capabilities()`(현재는
+`capability_matrix()`만 호출해 자격증명을 전혀 읽지 않으므로
+실질적 위험은 없었지만, 방어적 일관성을 위해 함께 정정). 같은
+저장소 안의 `app/domains/store_connection/service.py::
+verify_existing()`은 이미 "참조 없음 = 즉시 차단"이라는 안전한
+패턴을 쓰고 있었다 — `channel_adapter.py`만 예외적으로 fallback을
+갖고 있었던 것이다. `app/domains/purchase/supplier_order_
+providers.py`(레거시 단일연결 도메인, `homez_onchannel_api` 이름의
+실제 소유자)와 `app/domains/trend_discovery/adapter.py`(네이버
+API 허브 — 설치 전체가 의도적으로 공유하는 시스템 레벨
+자격증명, 이런 종류의 fallback이 아예 없음)는 별개의 정당한
+설계라 건드리지 않았다.
+
+**수정**: `OnchannelChannelAdapter.__init__`이 `credential_
+reference=None`을 더 이상 다른 이름으로 대체하지 않는다.
+`_read_credential()`은 참조가 없으면 Credential Store 자체를
+전혀 조회하지 않고(`.read(None)`을 어떤 스토어 구현에도 절대
+넘기지 않음) 즉시 `None`을 반환한다 — 이후 모든 실제 호출
+메서드(`lookup_product`/`list_products`/`lookup_order`/`lookup_
+tracking`/`check_member_point`/`apply_for_sale`/`submit_order`)가
+`_require_client()`를 거쳐 `PurchaseChannelAdapterError`로 막힌다.
+
+**신규 테스트**: `tests/test_purchase_channel_adapter.py::
+CredentialReferenceIsolationTestCase`(10개) — 레거시 이름 아래
+"유효해 보이는" 자격증명과 다른 연결의 자격증명이 스토어에 이미
+있어도 참조 없는 Adapter가 그것을 절대 읽지 않음을 스파이
+Credential Store(`.read()` 호출 자체를 기록)로 직접 증명, 7개
+실제 호출 메서드 전부가 네트워크 함수(호출되면 즉시 실패하는
+가짜)에 닿기 전에 막힘을 증명, `check_connection()`이 참조 없는
+연결을 "등록됨"으로 잘못 보고하지 않음을 확인, 명시적 참조가
+있어도 정확히 그 이름만 조회하고 다른 연결 이름은 곁다리로도
+읽지 않음을 확인. 기존 테스트 1건(`OnchannelChannelAdapterTestCase.
+setUp`)은 fallback에 암묵적으로 의존하고 있었음을 발견해 참조를
+명시적으로 넘기도록 정정(같은 검증 의도를 유지하면서 마법의
+기본값 의존을 제거).
+
+**테스트**: `test_purchase_channel_adapter.py` 51/51(신규 10건
+포함), `tests/test_purchase_*.py` 전체 382/382, 관련 Naver/온채널
+Credential 테스트 파일 4개 28/28 — 전부 OK.
+
+**전체 저장소 회귀(처음부터 새로 실행)**: **4239개 테스트,
+6074.4초(약 101분), 전부 OK(실패 0건)** — 첫 실행에 바로 통과.
+실행 전후 `homez.db` 수정시각·SHA-256 완전히 동일(변경 없음).
+
+### V8 공식 목표 추가: 상품 이미지 리딩 기반 커머스 인텔리전스 (2026-09-12)
+
+사용자 결정에 따라 V7에는 새 기능을 억지로 결합하지 않고, V7을
+안정적인 반자동 운영 기준선으로 유지한다. 다음 내용을 V8의 핵심
+개발 목표로 채택한다.
+
+- 공급처 페이지, 상품 이미지, 고객후기, HOMEZ 상품 사실, 판매채널
+  등록값을 함께 읽고 대조한다.
+- 이미지 편집부터 실행하지 않고 먼저 이미지 내용을 판독하여 수정이
+  필요한지, 어떤 근거로 수정해야 하는지를 판단한다.
+- 수량, 규격, 재질, 원산지, 옵션 등 사실 충돌은 자동등록을 차단하고
+  사용자 확인을 요청한다.
+- 상품 발굴 단계에는 수익성뿐 아니라 후기의 개선 가능성, 정보
+  완성도, 이미지 품질, 중복 여부, 예상 편집 작업량을 함께 반영한다.
+- 필요한 이미지만 수정안을 만들고 원본과 수정본, 변경 위치, 변경
+  근거를 사용자에게 비교 표시한다.
+- 승인된 사실과 이미지만 기존 Listing Wizard로 전달한다.
+- 공식 API를 우선하며 브라우저 보조 등록은 마지막 단계에서 별도
+  안전 게이트와 결과 대조를 갖춘 뒤 도입한다.
+
+세부 설계와 단계별 완료 조건은
+`docs/HOMEZ_V8_VISUAL_COMMERCE_INTELLIGENCE_DESIGN_20260912.md`를
+기준으로 한다. 현재 판정은 `OFFICIAL_V8_GOAL_DESIGN_ONLY`이며,
+이 기록은 목표와 설계 방향의 확정이다. 코드 구현, DB Migration,
+외부 쓰기, 상품 제출, 발주 또는 결제 승인을 의미하지 않는다.
+
+### 자동결제 한도 실행경로 감사·월간 한도 게이트 결함 수정 (2026-09-12)
+
+V7 기준선 정리 라운드 Phase 4 — "UI가 존재한다는 이유로 구현됐다고
+판정하지 않는다"는 지시에 따라 자동결제(발주) 한도 3종(건당·일간·
+월간)이 실제 발주 직전 최종 게이트에서 전부 강제되는지 코드로
+추적했다.
+
+**발견한 결함(Medium~High)**: `PurchaseTaskPolicySetting`에
+`monthly_purchase_budget_amount` 필드가 있고, 화면(`console.js`)이
+값을 입력받아 저장하며, `PurchaseTaskPolicyService.evaluate()`
+(PurchaseTask **생성 시점**의 후보 평가 게이트)는 이 값을 실제로
+확인한다 — 그런데 실제 온채널 발주(되돌릴 수 없는 금전 행동)
+바로 직전의 최종 게이트인 `PurchaseOrderApprovalService.
+finalize_approval()`(Gate D)은 건당 한도(`per_order_max_amount`)와
+일간 한도(`daily_purchase_limit_amount`)만 재확인하고 월간 한도는
+전혀 재확인하지 않았다. 즉 작업 생성 시점 이후 다른 작업들이 이미
+소비한 금액을 반영하지 못한 채, 월간 한도가 실질적으로 이 최종
+게이트에서는 강제되지 않는 상태였다 — 화면·Model·초기 평가 단계
+코드가 전부 존재해 "구현됨"처럼 보였지만 실제 집행 경로에는
+빠져 있던 사례.
+
+**수정**: `app/domains/purchase_task/constants.py`에
+`RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT = 3_000_000`(설정을
+안 했다는 사실을 "무제한"으로 읽지 않는다는 기존 원칙을 그대로
+적용, per_order_max/daily_limit과 동일한 패턴) 추가.
+`order_approval_service.py::finalize_approval()`에 월간 한도
+재확인 블록(건당·일간과 같은 위치, 같은 `blocked_reasons` 목록에
+합류)과 `_sum_consumed_amount_this_month()`(최근 30일 CONSUMED
+승인 합계 — `_sum_consumed_amount_today()`와 동일한 계산 방식,
+policy_service.py::evaluate()가 쓰는 30일 창과 일치)를 추가했다.
+
+**테스트**: `tests/test_purchase_order_approval_service.py`에
+`MonthlyLimitAggregationTestCase` 신규(2건) — 월간 한도 초과 시
+차단(명시적 설정값 기준), 설정을 안 했을 때 RECOMMENDED 기본값이
+실제로 강제됨(무제한으로 읽히지 않음)을 각각 증명. 기존 23개
+테스트(`test_purchase_order_approval_service.py`, 신규 2건 포함
+총 25개) 회귀 없이 25/25 OK. `tests/test_purchase_*.py` 패턴에
+해당하는 전체 파일을 `unittest discover`로 재실행 — 384개 테스트
+384/384 OK(실패 0건, 503.5초). 실행 전후 실 `homez.db` SHA-256·
+mtime·크기(3,391,488바이트) 완전히 동일(변경 없음).
+
+**같은 라운드에서 이어서 수정(사용자 승인)**:
+
+1. **동시 진행 작업 한도(`max_concurrent_tasks`) 재확인 추가** —
+   `policy_service.evaluate()`(작업 생성 시점)에는 있었지만
+   `finalize_approval()`(발주 직전)에는 없던 재확인을 min_residual
+   확인 바로 뒤에 추가(`PurchaseTaskRepository.count_open_tasks()`
+   재사용). 신규 테스트 `test_max_concurrent_tasks_exceeded_blocks`
+   (BUDGET_HOLDING 상태 작업 2건 + 한도 1건 설정 → 3번째 작업
+   최종 승인 차단 확인).
+2. **경쟁조건 제거(프로세스 내)** — `finalize_approval()`/
+   `mark_consumed()`에 DB 행 잠금이 없어 동시 호출 시 한도를
+   근소하게 초과할 수 있는 이론적 가능성이 있었다. HOMEZ가 단일
+   프로세스 Modular Monolith라는 실제 아키텍처에 맞춰, DB 잠금
+   대신 프로세스 내 `threading.Lock`(`_finalize_approval_lock`)으로
+   두 메서드를 감싸 같은 프로세스 안에서는 절대 겹쳐 실행되지
+   않도록 했다(`_synchronized` 데코레이터, 기존 메서드 본문은
+   재작성하지 않음). 이 락은 `finalize_approval()`의 승인과 실제
+   온채널 발주(별도 외부 API 호출) 사이의 간격까지는 막지 않는다
+   — 그 간격은 승인 유효시간(10분) 만료로 이미 별도 처리된다.
+
+**의도적으로 보류한 것(코드 결함이 아니라 사업 운영 방침 결정
+필요)**: 펀딩(운영자금) 잔액 재확인은 이번 라운드에서 추가하지
+않았다. 실 `homez.db`를 읽기전용으로 확인한 결과 `funding_accounts`
+테이블이 아직 0행이다(회사 1도 계좌 없음) — 만약 이 재확인을
+`finalize_approval()`에 그대로 추가했다면, 오늘부터 실제 회사의
+모든 최종 승인이 즉시 차단되는 운영상 결과가 생겼을 것이다. 이건
+"놓친 재확인을 추가한다"가 아니라 "펀딩 계좌를 실제로 언제부터
+운영할지"를 정하는 사업 판단이므로, 코드를 건드리지 않고 사실만
+기록해 사용자 판단으로 넘긴다.
+
+**테스트(추가분)**: `test_purchase_order_approval_service.py`
+26/26(최종, 신규 3건 — 월간 한도 2건 + 동시 진행 한도 1건 —
+포함) OK.
+
+### 온채널 실 API 읽기 재검증 1회 (2026-09-12, 사용자 승인)
+
+Credential 격리 결함 수정 이후, 실제 ONCHANNEL 연결(id=4,
+company_id=1)의 자격증명이 여전히 유효한지 사용자 승인을 받아
+정확히 1회 재검증했다.
+
+**사전 확인(읽기 전용, 값 미출력)**: 실 `homez.db`에서 연결 id=4
+확인 — `status=CONNECTED`, `verified_at`=2026-09-08 12:17:19,
+`credential_reference`="homez_channel_connection_4"(레거시 공유
+이름이 아니라 이 연결 전용 이름 — `create_connection()`을 거쳐
+정상 생성된 연결임을 재확인). Windows Credential Manager에 이
+이름의 자격증명이 실제로 존재함을 키 목록만으로 확인(`auth_key`/
+`allowed_ip`, 값 미출력).
+
+**실행**: `OnchannelChannelAdapter.check_member_point()` →
+`GET https://api.onch3.co.kr/openapi/common/member/point`, 재시도
+없음, timeout 10초, 정확히 1회 호출.
+
+**결과**: 실제 인증 성공. `support=SUPPORTED`,
+`member_id_masked="s***(len=7)"`(기존 마스킹 유틸 적용, PII
+원문 미노출), `point=0`(포인트 잔액 — 자격증명이 아니라 사업
+정보라 그대로 기록), `point_interpretable=True`(응답 필드를
+정상 해석). 이 결과는 **상품조회 인증 성공만 확인한 것**이며
+판매신청·발주·결제 권한으로 확대 해석하지 않는다.
+
+**부작용**: 없음(순수 읽기, DB 미접촉). 호출 전후 실 `homez.db`
+SHA-256·mtime·크기 완전히 동일함을 재확인.
