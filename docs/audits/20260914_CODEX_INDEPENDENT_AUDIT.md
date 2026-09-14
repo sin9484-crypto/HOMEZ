@@ -88,3 +88,34 @@ spent_before_after_reconfirm 13000 0
 5. 수정본 독립 재현·회귀 확인 후에만 중지 작업 재개 조건 판단.
 
 실제 발주 재개 불가. 전체 감사 완료나 안전성 보증을 선언하지 않는다.
+
+## 2차 독립 재현 (2026-09-14)
+
+사용자의 완료 알림 요청 후 감사를 재개했다. Claude 작업의 미커밋 변경에서 ACTIVE 승인 합산 추가를 확인했다. 이는 IA-001의 일부 조건을 보완하지만 영속 실행 잠금, UNKNOWN 금액 보존, IA-002/003 해소까지 증명하지는 않는다. 수정 중인 제품 파일은 변경하지 않았다.
+
+### [Critical] IA-004: 처리 중인 동일 작업이 새 키로 중복 발주됨
+
+- 근거: `order_submission_service.py:142`의 `compute_idempotency_key()`는 기존 시도 개수+1을 키에 넣는다. 첫 IN_FLIGHT 행이 생긴 뒤 두 번째 요청이 들어오면 키가 달라진다.
+- `:320`은 미해소 UNKNOWN만 차단하고 IN_FLIGHT 작업을 차단하지 않는다. `:620`의 키 UNIQUE는 서로 다른 키를 막지 못한다.
+- 격리 재현: 기존 `OrderApprovalGateIntegrationTestCase`의 임시 DB, InMemoryCredentialStore, 상품/포인트/판매신청/발주 Fake를 사용했다. Gate D는 mock하지 않았으며 유효 승인 행은 기존 fixture처럼 삽입했다. 첫 Fake 전송 내부에서 첫 요청이 완료되기 전에 같은 작업·상품·옵션으로 두 번째 제출을 호출했다. 두 제출 모두 키를 서버가 계산했다.
+
+```text
+OVERLAPPING_SAME_TASK SUCCEEDED SUCCEEDED fake_sends 2 different_keys True
+```
+
+이것은 스레드 부하 시험이 아니라 첫 요청 IN_FLIGHT 저장 이후 둘째 요청 진입이라는 실행 순서를 결정적으로 재현한 시험이다. 첫 승인 CONSUMED 처리 전에 둘째 요청도 ACTIVE 승인을 읽는다. 실제 온채널 호출은 0회다.
+
+수정 방향: 회사/업무 주문 단위로 하나의 실행 소유권을 DB에서 원자적으로 확보한다. 시도 순번 증가는 명시적으로 재시도 가능한 종결 상태에서만 허용하고 IN_FLIGHT/성공/미해소 UNKNOWN에는 금지한다. 승인 자체도 원자적으로 실행 점유해야 한다. 옵션 변경이나 순서 변경으로 같은 업무 주문을 다시 보낼 수 없는지 검증한다.
+
+### [High] IA-005: 승인된 상품과 다른 상품도 동가이면 제출 가능
+
+- 근거: 승인 조회 키는 회사·연결·작업뿐이며 `order_approval_service.py::revalidate_before_submission()`의 입력에는 상품/옵션/수취인 지문이 없다. 상품가 합계만 비교한다.
+- 같은 격리 fixture에서 승인 상품은 `CH-APPROVED-OTHER`, 제출 상품은 기존 합성 `CH1234567`로 두고 가격 합계를 같게 했더니 전체 제출 서비스가 Fake 발주까지 도달했다.
+
+```text
+DIFFERENT_PRODUCT SUCCEEDED fake_sends 1
+```
+
+수정 방향: 상품·옵션·수량·배송비·수취정보와 관련 정책 버전에 승인을 결합한다. 민감 원문을 일반 로그나 승인 장부에 복제하지 말고 서버에서 정규화한 지문 등으로 대조한다. 동일 총액의 다른 상품/옵션/주소 및 승인 후 변경을 거부하는 테스트가 필요하다.
+
+검증 공통: import 전 DATABASE_URL=메모리 SQLite, socket 연결 금지, 기존 fixture 임시 파일 및 가짜 자격증명만 사용. 실행 종료 코드 0, Fake 호출 수 직접 확인, cleanup/teardown 수행. 전면 감사와 전체 회귀 완료를 뜻하지 않는다.
