@@ -75,3 +75,4 @@ Funding Account는 은행 잔액이 아니라 사업자가 관리하는 사업 �
 - DB/Migration 작업: `homez-migration-safety`
 - 완료·릴리스 판단: `homez-release-gate`
 - 장시간 자율 작업 중 상태 알림: `homez-self-monitor`
+- HOMEZ 콘솔을 브라우저로 직접 조작해 실사용 검증·E2E를 진행: `homez-console-e2e`
