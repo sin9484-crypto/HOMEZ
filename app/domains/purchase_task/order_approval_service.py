@@ -406,20 +406,31 @@ class PurchaseOrderApprovalService:
         self.db.refresh(approval)
         return approval
 
-    def _sum_consumed_amount_today(self, connection_id: int, company_id: int) -> int:
-        """오늘 이미 실제 발주로 이어진(CONSUMED) 승인들의 금액
-        합계 — 하루 한도 판정 기준. 발주 시도 장부(PurchaseOrder
-        SubmissionAttempt)는 금액을 저장하지 않으므로(개인정보·금액
-        모두 최소화 설계, Gate PT-3) 이 승인 테이블이 금액의 유일한
-        출처다."""
+    def _sum_reserved_amount(self, company_id: int, since: datetime) -> int:
+        """2026-09-14 전면 감사 후속(Phase 5.1 발견·재현된 결함 수정) —
+        기존에는 `CONSUMED`(실제로 발주까지 이어진 건)만 합산했다.
+        그러나 아직 `CONSUMED`가 아닌 `ACTIVE` 승인(사람이 이미
+        최종 승인해 10분 유효시간 안에 있는, 곧 발주로 이어질 금액)은
+        전혀 반영되지 않아, 여러 작업을 짧은 시간 안에 각각 승인하면
+        (각 호출이 서로의 아직 `CONSUMED` 안 된 `ACTIVE` 금액을 못 보므로)
+        한도를 실제로 넘겨도 전부 통과하는 결함이 있었다 — 임시 DB
+        재현 시험으로 실제 확인됨(일간 한도 15만원 설정, 8만원짜리
+        3건이 전부 ACTIVE로 통과, 합계 24만원). `CONSUMED` +
+        "아직 만료되지 않은 ACTIVE"를 함께 합산해 이 결함을 닫는다."""
 
-        since = datetime.utcnow() - timedelta(hours=24)
         rows = (
             self.db.query(PurchaseOrderApproval)
             .filter(
                 PurchaseOrderApproval.company_id == company_id,
-                PurchaseOrderApproval.status == PurchaseOrderApprovalStatus.CONSUMED,
                 PurchaseOrderApproval.updated_at >= since,
+                (
+                    (PurchaseOrderApproval.status == PurchaseOrderApprovalStatus.CONSUMED)
+                    | (
+                        (PurchaseOrderApproval.status == PurchaseOrderApprovalStatus.ACTIVE)
+                        & (PurchaseOrderApproval.expires_at.is_not(None))
+                        & (PurchaseOrderApproval.expires_at > datetime.utcnow())
+                    )
+                ),
             )
             .all()
         )
@@ -427,28 +438,28 @@ class PurchaseOrderApprovalService:
             (row.item_amount_snapshot or 0) + (row.shipping_cost_amount or 0)
             for row in rows
         )
+
+    def _sum_consumed_amount_today(self, connection_id: int, company_id: int) -> int:
+        """오늘 이미 실제로 소비 확정(CONSUMED)됐거나, 아직 만료되지
+        않은 채 승인(ACTIVE)돼 곧 소비될 예정인 금액의 합계 — 하루
+        한도 판정 기준. 발주 시도 장부(PurchaseOrderSubmissionAttempt)
+        는 금액을 저장하지 않으므로(개인정보·금액 모두 최소화 설계,
+        Gate PT-3) 이 승인 테이블이 금액의 유일한 출처다."""
+
+        since = datetime.utcnow() - timedelta(hours=24)
+        return self._sum_reserved_amount(company_id, since)
 
     def _sum_consumed_amount_this_month(self, company_id: int) -> int:
         """2026-09-12 후속(Phase 4 자동결제 한도 실행경로 감사) —
-        `_sum_consumed_amount_today()`와 같은 방식으로, 최근 30일간
-        실제 발주로 이어진(CONSUMED) 승인들의 금액 합계를 월간 한도
-        판정 기준으로 쓴다(policy_service.py::evaluate()가 후보
-        평가 시점에 쓰는 것과 같은 30일 창을 맞췄다)."""
+        `_sum_consumed_amount_today()`와 같은 방식으로, 최근 30일간의
+        합계를 월간 한도 판정 기준으로 쓴다(policy_service.py::
+        evaluate()가 후보 평가 시점에 쓰는 것과 같은 30일 창을
+        맞췄다). 2026-09-14 후속으로 `_sum_reserved_amount()`를
+        공유해 CONSUMED + 미만료 ACTIVE를 함께 합산한다(위 docstring
+        참고)."""
 
         since = datetime.utcnow() - timedelta(days=30)
-        rows = (
-            self.db.query(PurchaseOrderApproval)
-            .filter(
-                PurchaseOrderApproval.company_id == company_id,
-                PurchaseOrderApproval.status == PurchaseOrderApprovalStatus.CONSUMED,
-                PurchaseOrderApproval.updated_at >= since,
-            )
-            .all()
-        )
-        return sum(
-            (row.item_amount_snapshot or 0) + (row.shipping_cost_amount or 0)
-            for row in rows
-        )
+        return self._sum_reserved_amount(company_id, since)
 
     # ---------------- 실제 발주 직전 재대조 ----------------
 

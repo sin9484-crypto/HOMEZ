@@ -450,7 +450,18 @@ class ExpiryAndRevalidationTestCase(OrderApprovalServiceTestCaseBase):
 
 class DailyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
 
-    def test_only_consumed_rows_within_24h_counted(self):
+    def test_consumed_and_active_rows_within_24h_counted(self):
+        """2026-09-14 전면 감사 후속(Phase 5.1 결함 수정) — 이전에는
+        이 테스트 이름이 `test_only_consumed_rows_within_24h_counted`
+        였고 "ACTIVE는 합계에서 제외돼야 한다"는 것을 검증했다. 그
+        기대값 자체가 실제 결함이었다: 여러 작업을 짧은 시간 안에
+        각각 승인하면(각 호출이 서로의 아직 CONSUMED 안 된 ACTIVE
+        금액을 못 보므로) 일간·월간 한도를 실제로 넘겨도 전부
+        통과하는 것을 임시 DB로 직접 재현해 확인했다
+        (docs/audits/20260914_FULL_AUDIT.md Phase 5.1). 이제 CONSUMED와
+        "아직 만료되지 않은 ACTIVE"를 함께 합산하도록 고쳤으므로,
+        이 테스트도 고쳐진 동작을 검증하도록 바꾼다(결함을 가리기
+        위해 기대값을 바꾼 것이 아니라, 기대값 자체가 결함이었다)."""
 
         task1 = self._create_task(key="t1")
         self.service.confirm_shipping_cost(
@@ -470,14 +481,39 @@ class DailyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
             source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
             confirmed_by=1,
         )
-        # 아직 ACTIVE일 뿐 CONSUMED가 아님 — 합계에 포함되면 안 된다.
+        # 아직 ACTIVE일 뿐 CONSUMED는 아니다 — 그래도 만료 전이므로
+        # 합계에 포함돼야 한다(수정된 동작).
         self.service.finalize_approval(
             4, self.company_a.id, task2.id,
             item_amount=8000, current_points=1_000_000, triggered_by=1,
         )
 
         total = self.service._sum_consumed_amount_today(4, self.company_a.id)
-        self.assertEqual(total, 6000)  # task1만: 5000 + 1000
+        self.assertEqual(total, 16000)  # task1(5000+1000) + task2(8000+2000)
+
+    def test_expired_active_rows_not_counted(self):
+        """만료된 ACTIVE 승인(사람이 재승인하지 않고 그대로 방치한
+        건)은 더 이상 곧 소비될 예정이 아니므로 합계에서 제외돼야
+        한다 — CONSUMED + "미만료" ACTIVE만 합산한다는 계약의
+        경계값 검증."""
+
+        task = self._create_task(key="t-expired")
+        self.service.confirm_shipping_cost(
+            4, self.company_a.id, task.id, "CH1", shipping_cost_amount=1000,
+            source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+            confirmed_by=1,
+        )
+        approval = self.service.finalize_approval(
+            4, self.company_a.id, task.id,
+            item_amount=5000, current_points=1_000_000, triggered_by=1,
+        )
+        # 실제로 시간이 지나기를 기다리지 않고, 이미 만료된 것처럼
+        # 강제로 되돌린다(격리 테스트 — 실 시계에 의존하지 않는다).
+        approval.expires_at = datetime.utcnow() - timedelta(seconds=1)
+        self.db.commit()
+
+        total = self.service._sum_consumed_amount_today(4, self.company_a.id)
+        self.assertEqual(total, 0)
 
     def test_daily_limit_exceeded_blocks(self):
         """RECOMMENDED_* 기본값 대신 이 회사 전용의 낮은 하루 한도를
