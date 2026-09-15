@@ -1070,7 +1070,44 @@ connections` 원본 생성 Migration의 DDL-diff 테스트를 다시 깨뜨리�
 `tests/test_notification_delivery_pt3.py` 35/35,
 `tests/test_purchase_*.py` 전체 회귀 414/414 통과.
 
-### 13.10 잔여 위험과 다음 단계
+### 13.10 Phase 10A — 안전 기본 전체 회귀(1차)
+
+사용자 후속 지시(2026-09-15, "[HOMEZ 전체 감사 후속 — Phase 10 완료
+확인 및 미뤄진 안전 기능 구현]")에 따라 HEAD=`c6ad9e7` 기준으로
+`python -m unittest discover -s tests -p "test_*.py" -v`를
+실행했다(실제 homez.db·실제 Windows Credential
+Manager·실제 외부 API 전혀 미사용 — 임시 SQLite·Fake Provider·
+InMemoryCredentialStore만 사용, 후자는 Phase 6 게이트로 기본
+제외됨).
+
+**결과**: 4,287건 실행, 5,715.194초, 실패 1건, 오류 0건, skip 7건
+(전부 Phase 6이 게이트한 실제 Windows Credential Manager 테스트 —
+의도된 skip).
+
+**실패 1건 원인과 수정**: `test_gate8_operations_schema_migration.py
+::MigrationApplyTestCase::test_new_table_columns_match_model` —
+2026-08-15 원본 Migration 적용 직후 시점의 DB 컬럼을 "현재" Model과
+직접 비교하는데, `backup_records.is_encrypted`(Phase 5,
+`20260915_03`)처럼 이후 ALTER TABLE ADD COLUMN으로 추가된 컬럼은
+그 시점 DB에 없어 항상 실패한다 — 이 세션에서 이미 여러 번(Phase
+3, Phase 9) 반복된 것과 동일한 클래스의 결함이다. 다른 Migration
+테스트 파일들과 동일하게 "이 Migration 이후 파일에서 ADD COLUMN을
+자동으로 찾아 Model 비교에서 제외"하는 방식으로 근본 수정했다
+(커밋 `6ac00fa`) — `NEW_TABLE_MODELS`의 5개 테이블 전부에 일반적으로
+적용되므로 향후 이 중 어느 테이블에 컬럼이 추가돼도 다시 깨지지
+않는다. 기댓값을 완화하거나 실패를 skip으로 숨기지 않았다 — 원인을
+직접 고쳤다.
+
+**집중 재검증**: `tests/test_gate8_operations_schema_migration.py`
+12/12, `tests/test_gate8_*.py` 24/24 통과.
+
+**아직 선언하지 않는 것**: 이 시점에도 Phase 9A~9K(안전 기능 10개
+전체 구현)이 아직 진행 중이므로, 전체 작업 완료를 선언하지 않는다
+— 아래 Phase 9A 이후 절에서 이어서 기록한다. Phase 10B(안전 전체
+회귀 2차, 안전 기능 전체 구현 이후 1회만 실행)에서 최종 결과를
+다시 기록한다.
+
+### 13.11 잔여 위험과 다음 단계
 
 - IA-004(Critical, idempotency key 중복발주)의 원래 경로는
   `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른
