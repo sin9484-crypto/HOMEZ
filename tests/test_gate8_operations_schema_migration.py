@@ -92,6 +92,33 @@ def _db_columns(conn, table_name: str) -> dict[str, bool]:
     return {row[1]: not bool(row[3]) for row in rows}
 
 
+_ADD_COLUMN_RE = re.compile(
+    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)", re.IGNORECASE,
+)
+
+
+def _columns_added_by_later_migrations() -> dict[str, set[str]]:
+    """2026-09-15 전면 감사 후속 — Model은 항상 "현재" 전체 스키마를
+    반영하므로, 이 신규 Migration 이후에 이 5개 테이블 중 하나에
+    ALTER TABLE ADD COLUMN이 생기면(예: 20260915_03의 backup_records.
+    is_encrypted) test_new_table_columns_match_model()이 매번
+    깨진다(다른 여러 Migration 테스트 파일에서 반복된 것과 동일한
+    클래스의 결함). NEW_MIGRATION보다 사전순으로 뒤인 파일들에서
+    이 5개 테이블에 대한 "ADD COLUMN"을 자동으로 찾아, 그 컬럼들을
+    Model 쪽 비교 대상에서 제외한다 — 손으로 컬럼명을 나열하지
+    않는다."""
+
+    added: dict[str, set[str]] = {name: set() for name in NEW_TABLE_MODELS}
+    for name in sorted(os.listdir(MIGRATIONS_DIR)):
+        if not name.endswith(".sql") or name <= NEW_MIGRATION:
+            continue
+        content = _read(name)
+        for table, col in _ADD_COLUMN_RE.findall(content):
+            if table in added:
+                added[table].add(col)
+    return added
+
+
 def _extract_rollback_sql(content: str) -> str:
 
     lines = content.splitlines()
@@ -221,9 +248,12 @@ class MigrationApplyTestCase(unittest.TestCase):
             self._apply_prior_migrations(conn)
             conn.executescript(self.new_sql)
 
+            added_later = _columns_added_by_later_migrations()
             for table_name, model_cls in NEW_TABLE_MODELS.items():
                 db_cols = _db_columns(conn, table_name)
                 model_cols = _model_columns(model_cls)
+                for col in added_later[table_name]:
+                    model_cols.pop(col, None)
                 self.assertEqual(
                     db_cols, model_cols,
                     f"{table_name}: DB 컬럼과 Model이 다릅니다.",
