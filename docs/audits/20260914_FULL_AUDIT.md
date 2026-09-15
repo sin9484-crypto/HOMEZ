@@ -990,7 +990,47 @@ test_full_subprocess_helper_cli_end_to_end` — 완전히 별도 OS
 않았다(개발본 60/64, 설치본 41/64 — 둘 다 임시 SQLite 읽기 전용
 재확인으로만 파악).
 
-### 13.8 잔여 위험과 다음 단계
+### 13.8 Phase 8 — 실행 게이트 배선(등록/가격/주문수집/결제/발주/환불)
+
+지시문 Phase 8은 자동화 모드+비상정지 게이트를 모든 "최종 외부
+쓰기 지점" 앞에 배선하라고 요구했다. 6개 영역을 전수 점검했다:
+
+| 영역 | 판정 | 근거 |
+|---|---|---|
+| 발주(purchase_task) | ✅ 기존에 이미 완비 | `submit_order()` 최상단에서 `is_emergency_stop_active()` + `get_function_mode(company_id, FunctionCode.PURCHASE_ORDER)` 확인(기준 패턴) |
+| 환불(refund) | ❌→✅ 이번에 수정 | `mark_executed()`에 게이트가 전혀 없었다 — 4cb3d3b로 추가 |
+| 상품 등록(marketplace_listing) | ✅ 존재(다른 체계) | `preflight()`에 `is_emergency_stop_active()` + `get_current_mode()`(구 전역 `AutomationMode`) 게이트 존재 — 새 `FunctionMode` 체계와 다른 어휘지만 결함이 아니라 이전 세션의 명시적 설계 결정(아래 참고), 통합은 범위 밖 |
+| 결제(payment) | N/A | 실제 `gateway.charge()` 호출부 자체가 코드에 없음(판정 함수만 존재, 실행은 이 세션 범위 밖) — 이미 확인된 사실 재확인 |
+| 가격변경(pricing) | N/A | 외부 채널 API 호출부 자체가 없음 — 내부 DB 갱신뿐 |
+| 주문수집(order collection) | N/A | 읽기 전용(폴링/조회)만 존재, 외부 쓰기 없음 |
+
+**환불 수정 내용**: `mark_executed()`가 `is_admin` 확인 직후,
+`RefundStatus.APPROVED` 확인보다도 먼저 비상정지와
+`FunctionCode.REFUND`의 PAUSED/ERROR 상태를 검사하도록 했다(발주
+실행과 동일한 "최종 실행 직전" 위치). 이미 승인된 환불이라도
+승인 이후 상황이 바뀌었을 수 있다는 것을 승인 게이트 하나만으로는
+반영할 수 없기 때문이다 — 승인(사람 필수, 기존 그대로 유지)과
+실행 게이트(자동화 상태 반영, 신규)는 목적이 다른 별개의 방어선.
+
+**상품 등록 게이트를 건드리지 않은 이유**: `FunctionMode` 클래스
+자체의 docstring이 이미 "기존 `AutomationMode`... 이번에 그 값이나
+호출부를 바꾸지 않는다 — 기존 회귀(`tests/test_automation_safety.py`,
+49개 검증 지점)를 불필요하게 건드리지 않기 위함"이라고 명시적으로
+기록해 두었다. `AutomationMode.OPERATOR_APPROVAL` 전역 게이트는
+`app/web/router.py`와 15개 이상의 테스트 파일(`test_gate6_
+candidate_pipeline.py`, `test_listing_wizard_*.py`,
+`test_marketplace_*.py`, `test_coupang_live_submission.py` 등)에
+깊이 결합돼 있다 — 이를 `FunctionCode.PRODUCT_LISTING`(회사별)
+체계로 통합하는 것은 게이트 "배선"이 아니라 아키텍처 통합 프로젝트
+규모이며, 이전 세션이 이미 한 번 명시적으로 보류를 결정한 사항을
+이번 감사가 임의로 뒤집을 근거가 없다 — 결함이 아니라 알려진
+설계상 이원화로 기록하고 다음 라운드 재검토 후보로만 남긴다.
+
+**테스트 결과**: 환불 신규 3건(비상정지 차단, PAUSED 차단,
+AUTOMATIC 정상 통과) 포함 `tests/test_refund_domain.py` 29/29,
+`tests/test_refund_router_guard.py` 3/3 통과.
+
+### 13.9 잔여 위험과 다음 단계
 
 - IA-004(Critical, idempotency key 중복발주)의 원래 경로는
   `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른
@@ -1008,6 +1048,9 @@ test_full_subprocess_helper_cli_end_to_end` — 완전히 별도 OS
   근거 중 하나로 유지한다.
 - 개발본/설치본 DB 선택은 여전히 사용자 결정 대기(11.6-1, Phase 7
   준비 문서: `docs/audits/20260915_DEV_VS_INSTALLED_DB_DECISION_PREP.md`).
-- Phase 8(실행 게이트 배선), Phase 9(안전 기능 7-8/7-11/7-16/8-5/
-  8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이 라운드에서 착수하지
-  않았다 — 아래 최종 보고에서 범위 한계를 명시한다.
+- 발주/환불 실행 게이트는 Phase 8에서 완비됐다. 상품 등록은 여전히
+  구 `AutomationMode`(전역) 체계를 쓴다 — 결함은 아니지만 새
+  `FunctionMode`(회사별) 체계로 통합할지는 다음 라운드 판단 필요.
+- Phase 9(안전 기능 7-8/7-11/7-16/8-5/8-6/8-16/8-19/10-4/10-5/
+  10-17/10-18)는 이 라운드에서 착수하지 않았다 — 아래 최종 보고에서
+  범위 한계를 명시한다.
