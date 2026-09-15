@@ -18,10 +18,12 @@ from datetime import datetime
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Float
+from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
+from sqlalchemy import text
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -731,6 +733,29 @@ class PurchaseOrderSubmissionAttempt(Base):
         UniqueConstraint(
             "company_id", "idempotency_key",
             name="uq_purchase_order_submission_attempts_company_idempotency",
+        ),
+        # 2026-09-15 전면 감사 후속(Phase 3) — 위 idempotency_key
+        # UNIQUE만으로는 "같은 purchase_task_id에 대해 동시에 서로
+        # 다른 idempotency_key(예: 옵션이 다른 요청)로 들어온 두 요청"
+        # 까지는 막지 못한다. _has_blocking_task_attempt()는 INSERT
+        # 이전 SELECT라 애플리케이션 프로세스가 둘 이상이면(또는 같은
+        # 프로세스 안에서도 네트워크 호출 대기 중 경쟁 요청이 끼어들면)
+        # 둘 다 "아직 없음"을 관측하고 통과할 수 있다 — 이 부분
+        # UNIQUE INDEX가 최종 방어선이다: 같은 (company_id,
+        # purchase_task_id)에 대해 "차단 대상" 상태(PENDING/IN_FLIGHT/
+        # SUCCEEDED, 또는 RESULT_UNKNOWN이면서 ORDER_NOT_CONFIRMED로
+        # 아직 확정되지 않음)인 행은 동시에 하나만 존재할 수 있다.
+        Index(
+            "uq_purchase_order_submission_attempts_active_task",
+            "company_id", "purchase_task_id",
+            unique=True,
+            sqlite_where=text(
+                "purchase_task_id IS NOT NULL AND ("
+                "status IN ('PENDING', 'IN_FLIGHT', 'SUCCEEDED') OR "
+                "(status = 'RESULT_UNKNOWN' AND "
+                "unknown_resolution_status != 'ORDER_NOT_CONFIRMED')"
+                ")",
+            ),
         ),
     )
 

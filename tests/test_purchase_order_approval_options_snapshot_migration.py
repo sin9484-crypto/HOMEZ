@@ -98,8 +98,14 @@ class FullChainReplayTestCase(unittest.TestCase):
             self.assertIn(NEW_MIGRATION, all_files)
             prior_only_dir = tempfile.mkdtemp()
             self.addCleanup(shutil.rmtree, prior_only_dir, True)
+            # 2026-09-15 Phase 3 후속 — NEW_MIGRATION 하나만 제외하면
+            # 이 파일보다 사전순으로 뒤에 추가된 다른 Migration(예:
+            # 20260915_01)까지 "이전 상태"에 섞여 들어가
+            # OrderInversionError가 난다(다른 5개 파일에서 반복된
+            # 것과 동일한 클래스의 결함). NEW_MIGRATION과 같거나
+            # 사전순으로 뒤인 파일은 전부 제외한다.
             for name in all_files:
-                if name == NEW_MIGRATION:
+                if name >= NEW_MIGRATION:
                     continue
                 shutil.copyfile(
                     os.path.join(MIGRATIONS_DIR, name),

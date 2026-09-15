@@ -658,10 +658,18 @@ class PurchaseOrderSubmissionService:
         self, *, connection_id, company_id, purchase_task_id, idempotency_key,
         mall_code, product_code, options, triggered_by,
     ) -> PurchaseOrderSubmissionAttempt:
-        """(company_id, idempotency_key) UNIQUE 제약이 곧 잠금이다 —
-        이미 존재하면 DB가 IntegrityError로 거부한다(사전 SELECT가
-        아니라 INSERT 자체의 실패로 판단해, 동시 요청 두 개가 동시에
-        "아직 없음"을 보고 둘 다 진행하는 경쟁 상태까지 막는다)."""
+        """DB UNIQUE 제약 두 개가 곧 잠금이다 — 사전 SELECT
+        (_has_blocking_task_attempt/compute_idempotency_key)가 아니라
+        INSERT 자체의 실패로 판단해, 동시 요청 두 개가 동시에 "아직
+        없음"을 보고 둘 다 진행하는 경쟁 상태까지 막는다:
+        - (company_id, idempotency_key): 완전히 같은 조합(상품·옵션·
+          시도 횟수까지 동일)의 재요청 차단.
+        - (company_id, purchase_task_id)의 부분 UNIQUE INDEX
+          (2026-09-15 Phase 3, uq_purchase_order_submission_attempts_
+          active_task): 같은 업무 주문에 대해 idempotency_key가 다른
+          (예: 옵션이 다른) 두 요청이 동시에 들어와도, 둘 중 하나가
+          PENDING/IN_FLIGHT/SUCCEEDED이거나 미확정 RESULT_UNKNOWN인
+          동안은 두 번째 INSERT 자체를 DB가 거부한다."""
 
         attempt = PurchaseOrderSubmissionAttempt(
             company_id=company_id, connection_id=connection_id,
@@ -676,6 +684,15 @@ class PurchaseOrderSubmissionService:
             self.db.commit()
         except IntegrityError as exc:
             self.db.rollback()
+            message = str(getattr(exc, "orig", exc))
+            if "purchase_task_id" in message:
+                raise ConflictException(
+                    "이 매입 작업에는 진행 중이거나 이미 성공/생성 확인된 "
+                    "발주가 있습니다 — 같은 업무 주문을 다시 전송하지 "
+                    "않습니다(동시 요청 경쟁 상태를 DB 제약이 차단했습니다). "
+                    "결과불명 시도는 온채널 관리자 화면에서 주문이 생성되지 "
+                    "않았음을 명시적으로 확정한 경우에만 새 시도가 가능합니다.",
+                ) from exc
             raise ConflictException(
                 f"이미 이 idempotency_key(\"{idempotency_key}\")로 발주 시도가 "
                 "있습니다 — 같은 시도를 다시 보내지 않습니다. 결과를 먼저 "

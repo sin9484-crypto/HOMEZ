@@ -580,6 +580,43 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
             )
         self.assertEqual(call_log, [])
 
+    def test_concurrent_attempt_with_different_key_same_task_blocked_at_db_level(self):
+        """2026-09-15 전면 감사 후속(Phase 3) — _has_blocking_task_
+        attempt()는 INSERT 이전 SELECT라, 두 "동시" 요청이 옵션이
+        달라 서로 다른 idempotency_key를 계산했다면(예: 다른 옵션)
+        이 사전 검사만으로는 둘 다 통과할 수 있다. 이 테스트는 그
+        사전 검사를 거치지 않고 _create_locked_attempt를 직접 두 번
+        호출해 "이미 둘 다 사전 검사를 통과한 뒤" 상태를 재현한다 —
+        그래도 부분 UNIQUE INDEX(uq_purchase_order_submission_
+        attempts_active_task)가 두 번째 INSERT 자체를 거부해야
+        한다."""
+
+        self.service._create_locked_attempt(
+            connection_id=1, company_id=self.company_a.id,
+            purchase_task_id=555, idempotency_key="k-race-a",
+            mall_code="ONCHANNEL", product_code="CH1",
+            options=[{"id": 1, "qty": 1}], triggered_by=None,
+        )
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service._create_locked_attempt(
+                connection_id=1, company_id=self.company_a.id,
+                purchase_task_id=555, idempotency_key="k-race-b",
+                mall_code="ONCHANNEL", product_code="CH1",
+                options=[{"id": 2, "qty": 3}], triggered_by=None,
+            )
+        self.assertIn("업무 주문", str(ctx.exception))
+
+        # 다른 회사(company_b)는 같은 purchase_task_id 숫자를 써도
+        # 전혀 차단되지 않아야 한다 — 이 인덱스가 회사 격리를
+        # 위반하지 않는다는 것을 함께 확인한다.
+        self.service._create_locked_attempt(
+            connection_id=1, company_id=self.company_b.id,
+            purchase_task_id=555, idempotency_key="k-race-c",
+            mall_code="ONCHANNEL", product_code="CH1",
+            options=[{"id": 1, "qty": 1}], triggered_by=None,
+        )
+
     def test_result_unknown_attempt_survives_process_restart_and_still_blocks_retry(self):
         """프로세스 재시작 복구 — 결과 불명 상태로 끝난 시도가 새
         프로세스(새 DB 세션·새 서비스 인스턴스)에서도 그대로 보이고,
