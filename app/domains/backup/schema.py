@@ -37,6 +37,7 @@ class BackupRecordResponse(BaseModel):
     trigger_source: str
     triggered_by_user_id: int | None
     label: str | None
+    is_encrypted: bool
     created_at: datetime
 
 

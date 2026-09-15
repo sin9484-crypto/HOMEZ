@@ -51,7 +51,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
+
+if TYPE_CHECKING:
+    from app.core.windows_credential_store import CredentialStore
 
 RESTORE_HELPER_CLI_FLAG = "--homez-restore-helper"
 PLAN_ARG = "--plan"
@@ -301,6 +305,8 @@ def _write_result(path: Path, outcome: dict) -> None:
 def run_restore_in_helper_process(
     plan: RestorePlan,
     result_path: Path | None = None,
+    *,
+    credential_store: CredentialStore | None = None,
 ) -> dict:
     """
     Helper 프로세스 안에서 실제 복원을 수행한다. 이 함수는 부모
@@ -315,15 +321,25 @@ def run_restore_in_helper_process(
     `RestoreService.restore()` 자체에 적용한 수정(os.replace() 직전
     명시적 dispose, app/domains/restore/service.py)만으로 충분히
     처리된다.
+
+    2026-09-15 전면 감사 후속(Phase 5) — `credential_store`는
+    테스트가 `InMemoryCredentialStore`를 주입할 수 있도록 선택
+    인자로 뒀다(None이면 실제 Helper 프로세스답게
+    `WindowsCredentialStore()`를 만든다). 이 값을 생성자 인자로
+    노출하지 않으면 테스트가 이 함수를 부를 때마다 실제 Windows
+    Credential Manager를 건드리게 된다.
     """
 
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from app.database.base import Base
-    from app.domains.backup.service import sha256_of_file
     from app.domains.restore.service import RestoreError
     from app.domains.restore.service import RestoreService
+
+    if credential_store is None:
+        from app.core.windows_credential_store import WindowsCredentialStore
+        credential_store = WindowsCredentialStore()
 
     result_path = result_path or default_result_path()
 
@@ -344,15 +360,18 @@ def run_restore_in_helper_process(
         _write_result(result_path, outcome)
         return outcome
 
-    actual_sha256 = sha256_of_file(source_backup_path)
-    if actual_sha256 != plan.expected_sha256:
-        outcome["status"] = "failed"
-        outcome["reason"] = (
-            "SHA-256 재검증 실패 — 계획 저장 이후 백업 파일이 "
-            "변경되었을 수 있습니다."
-        )
-        _write_result(result_path, outcome)
-        return outcome
+    # 2026-09-15 전면 감사 후속(Phase 5) — 예전에는 여기서 원본
+    # 바이트를 직접 sha256_of_file()로 해시해 plan.expected_sha256과
+    # 비교했다. 이제 백업이 암호화되어 있으면(app/domains/backup/
+    # service.py가 이제 항상 그렇게 만든다) 원본 바이트는 암호문이라
+    # 이 비교가 항상 실패한다(expected_sha256은 항상 평문 기준 —
+    # BackupRecord.sha256 docstring 참고). 이 "계획 저장 이후 파일이
+    # 바뀌었는가" 재검증은 아래 RestoreService.restore()가 내부적으로
+    # 호출하는 validate_backup_file()이 암호화를 인식해 이미 똑같이
+    # (그리고 올바르게) 수행하므로, 여기서 중복 검사를 별도로 유지하지
+    # 않는다 — 파일이 바뀌었다면 restore()가 RestoreError로 실패하고
+    # 아래 except 블록이 잡는다(결과는 동일, 실행 경로만 한 단계
+    # 늦춰진다).
 
     pre_restore_backups_dir = Path(plan.pre_restore_backups_dir)
 
@@ -362,7 +381,7 @@ def run_restore_in_helper_process(
     db = session_factory()
 
     try:
-        service = RestoreService(db)
+        service = RestoreService(db, credential_store)
         attempt = service.restore(
             source_backup_path=source_backup_path,
             target_db_path=target_db_path,

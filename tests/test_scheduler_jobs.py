@@ -22,6 +22,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.database.bootstrap import bootstrap_environment
 from app.domains.company.model import Company
@@ -83,6 +84,7 @@ class BackupRehearsalJobTestCase(unittest.TestCase):
 
         self.engine = create_engine(f"sqlite:///{self.db_path}")
         self.SessionLocal = sessionmaker(bind=self.engine)
+        self.credential_store = InMemoryCredentialStore()
 
         db = self.SessionLocal()
         self.active_company_1 = Company(
@@ -138,6 +140,7 @@ class BackupRehearsalJobTestCase(unittest.TestCase):
                 backups_dir=self.backups_dir,
                 rehearsal_dir=self.rehearsal_dir,
                 session_factory=self.SessionLocal,
+                credential_store=self.credential_store,
             )
 
         called_company_ids = {
@@ -158,6 +161,7 @@ class BackupRehearsalJobTestCase(unittest.TestCase):
             backups_dir=self.backups_dir,
             rehearsal_dir=self.rehearsal_dir,
             session_factory=self.SessionLocal,
+            credential_store=self.credential_store,
         )
 
         backup_files = list(self.backups_dir.glob("homez_backup_*.db"))
@@ -185,6 +189,7 @@ class BackupRehearsalJobTestCase(unittest.TestCase):
                 backups_dir=self.backups_dir,
                 rehearsal_dir=self.rehearsal_dir,
                 session_factory=self.SessionLocal,
+                credential_store=self.credential_store,
             )
 
         # company_2는 정상 처리돼 백업이 1개는 생겼어야 한다.
@@ -207,6 +212,7 @@ class BackupRehearsalJobTestCase(unittest.TestCase):
             backups_dir=self.backups_dir,
             rehearsal_dir=self.rehearsal_dir,
             session_factory=self.SessionLocal,
+            credential_store=self.credential_store,
         )
 
         backup_files = list(self.backups_dir.glob("homez_backup_*.db"))

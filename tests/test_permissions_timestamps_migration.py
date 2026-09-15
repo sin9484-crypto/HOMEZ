@@ -323,6 +323,10 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 컬럼 1개 추가. 동일한 이유로 추가. 실제 운영 DB에는
             # 아직 미적용이다.
             "20260915_02_add_refund_execution_attempt_marker.sql",
+            # 2026-09-15 전면 감사 후속(Phase 5, 백업 암호화 실제
+            # 연결) — backup_records에 is_encrypted 컬럼 1개 추가.
+            # 동일한 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260915_03_add_backup_records_is_encrypted.sql",
         ]
 
         all_files = sorted(

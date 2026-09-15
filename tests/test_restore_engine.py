@@ -33,7 +33,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.guard import admin_guard
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
+from app.domains.backup.encryption import decrypt_file
+from app.domains.backup.encryption import get_or_create_backup_encryption_key
 from app.domains.backup.model import BackupRecord
 from app.domains.backup.service import TRIGGER_SOURCE_MANUAL
 from app.domains.backup.service import BackupService
@@ -105,6 +108,7 @@ class RestoreEngineTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
+        self.credential_store = InMemoryCredentialStore()
 
         # 실제(유효한 HOMEZ 스키마) 백업 하나를 만들어 복원 대상으로
         # 쓴다 — REQUIRED_CORE_TABLES 재활성화 이후에도 이 파일의
@@ -112,7 +116,7 @@ class RestoreEngineTestCase(unittest.TestCase):
         self.source_db_path = self.tmp_dir / "source.db"
         _make_valid_homez_backup_source(self.source_db_path, "v1")
 
-        backup_service = BackupService(self.db)
+        backup_service = BackupService(self.db, self.credential_store)
         self.backup_record = backup_service.create_backup(
             source_db_path=self.source_db_path,
             backups_dir=self.backups_dir,
@@ -131,7 +135,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_validate_backup_file_ok(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
 
         result = service.validate_backup_file(
             Path(self.backup_record.file_path),
@@ -146,7 +150,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_validate_backup_file_missing(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
 
         result = service.validate_backup_file(
             self.tmp_dir / "does_not_exist.db",
@@ -157,7 +161,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_validate_backup_file_sha256_mismatch_blocked(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
 
         result = service.validate_backup_file(
             Path(self.backup_record.file_path),
@@ -174,7 +178,7 @@ class RestoreEngineTestCase(unittest.TestCase):
         생기지 않는지 확인한다.
         """
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
         service.validate_backup_file(Path(self.backup_record.file_path))
 
         self.assertEqual(len(service.list_attempts()), 0)
@@ -185,7 +189,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_restore_into_nonexistent_target_succeeds(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
         target = self.tmp_dir / "restored_fresh.db"
 
         attempt = service.restore(
@@ -211,7 +215,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_restore_over_existing_target_without_safety_dir_blocked(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
         target = self.tmp_dir / "existing_target.db"
         shutil.copyfile(self.source_db_path, target)
 
@@ -229,7 +233,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_restore_over_existing_target_creates_safety_backup_first(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
         target = self.tmp_dir / "existing_target2.db"
 
         # 기존 target에는 다른 값을 넣어 "안전백업이 실제로 이전
@@ -259,7 +263,15 @@ class RestoreEngineTestCase(unittest.TestCase):
         self.assertTrue(Path(attempt.pre_restore_backup_path).exists())
 
         # 안전 백업에는 old-value가 남아 있어야 한다(교체 전 스냅샷).
-        safety_conn = sqlite3.connect(attempt.pre_restore_backup_path)
+        # 2026-09-15 전면 감사 후속(Phase 5) — 이 안전 백업도
+        # BackupService.create_backup()이 만들므로 이제 암호화되어
+        # 있다 — 같은 키로 복호화한 사본을 열어 확인한다.
+        key = get_or_create_backup_encryption_key(self.credential_store)
+        decrypted_safety_path = self.tmp_dir / "decrypted_safety_for_test.db"
+        decrypt_file(
+            Path(attempt.pre_restore_backup_path), decrypted_safety_path, key,
+        )
+        safety_conn = sqlite3.connect(str(decrypted_safety_path))
         old_row = safety_conn.execute(
             "SELECT value FROM probe WHERE id = 1",
         ).fetchone()
@@ -278,7 +290,7 @@ class RestoreEngineTestCase(unittest.TestCase):
         self,
     ):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
         target = self.tmp_dir / "protected_target.db"
         shutil.copyfile(self.source_db_path, target)
 
@@ -297,7 +309,7 @@ class RestoreEngineTestCase(unittest.TestCase):
 
     def test_list_attempts_returns_most_recent_first(self):
 
-        service = RestoreService(self.db)
+        service = RestoreService(self.db, self.credential_store)
 
         first = service.restore(
             source_backup_path=Path(self.backup_record.file_path),
@@ -332,7 +344,8 @@ class RestoreValidateRequiredTablesTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
-        self.service = RestoreService(self.db)
+        self.credential_store = InMemoryCredentialStore()
+        self.service = RestoreService(self.db, self.credential_store)
 
     def tearDown(self):
 

@@ -43,6 +43,8 @@ from app.core.dependency import get_db
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import NotFoundException
 from app.core.guard import admin_guard
+from app.core.windows_credential_store import CredentialStore
+from app.core.windows_credential_store import WindowsCredentialStore
 from app.domains.backup.repository import BackupRepository
 from app.domains.restore.schema import BackupValidationRequest
 from app.domains.restore.schema import BackupValidationResponse
@@ -60,6 +62,11 @@ router = APIRouter(
 )
 
 
+def get_credential_store() -> CredentialStore:
+
+    return WindowsCredentialStore()
+
+
 @router.post(
     "/validate",
     response_model=BackupValidationResponse,
@@ -68,6 +75,7 @@ def validate_backup(
     data: BackupValidationRequest,
     _: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_credential_store),
 ):
     """지정한 백업 이력 행이 실제로 복원 가능한 상태인지 읽기 전용으로 검증한다."""
 
@@ -77,7 +85,7 @@ def validate_backup(
     if record is None:
         raise NotFoundException("해당 백업 이력을 찾을 수 없습니다.")
 
-    service = RestoreService(db)
+    service = RestoreService(db, credential_store)
     result = service.validate_backup_file(
         backup_path=record.file_path,
         expected_sha256=record.sha256,
@@ -99,6 +107,7 @@ def execute_restore(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_credential_store),
 ):
     """
     실 운영 DB(homez.db)에 대한 복원을 실제로 실행한다.
@@ -118,7 +127,7 @@ def execute_restore(
     if record is None:
         raise NotFoundException("해당 백업 이력을 찾을 수 없습니다.")
 
-    service = RestoreService(db)
+    service = RestoreService(db, credential_store)
     validation = service.validate_backup_file(
         backup_path=record.file_path,
         expected_sha256=record.sha256,
@@ -179,10 +188,11 @@ def execute_restore(
 def list_restore_attempts(
     _: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_credential_store),
 ):
     """복원 시도 이력(성공/실패 모두)을 조회한다."""
 
-    service = RestoreService(db)
+    service = RestoreService(db, credential_store)
 
     return service.list_attempts()
 

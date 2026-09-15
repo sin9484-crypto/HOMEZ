@@ -29,6 +29,9 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.core.windows_credential_store import CredentialStore
+from app.domains.backup.encryption import encrypt_file
+from app.domains.backup.encryption import get_or_create_backup_encryption_key
 from app.domains.backup.model import BackupRecord
 from app.domains.backup.repository import BackupRepository
 
@@ -72,8 +75,17 @@ class BackupService:
     def __init__(
         self,
         db: Session,
+        credential_store: CredentialStore,
     ):
+        """2026-09-15 전면 감사 후속(Phase 5) — credential_store가
+        필수 인자가 됐다. 실제 백업 파일은 반드시 암호화한다는
+        요구사항(HOMEZ_USER_OPERATION_SETTINGS.md 11번)을 "깜빡하고
+        인자를 안 넘기면 조용히 평문으로 저장되는" 방식으로 두지
+        않기 위해서다 — 테스트에서도 InMemoryCredentialStore를
+        명시적으로 넘겨야 한다."""
+
         self.repository = BackupRepository(db)
+        self.credential_store = credential_store
 
     def create_backup(
         self,
@@ -139,8 +151,19 @@ class BackupService:
                 f"기록되지 않았습니다.",
             )
 
-        file_size_bytes = backup_path.stat().st_size
+        # 2026-09-15 전면 감사 후속(Phase 5) — sha256은 항상 "평문
+        # 내용"의 해시로 남긴다(BackupRecord.sha256 docstring 참고).
+        # 암호화는 integrity_check·sha256 계산이 끝난 뒤 마지막
+        # 단계에서만 수행한다 — SQLite는 암호화된 파일을 열어
+        # integrity_check할 수 없으므로 순서를 반드시 이렇게 지킨다.
         sha256 = sha256_of_file(backup_path)
+
+        encryption_key = get_or_create_backup_encryption_key(
+            self.credential_store,
+        )
+        encrypt_file(backup_path, backup_path, encryption_key)
+
+        file_size_bytes = backup_path.stat().st_size
 
         record = BackupRecord(
             file_path=str(backup_path),
@@ -150,6 +173,7 @@ class BackupService:
             trigger_source=trigger_source,
             triggered_by_user_id=triggered_by_user_id,
             label=label,
+            is_encrypted=True,
         )
 
         return self.repository.create(record)

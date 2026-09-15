@@ -31,6 +31,8 @@ from app.core.db_path_contract import assert_bootstrap_path_matches_engine
 from app.core.dependency import get_db
 from app.core.exceptions import InternalServerException
 from app.core.guard import admin_guard
+from app.core.windows_credential_store import CredentialStore
+from app.core.windows_credential_store import WindowsCredentialStore
 from app.desktop.paths import get_backups_dir
 from app.domains.backup.schema import BackupCreateRequest
 from app.domains.backup.schema import BackupRecordResponse
@@ -47,6 +49,11 @@ router = APIRouter(
 )
 
 
+def get_credential_store() -> CredentialStore:
+
+    return WindowsCredentialStore()
+
+
 @router.post(
     "",
     response_model=BackupRecordResponse,
@@ -56,10 +63,11 @@ def create_backup(
     data: BackupCreateRequest,
     current_user: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_credential_store),
 ):
     """실제 운영 DB의 온라인 백업을 지금 생성한다."""
 
-    service = BackupService(db)
+    service = BackupService(db, credential_store)
 
     try:
         return service.create_backup(
@@ -80,10 +88,11 @@ def create_backup(
 def list_backups(
     _: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_credential_store),
 ):
     """최근 백업 이력을 조회한다."""
 
-    service = BackupService(db)
+    service = BackupService(db, credential_store)
 
     return service.list_backups()
 
@@ -96,6 +105,7 @@ def check_retention(
     keep_count: int = DEFAULT_RETENTION_KEEP_COUNT,
     _: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_credential_store),
 ):
     """
     2026-08-15 V7 Gate 8 — 보존 기준(keep_count, 최신순)을 넘는 백업
@@ -104,7 +114,7 @@ def check_retention(
     한다(자동 삭제는 이 세션 Safety 경계 밖).
     """
 
-    service = BackupService(db)
+    service = BackupService(db, credential_store)
     beyond = service.list_backups_beyond_retention(keep_count)
     total = len(service.list_backups(limit=10_000))
 

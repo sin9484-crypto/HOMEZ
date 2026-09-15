@@ -62,6 +62,7 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from app.core.scheduler_service import SchedulerService
+from app.core.windows_credential_store import CredentialStore
 from app.domains.company.model import Company
 from app.domains.restore.service import RestoreService
 
@@ -76,6 +77,7 @@ def run_backup_rehearsal_job(
     backups_dir: Path,
     rehearsal_dir: Path,
     session_factory: Callable[[], Session] | None = None,
+    credential_store: CredentialStore | None = None,
 ) -> None:
     """
     활성 회사마다(개인 베타 현재는 1개) 백업 복구 리허설을 1회씩
@@ -102,6 +104,10 @@ def run_backup_rehearsal_job(
         from app.database.session import SessionLocal
         session_factory = SessionLocal
 
+    if credential_store is None:
+        from app.core.windows_credential_store import WindowsCredentialStore
+        credential_store = WindowsCredentialStore()
+
     db = session_factory()
     try:
         # company.id만 미리 리스트로 뽑아둔다(ORM 인스턴스 자체를
@@ -117,7 +123,7 @@ def run_backup_rehearsal_job(
             c.id
             for c in db.query(Company).filter(Company.active.is_(True))
         ]
-        service = RestoreService(db)
+        service = RestoreService(db, credential_store)
 
         for company_id in company_ids:
             try:

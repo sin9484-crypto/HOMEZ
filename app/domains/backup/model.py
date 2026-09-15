@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import BigInteger
+from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -49,6 +50,11 @@ class BackupRecord(Base):
         nullable=False,
     )
 
+    # 2026-09-15 전면 감사 후속(Phase 5) — 파일이 암호화되어 있어도
+    # 이 값은 항상 "평문 DB 내용"의 SHA-256이다(암호화 직전에
+    # 계산·기록). 복원 시 파일이 암호화라면 먼저 복호화한 뒤 그
+    # 평문의 SHA-256을 이 값과 비교한다 — 암호문 바이트의 해시가
+    # 아니다.
     sha256: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
@@ -80,6 +86,18 @@ class BackupRecord(Base):
     label: Mapped[str | None] = mapped_column(
         String(200),
         nullable=True,
+    )
+
+    # 2026-09-15 전면 감사 후속(Phase 5, HOMEZ_USER_OPERATION_SETTINGS.md
+    # 11번 — "실제 DB 백업 파일은 암호화하고 GitHub에 올리지 않는다")
+    # — app/domains/backup/encryption.py가 실제로 create_backup()에
+    # 연결된 뒤부터 생성되는 백업은 True다. 이 컬럼 추가 이전에
+    # 생성된 과거 백업 행은 실제로 평문이었으므로 기본값 False가
+    # 사실과 일치한다(추측으로 True로 채우지 않는다).
+    is_encrypted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(

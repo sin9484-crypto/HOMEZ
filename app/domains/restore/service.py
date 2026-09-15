@@ -40,6 +40,11 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.core.windows_credential_store import CredentialStore
+from app.domains.backup.encryption import BackupEncryptionError
+from app.domains.backup.encryption import decrypt_file
+from app.domains.backup.encryption import get_or_create_backup_encryption_key
+from app.domains.backup.encryption import is_encrypted_backup
 from app.domains.backup.model import BackupRecord
 from app.domains.backup.service import TRIGGER_SOURCE_PRE_RESTORE
 from app.domains.backup.service import TRIGGER_SOURCE_SCHEDULED_REHEARSAL
@@ -119,9 +124,36 @@ class RestoreService:
     def __init__(
         self,
         db: Session,
+        credential_store: CredentialStore,
     ):
+        """2026-09-15 전면 감사 후속(Phase 5) — credential_store가
+        필수 인자가 됐다. 암호화된 백업(app/domains/backup/service.py
+        가 이제 항상 그렇게 만든다)을 복호화하려면 같은 키가
+        필요하다."""
+
         self.db = db
         self.repository = RestoreRepository(db)
+        self.credential_store = credential_store
+
+    def _decrypt_to_temp_if_needed(self, backup_path: Path) -> tuple[Path, bool]:
+        """backup_path가 암호화된 백업이면 임시 평문 사본을 만들어
+        그 경로를 반환한다(두 번째 값 True). 아니면 원본 경로를
+        그대로 반환한다(두 번째 값 False — 정리할 임시 파일이 없다는
+        뜻). 호출부는 반환된 bool이 True일 때만 임시 파일을 정리해야
+        한다."""
+
+        if not is_encrypted_backup(backup_path):
+            return backup_path, False
+
+        key = get_or_create_backup_encryption_key(self.credential_store)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(backup_path.parent), prefix=".restore_decrypt_",
+            suffix=".db",
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        decrypt_file(backup_path, tmp_path, key)
+        return tmp_path, True
 
     def validate_backup_file(
         self,
@@ -139,6 +171,46 @@ class RestoreService:
                 "restorable": False,
                 "reason": "백업 파일이 존재하지 않습니다.",
             }
+
+        # 2026-09-15 전면 감사 후속(Phase 5) — 암호화된 백업이면 검증
+        # 대상을 임시 평문 사본으로 바꾼다. SQLite는 암호화된 파일을
+        # 열 수 없고, sha256 비교도 항상 평문 기준(BackupRecord.sha256
+        # docstring)이어야 하기 때문이다. 잘못된 키·변조된 파일이면
+        # decrypt_file()이 BackupEncryptionError를 던진다 — 이것도
+        # "정상적으로 검증 실패한 백업"으로 구조화해 반환한다(원본
+        # 백업 파일에는 어떤 쓰기도 하지 않으므로 영향 없음).
+        try:
+            plaintext_path, is_temp = self._decrypt_to_temp_if_needed(
+                backup_path,
+            )
+        except BackupEncryptionError as exc:
+            return {
+                "file_exists": True,
+                "sha256_matches": False,
+                "integrity_check_result": None,
+                "restorable": False,
+                "reason": (
+                    "암호화된 백업을 복호화할 수 없습니다(변조되었거나 "
+                    f"키가 일치하지 않습니다): {exc}"
+                ),
+            }
+
+        try:
+            return self._validate_plaintext_backup_file(
+                plaintext_path, expected_sha256,
+            )
+        finally:
+            if is_temp and plaintext_path.exists():
+                plaintext_path.unlink()
+
+    def _validate_plaintext_backup_file(
+        self,
+        backup_path: Path,
+        expected_sha256: str | None,
+    ) -> dict:
+        """복호화(필요한 경우)가 끝난 평문 파일을 대상으로 기존
+        검증 로직을 그대로 수행한다 — 2026-09-15 이전의
+        validate_backup_file() 본문과 동일하다."""
 
         actual_sha256 = sha256_of_file(backup_path)
         sha256_matches = (
@@ -327,7 +399,7 @@ class RestoreService:
                         "— 안전 백업 없이 기존 DB를 덮어쓸 수 없습니다.",
                     )
 
-                backup_service = BackupService(self.db)
+                backup_service = BackupService(self.db, self.credential_store)
                 safety_record = backup_service.create_backup(
                     source_db_path=target_db_path,
                     backups_dir=pre_restore_backups_dir,
@@ -376,13 +448,27 @@ class RestoreService:
             tmp_path = Path(tmp_name)
 
             try:
-                with open(source_backup_path, "rb") as src_f:
-                    with open(tmp_path, "wb") as dst_f:
-                        while True:
-                            chunk = src_f.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            dst_f.write(chunk)
+                # 2026-09-15 전면 감사 후속(Phase 5) — 백업이
+                # 암호화되어 있으면(app/domains/backup/service.py가
+                # 이제 항상 그렇게 만든다) 원문 바이트를 그대로
+                # target_db_path에 복사하면 안 된다(암호문이 그대로
+                # "복원된 DB"가 되어 즉시 깨진다). 위
+                # validate_backup_file()이 이미 같은 키로 복호화까지
+                # 성공했음을 확인했으므로, 여기서도 같은 방식으로
+                # 복호화해 tmp_path에 쓴다.
+                if is_encrypted_backup(source_backup_path):
+                    key = get_or_create_backup_encryption_key(
+                        self.credential_store,
+                    )
+                    decrypt_file(source_backup_path, tmp_path, key)
+                else:
+                    with open(source_backup_path, "rb") as src_f:
+                        with open(tmp_path, "wb") as dst_f:
+                            while True:
+                                chunk = src_f.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                dst_f.write(chunk)
 
                 os.replace(str(tmp_path), str(target_db_path))
             finally:
@@ -488,7 +574,7 @@ class RestoreService:
         rehearsal_dir = Path(rehearsal_dir)
 
         try:
-            backup_service = BackupService(self.db)
+            backup_service = BackupService(self.db, self.credential_store)
             backup_record = backup_service.create_backup(
                 source_db_path=source_db_path,
                 backups_dir=backups_dir,

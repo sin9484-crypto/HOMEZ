@@ -20,8 +20,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.guard import admin_guard
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.domains.backup import router as backup_router_module
+from app.domains.backup.encryption import decrypt_file
+from app.domains.backup.encryption import get_or_create_backup_encryption_key
 from app.domains.backup.model import BackupRecord
 from app.domains.backup.service import (
     TRIGGER_SOURCE_MANUAL,
@@ -62,6 +65,7 @@ class BackupEngineTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
+        self.credential_store = InMemoryCredentialStore()
 
     def tearDown(self):
 
@@ -75,7 +79,7 @@ class BackupEngineTestCase(unittest.TestCase):
 
     def test_create_backup_succeeds_and_records_history(self):
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         record = service.create_backup(
             source_db_path=self.source_db_path,
@@ -95,9 +99,13 @@ class BackupEngineTestCase(unittest.TestCase):
         self.assertGreater(record.file_size_bytes, 0)
         self.assertEqual(len(record.sha256), 64)
 
-    def test_backup_file_contains_real_data_copy(self):
+    def test_backup_file_is_encrypted_and_decrypts_to_real_data_copy(self):
+        """2026-09-15 전면 감사 후속(Phase 5) — 실제 백업 파일은
+        암호화되어 있어야 한다(HOMEZ_USER_OPERATION_SETTINGS.md 11번).
+        디스크에 남은 파일 자체는 평문 SQLite로 열리면 안 되고, 같은
+        키로 복호화해야만 원본 데이터를 볼 수 있어야 한다."""
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         record = service.create_backup(
             source_db_path=self.source_db_path,
@@ -105,7 +113,19 @@ class BackupEngineTestCase(unittest.TestCase):
             trigger_source=TRIGGER_SOURCE_MANUAL,
         )
 
-        verify = sqlite3.connect(record.file_path)
+        self.assertTrue(record.is_encrypted)
+        encrypted_conn = sqlite3.connect(record.file_path)
+        try:
+            with self.assertRaises(sqlite3.DatabaseError):
+                encrypted_conn.execute("SELECT 1").fetchone()
+        finally:
+            encrypted_conn.close()
+
+        key = get_or_create_backup_encryption_key(self.credential_store)
+        decrypted_path = self.tmp_dir / "decrypted_for_test.db"
+        decrypt_file(Path(record.file_path), decrypted_path, key)
+
+        verify = sqlite3.connect(str(decrypted_path))
         row = verify.execute(
             "SELECT value FROM probe WHERE id = 1",
         ).fetchone()
@@ -113,11 +133,16 @@ class BackupEngineTestCase(unittest.TestCase):
 
         self.assertEqual(row[0], "gate-y1")
 
-    def test_backup_sha256_matches_actual_file_bytes(self):
+    def test_backup_sha256_is_plaintext_hash_not_ciphertext_hash(self):
+        """2026-09-15 전면 감사 후속(Phase 5) — BackupRecord.sha256은
+        항상 "평문 내용"의 해시다(docstring 계약). 디스크의 암호화된
+        파일 바이트를 직접 해시한 값과는 다르다는 것과, 복호화한
+        평문을 해시하면 record.sha256과 일치한다는 것을 함께
+        확인한다."""
 
         import hashlib
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         record = service.create_backup(
             source_db_path=self.source_db_path,
@@ -125,15 +150,27 @@ class BackupEngineTestCase(unittest.TestCase):
             trigger_source=TRIGGER_SOURCE_MANUAL,
         )
 
-        actual = hashlib.sha256(
+        ciphertext_hash = hashlib.sha256(
             Path(record.file_path).read_bytes(),
         ).hexdigest()
+        self.assertNotEqual(
+            record.sha256, ciphertext_hash,
+            "암호화된 파일이라면 평문 해시와 암호문 해시가 같으면 "
+            "안 된다(=암호화가 실제로 적용되지 않았다는 뜻).",
+        )
 
-        self.assertEqual(record.sha256, actual)
+        key = get_or_create_backup_encryption_key(self.credential_store)
+        decrypted_path = self.tmp_dir / "decrypted_for_sha_test.db"
+        decrypt_file(Path(record.file_path), decrypted_path, key)
+        plaintext_hash = hashlib.sha256(
+            decrypted_path.read_bytes(),
+        ).hexdigest()
+
+        self.assertEqual(record.sha256, plaintext_hash)
 
     def test_list_backups_returns_most_recent_first(self):
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         first = service.create_backup(
             source_db_path=self.source_db_path,
@@ -160,7 +197,7 @@ class BackupEngineTestCase(unittest.TestCase):
 
     def test_missing_source_db_raises_and_records_nothing(self):
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         with self.assertRaises(BackupError):
             service.create_backup(
@@ -173,7 +210,7 @@ class BackupEngineTestCase(unittest.TestCase):
 
     def test_unknown_trigger_source_rejected(self):
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         with self.assertRaises(BackupError):
             service.create_backup(
@@ -203,7 +240,7 @@ class BackupEngineTestCase(unittest.TestCase):
         self.backups_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.source_db_path, colliding_source)
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         with mock.patch(
             "app.domains.backup.service.datetime",
@@ -229,7 +266,7 @@ class BackupEngineTestCase(unittest.TestCase):
 
         import unittest.mock as mock
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         class _FakeCursor:
             def fetchone(self_inner):

@@ -33,7 +33,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import app.main  # noqa: F401 — 전 도메인 Model을 Base.metadata에 등록
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
+from app.domains.backup.encryption import decrypt_file
+from app.domains.backup.encryption import get_or_create_backup_encryption_key
 from app.domains.backup.model import BackupRecord
 from app.domains.backup.service import BackupService
 from app.domains.company.model import Company  # noqa: F401
@@ -79,6 +82,7 @@ class BackupCoversGate3To7DomainsTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.app_engine)
         self.AppSession = sessionmaker(bind=self.app_engine)
         self.db = self.AppSession()
+        self.credential_store = InMemoryCredentialStore()
 
     def tearDown(self):
 
@@ -87,8 +91,12 @@ class BackupCoversGate3To7DomainsTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_whole_file_backup_includes_all_gate3_to_7_tables_and_data(self):
+        """2026-09-15 전면 감사 후속(Phase 5) — 백업 파일은 이제
+        암호화되어 있으므로, 같은 키로 복호화한 사본을 열어 테이블·
+        데이터가 실제로 포함됐는지 확인한다(암호화 이전에는 파일을
+        직접 열어 확인했다)."""
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         record = service.create_backup(
             source_db_path=self.source_db_path,
@@ -96,7 +104,11 @@ class BackupCoversGate3To7DomainsTestCase(unittest.TestCase):
             trigger_source="manual",
         )
 
-        conn = sqlite3.connect(f"file:{record.file_path}?mode=ro", uri=True)
+        key = get_or_create_backup_encryption_key(self.credential_store)
+        decrypted_path = self.tmp_dir / "decrypted_for_test.db"
+        decrypt_file(Path(record.file_path), decrypted_path, key)
+
+        conn = sqlite3.connect(f"file:{decrypted_path}?mode=ro", uri=True)
         try:
             table_names = {
                 row[0]
@@ -150,6 +162,7 @@ class BackupRetentionTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
+        self.credential_store = InMemoryCredentialStore()
 
     def tearDown(self):
 
@@ -159,7 +172,7 @@ class BackupRetentionTestCase(unittest.TestCase):
 
     def _make_backup(self, label: str) -> BackupRecord:
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
         record = service.create_backup(
             source_db_path=self.source_db_path,
             backups_dir=self.backups_dir,
@@ -174,7 +187,7 @@ class BackupRetentionTestCase(unittest.TestCase):
         for i in range(5):
             self._make_backup(f"backup-{i}")
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         beyond = service.list_backups_beyond_retention(keep_count=2)
 
@@ -188,7 +201,7 @@ class BackupRetentionTestCase(unittest.TestCase):
         for i in range(3):
             self._make_backup(f"backup-{i}")
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
 
         beyond = service.list_backups_beyond_retention(keep_count=10)
 
@@ -198,7 +211,7 @@ class BackupRetentionTestCase(unittest.TestCase):
 
         records = [self._make_backup(f"backup-{i}") for i in range(4)]
 
-        service = BackupService(self.db)
+        service = BackupService(self.db, self.credential_store)
         service.list_backups_beyond_retention(keep_count=1)
 
         for record in records:

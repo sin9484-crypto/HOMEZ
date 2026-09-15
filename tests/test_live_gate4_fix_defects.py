@@ -37,6 +37,7 @@ from unittest import mock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.core.first_admin_setup import (
     FirstAdminSetupStatus,
     atomic_create_first_admin,
@@ -794,7 +795,8 @@ class ValidateBackupFileTestCase(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(bind=engine)
         self.db = sessionmaker(bind=engine)()
-        self.service = RestoreService(self.db)
+        self.credential_store = InMemoryCredentialStore()
+        self.service = RestoreService(self.db, self.credential_store)
 
     def tearDown(self):
 

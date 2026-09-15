@@ -34,6 +34,7 @@ from sqlalchemy import create_engine
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.database.bootstrap import bootstrap_environment
 from app.domains.backup.service import TRIGGER_SOURCE_SCHEDULED_REHEARSAL
@@ -129,7 +130,8 @@ class WeeklyRehearsalTestCase(unittest.TestCase):
         self.db.add(self.admin)
         self.db.commit()
 
-        self.service = RestoreService(self.db)
+        self.credential_store = InMemoryCredentialStore()
+        self.service = RestoreService(self.db, self.credential_store)
 
     def tearDown(self):
 

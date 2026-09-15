@@ -31,6 +31,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.desktop import restore_helper
 from app.domains.backup.service import TRIGGER_SOURCE_MANUAL
@@ -127,6 +128,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
     def setUp(self):
 
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="homez_restore_helper_test_"))
+        self.credential_store = InMemoryCredentialStore()
 
     def tearDown(self):
 
@@ -139,7 +141,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         backups_dir = self.tmp_dir / "backups"
         backup_engine, backup_db = _single_file_session(self.tmp_dir / f"bookkeeping_{tag}.db")
         try:
-            svc = BackupService(backup_db)
+            svc = BackupService(backup_db, self.credential_store)
             record = svc.create_backup(
                 source_db_path=source,
                 backups_dir=backups_dir,
@@ -161,7 +163,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             attempt = service.restore(
                 source_backup_path=backup_path,
                 target_db_path=target,
@@ -195,7 +197,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
             from sqlalchemy import text
             db.execute(text("SELECT 1"))  # admin_guard 등 사전 쿼리 흉내
 
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             attempt = service.restore(
                 source_backup_path=backup_path,
                 target_db_path=target,
@@ -220,7 +222,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             attempt = service.restore(
                 source_backup_path=backup_path,
                 target_db_path=target,
@@ -253,7 +255,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             with self.assertRaises(RestoreError):
                 service.restore(
                     source_backup_path=backup_path,
@@ -269,7 +271,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         # 외부 커넥션을 닫은 뒤에는 정상적으로 복원 가능해야 한다.
         engine2, db2 = _single_file_session(target)
         try:
-            service2 = RestoreService(db2)
+            service2 = RestoreService(db2, self.credential_store)
             attempt = service2.restore(
                 source_backup_path=backup_path,
                 target_db_path=target,
@@ -302,13 +304,21 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
 
             import app.domains.restore.service as service_module
 
             original_mkstemp = service_module.tempfile.mkstemp
 
             def _boom(*args, **kwargs):
+                # 2026-09-15 전면 감사 후속(Phase 5) — validate_backup_
+                # file()이 암호화된 백업을 복호화할 때도 이제
+                # tempfile.mkstemp를 쓴다(prefix=".restore_decrypt_").
+                # 이 테스트는 "교체 직전(.restore_tmp_) 임시 파일 생성
+                # 실패"만 재현하려는 것이므로, 그 prefix가 아니면 원래
+                # mkstemp를 그대로 호출한다.
+                if kwargs.get("prefix") != ".restore_tmp_":
+                    return original_mkstemp(*args, **kwargs)
                 raise OSError("시뮬레이션된 임시 파일 생성 실패")
 
             service_module.tempfile.mkstemp = _boom
@@ -365,7 +375,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
 
             import app.domains.restore.service as service_module
 
@@ -418,7 +428,23 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
             rollback_path = Path(failed.pre_restore_backup_path)
             self.assertTrue(rollback_path.exists())
-            verify = sqlite3.connect(f"file:{rollback_path}?mode=ro", uri=True)
+
+            # 2026-09-15 전면 감사 후속(Phase 5) — 이 안전 백업도
+            # BackupService.create_backup()이 만들므로 이제
+            # 암호화되어 있다 — 같은 키로 복호화한 사본에
+            # integrity_check를 실행한다.
+            from app.domains.backup.encryption import decrypt_file
+            from app.domains.backup.encryption import (
+                get_or_create_backup_encryption_key,
+            )
+
+            key = get_or_create_backup_encryption_key(self.credential_store)
+            decrypted_rollback_path = self.tmp_dir / "decrypted_rollback_for_test.db"
+            decrypt_file(rollback_path, decrypted_rollback_path, key)
+
+            verify = sqlite3.connect(
+                f"file:{decrypted_rollback_path}?mode=ro", uri=True,
+            )
             integrity = verify.execute("PRAGMA integrity_check").fetchone()[0]
             verify.close()
             self.assertEqual(integrity, "ok")
@@ -441,7 +467,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         backups_dir = weird_dir / "백업 저장소"
         backup_engine, backup_db = _single_file_session(weird_dir / "bookkeeping.db")
         try:
-            record = BackupService(backup_db).create_backup(
+            record = BackupService(backup_db, self.credential_store).create_backup(
                 source_db_path=source,
                 backups_dir=backups_dir,
                 trigger_source=TRIGGER_SOURCE_MANUAL,
@@ -453,7 +479,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         target = weird_dir / "대상 홈즈.db"
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             attempt = service.restore(
                 source_backup_path=Path(record.file_path),
                 target_db_path=target,
@@ -488,7 +514,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             for i in range(3):
                 attempt = service.restore(
                     source_backup_path=backup_path,
@@ -552,7 +578,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
             self.tmp_dir / "full_schema_bookkeeping.db",
         )
         try:
-            record = BackupService(backup_db).create_backup(
+            record = BackupService(backup_db, self.credential_store).create_backup(
                 source_db_path=source,
                 backups_dir=backups_dir,
                 trigger_source=TRIGGER_SOURCE_MANUAL,
@@ -564,7 +590,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         target = self.tmp_dir / "full_schema_target.db"
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             attempt = service.restore(
                 source_backup_path=Path(record.file_path),
                 target_db_path=target,
@@ -597,7 +623,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
 
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             service.restore(
                 source_backup_path=backup_path,
                 target_db_path=target,
@@ -651,7 +677,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         backups_dir = self.tmp_dir / "wal_backups"
         backup_engine, backup_db = _single_file_session(self.tmp_dir / "wal_bookkeeping.db")
         try:
-            record = BackupService(backup_db).create_backup(
+            record = BackupService(backup_db, self.credential_store).create_backup(
                 source_db_path=source,
                 backups_dir=backups_dir,
                 trigger_source=TRIGGER_SOURCE_MANUAL,
@@ -663,7 +689,7 @@ class RestoreSingleFileArchitectureTestCase(unittest.TestCase):
         target = self.tmp_dir / "wal_target.db"
         engine, db = _single_file_session(target)
         try:
-            service = RestoreService(db)
+            service = RestoreService(db, self.credential_store)
             attempt = service.restore(
                 source_backup_path=Path(record.file_path),
                 target_db_path=target,
@@ -690,7 +716,8 @@ class RestoreValidationEdgeCaseTestCase(unittest.TestCase):
         engine, db = _single_file_session(self.tmp_dir / "app.db")
         self.engine = engine
         self.db = db
-        self.service = RestoreService(db)
+        self.credential_store = InMemoryCredentialStore()
+        self.service = RestoreService(db, self.credential_store)
 
     def tearDown(self):
 
@@ -771,6 +798,7 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
 
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="homez_restore_helper_module_"))
         restore_helper.clear_desktop_context()
+        self.credential_store = InMemoryCredentialStore()
 
     def tearDown(self):
 
@@ -874,7 +902,7 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
         backups_dir = self.tmp_dir / "helper_backups"
         backup_engine, backup_db = _single_file_session(self.tmp_dir / "helper_bookkeeping.db")
         try:
-            record = BackupService(backup_db).create_backup(
+            record = BackupService(backup_db, self.credential_store).create_backup(
                 source_db_path=source,
                 backups_dir=backups_dir,
                 trigger_source=TRIGGER_SOURCE_MANUAL,
@@ -896,7 +924,9 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
         )
 
         result_path = self.tmp_dir / "result.json"
-        outcome = restore_helper.run_restore_in_helper_process(plan, result_path)
+        outcome = restore_helper.run_restore_in_helper_process(
+            plan, result_path, credential_store=self.credential_store,
+        )
 
         self.assertEqual(outcome["status"], "succeeded")
         self.assertTrue(result_path.exists())
@@ -922,6 +952,7 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
 
         outcome = restore_helper.run_restore_in_helper_process(
             plan, self.tmp_dir / "tamper_result.json",
+            credential_store=self.credential_store,
         )
         self.assertEqual(outcome["status"], "failed")
         self.assertIn("SHA-256", outcome["reason"])
@@ -932,7 +963,23 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
         (`main_cli`)까지 전부 태워서 복원이 되는지 확인한다. 부모
         프로세스 역할은 더미 자식 프로세스로 대신한다(빨리 끝나야
         Helper의 "부모 종료 대기"가 곧바로 통과한다).
+
+        2026-09-15 전면 감사 후속(Phase 5) — main_cli()가 부르는
+        run_restore_in_helper_process()는 credential_store를 넘기지
+        않으면 실제 WindowsCredentialStore()를 만든다(진짜 Helper
+        프로세스와 동일하게). 이 테스트는 완전히 별도의 OS 프로세스를
+        띄우므로 InMemoryCredentialStore를 공유할 방법이 없다 — 그래서
+        이 테스트만 예외적으로 실제 Windows Credential Manager를
+        쓴다(백업 생성도 같은 실제 저장소를 써야 서로 다른 프로세스가
+        같은 암호화 키를 본다). 이 저장소의 나머지 테스트는 전부
+        InMemoryCredentialStore만 쓴다 — 이 테스트 하나가 실제
+        Credential Manager를 건드리는 유일한 예외이며, 향후 Phase 6
+        (테스트 격리)에서 이 테스트를 별도 스위트로 분리하는 것을
+        검토해야 한다(이 세션의 안전 회귀 실행에서는 이 사실을 알고
+        포함/제외를 판단해야 한다).
         """
+
+        from app.core.windows_credential_store import WindowsCredentialStore
 
         source = self.tmp_dir / "cli_source.db"
         _make_full_schema_source_db(source, "cli-value")
@@ -940,7 +987,7 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
         backups_dir = self.tmp_dir / "cli_backups"
         backup_engine, backup_db = _single_file_session(self.tmp_dir / "cli_bookkeeping.db")
         try:
-            record = BackupService(backup_db).create_backup(
+            record = BackupService(backup_db, WindowsCredentialStore()).create_backup(
                 source_db_path=source,
                 backups_dir=backups_dir,
                 trigger_source=TRIGGER_SOURCE_MANUAL,
