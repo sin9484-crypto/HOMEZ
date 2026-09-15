@@ -655,6 +655,17 @@ class PurchaseChannelConnection(Base):
         DateTime, nullable=True,
     )
 
+    # 2026-09-15 전면 감사 후속(Phase 9, HOMEZ_USER_OPERATION_SETTINGS.md
+    # 8-16 — "매입처 조회 실패가 계속되면 사용자에게 알린다") — 실제
+    # 조회(lookup_product/list_products 등)가 실패할 때마다(인증
+    # 오류뿐 아니라 네트워크·형식오류 등 모든 실패 종류) 증가하고,
+    # 성공하면 0으로 되돌린다. 이 값이 임계치(consecutive_failure_
+    # notify_threshold, service.py)에 도달하는 "그 순간"에만 알림을
+    # 보낸다 — 매 실패마다 반복 알림을 보내지 않는다.
+    consecutive_failure_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, index=True,
     )

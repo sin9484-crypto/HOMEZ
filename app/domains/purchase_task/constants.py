@@ -343,6 +343,17 @@ BROWSER_LOGIN_TRUST_WINDOW_DAYS = 14
 CREDENTIAL_REVERIFICATION_WINDOW_HOURS = 24
 
 
+# 2026-09-15 전면 감사 후속(Phase 9, HOMEZ_USER_OPERATION_SETTINGS.md
+# 8-16 — "매입처 조회 실패가 계속되면 사용자에게 알린다"). 실제
+# 조회(lookup_product/list_products 등)가 이 횟수만큼 연속으로
+# 실패하면(성공이 한 번도 끼지 않고) 사용자에게 알림을 보낸다.
+# 값을 낮게 잡을수록 알림이 빨리 오지만 일시적 네트워크 잡음에도
+# 민감해진다 — 3회는 "우연 1~2회"와 "실제로 계속 안 됨"을 구분하는
+# 가장 보수적인 최소값으로 선택했다(문서에 구체적 횟수가 명시되어
+# 있지 않으므로 추측하지 않고, 이 상수 하나로 조정 가능하게 둔다).
+CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD = 3
+
+
 class OnchannelOrderContractItem:
     """2026-09-09 후속("계약 상태 세분화") — 온채널 실제 발주 실행에
     필요한 공식 계약 사실을 하나의 boolean으로 뭉뚱그리지 않는다.

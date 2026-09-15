@@ -279,7 +279,8 @@ class ModelDdlCanonicalDiffTestCase(unittest.TestCase):
         result = normalized_ddl
         for name in column_names:
             result = re.sub(
-                rf",\s*{re.escape(name)}\s+\w+", "", result, count=1,
+                rf",\s*{re.escape(name)}\s+\w+(?:\s+NOT\s+NULL)?",
+                "", result, count=1,
             )
         return result
 

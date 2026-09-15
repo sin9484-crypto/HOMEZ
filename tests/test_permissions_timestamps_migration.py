@@ -327,6 +327,11 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 연결) — backup_records에 is_encrypted 컬럼 1개 추가.
             # 동일한 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
             "20260915_03_add_backup_records_is_encrypted.sql",
+            # 2026-09-15 전면 감사 후속(Phase 9, 8-16 매입처 조회
+            # 반복 실패 알림) — purchase_channel_connections에
+            # consecutive_failure_count 컬럼 1개 추가. 동일한 이유로
+            # 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260915_04_add_purchase_channel_connection_consecutive_failure.sql",
         ]
 
         all_files = sorted(

@@ -13,6 +13,7 @@ DDL이 일치하는지 확인한다. 실제 homez.db는 전혀 열지 않는다.
 """
 
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -258,12 +259,54 @@ class FullChainReplayTestCase(unittest.TestCase):
 class ModelDdlCanonicalDiffTestCase(unittest.TestCase):
     """homez-migration-safety 원칙 — SQLAlchemy CreateTable을 sqlite
     dialect로 컴파일한 canonical DDL과 이 Migration 파일 안의 CREATE
-    TABLE 문을 공백만 정규화해 비교한다."""
+    TABLE 문을 공백만 정규화해 비교한다.
+
+    2026-09-15 전면 감사 후속 — Model은 항상 "현재" 전체 스키마를
+    반영하므로, 이 CREATE TABLE 이후에 추가된 ALTER TABLE ADD COLUMN
+    Migration(예: 20260915_04의 consecutive_failure_count)이 생기면
+    이 테스트가 매번 깨진다(다른 여러 Migration 테스트 파일에서
+    반복된 것과 동일한 클래스의 결함). NEW_MIGRATION보다 사전순으로
+    뒤인 Migration 파일들에서 이 테이블에 대한 "ADD COLUMN"을
+    자동으로 찾아, 그 컬럼들을 canonical DDL 생성 시 제외한다 —
+    손으로 컬럼명을 나열하지 않는다."""
+
+    _CONNECTION_ADD_COLUMN_RE = re.compile(
+        r"ALTER\s+TABLE\s+purchase_channel_connections\s+ADD\s+COLUMN\s+"
+        r"(\w+)",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     def _normalize(sql: str) -> str:
 
         return " ".join(sql.split()).rstrip(";").strip()
+
+    @classmethod
+    def _columns_added_by_later_migrations(cls, pattern) -> set[str]:
+
+        added: set[str] = set()
+        for name in sorted(os.listdir(MIGRATIONS_DIR)):
+            if not name.endswith(".sql") or name <= NEW_MIGRATION:
+                continue
+            with open(
+                os.path.join(MIGRATIONS_DIR, name), encoding="utf-8",
+            ) as f:
+                added.update(pattern.findall(f.read()))
+        return added
+
+    @classmethod
+    def _strip_columns(cls, normalized_ddl: str, column_names: set[str]) -> str:
+        """정규화된 CREATE TABLE 문자열에서 지정한 컬럼 정의(",
+        이름 타입") 구간만 제거한다. 이 Migration 이후에 ADD COLUMN
+        으로 추가된, 제약 없는 단순 컬럼에만 사용한다."""
+
+        result = normalized_ddl
+        for name in column_names:
+            result = re.sub(
+                rf",\s*{re.escape(name)}\s+\w+(?:\s+NOT\s+NULL)?",
+                "", result, count=1,
+            )
+        return result
 
     def test_connection_table_ddl_matches_model(self):
 
@@ -272,17 +315,23 @@ class ModelDdlCanonicalDiffTestCase(unittest.TestCase):
         ) as f:
             migration_sql = f.read()
 
+        added_later = self._columns_added_by_later_migrations(
+            self._CONNECTION_ADD_COLUMN_RE,
+        )
         canonical = str(
             CreateTable(PurchaseChannelConnection.__table__).compile(
                 dialect=sqlite_dialect.dialect(),
             ),
+        )
+        canonical_as_of_creation = self._strip_columns(
+            self._normalize(canonical), added_later,
         )
 
         start = migration_sql.index("CREATE TABLE purchase_channel_connections (")
         end = migration_sql.index(");", start) + 1
         actual = migration_sql[start:end]
 
-        self.assertEqual(self._normalize(actual), self._normalize(canonical))
+        self.assertEqual(self._normalize(actual), canonical_as_of_creation)
 
     def test_event_table_ddl_matches_model(self):
 

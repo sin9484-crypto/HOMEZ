@@ -1202,6 +1202,47 @@ class RealCheckRecordingTestCase(ChannelConnectionServiceTestCaseBase):
         self.assertEqual(row.status, ChannelConnectionStatus.ERROR)
         self.assertIsNone(row.verified_at)
 
+    def test_consecutive_failure_count_increments_regardless_of_error_type(self):
+        """2026-09-15 전면 감사 후속(Phase 9, 8-16) — 인증 실패든
+        일반 실패든 종류와 무관하게 연속 실패 횟수를 센다("조회
+        실패가 계속되면"은 인증 실패로 한정하지 않는다)."""
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company_a.id, auth_key="x")
+        self._install_fake_adapter(
+            lookup_product_error=ValueError("일반 오류"),
+        )
+
+        for expected_count in (1, 2):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c.id, self.company_a.id, "CH1")
+            row = self.db.query(PurchaseChannelConnection).get(c.id)
+            self.assertEqual(row.consecutive_failure_count, expected_count)
+
+    def test_consecutive_failure_count_resets_on_success(self):
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company_a.id, auth_key="x")
+        self._install_fake_adapter(
+            lookup_product_error=ValueError("일반 오류"),
+        )
+        with self.assertRaises(ValueError):
+            self.service.lookup_product(c.id, self.company_a.id, "CH1")
+        with self.assertRaises(ValueError):
+            self.service.lookup_product(c.id, self.company_a.id, "CH1")
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        self.assertEqual(row.consecutive_failure_count, 2)
+
+        self._install_fake_adapter(lookup_product_result={"fake": "product"})
+        self.service.lookup_product(c.id, self.company_a.id, "CH1")
+
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        self.assertEqual(row.consecutive_failure_count, 0)
+
     def test_verification_success_does_not_leak_to_sibling_connection(self):
         """다른 회사·다른 연결의 인증 결과 재사용 불가 — 지시문 4번.
         같은 회사 안에서도 연결 A의 실제 조회 성공이 연결 B에 영향을
@@ -1339,6 +1380,178 @@ class RealCheckRecordingTestCase(ChannelConnectionServiceTestCaseBase):
         # InMemoryCredentialStore에는 여전히 남아있다(deactivate가
         # 자격증명 자체를 지우지는 않는다 — 별도 기능).
         self.assertTrue(self.credential_store.exists(row.credential_reference))
+
+
+class RepeatedLookupFailureNotificationTestCase(unittest.TestCase):
+    """2026-09-15 전면 감사 후속(Phase 9, HOMEZ_USER_OPERATION_
+    SETTINGS.md 8-16 — "매입처 조회 실패가 계속되면 사용자에게
+    알린다"). 위 RealCheckRecordingTestCase의 경량 fixture는
+    notification_email_logs/users 테이블이 없어 알림 발송 자체를
+    검증할 수 없다(dispatch_operational_event가 테이블 부재 시
+    조용히 no-op한다) — 이 클래스는 bootstrap_environment()로 전체
+    스키마를 갖춘 임시 DB를 써서 실제로 알림 행이 만들어지는지
+    확인한다."""
+
+    def setUp(self):
+
+        from pathlib import Path
+
+        from app.database.bootstrap import bootstrap_environment
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.remove(path)
+        self.db_path = Path(path)
+        self.backups_dir = Path(tempfile.mkdtemp())
+
+        repo_root = Path(__file__).resolve().parent.parent
+        result = bootstrap_environment(
+            db_path=self.db_path,
+            migrations_dir=repo_root / "migrations",
+            backups_dir=self.backups_dir,
+        )
+        self.assertTrue(result.is_new_install)
+
+        self.engine = create_engine(f"sqlite:///{self.db_path}")
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+
+        self.company = Company(
+            name="공급처 알림 테스트 회사", business_number="333-33-33333",
+            ceo="테스트", phone="02-000-0000",
+            email="supplier-notify@example.com", address="테스트",
+        )
+        self.db.add(self.company)
+        self.db.commit()
+
+        self.role = Role(name="Administrator", code="SUPER_ADMIN")
+        self.db.add(self.role)
+        self.db.commit()
+
+        self.admin = User(
+            company_id=self.company.id, username="supplierlookupadmin",
+            email="supplierlookupadmin@example.com", password_hash="x",
+            name="관리자", role_id=self.role.id, is_active=True,
+        )
+        self.db.add(self.admin)
+        self.db.commit()
+
+        self.credential_store = InMemoryCredentialStore()
+        self.service = PurchaseChannelConnectionService(
+            self.db, credential_store=self.credential_store,
+        )
+
+    def tearDown(self):
+
+        self.db.close()
+        self.engine.dispose()
+        if self.db_path.exists():
+            self.db_path.unlink()
+
+    def _install_fake_adapter(self, *, error=None, result=None):
+
+        import unittest.mock as mock
+
+        class _FakeAdapter:
+            def lookup_product(self_inner, external_product_id):
+                if error is not None:
+                    raise error
+                return result
+
+        patcher = mock.patch(
+            "app.domains.purchase_task.channel_connection_service.get_purchase_channel_adapter",
+            return_value=_FakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _notification_rows(self):
+
+        from sqlalchemy import text
+
+        return self.db.execute(
+            text(
+                "SELECT user_id, event_code FROM notification_email_logs "
+                "WHERE event_code = 'SUPPLIER_LOOKUP_REPEATED_FAILURE'",
+            ),
+        ).fetchall()
+
+    def test_notifies_super_admin_exactly_when_threshold_reached(self):
+
+        from app.domains.purchase_task.constants import (
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD,
+        )
+
+        c = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company.id, auth_key="x")
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+
+        for i in range(1, CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c.id, self.company.id, "CH1")
+            self.assertEqual(
+                len(self._notification_rows()), 0,
+                f"임계치({CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD}) 도달 전인 "
+                f"{i}회차에는 알림이 없어야 한다.",
+            )
+
+        with self.assertRaises(ValueError):
+            self.service.lookup_product(c.id, self.company.id, "CH1")
+
+        rows = self._notification_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], self.admin.id)
+
+    def test_does_not_notify_again_on_further_failures_in_same_streak(self):
+        """임계치 도달 이후에도 스트릭이 계속되면(성공 없이) 매번
+        반복 알림을 보내지 않는다 — 임계치 "도달 순간"에만 1회."""
+
+        from app.domains.purchase_task.constants import (
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD,
+        )
+
+        c = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company.id, auth_key="x")
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD + 3):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c.id, self.company.id, "CH1")
+
+        self.assertEqual(len(self._notification_rows()), 1)
+
+    def test_success_then_new_streak_notifies_again(self):
+        """성공으로 스트릭이 끊긴 뒤 새 스트릭이 다시 임계치에
+        도달하면 새 알림이 (다시) 발송돼야 한다."""
+
+        from app.domains.purchase_task.constants import (
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD,
+        )
+
+        c = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company.id, auth_key="x")
+
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c.id, self.company.id, "CH1")
+        self.assertEqual(len(self._notification_rows()), 1)
+
+        self._install_fake_adapter(result={"fake": "product"})
+        self.service.lookup_product(c.id, self.company.id, "CH1")
+
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c.id, self.company.id, "CH1")
+
+        self.assertEqual(len(self._notification_rows()), 2)
 
 
 class OnchannelOrderContractStatusTestCase(unittest.TestCase):

@@ -56,10 +56,12 @@ from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
 from app.domains.purchase_task.channel_adapter import get_purchase_channel_adapter
+from app.domains.notification_center.operational_events import dispatch_operational_event
 from app.domains.purchase_task.constants import BROWSER_LOGIN_TRUST_WINDOW_DAYS
 from app.domains.purchase_task.constants import ChannelConnectionEventType
 from app.domains.purchase_task.constants import ChannelConnectionStatus
 from app.domains.purchase_task.constants import ConnectionMethod
+from app.domains.purchase_task.constants import CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD
 from app.domains.purchase_task.constants import CREDENTIAL_REVERIFICATION_WINDOW_HOURS
 from app.domains.purchase_task.constants import is_onchannel_order_contract_fully_confirmed
 from app.domains.purchase_task.constants import PurchaseChannelMallCode
@@ -872,6 +874,10 @@ class PurchaseChannelConnectionService:
         connection.verified_at = now
         connection.last_checked_at = now
         connection.status = ChannelConnectionStatus.CONNECTED
+        # 2026-09-15 전면 감사 후속(Phase 9, 8-16) — 실제 조회가 다시
+        # 성공했으므로 연속 실패 스트릭을 끊는다. 이 값을 신뢰해 다음
+        # 실패 스트릭도 처음부터 정확히 카운트할 수 있게 한다.
+        connection.consecutive_failure_count = 0
         self._log_event(
             connection, ChannelConnectionEventType.VERIFIED,
             detail=detail, triggered_by=triggered_by,
@@ -886,25 +892,104 @@ class PurchaseChannelConnectionService:
         """인증이 명백히 잘못됐다는 신호(401/403)일 때만 연결을 사용
         불가로 낮춘다. 자격증명 자체가 없어서 나는 PurchaseChannelAdapterError,
         일시적 오류(429/응답형식오류/네트워크오류)는 "자격증명이
-        잘못됐다"는 증거가 아니므로 여기서 상태를 건드리지 않는다."""
+        잘못됐다"는 증거가 아니므로 상태(status/verified_at)는 여기서
+        건드리지 않는다.
+
+        2026-09-15 전면 감사 후속(Phase 9, HOMEZ_USER_OPERATION_
+        SETTINGS.md 8-16) — 다만 실패 종류와 무관하게 연속 실패
+        횟수는 항상 센다("조회 실패가 계속되면"은 인증 실패로
+        한정하지 않는다). 이 횟수가 임계치에 "처음" 도달하는 순간에만
+        사용자에게 알린다 — 매 실패마다 반복 알림을 보내지 않는다."""
 
         from app.domains.purchase_task.onchannel_client import (
             OnchannelAuthenticationError, OnchannelPermissionError,
         )
 
-        if not isinstance(exc, (OnchannelAuthenticationError, OnchannelPermissionError)):
-            return
-
-        connection.verified_at = None
-        connection.last_checked_at = datetime.utcnow()
-        connection.status = ChannelConnectionStatus.ERROR
-        self._log_event(
-            connection, ChannelConnectionEventType.STATUS_CHANGED,
-            detail="실제 API 인증 실패로 이 연결을 사용 불가로 기록",
-            triggered_by=triggered_by,
+        connection.consecutive_failure_count += 1
+        reached_notify_threshold = (
+            connection.consecutive_failure_count
+            == CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD
         )
+
+        is_auth_failure = isinstance(
+            exc, (OnchannelAuthenticationError, OnchannelPermissionError),
+        )
+        if is_auth_failure:
+            connection.verified_at = None
+            connection.last_checked_at = datetime.utcnow()
+            connection.status = ChannelConnectionStatus.ERROR
+            self._log_event(
+                connection, ChannelConnectionEventType.STATUS_CHANGED,
+                detail="실제 API 인증 실패로 이 연결을 사용 불가로 기록",
+                triggered_by=triggered_by,
+            )
+
         self.db.commit()
         self.db.refresh(connection)
+
+        if reached_notify_threshold:
+            self._notify_repeated_lookup_failure(
+                connection, exc, occurred_at=datetime.utcnow(),
+            )
+
+    def _notify_repeated_lookup_failure(
+        self, connection: PurchaseChannelConnection, exc: Exception,
+        *, occurred_at: datetime,
+    ) -> None:
+        """2026-09-15 전면 감사 후속(Phase 9, 8-16) — 누가 이 조회를
+        트리거했는지(triggered_by)와 무관하게 실제 회사 관리자에게
+        도달해야 하므로, 단일 사용자가 아니라 활성 SUPER_ADMIN 전원
+        에게 통지한다(app/domains/restore/service.py::_notify_
+        rehearsal_failure()와 동일한 패턴). 알림 발송 실패가 원
+        업무(조회 자체)를 되돌리면 안 된다 — best-effort."""
+
+        try:
+            from app.domains.user.model import User
+
+            for user in (
+                self.db.query(User)
+                .filter(
+                    User.company_id == connection.company_id,
+                    User.is_active.is_(True),
+                )
+                .all()
+            ):
+                if (user.role or "").strip().upper() != "SUPER_ADMIN":
+                    continue
+
+                # idempotency_key는 (connection, 실패 스트릭) 조합마다
+                # 달라야 한다 — consecutive_failure_count는 성공 시
+                # 0으로 되돌아간 뒤 다음 스트릭에서 같은 임계치 값을
+                # 다시 지나가므로, 카운터 값만으로는 서로 다른 두
+                # 스트릭이 같은 키로 충돌해 두 번째 알림이 "중복"으로
+                # 조용히 스킵된다(2026-09-15 회귀 테스트로 재현). 이
+                # 알림이 실제로 호출된 시각(마이크로초 단위, 실패
+                # 종류와 무관하게 항상 새로 계산됨)을 함께 넣어
+                # 스트릭마다 고유하게 만든다.
+                dispatch_operational_event(
+                    self.db, "SUPPLIER_LOOKUP_REPEATED_FAILURE",
+                    company_id=connection.company_id, user_id=user.id,
+                    idempotency_key=(
+                        f"supplier-lookup-failure:{connection.id}:"
+                        f"{connection.consecutive_failure_count}:"
+                        f"{occurred_at.isoformat()}"
+                    ),
+                    title="매입처 연결 조회가 계속 실패하고 있습니다",
+                    message=(
+                        f"매입처 연결 #{connection.id}({connection.account_label})"
+                        f"의 실제 조회가 {connection.consecutive_failure_count}회 "
+                        f"연속 실패했습니다({type(exc).__name__}) — 연결 상태를 "
+                        "확인해 주세요."
+                    ),
+                    link_path="purchase-channel-connections",
+                    entity_ref=f"purchase_channel_connection:{connection.id}",
+                    reason=type(exc).__name__,
+                    entity_summary=(
+                        f"매입처 연결 #{connection.id}({connection.account_label})"
+                    ),
+                )
+        except Exception:  # noqa: BLE001 — 알림 실패가 조회 결과 반환을 막지 않는다
+            pass
 
     # ---------------- 내부 ----------------
 

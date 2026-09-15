@@ -658,6 +658,9 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             "LOGIN_ACCOUNT_LOCKED",
             "FUNCTION_AUTOMATION_DEMOTED_TO_ERROR",
             "BACKUP_RESTORE_REHEARSAL_FAILED",
+            # 2026-09-15 전면 감사 후속(Phase 9, HOMEZ_USER_OPERATION_
+            # SETTINGS.md 8-16) — 매입처 조회 반복 실패 알림.
+            "SUPPLIER_LOOKUP_REPEATED_FAILURE",
         }
         actual_wired = {code for code, row in by_code.items() if row.wired}
         self.assertEqual(actual_wired, expected_wired)
@@ -684,6 +687,9 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             Path("app/domains/auth/service.py"),
             Path("app/domains/purchase_task/service.py"),
             Path("app/domains/restore/service.py"),
+            # 2026-09-15 전면 감사 후속(Phase 9) —
+            # SUPPLIER_LOOKUP_REPEATED_FAILURE가 실제로 발생하는 위치.
+            Path("app/domains/purchase_task/channel_connection_service.py"),
         ]
         source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
         for event_code, definition in EVENT_CATALOG.items():

@@ -272,6 +272,19 @@ EVENT_CATALOG: dict[str, NotificationEventDefinition] = {
             description_en="A sales channel credential expired or needs reauthentication.",
         ),
         _e(
+            "SUPPLIER_LOOKUP_REPEATED_FAILURE", NotificationCategory.SECURITY,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko=(
+                "매입처 연결의 실제 조회가 반복해서 실패하고 있습니다 "
+                "(HOMEZ_USER_OPERATION_SETTINGS.md 8-16)."
+            ),
+            description_en=(
+                "Real lookups against a purchase channel connection have "
+                "failed repeatedly."
+            ),
+        ),
+        _e(
             "ESTOP_ACTIVATED", NotificationCategory.SECURITY,
             NotificationSeverity.CRITICAL, critical_cannot_disable=True,
             default_email_immediate=True, wired=True,
