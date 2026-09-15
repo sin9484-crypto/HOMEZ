@@ -881,17 +881,80 @@ Executor만 사용하므로 이 결함들은 지금 당장 실금전 피해로 �
 nullable 확인, 기존 행 보존). `tests/test_payment_*.py` 32/32,
 `tests/test_refund_*.py` 33/33 통과.
 
-### 13.5 잔여 위험과 다음 단계
+### 13.5 Phase 5 — 백업 암호화 재감사 및 실제 연결
+
+**재감사 결과**: `app/domains/backup/encryption.py`는 stdlib만으로
+구현한 encrypt-then-MAC(HMAC-SHA256 기반) 모듈로, 자체 단위 테스트는
+전부 갖추고 있었지만 **`BackupService.create_backup()`에 실제로
+연결된 적이 없었다** — 즉 이번 재감사 이전까지 모든 실제 백업
+파일은 평문 SQLite로 저장되고 있었다. 이는
+`HOMEZ_USER_OPERATION_SETTINGS.md` 11번("실제 DB 백업 파일은
+암호화하고 GitHub에 올리지 않는다")의 명시적 요구사항 미충족이며,
+독립 감사 문서(`20260914_CODEX_INDEPENDENT_AUDIT.md:246`)도 같은
+결함을 이미 지적한 바 있다.
+
+**수정 내용**: `create_backup()`이 integrity_check·SHA-256 계산(둘
+다 평문 기준 — SQLite는 암호화된 파일을 열 수 없어 순서를 반드시
+지킨다) 이후 파일을 실제로 암호화하고, `BackupRecord.is_encrypted`
+(신규 컬럼)에 기록한다. `RestoreService`는 `is_encrypted_backup()`
+으로 암호화 여부를 자동 감지해 임시 평문 사본으로 복호화한 뒤 기존
+검증·복원 로직을 그대로 수행하며, `restore()` 자체도 암호문을 그대로
+target에 복사하지 않고 복호화해 쓴다. 복호화 실패(변조·오탈키)는
+"정상적으로 검증 실패한 백업"으로 구조화해 반환한다.
+`BackupService`/`RestoreService` 생성자가 `credential_store`를 필수
+인자로 받도록 바꿔, 실제 운영 호출부 9곳(router 2개·
+`restore_helper.py`·`scheduler/jobs.py`, 그리고 두 서비스 내부의
+안전 백업 생성 지점) 전부에서 실제 암호화가 빠짐없이 적용되게 했다.
+
+**범위 밖으로 명시적으로 남긴 것**: `MigrationRunner.create_backup()`
+(pre-migration 안전 복사본)과 `app/database/bootstrap.py`의 부트스트랩
+백업 기록 경로는 여전히 평문이다 — DI 인프라(credential_store 주입)가
+없는 부트스트랩 이전 단계의 별도 저수준 경로라 이번 라운드에서
+건드리지 않았다. `bootstrap.py`의 `backup_records` INSERT는
+`is_encrypted` 컬럼을 명시하지 않으므로 DB DEFAULT 0(false)이
+적용되는데, 이 값은 실제 사실과 일치한다(이 경로로 만들어진 백업은
+지금도 정말 평문이다) — 거짓으로 "암호화됨"이라고 기록하지 않는다.
+다음 감사에서 이 경로도 암호화할지 재검토가 필요하다.
+
+**새로 발견된 테스트 격리 이슈**: `tests/test_restore_helper.py::
+test_full_subprocess_helper_cli_end_to_end`는 완전히 별도의 OS
+프로세스를 `subprocess.run()`으로 띄워 CLI 진입점까지 검증하는
+기존 테스트다. 암호화 연결 이후 이 테스트는 부모-자식 프로세스가
+같은 암호화 키를 봐야 하므로(InMemoryCredentialStore는 프로세스
+경계를 넘지 못한다) 예외적으로 실제 Windows Credential Manager를
+쓰게 됐다 — 테스트 docstring에 이유를 명시했고, 이 세션의 나머지
+93개 테스트는 전부 InMemoryCredentialStore만 쓴다. 이 테스트 1건을
+어떻게 격리할지는 Phase 6(테스트 격리)에서 재검토가 필요하다.
+
+**테스트 결과**: `test_backup_engine.py`(10) +
+`test_gate8_backup_domain_expansion.py`(4) +
+`test_restore_engine.py`(14) + `test_restore_helper.py`(22) +
+`test_live_gate4_fix_defects.py`(일부) +
+`test_restore_weekly_rehearsal.py` + `test_scheduler_jobs.py`(4) 등
+관련 파일 94건 + 신규 Migration 테스트 4건 전부 통과. 암호화 연결로
+인해 기존 테스트 중 백업 파일을 직접 평문 SQLite로 열어 확인하던
+케이스들을 "같은 키로 복호화한 사본을 열어 확인"하는 방식으로
+갱신했다(삭제나 assertion 약화가 아니라 새 계약에 맞춘 갱신 —
+`app/domains/restore/service.py`의 2026-08-17 "낡은 전제를 실제
+안전 요구사항에 맞게 명시적 승인 하에 갱신" 원칙과 동일).
+
+### 13.6 잔여 위험과 다음 단계
 
 - IA-004(Critical, idempotency key 중복발주)의 원래 경로는
   `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른
   키로 우회하는 하위 경로는 Phase 3에서 DB 제약으로 닫았다.
 - IA-011의 구조적 완화는 Phase 4에서 마쳤지만, 완전한 시도 장부는
   실제 Provider 연동 전 별도 작업으로 남아 있다.
+- 백업 암호화는 Phase 5에서 실제로 연결됐지만, `MigrationRunner.
+  create_backup()`/부트스트랩 경로는 여전히 평문 — 다음 라운드
+  재검토 대상.
+- `test_full_subprocess_helper_cli_end_to_end`가 실제 Windows
+  Credential Manager를 쓰는 유일한 테스트로 새로 확인됨 — Phase 6
+  테스트 격리 대상 목록에 추가.
 - 수취인 정보 결합은 여전히 미해결 — 온채널 실제 발주 재개를 막는
   근거 중 하나로 유지한다.
 - 개발본/설치본 DB 선택은 여전히 사용자 결정 대기(11.6-1).
-- Phase 5(백업 암호화 재감사), Phase 6(테스트 격리), Phase 8(실행
-  게이트 배선), Phase 9(안전 기능 7-8/7-11/7-16/8-5/8-6/8-16/8-19/
-  10-4/10-5/10-17/10-18)는 이 라운드에서 착수하지 않았다 — 아래
-  최종 보고에서 범위 한계를 명시한다.
+- Phase 6(테스트 격리), Phase 8(실행 게이트 배선), Phase 9(안전 기능
+  7-8/7-11/7-16/8-5/8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이
+  라운드에서 착수하지 않았다 — 아래 최종 보고에서 범위 한계를
+  명시한다.
