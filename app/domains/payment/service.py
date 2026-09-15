@@ -105,10 +105,24 @@ class PaymentService:
             created_by=user_id,
         )
 
+        # 2026-09-15 전면 감사 후속(Phase 4, IA-011) — Credential
+        # Store 저장은 이미 끝났다(위). 그 뒤의 "기본값 해제 + 신규
+        # 행 생성"은 한 트랜잭션(commit 1회)으로 묶고, 그 commit이
+        # 실패하면 방금 저장한 Credential Store 토큰도 최선노력으로
+        # 되돌린다 — 그렇지 않으면 DB에는 없는데 Credential Store에만
+        # 남는 고아 토큰이 생긴다(실금전 위험은 아니지만 정리되지
+        # 않는 비밀정보가 남는 문제).
         if make_default:
             self.repository.clear_default_for_company(company_id)
-
-        return self.repository.create_method(method)
+        try:
+            return self.repository.create_method(method)
+        except Exception:
+            self.db.rollback()
+            try:
+                self.credential_store.delete(target_name)
+            except Exception:  # noqa: BLE001 — 되돌리기 실패가 원래 예외를 가리면 안 된다
+                pass
+            raise
 
     def list_methods(
         self, company_id: int, *, include_inactive: bool = False,
@@ -175,9 +189,21 @@ class PaymentService:
                 "비활성화된 결제수단은 기본으로 지정할 수 없습니다.",
             )
 
+        # 2026-09-15 전면 감사 후속(Phase 4, IA-011) — clear_default_
+        # for_company()가 더 이상 자체 commit하지 않으므로, 아래
+        # commit 1회가 "기존 기본값 해제"와 "새 기본값 지정"을 함께
+        # 반영한다. 이전에는 두 개의 별도 commit이라 두 번째가
+        # 실패하면 기본 결제수단이 아예 없는 상태로 남을 위험이
+        # 있었다. commit 실패 시 명시적으로 rollback해, 세션에 남은
+        # 미반영 변경(is_default=True 등)이 다음 호출에 잘못 섞여
+        # 들어가지 않게 한다.
         self.repository.clear_default_for_company(company_id)
         method.is_default = True
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.db.refresh(method)
 
         return method

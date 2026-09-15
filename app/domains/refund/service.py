@@ -33,10 +33,12 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException
+from app.core.exceptions import ConflictException
 from app.core.exceptions import ForbiddenException
 from app.core.exceptions import NotFoundException
 from app.domains.refund.constants import RefundStatus
 from app.domains.refund.constants import RefundType
+from app.domains.refund.executor import RefundExecutionError
 from app.domains.refund.executor import RefundExecutor
 from app.domains.refund.model import Refund
 from app.domains.refund.model import RefundStatusEvent
@@ -216,6 +218,7 @@ class RefundService:
         user_id: int,
         is_admin: bool,
         now: datetime | None = None,
+        confirm_retry_after_uncertain_execution: bool = False,
     ) -> Refund:
 
         if not is_admin:
@@ -232,11 +235,56 @@ class RefundService:
                 f"{refund.status}",
             )
 
+        # 2026-09-15 전면 감사 후속(Phase 4, IA-011) — status가 여전히
+        # APPROVED인데 execution_attempt_started_at이 이미 채워져
+        # 있다면, 직전 mark_executed() 호출이 Executor를 실제로
+        # 호출한 뒤 상태 전이를 확정하지 못한 채 끝났다는 뜻이다
+        # (프로세스 중단 등 — "결과불명" 구간). 이 경우 사람이 실제
+        # Provider 쪽 기록을 직접 확인했다는 명시적 확인
+        # (confirm_retry_after_uncertain_execution=True) 없이는
+        # Executor를 다시 호출하지 않는다 — 자동 재시도가 이중 환불로
+        # 이어질 위험을 구조적으로 막는다(현재 Fake 단계에서는
+        # 직접 재현되지 않지만, 실제 Provider로 교체되기 전에 반드시
+        # 필요한 방어선이다).
+        if (
+            refund.execution_attempt_started_at is not None
+            and not confirm_retry_after_uncertain_execution
+        ):
+            raise ConflictException(
+                "이 환불은 이전 실행 시도가 성공/실패 어느 쪽으로도 "
+                "확정되지 못한 채 남아 있습니다(시도 시각: "
+                f"{refund.execution_attempt_started_at}) — 실제 Provider "
+                "기록을 직접 확인하기 전까지 자동으로 다시 실행하지 "
+                "않습니다. 확인 후 다시 실행하려면 "
+                "confirm_retry_after_uncertain_execution=True로 호출하세요.",
+            )
+
+        # 2026-09-15 전면 감사 후속(Phase 4, IA-011) — 외부 Executor를
+        # 호출하기 "직전"에 이 시도 자체를 durable하게 먼저 commit한다
+        # (purchase_task 발주 시도가 IN_FLIGHT를 네트워크 호출 전에
+        # commit하는 것과 같은 설계). 그래야 Executor 호출 이후
+        # 프로세스가 중단돼도 "실행을 시도한 적이 있다"는 사실이
+        # 사라지지 않는다.
+        refund.execution_attempt_started_at = now
+        self.db.commit()
+        self.db.refresh(refund)
+
         # 실행 자체(Fake)는 상태 전이 이전에 호출한다 — 실행이
         # 실패하면(FakeRefundExecutor는 amount<=0에서만 실패하지만,
         # 미래의 실제 Executor는 다양한 이유로 실패할 수 있다) 상태를
         # 전혀 바꾸지 않는다.
-        self.executor.execute(refund.id, refund.amount, refund.currency)
+        try:
+            self.executor.execute(refund.id, refund.amount, refund.currency)
+        except RefundExecutionError:
+            # 2026-09-15 전면 감사 후속(Phase 4, IA-011) — 이 예외는
+            # Executor가 실제로 외부에 도달하기 전에 확정적으로
+            # 거부했다는 뜻이다(예: amount<=0 사전 검증). "결과불명"이
+            # 아니라 "확실히 안 됐다"이므로 시도 마커를 지워 다음
+            # mark_executed() 호출이 사람의 별도 확인 없이도 정상
+            # 진행되게 한다.
+            refund.execution_attempt_started_at = None
+            self.db.commit()
+            raise
 
         rowcount = self.repository.transition_status_conditional(
             refund_id, company_id,

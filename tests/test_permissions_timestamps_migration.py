@@ -313,6 +313,16 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 컬럼 1개 추가. 동일한 이유로 추가. 실제 운영 DB에는
             # 아직 미적용이다.
             "20260915_00_add_purchase_order_approval_options_snapshot.sql",
+            # 2026-09-15 전면 감사 후속(Phase 3, 업무 주문 단위 중복
+            # 방지 강화) — purchase_order_submission_attempts에 부분
+            # UNIQUE INDEX 1개 추가(컬럼 변경 없음). 동일한 이유로
+            # 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260915_01_add_purchase_order_submission_attempts_active_task_index.sql",
+            # 2026-09-15 전면 감사 후속(Phase 4, 결제·환불 Provider
+            # 안전 구조) — refunds에 execution_attempt_started_at
+            # 컬럼 1개 추가. 동일한 이유로 추가. 실제 운영 DB에는
+            # 아직 미적용이다.
+            "20260915_02_add_refund_execution_attempt_marker.sql",
         ]
 
         all_files = sorted(

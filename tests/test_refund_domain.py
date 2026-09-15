@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.exceptions import BadRequestException
+from app.core.exceptions import ConflictException
 from app.core.exceptions import ForbiddenException
 from app.core.exceptions import NotFoundException
 from app.database.bootstrap import bootstrap_environment
@@ -314,6 +315,86 @@ class RefundDomainTestCase(unittest.TestCase):
                 refund_id=refund.id, company_id=self.company.id,
                 user_id=self.admin.id, is_admin=True,
             )
+
+    def test_mark_executed_blocks_silent_retry_after_uncertain_execution(self):
+        """2026-09-15 전면 감사 후속(Phase 4, IA-011) — Executor 호출은
+        성공했지만(execution_attempt_started_at이 durable하게 남음)
+        그 뒤 로컬 상태 전이가 확정되지 못한 채 끝난 상황을 재현한다
+        (프로세스 중단을 transition_status_conditional 예외로 흉내낸다).
+        다음 mark_executed() 호출은 사람의 명시적 확인 없이 Executor를
+        다시 부르면 안 된다(이중 환불 위험) — ConflictException으로
+        막히고, 확인 플래그를 주면 정상 진행돼야 한다."""
+
+        import unittest.mock as mock
+
+        refund = self._create_refund()
+        self.service.approve_refund(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+
+        with mock.patch.object(
+            self.service.repository, "transition_status_conditional",
+            side_effect=RuntimeError("시뮬레이션된 프로세스 중단"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.mark_executed(
+                    refund_id=refund.id, company_id=self.company.id,
+                    user_id=self.admin.id, is_admin=True,
+                )
+
+        stuck = self.service.get(refund.id, self.company.id)
+        self.assertEqual(stuck.status, RefundStatus.APPROVED)
+        self.assertIsNotNone(
+            stuck.execution_attempt_started_at,
+            "Executor 호출 직전에 남긴 시도 마커는 그대로 남아 있어야 한다.",
+        )
+
+        with self.assertRaises(ConflictException):
+            self.service.mark_executed(
+                refund_id=refund.id, company_id=self.company.id,
+                user_id=self.admin.id, is_admin=True,
+            )
+
+        executed = self.service.mark_executed(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+            confirm_retry_after_uncertain_execution=True,
+        )
+        self.assertEqual(executed.status, RefundStatus.EXECUTED)
+
+    def test_mark_executed_clean_rejection_does_not_require_confirmation(self):
+        """실행 시도 자체가 Executor에 실제로 도달하기 전에 확정적으로
+        거부된 경우(RefundExecutionError)는 "결과불명"이 아니다 — 시도
+        마커를 지워, 다음 mark_executed() 호출이 사람의 별도 확인 없이
+        바로 진행될 수 있어야 한다."""
+
+        import unittest.mock as mock
+
+        refund = self._create_refund()
+        self.service.approve_refund(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+
+        with mock.patch.object(
+            self.service.executor, "execute",
+            side_effect=RefundExecutionError("시뮬레이션된 확정 거부"),
+        ):
+            with self.assertRaises(RefundExecutionError):
+                self.service.mark_executed(
+                    refund_id=refund.id, company_id=self.company.id,
+                    user_id=self.admin.id, is_admin=True,
+                )
+
+        rejected_attempt = self.service.get(refund.id, self.company.id)
+        self.assertIsNone(rejected_attempt.execution_attempt_started_at)
+
+        executed = self.service.mark_executed(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+        self.assertEqual(executed.status, RefundStatus.EXECUTED)
 
     def test_full_lifecycle_status_events_are_ordered(self):
 

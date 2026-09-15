@@ -279,6 +279,88 @@ class PaymentDomainTestCase(unittest.TestCase):
                 is_admin=True,
             )
 
+    def test_register_method_with_make_default_rolls_back_credential_on_db_failure(self):
+        """2026-09-15 전면 감사 후속(Phase 4, IA-011) — DB commit이
+        실패하면 방금 Credential Store에 저장한 토큰도 되돌려, DB에는
+        없는데 Credential Store에만 남는 고아 토큰을 만들지 않는다.
+        기존 기본 결제수단도 그대로 남아 있어야 한다(트랜잭션 전체가
+        롤백됐으므로)."""
+
+        first = self.service.register_method(
+            company_id=self.company.id, user_id=self.admin.id,
+            is_admin=True, method_type=PaymentMethodType.CARD,
+            raw_details={}, display_name="기존 기본", make_default=True,
+        )
+        self.assertTrue(first.is_default)
+
+        import unittest.mock as mock
+
+        credential_keys_before = set(self.credential_store._data.keys())
+
+        with mock.patch.object(
+            self.db, "commit", side_effect=RuntimeError("시뮬레이션된 DB 실패"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.register_method(
+                    company_id=self.company.id, user_id=self.admin.id,
+                    is_admin=True, method_type=PaymentMethodType.CARD,
+                    raw_details={}, display_name="새 기본(실패해야 함)",
+                    make_default=True,
+                )
+
+        methods = self.service.list_methods(self.company.id)
+        self.assertEqual(len(methods), 1, "실패한 등록이 DB에 남으면 안 된다.")
+        self.assertTrue(
+            self.service.list_methods(self.company.id)[0].is_default,
+            "기존 기본 결제수단이 그대로 유지돼야 한다.",
+        )
+        self.assertEqual(
+            set(self.credential_store._data.keys()), credential_keys_before,
+            "DB commit 실패 시 방금 저장한 Credential Store 토큰도 "
+            "되돌려져야 한다(고아 토큰 방지, IA-011).",
+        )
+
+    def test_set_default_method_leaves_old_default_intact_on_db_failure(self):
+        """2026-09-15 전면 감사 후속(Phase 4, IA-011) — 예전에는
+        "기존 기본값 해제"와 "새 기본값 지정"이 별도 commit이라, 두
+        번째 실패 시 기본 결제수단이 아예 없는 상태로 남을 수 있었다.
+        지금은 하나의 commit으로 묶여 있으므로, 실패하면 기존 기본값이
+        그대로 남아야 한다."""
+
+        old_default = self.service.register_method(
+            company_id=self.company.id, user_id=self.admin.id,
+            is_admin=True, method_type=PaymentMethodType.CARD,
+            raw_details={}, display_name="기존 기본", make_default=True,
+        )
+        new_method = self.service.register_method(
+            company_id=self.company.id, user_id=self.admin.id,
+            is_admin=True, method_type=PaymentMethodType.CARD,
+            raw_details={}, display_name="새 후보",
+        )
+
+        import unittest.mock as mock
+
+        with mock.patch.object(
+            self.db, "commit", side_effect=RuntimeError("시뮬레이션된 DB 실패"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.set_default_method(
+                    company_id=self.company.id, method_id=new_method.id,
+                    is_admin=True,
+                )
+
+        refreshed_old = self.service.repository.get_method(
+            self.company.id, old_default.id,
+        )
+        refreshed_new = self.service.repository.get_method(
+            self.company.id, new_method.id,
+        )
+        self.assertTrue(
+            refreshed_old.is_default,
+            "commit 실패 시 기존 기본값이 사라지면 안 된다(IA-011).",
+        )
+        self.assertFalse(refreshed_new.is_default)
+
     def test_methods_are_isolated_per_company(self):
 
         other_company = Company(

@@ -127,6 +127,21 @@ class Refund(Base):
         nullable=True,
     )
 
+    # 2026-09-15 전면 감사 후속(Phase 4, IA-011) — mark_executed()가
+    # 외부 Executor를 호출하기 직전에 이 값을 채우고 commit한다(외부
+    # 호출보다 먼저 durable하게 남긴다 — purchase_task 발주 시도가
+    # IN_FLIGHT를 네트워크 호출 전에 commit하는 것과 같은 설계).
+    # status가 여전히 APPROVED인데 이 값이 채워져 있다면 "직전 실행
+    # 시도가 성공/실패 어느 쪽으로도 확정되지 못한 채 끝났다"는
+    # 뜻이다(프로세스 중단 등) — 이 경우 mark_executed()는 사람의
+    # 명시적 확인 없이 Executor를 다시 호출하지 않는다(실제 Provider로
+    # 교체된 뒤 이중 환불을 막기 위함, 현재 Fake 단계에서는 직접
+    # 재현되지 않지만 구조적으로 미리 막아 둔다).
+    execution_attempt_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
