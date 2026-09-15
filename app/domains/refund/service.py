@@ -16,9 +16,20 @@ Phase 3에서 AUTOMATIC으로 설정돼 있어도 이 전이를 자동으로
 기능이 AUTOMATIC이면 한도 안에서 자동 실행 판정을 내려주는)와
 의도적으로 다른 설계다 — Phase 8 지시 문구 자체가 "승인 후에만
 진행한다"고 예외 없이 명시하기 때문이다. `FunctionMode.REFUND`
-값은 이 도메인에서 승인 자동화에 쓰이지 않는다(단순 참고용으로만
-Refund 행에 남길 수 있으나, 이번 구현에서는 그마저도 하지 않는다 —
-불필요한 결합을 늘리지 않기 위함).
+값은 **이 승인 게이트에는** 쓰이지 않는다 — 자동 모드라고 해서
+사람의 승인을 건너뛰지 않는다는 뜻이다.
+
+2026-09-15 전면 감사 후속(11단계 지시문 Phase 8, 실행 게이트 배선)
+— 단, `mark_executed()`(APPROVED→EXECUTED, 실제 Executor를 호출하는
+최종 지점)는 별도로 `is_emergency_stop_active()`와
+`get_function_mode(company_id, FunctionCode.REFUND)`(PAUSED/ERROR
+차단)를 검사한다 — purchase_task 발주 실행과 동일한 성격의 "최종
+외부 쓰기 직전" 방어선이다. 승인 게이트(사람 필수)와 실행 게이트
+(자동화 상태 반영)는 서로 다른 목적이라 별도로 존재한다: 승인은
+"이 환불이 정당한가"를, 실행 게이트는 "지금 이 순간 외부에 실제로
+쓰기를 내보내도 되는가"를 묻는다 — 이미 승인된 환불이라도 승인
+이후 비상정지가 걸리거나 REFUND 기능이 일시중지됐다면 실행하지
+않는다.
 
 **절대 하지 않는 것**: 실제 환불 실행. `mark_executed()`는
 `FakeRefundExecutor`만 호출한다(app/domains/refund/executor.py) —
@@ -36,6 +47,9 @@ from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import ForbiddenException
 from app.core.exceptions import NotFoundException
+from app.domains.automation_safety.constants import FunctionCode
+from app.domains.automation_safety.constants import FunctionMode
+from app.domains.automation_safety.service import SafetyService
 from app.domains.refund.constants import RefundStatus
 from app.domains.refund.constants import RefundType
 from app.domains.refund.executor import RefundExecutionError
@@ -52,6 +66,7 @@ class RefundService:
         self.db = db
         self.repository = RefundRepository(db)
         self.executor = executor
+        self._safety_service = SafetyService(db)
 
     def _get_required(self, refund_id: int, company_id: int) -> Refund:
 
@@ -224,6 +239,31 @@ class RefundService:
         if not is_admin:
             raise ForbiddenException(
                 "환불 실행 확정은 관리자만 가능합니다.",
+            )
+
+        # 2026-09-15 전면 감사 후속(Phase 8, 실행 게이트 배선) —
+        # AWAITING_APPROVAL→APPROVED 전이(approve_refund())는 항상
+        # 사람이 승인해야 하므로 자동화 모드와 무관하다(이 파일 상단
+        # docstring 참고, 의도적 설계). 하지만 이 메서드(APPROVED→
+        # EXECUTED, 실제 Executor 호출 — 돈이 움직이는 최종 지점)는
+        # purchase_task 발주 실행과 같은 성격의 "최종 외부 쓰기
+        # 직전" 지점이다. 이미 승인된 환불이라도 비상정지가 걸려
+        # 있거나 REFUND 기능이 PAUSED/ERROR 상태면 실행하지 않는다 —
+        # 승인 이후에 상황이 바뀌었을 수 있다는 것을 승인 단계
+        # 하나만으로는 반영할 수 없기 때문이다.
+        if self._safety_service.is_emergency_stop_active():
+            raise ConflictException(
+                "비상정지가 활성화되어 있습니다 — 환불 실행을 진행하지 "
+                "않습니다.",
+            )
+        function_mode = self._safety_service.get_function_mode(
+            company_id, FunctionCode.REFUND,
+        )
+        if function_mode in (FunctionMode.PAUSED, FunctionMode.ERROR):
+            raise ConflictException(
+                f"환불 기능이 현재 \"{FunctionMode.LABELS_KO.get(function_mode, function_mode)}\" "
+                f"상태입니다({FunctionMode.DESCRIPTIONS_KO.get(function_mode, '')}) — 이미 승인된 "
+                "환불이라도 실행을 진행하지 않습니다.",
             )
 
         now = now or datetime.utcnow()

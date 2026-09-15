@@ -27,6 +27,9 @@ from app.core.exceptions import ConflictException
 from app.core.exceptions import ForbiddenException
 from app.core.exceptions import NotFoundException
 from app.database.bootstrap import bootstrap_environment
+from app.domains.automation_safety.constants import FunctionCode
+from app.domains.automation_safety.constants import FunctionMode
+from app.domains.automation_safety.service import SafetyService
 from app.domains.company.model import Company
 from app.domains.refund.constants import RefundStatus
 from app.domains.refund.constants import RefundType
@@ -389,6 +392,76 @@ class RefundDomainTestCase(unittest.TestCase):
 
         rejected_attempt = self.service.get(refund.id, self.company.id)
         self.assertIsNone(rejected_attempt.execution_attempt_started_at)
+
+        executed = self.service.mark_executed(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+        self.assertEqual(executed.status, RefundStatus.EXECUTED)
+
+    def test_mark_executed_blocked_by_emergency_stop(self):
+        """2026-09-15 전면 감사 후속(Phase 8, 실행 게이트 배선) —
+        이미 승인된 환불이라도 비상정지가 활성화되어 있으면 실행을
+        진행하지 않는다(purchase_task 발주 실행과 동일한 최종
+        방어선)."""
+
+        refund = self._create_refund()
+        self.service.approve_refund(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+
+        SafetyService(self.db).activate_emergency_stop(
+            "테스트 정지", set_by=self.admin.id, is_admin=True,
+        )
+
+        with self.assertRaises(ConflictException):
+            self.service.mark_executed(
+                refund_id=refund.id, company_id=self.company.id,
+                user_id=self.admin.id, is_admin=True,
+            )
+
+        unchanged = self.service.get(refund.id, self.company.id)
+        self.assertEqual(unchanged.status, RefundStatus.APPROVED)
+
+    def test_mark_executed_blocked_when_refund_function_paused(self):
+        """REFUND 기능이 PAUSED 상태면 이미 승인된 환불도 실행되지
+        않는다."""
+
+        refund = self._create_refund()
+        self.service.approve_refund(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+
+        SafetyService(self.db).set_function_mode(
+            self.company.id, FunctionCode.REFUND, FunctionMode.PAUSED,
+            set_by=self.admin.id, is_admin=True,
+        )
+
+        with self.assertRaises(ConflictException):
+            self.service.mark_executed(
+                refund_id=refund.id, company_id=self.company.id,
+                user_id=self.admin.id, is_admin=True,
+            )
+
+        unchanged = self.service.get(refund.id, self.company.id)
+        self.assertEqual(unchanged.status, RefundStatus.APPROVED)
+
+    def test_mark_executed_allowed_when_refund_function_automatic(self):
+        """AUTOMATIC은 차단 대상이 아니다 — 실행 게이트가 과잉
+        차단하지 않는지 함께 확인한다."""
+
+        refund = self._create_refund()
+        self.service.approve_refund(
+            refund_id=refund.id, company_id=self.company.id,
+            user_id=self.admin.id, is_admin=True,
+        )
+
+        SafetyService(self.db).set_function_mode(
+            self.company.id, FunctionCode.REFUND, FunctionMode.AUTOMATIC,
+            set_by=self.admin.id, is_admin=True,
+        )
 
         executed = self.service.mark_executed(
             refund_id=refund.id, company_id=self.company.id,
