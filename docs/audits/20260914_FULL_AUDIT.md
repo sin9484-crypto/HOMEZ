@@ -707,3 +707,105 @@ IA-003(최신 잔여포인트) → IA-005(상품 불일치). 이 감사는 이 5
 "다음 독립 감사 순서"를 별도로 제안하고 있어, 두 감사·수정 작업이
 서로 충돌하지 않도록 **사용자의 조율 지시를 기다리는 것이 안전
 하다고 판단**했다.
+
+---
+
+## Phase 13 — 감사 후속 결함 수정(2026-09-15, Phase 1~2)
+
+사용자 지시("[HOMEZ 전체 감사 후속 결함 수정 작업]")에 따라 CODEX
+독립 감사가 로컬에만 반영해둔 IA-001~010 수정을 교차검증 후 커밋
+(`a4bfab1`)했고, 이어서 IA-004/IA-005/IA-008이 남긴 "옵션 불일치도
+제출 가능" 잔여 위험을 닫는 작업을 진행했다.
+
+### 13.1 Phase 1 — CODEX 로컬 수정 교차검증 및 커밋
+
+- 대상 파일 10개(`order_approval_service.py`,
+  `order_submission_service.py`, `constants.py`, `payment/router.py`,
+  `ai_learning/service.py` 및 대응 테스트 5개)를 diff 단위로 직접
+  검토 — IA-001, IA-004, IA-006, IA-007, IA-008, IA-009, IA-010에
+  각각 대응하는 변경임을 확인.
+- 독립 실행: 118/118 통과(Fake Provider·임시 SQLite만 사용, 실제
+  Windows Credential Manager·실제 homez.db 미접촉).
+- 커밋 `a4bfab1`로 체크포인트 생성, push 완료.
+- **이 라운드가 닫지 못한 항목**: IA-002(재확인 시 CONSUMED 승인
+  덮어쓰기)는 CODEX 수정에 이미 조기 guard로 포함되어 함께 닫힘.
+  IA-003(최신 잔여포인트 재검증), IA-005(상품/옵션 불일치 제출
+  가능)는 `revalidate_before_submission()`의 한도·가격 재검사까지는
+  CODEX 로컬 수정에 포함되어 있었으나, **옵션 ID·수량 단위의
+  일치 검증은 이번 Phase 2 작업 전까지 존재하지 않았다.**
+
+### 13.2 Phase 2 — 발주 승인의 상품/옵션/수량 결합 완성
+
+**수정 전 재현**: `revalidate_before_submission()`은 `product_code`
+문자열만 비교했다 — 같은 상품 코드 안에서 옵션 ID나 수량이 승인
+시점과 실제 제출 시점에 달라져도(예: 승인은 "블랙/M 1개"였는데
+제출은 "화이트/L 3개") 총액 스냅샷만 일치하면 그대로 통과했다.
+이는 12.1의 IA-005("승인된 상품과 다른 상품도 총액만 같으면 제출
+가능")가 지적한 문제의 옵션 단위 하위 케이스다.
+
+**수정 내용**:
+- `app/domains/purchase_task/model.py` — `PurchaseOrderApproval`에
+  `options_snapshot_json: Text | None`(nullable) 컬럼 추가. 스냅샷이
+  없으면(레거시 승인, 또는 옵션 없는 상품) 검사를 건너뛴다 — 이는
+  "검증 생략"이지 "검증 통과"로 추측해 채운 것이 아니다.
+- `app/domains/purchase_task/order_approval_service.py` —
+  `_normalize_options()` 추가(id 기준 정렬, 순서 차이는 다른 구성으로
+  오판하지 않음). `finalize_approval()`이 `options` 인자를 받아
+  정규화 후 스냅샷 저장. `revalidate_before_submission()`이
+  `current_options` 인자를 받아 스냅샷과 비교 — 불일치 시
+  `INVALIDATED_PRICE_CHANGE` 상태로 전환하고 "옵션" 문구가 포함된
+  한국어 사유와 함께 `ConflictException` 발생.
+- `schema.py`/`router.py` — 승인 확정 API가 옵션 목록을 받아
+  서비스에 전달하도록 배선.
+- `migrations/20260915_00_add_purchase_order_approval_options_snapshot.sql`
+  — `ALTER TABLE purchase_order_approvals ADD COLUMN
+  options_snapshot_json TEXT;` 단일 문장, BEGIN/COMMIT으로 감쌈.
+  **임시 SQLite에서만 검증했다 — 실제 homez.db(개발본·설치본
+  어느 쪽도)에는 적용하지 않았다.**
+- **명시적으로 구현하지 않은 것**: 수취인 정보(이름/연락처/주소)
+  결합. 현재 UI 흐름은 수취인 정보를 승인 시점이 아니라
+  `SubmitRealOrderRequest` 시점에만 수집하므로, 대조할 "승인된"
+  수취인 값 자체가 존재하지 않는다. 이는 추측으로 채울 수 없는
+  구조적 공백이며, 해소하려면 수취인 정보를 승인 이전 단계로
+  당겨오는 UI 흐름 변경이 필요하다(향후 별도 작업).
+
+**테스트 결과**:
+- Migration 자체: `tests/test_purchase_order_approval_options_snapshot_migration.py`
+  신규 4건 — 전체 체인 클린 적용, 컬럼 nullable 확인, 기존 승인 행
+  보존(NULL 백필), 재적용 명시적 실패. 전부 통과.
+  `MigrationRunner(db_path, migrations_dir).apply_pending(conn)`
+  (인자 1개) 호출 규약을 재확인 — 최초 `apply_pending(conn,
+  file_list)`로 잘못 호출했을 때는 예외 없이 "성공"처럼 보였지만
+  실제로는 DB에 아무것도 쓰지 않았다(재연결 후 테이블 0개로 확인).
+- 옵션 결합 로직: `tests/test_purchase_order_approval_service.py`의
+  `OptionBindingTestCase` 신규 3건(다른 옵션 제출 시 차단·순서만
+  다른 동일 옵션 통과·스냅샷 없으면 생략) 포함, 전체 32/32 통과.
+- **회귀로 드러난 부수 결함**: 신규 Migration 파일 추가가 "이전
+  상태" DB를 시뮬레이션하기 위해 전체 Migration 파일 목록을 손으로
+  나열해두던 테스트 3개(`test_purchase_channel_connection_migration.py`,
+  `test_unknown_resolution_and_tracking_refresh_migration.py`,
+  `test_permissions_timestamps_migration.py`)를 깨뜨렸다 — 이 파일들
+  자체 주석에 "다음에 이 파일을 만지면 자동 계산 방식으로 바꾸는
+  편이 낫다"고 이미 기록돼 있던 반복 패턴(9~10회 이력)이다. 근본
+  원인에 맞춰 하드코딩 목록을 `NEW_MIGRATION`과 같거나 사전순으로
+  뒤인 `.sql` 파일 전부를 자동 계산하는 방식으로 교체했다(3개 모두
+  수정, `test_migration_restricted_mode_schema_error_handling.py`는
+  아직 깨지지 않았지만 동일한 취약 패턴이 있어 선제적으로 함께
+  교체). 수정 후 관련 5개 파일 36건 전부 통과 재확인.
+- 이어서 `tests/test_purchase_*.py` 전체 회귀를 실행해 Phase 2
+  변경이 기존 매입 작업 흐름에 회귀를 일으키지 않았는지 확인했다
+  (결과는 아래 13.3, 실행 완료 후 갱신).
+
+### 13.3 잔여 위험과 다음 단계
+
+- IA-004(Critical, idempotency key 중복발주)는 `_has_blocking_task_attempt`
+  로 Phase 1에서 이미 닫혔음을 재확인(테스트
+  `test_task_lock_blocks_pending_inflight_and_succeeded_attempts`).
+- 수취인 정보 결합은 여전히 미해결 — 온채널 실제 발주 재개를 막는
+  근거 중 하나로 유지한다.
+- 개발본/설치본 DB 선택은 여전히 사용자 결정 대기(11.6-1).
+- Phase 3(작업 단위 중복 방지 DB 제약), Phase 4(결제/환불 Provider
+  원자성), Phase 5(백업 암호화 재감사), Phase 6(테스트 격리),
+  Phase 8(실행 게이트 배선), Phase 9(안전 기능 7-8/7-11/7-16/8-5/
+  8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이 라운드에서 착수하지
+  않았다 — 아래 최종 보고에서 범위 한계를 명시한다.
