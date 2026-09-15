@@ -321,6 +321,14 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 4h16v4H4zM4 10h16v10H4z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/><path d="M9 14h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span data-i18n="nav.purchase_task">매입·발주 관리</span>
       </button>
+      <button class="nav-item" data-view="product-attr-comparison" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 3v18M16 3v18M4 8h4M16 8h4M4 16h4M16 16h4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.product_attr_comparison">상품 속성 비교</span>
+      </button>
+      <button class="nav-item" data-view="recall-blocks" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10.3 3.9L2.6 17.4a1.6 1.6 0 001.4 2.4h16a1.6 1.6 0 001.4-2.4L13.7 3.9a1.6 1.6 0 00-2.8 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.recall_blocks">리콜·판매중지 차단</span>
+      </button>
     </div>
 
     <div class="nav-group">
@@ -950,6 +958,58 @@
         </div>
         <p class="view-desc" data-i18n="new_product.desc">신제품으로 판정된 후보(출시 0~15일, Asia/Seoul 기준)만 표시합니다.</p>
         <div id="new-product-table-wrap" class="table-wrap" aria-live="polite">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 상품 속성 비교(매입처/판매채널/HOMEZ 현재 값 불일치 검토) -->
+      <section id="view-product-attr-comparison" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.product_attr_comparison">상품 속성 비교</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="product-attr-comparison" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="stat-sub" data-i18n="pac.list_intro">매입처·판매채널·HOMEZ 현재 값이 불일치하거나 확인할 수 없는 상품은 자동 등록·자동 발주가 차단됩니다. 값을 확인하고 처리해 주세요.</p>
+        <div class="toolbar" id="pac-filter-tabs" role="tablist">
+          <button type="button" class="btn btn-sm pac-tab active" data-status="BLOCKED" data-i18n="pac.tab_blocked">차단됨</button>
+          <button type="button" class="btn btn-sm pac-tab" data-status="" data-i18n="pac.tab_all">전체</button>
+        </div>
+        <div id="pac-table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 상품 속성 비교 상세·해소 -->
+      <section id="view-product-attr-comparison-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="pac-detail-back-btn" data-i18n="pac.back_to_list">← 목록으로</button>
+        </div>
+        <div id="pac-detail-body">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 리콜·판매중지 확인 차단 -->
+      <section id="view-recall-blocks" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.recall_blocks">리콜·판매중지 차단</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="recall-blocks" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="stat-sub" data-i18n="rcb.list_intro">리콜·판매중지가 확인된 상품은 신규 등록·가격 확대·가상재고 증가·자동발주가 모두 차단됩니다. 기존 주문은 자동으로 취소되지 않습니다.</p>
+        <div class="toolbar" id="rcb-filter-tabs" role="tablist">
+          <button type="button" class="btn btn-sm rcb-tab active" data-status="BLOCKED" data-i18n="rcb.tab_blocked">차단됨</button>
+          <button type="button" class="btn btn-sm rcb-tab" data-status="" data-i18n="rcb.tab_all">전체</button>
+        </div>
+        <div id="rcb-table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 리콜·판매중지 차단 상세·해제 -->
+      <section id="view-recall-blocks-detail" class="view">
+        <div class="view-header">
+          <button class="btn btn-ghost btn-sm" id="rcb-detail-back-btn" data-i18n="rcb.back_to_list">← 목록으로</button>
+        </div>
+        <div id="rcb-detail-body">
           <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
         </div>
       </section>

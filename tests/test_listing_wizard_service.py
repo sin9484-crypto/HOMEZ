@@ -131,6 +131,9 @@ from app.domains.channel_policy.model import ChannelPolicyRule
 from app.domains.channel_policy.model import CompanyChannelPolicySettings
 from app.domains.channel_policy.service import ChannelPolicyService
 from app.domains.media_asset.model import MediaAsset
+from app.domains.product_attribute_match.model import ProductAttributeComparisonItem
+from app.domains.product_attribute_match.model import ProductAttributeComparisonRun
+from app.domains.recall_notice.model import RecallProductBlock
 from app.domains.product_candidate.constants import CandidateStatus
 from app.domains.product_candidate.model import ProductCandidate
 from app.domains.product_candidate.model import ProductCandidateSelection
@@ -281,6 +284,9 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 ChannelPolicyRule.__table__,
                 CompanyChannelPolicySettings.__table__,
                 ChannelPolicyEvaluation.__table__,
+                ProductAttributeComparisonRun.__table__,
+                ProductAttributeComparisonItem.__table__,
+                RecallProductBlock.__table__,
             ],
         )
         with self.engine.begin() as conn:

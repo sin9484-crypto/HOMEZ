@@ -54,6 +54,11 @@ from app.domains.purchase_task.schema import ChannelConnectionCreate
 from app.domains.purchase_task.schema import ChannelConnectionCredentialSave
 from app.domains.purchase_task.schema import ChannelConnectionRename
 from app.domains.purchase_task.schema import ChannelConnectionResponse
+from app.domains.purchase_task.schema import ReactivateOrderFunctionRequest
+from app.domains.purchase_task.schema import SupplierIncidentAutoPauseSettingRequest
+from app.domains.purchase_task.schema import SupplierIncidentAutoPauseSettingResponse
+from app.domains.purchase_task.schema import SupplierIncidentRecordRequest
+from app.domains.purchase_task.schema import SupplierIncidentResponse
 from app.domains.purchase_task.schema import MemberPointCheckResponse
 from app.domains.purchase_task.schema import OrderLookupResponse
 from app.domains.purchase_task.schema import TrackingLookupResponse
@@ -862,6 +867,109 @@ def check_channel_connection_member_point(
     except PurchaseChannelAdapterError as exc:
         raise BadRequestException(str(exc)) from exc
     return result
+
+
+# --------------------------------------------------
+# 매입처 사건 기록·자동 일시중지(Phase 9B, 7-11)
+# --------------------------------------------------
+
+def get_supplier_incident_service(
+    db: Session = Depends(get_db),
+) -> "SupplierIncidentService":
+
+    from app.domains.purchase_task.supplier_incident_service import (
+        SupplierIncidentService,
+    )
+
+    return SupplierIncidentService(db)
+
+
+@router.post(
+    "/channel-connections/{connection_id}/incidents",
+    response_model=SupplierIncidentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_supplier_incident(
+    connection_id: int, data: SupplierIncidentRecordRequest,
+    current_user: User = Depends(AdminGuard),
+    service=Depends(get_supplier_incident_service),
+):
+
+    return service.record_incident(
+        connection_id=connection_id, company_id=current_user.company_id,
+        incident_type=data.incident_type, detail=data.detail,
+        recorded_by=current_user.id,
+    )
+
+
+@router.get(
+    "/channel-connections/{connection_id}/incidents",
+    response_model=list[SupplierIncidentResponse],
+)
+def list_supplier_incidents(
+    connection_id: int,
+    current_user: User = Depends(StaffGuard),
+    service=Depends(get_supplier_incident_service),
+):
+
+    return service.list_incidents(connection_id, current_user.company_id)
+
+
+@router.put(
+    "/supplier-incident-auto-pause-setting",
+    response_model=SupplierIncidentAutoPauseSettingResponse,
+)
+def set_supplier_incident_auto_pause_setting(
+    data: SupplierIncidentAutoPauseSettingRequest,
+    current_user: User = Depends(AdminGuard),
+    service=Depends(get_supplier_incident_service),
+):
+
+    service.set_auto_pause_setting(
+        current_user.company_id, window_days=data.window_days,
+        max_incident_count=data.max_incident_count,
+        set_by=current_user.id, is_admin=True,
+    )
+    window_days, max_count = service.get_auto_pause_setting(
+        current_user.company_id,
+    )
+    return SupplierIncidentAutoPauseSettingResponse(
+        window_days=window_days, max_incident_count=max_count,
+    )
+
+
+@router.get(
+    "/supplier-incident-auto-pause-setting",
+    response_model=SupplierIncidentAutoPauseSettingResponse,
+)
+def get_supplier_incident_auto_pause_setting(
+    current_user: User = Depends(StaffGuard),
+    service=Depends(get_supplier_incident_service),
+):
+
+    window_days, max_count = service.get_auto_pause_setting(
+        current_user.company_id,
+    )
+    return SupplierIncidentAutoPauseSettingResponse(
+        window_days=window_days, max_incident_count=max_count,
+    )
+
+
+@router.post(
+    "/channel-connections/{connection_id}/reactivate-order-function",
+    response_model=ChannelConnectionResponse,
+)
+def reactivate_order_function(
+    connection_id: int, data: ReactivateOrderFunctionRequest,
+    current_user: User = Depends(AdminGuard),
+    service=Depends(get_supplier_incident_service),
+):
+
+    return service.reactivate_order_function(
+        connection_id, current_user.company_id, is_admin=True,
+        reactivated_by=current_user.id,
+        confirmation_note=data.confirmation_note,
+    )
 
 
 # --------------------------------------------------

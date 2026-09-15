@@ -63,6 +63,8 @@ from app.domains.purchase_task.constants import ChannelConnectionStatus
 from app.domains.purchase_task.constants import ConnectionMethod
 from app.domains.purchase_task.constants import CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD
 from app.domains.purchase_task.constants import CREDENTIAL_REVERIFICATION_WINDOW_HOURS
+from app.domains.purchase_task.constants import DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS
+from app.domains.purchase_task.constants import RATE_LIMIT_BACKOFF_SECONDS
 from app.domains.purchase_task.constants import is_onchannel_order_contract_fully_confirmed
 from app.domains.purchase_task.constants import PurchaseChannelMallCode
 from app.domains.purchase_task.constants import unconfirmed_onchannel_order_contract_items
@@ -571,6 +573,16 @@ class PurchaseChannelConnectionService:
             raise BadRequestException(
                 "이 매입처는 API 기반 발주를 지원하지 않습니다(브라우저 로그인형).",
             )
+        # 2026-09-15 Phase 9B(7-11) — 반복 사건으로 이 연결의 발주
+        # 기능만 일시중지된 상태면, 다른 조건이 전부 정상이어도 막는다
+        # (회사 전체 자동화 모드와 무관 — 이 연결 하나만의 문제).
+        if connection.order_paused_at is not None:
+            raise ConflictException(
+                "이 연결은 반복된 매입처 사건(품절·오배송·취소·배송지연 "
+                f"등)으로 발주 기능이 일시중지되어 있습니다(사유: "
+                f"{connection.order_paused_reason}) — 원인을 확인하고 "
+                "사람이 명시적으로 재활성화해야 다시 발주할 수 있습니다.",
+            )
         self._apply_status_recompute(connection, touch_last_checked=True)
         self.db.commit()
         self.db.refresh(connection)
@@ -580,6 +592,33 @@ class PurchaseChannelConnectionService:
                 f"{connection.status}) — 실제 상품 조회가 최근 "
                 f"{CREDENTIAL_REVERIFICATION_WINDOW_HOURS}시간 안에 먼저 성공해야 합니다.",
             )
+        # 2026-09-15 Phase 9C(7-16) — 이 연결로 마지막 발주가 성공한
+        # 지 오래됐으면("휴면") 위 조회 인증 확인(24시간 이내
+        # verified_at)만으로는 부족하다고 본다 — 24시간 규칙은 항상
+        # 걸리는 일반 규칙이라 "오래 안 썼다"는 사실 자체를 사용자에게
+        # 알리지 못한다. 이 조건은 위 검사를 추가로 제한하지 않는다
+        # (verified_at이 이미 24시간 안이면 이 분기도 통과) — 대신
+        # "왜 재확인이 필요했는지"를 명확한 사유와 함께 감사 이벤트로
+        # 남긴다. 조회 성공을 결제·발주 가능 판정으로 확대하지
+        # 않는다는 원칙은 그대로 유지된다(이 메서드는 계속 (2)(3)
+        # 조건을 그대로 통과해야만 True를 반환한다).
+        dormant_threshold = datetime.utcnow() - timedelta(
+            days=DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS,
+        )
+        was_dormant = (
+            connection.last_successful_order_at is None
+            or connection.last_successful_order_at < dormant_threshold
+        )
+        if was_dormant:
+            self._log_event(
+                connection, ChannelConnectionEventType.STATUS_CHANGED,
+                detail=(
+                    f"휴면 연결({DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS}일"
+                    "이상 발주 없음) 재사용 — 조회 인증 재확인 통과 후 발주 허용"
+                ),
+                triggered_by=None,
+            )
+            self.db.commit()
         if not is_onchannel_order_contract_fully_confirmed():
             remaining = ", ".join(unconfirmed_onchannel_order_contract_items())
             raise ConflictException(
@@ -687,6 +726,134 @@ class PurchaseChannelConnectionService:
             credential_fingerprint_before=credential_fingerprint_before,
         )
         return result
+
+    def lookup_product_cached(
+        self, connection_id: int, company_id: int, external_product_id: str,
+        *, option_id: str, triggered_by: int | None = None,
+    ):
+        """2026-09-15 Phase 9A(HOMEZ_USER_OPERATION_SETTINGS.md 7-8)
+        — "매입처 API 호출 제한을 지키도록 조회 간격과 캐시 유효시간을
+        둔다"의 일반 조회 진입점. **`lookup_product()` 자체는 절대
+        캐시를 쓰지 않는다** — 이 메서드가 그 위에 캐시를 얹는
+        별도 진입점이다. order_submission_service.py의 발주 직전
+        조회는 여전히 이 메서드를 거치지 않고 `adapter.lookup_product()`
+        를 직접 호출한다(가격 인상을 놓치지 않기 위함, 변경 없음).
+
+        1) 이 연결이 429로 재시도 제한 중이면(rate_limited_until)
+           네트워크를 아예 타지 않고 그 시각을 담아 차단한다(자동
+           반복호출 금지).
+        2) 요청한 옵션의 가격·재고가 둘 다 아직 유효하면(만료 전)
+           캐시에서 반환한다(실제 조회 없음).
+        3) 아니면 실제 `lookup_product()`를 호출하고, 성공(SUPPORTED)
+           응답의 옵션들만 캐시에 저장한다(오류·인증실패·형식불명은
+           저장하지 않는다 — 이 메서드 자체가 성공/실패를 구분해서
+           `store_*`를 호출하므로, price_stock_safety 쪽 계약을
+           지킨다)."""
+
+        from app.domains.price_stock_safety.service import PriceStockSafetyService
+        from app.domains.purchase_task.constants import CapabilitySupport
+
+        connection = self.get_connection_or_404(connection_id, company_id)
+
+        if (
+            connection.rate_limited_until is not None
+            and connection.rate_limited_until > datetime.utcnow()
+        ):
+            raise ConflictException(
+                "이 연결은 매입처 API 호출 제한(429)으로 재시도 대기 "
+                f"중입니다 — {connection.rate_limited_until.isoformat()} "
+                "이후 다시 시도할 수 있습니다(자동으로 다시 시도하지 "
+                "않습니다).",
+            )
+
+        cache = PriceStockSafetyService(self.db)
+        cached_price = cache.get_cached_price(
+            company_id, connection_id, external_product_id, option_id,
+        )
+        cached_stock = cache.get_cached_stock(
+            company_id, connection_id, external_product_id, option_id,
+        )
+        if cached_price is not None and cached_stock is not None:
+            price_amount, price_confirmed_at = cached_price
+            in_stock, stock_confirmed_at = cached_stock
+            return {
+                "from_cache": True,
+                "price_amount": price_amount,
+                "price_confirmed_at": price_confirmed_at,
+                "in_stock": in_stock,
+                "stock_confirmed_at": stock_confirmed_at,
+            }
+
+        try:
+            result = self.lookup_product(
+                connection_id, company_id, external_product_id,
+                triggered_by=triggered_by,
+            )
+        except Exception as exc:
+            # 2026-09-15 Phase 9F(8-19) — 조회 자체가 실패하면 판매
+            # 가능 여부를 확인할 방법이 없다는 뜻이다 — 가상재고 0
+            # 제안을 만든다(외부 판매채널에는 아무것도 보내지 않는다,
+            # 사람 승인 전까지는 제안일 뿐이다).
+            cache.propose_zero_stock(
+                company_id=company_id, connection_id=connection_id,
+                product_code=external_product_id,
+                reason=f"실제 조회 실패로 판매 가능 여부 확인 불가: "
+                f"{type(exc).__name__}",
+            )
+            raise
+
+        if result.support == CapabilitySupport.SUPPORTED:
+            for option in result.options:
+                if option.price is not None:
+                    cache.store_price_quote(
+                        company_id=company_id, connection_id=connection_id,
+                        product_code=external_product_id,
+                        option_id=option.option_id,
+                        price_amount=float(option.price),
+                    )
+                if option.in_stock is not None:
+                    cache.store_stock_quote(
+                        company_id=company_id, connection_id=connection_id,
+                        product_code=external_product_id,
+                        option_id=option.option_id,
+                        in_stock=option.in_stock,
+                    )
+
+        matching = next(
+            (o for o in result.options if o.option_id == option_id), None,
+        )
+
+        # 2026-09-15 Phase 9F(8-19) — 조회 자체는 성공했어도(support=
+        # SUPPORTED) 요청한 옵션의 판매 가능 여부(in_stock)를 확인할
+        # 수 없으면(옵션을 못 찾았거나 in_stock이 None) 마찬가지로
+        # "확인 불가"로 본다.
+        sellability_unconfirmed = (
+            result.support != CapabilitySupport.SUPPORTED
+            or matching is None
+            or matching.in_stock is None
+        )
+        if sellability_unconfirmed:
+            cache.propose_zero_stock(
+                company_id=company_id, connection_id=connection_id,
+                product_code=external_product_id,
+                reason=(
+                    "실제 조회는 성공했지만 옵션의 판매 가능 여부를 "
+                    f"확인할 수 없음(support={result.support}, "
+                    f"option={option_id})"
+                ),
+            )
+
+        return {
+            "from_cache": False,
+            "price_amount": (
+                float(matching.price)
+                if matching is not None and matching.price is not None
+                else None
+            ),
+            "price_confirmed_at": datetime.utcnow(),
+            "in_stock": matching.in_stock if matching is not None else None,
+            "stock_confirmed_at": datetime.utcnow(),
+        }
 
     def list_products(
         self, connection_id: int, company_id: int,
@@ -903,6 +1070,7 @@ class PurchaseChannelConnectionService:
 
         from app.domains.purchase_task.onchannel_client import (
             OnchannelAuthenticationError, OnchannelPermissionError,
+            OnchannelRateLimitedError,
         )
 
         connection.consecutive_failure_count += 1
@@ -924,8 +1092,35 @@ class PurchaseChannelConnectionService:
                 triggered_by=triggered_by,
             )
 
+        # 2026-09-15 Phase 9A(7-8) — 429(호출 제한)면 재시도 가능
+        # 시각을 기록한다. 자동으로 다시 호출하는 코드는 이 저장소
+        # 어디에도 없다(문서 원칙 "결제와 발주는 자동 재시도하지
+        # 않는다") — 이 값은 "언제부터 다시 시도해도 되는지"를 화면에
+        # 보여주기 위한 것뿐이다.
+        if isinstance(exc, OnchannelRateLimitedError):
+            connection.rate_limited_until = datetime.utcnow() + timedelta(
+                seconds=RATE_LIMIT_BACKOFF_SECONDS,
+            )
+
         self.db.commit()
         self.db.refresh(connection)
+
+        # 2026-09-15 Phase 9B(7-11) — 인증 실패는 이미 "사건"의 한
+        # 종류다(다른 사건은 발주 등 다른 흐름에서 기록한다). Credential
+        # Store에 전혀 접근하지 않는 SupplierIncidentService로 기록해
+        # 도메인 결합을 늘리지 않는다.
+        if is_auth_failure:
+            from app.domains.purchase_task.supplier_incident_service import (
+                SupplierIncidentService,
+            )
+            from app.domains.purchase_task.constants import SupplierIncidentType
+
+            SupplierIncidentService(self.db).record_incident(
+                connection_id=connection.id, company_id=connection.company_id,
+                incident_type=SupplierIncidentType.AUTH_FAILURE,
+                detail=f"{type(exc).__name__}: {exc}"[:500],
+                recorded_by=None,
+            )
 
         if reached_notify_threshold:
             self._notify_repeated_lookup_failure(

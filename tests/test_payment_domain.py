@@ -116,25 +116,39 @@ class PaymentDomainTestCase(unittest.TestCase):
         self.assertEqual(method.method_type, PaymentMethodType.CARD)
 
     def test_register_method_never_stores_raw_card_number_in_db(self):
+        """`credential_target_name`은 `FakePaymentProvider.tokenize()`가
+        `raw_details`를 전혀 보지 않고 `secrets.token_hex()`로만 만든
+        토큰의 접미사다 — raw_details와 통계적으로 무관한 무작위
+        16진수 문자열이다. 그래서 짧은 3자리 CVC("999" 등)를 그
+        컬럼 전체 텍스트에서 부분일치로 찾으면, 실제 유출이 전혀
+        없어도 우연히 일치하는 flaky 실패가 날 수 있다(16자리
+        카드번호는 이 우연 충돌 확률이 무시할 수준이라 문제없다).
+        그래서 CVC는 사용자가 직접 입력하는 자유텍스트 필드
+        (display_name)에서만 확인하고, credential_target_name은
+        카드번호(16자리)만 확인한다."""
 
         raw_card_number = "4111111111111111"
+        raw_cvc = "999"
 
         self.service.register_method(
             company_id=self.company.id, user_id=self.admin.id,
             is_admin=True, method_type=PaymentMethodType.CARD,
-            raw_details={"number": raw_card_number, "cvc": "999"},
+            raw_details={"number": raw_card_number, "cvc": raw_cvc},
             display_name="국민카드 **** 1111",
         )
 
         rows = self.db.execute(
-            text("SELECT * FROM payment_methods"),
+            text(
+                "SELECT display_name, credential_target_name "
+                "FROM payment_methods",
+            ),
         ).fetchall()
         self.assertEqual(len(rows), 1)
 
-        for row in rows:
-            row_text = json.dumps([str(v) for v in row], ensure_ascii=False)
-            self.assertNotIn(raw_card_number, row_text)
-            self.assertNotIn("999", row_text)
+        display_name, credential_target_name = rows[0]
+        self.assertNotIn(raw_card_number, display_name)
+        self.assertNotIn(raw_cvc, display_name)
+        self.assertNotIn(raw_card_number, credential_target_name)
 
     def test_register_method_stores_only_token_ref_in_credential_store(self):
 

@@ -157,6 +157,32 @@ class ListingWizardLiveService:
             blockers.append("VALID_APPROVAL_REQUIRED")
         if not self._approval_payload_unchanged(wizard, company_id):
             blockers.append("APPROVED_PAYLOAD_CHANGED")
+        # 2026-09-15 전면 감사 후속(Phase 9G, HOMEZ_USER_OPERATION_
+        # SETTINGS.md 10-4) — 이 후보(candidate)에 대한 가장 최근
+        # 상품 속성 비교(이름/옵션/수량/사이즈/제조사/원산지)가
+        # 불일치·확인불가로 차단(BLOCKED)된 채 아직 해소되지 않았으면
+        # 실제 쿠팡 전송을 막는다. 비교를 실행한 적이 없으면(레코드
+        # 없음) 통과한다 — 이 블로커는 "비교를 실행하라"는 요구가
+        # 아니라 "이미 실행된 비교 결과를 무시하지 않는다"는 게이트다.
+        if wizard.product_candidate_id is not None:
+            from app.domains.product_attribute_match.service import (
+                ProductAttributeMatchService,
+            )
+
+            if ProductAttributeMatchService(self.db).has_blocking_attribute_mismatch(
+                company_id, f"candidate:{wizard.product_candidate_id}",
+            ):
+                blockers.append("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED")
+
+            # 2026-09-15 전면 감사 후속(Phase 9J, HOMEZ_USER_OPERATION_
+            # SETTINGS.md 10-18) — 이 후보에 대해 리콜/판매중지가
+            # 확인돼 차단된 상태면 신규 등록(실제 쿠팡 전송)을 막는다.
+            from app.domains.recall_notice.service import RecallNoticeService
+
+            if RecallNoticeService(self.db).has_active_block(
+                company_id, f"candidate:{wizard.product_candidate_id}",
+            ):
+                blockers.append("RECALL_OR_STOP_SALE_BLOCKED")
         _payload, payload_blockers = self._build(
             wizard, submission, selection,
         )

@@ -39,6 +39,10 @@ from app.domains.currency.router import router as currency_router
 from app.domains.payment.router import router as payment_router
 from app.domains.refund.router import router as refund_router
 from app.domains.price_stock_safety.router import router as price_stock_safety_router
+from app.domains.product_attribute_match.router import (
+    router as product_attribute_match_router,
+)
+from app.domains.recall_notice.router import router as recall_notice_router
 from app.domains.supplier_capability.router import router as supplier_capability_router
 from app.domains.diagnostics.router import router as diagnostics_router
 from app.domains.guides.router import router as guides_router
@@ -659,6 +663,23 @@ app.include_router(
 # 테이블들이 아직 없다(Migration은 임시 SQLite에서만 리허설).
 app.include_router(
     price_stock_safety_router,
+)
+
+# 2026-09-15 전면 감사 후속(Phase 9G) — 상품 속성(이름/옵션/수량/
+# 사이즈/제조사/원산지) 정규화 비교(app/domains/product_attribute_
+# match). 실제 homez.db에는 이 테이블들이 아직 없다(Migration은
+# 임시 SQLite에서만 리허설).
+app.include_router(
+    product_attribute_match_router,
+)
+
+# 2026-09-15 전면 감사 후속(Phase 9I/9J) — 리콜/판매중지 매일 확인·
+# 확인된 문제 상품 차단(app/domains/recall_notice). 실제 homez.db에는
+# 이 테이블들이 아직 없다(Migration은 임시 SQLite에서만 리허설). 실제
+# Provider도 아직 선정되지 않았다(app/domains/recall_notice/
+# provider.py::get_real_provider() 참고).
+app.include_router(
+    recall_notice_router,
 )
 
 # 2026-09-10 Phase 12 — AI 데이터·학습 기반(app/domains/ai_learning).

@@ -661,6 +661,15 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             # 2026-09-15 전면 감사 후속(Phase 9, HOMEZ_USER_OPERATION_
             # SETTINGS.md 8-16) — 매입처 조회 반복 실패 알림.
             "SUPPLIER_LOOKUP_REPEATED_FAILURE",
+            # 2026-09-15 전면 감사 후속 Phase 9B(7-11) — 반복된 매입처
+            # 이슈로 특정 연결의 발주 기능만 자동 일시중지됐을 때.
+            "SUPPLIER_CONNECTION_ORDER_AUTO_PAUSED",
+            # 2026-09-15 전면 감사 후속 Phase 9F(8-19) — 매입처 판매
+            # 가능 여부를 확인할 수 없어 가상재고 0 제안이 생성됐을 때.
+            "VIRTUAL_STOCK_ZERO_PROPOSED",
+            # 2026-09-15 전면 감사 후속 Phase 9J(10-18) — 리콜/판매중지
+            # 확인으로 상품이 차단됐을 때.
+            "RECALL_PRODUCT_BLOCKED",
         }
         actual_wired = {code for code, row in by_code.items() if row.wired}
         self.assertEqual(actual_wired, expected_wired)
@@ -690,6 +699,15 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             # 2026-09-15 전면 감사 후속(Phase 9) —
             # SUPPLIER_LOOKUP_REPEATED_FAILURE가 실제로 발생하는 위치.
             Path("app/domains/purchase_task/channel_connection_service.py"),
+            # 2026-09-15 전면 감사 후속 Phase 9B —
+            # SUPPLIER_CONNECTION_ORDER_AUTO_PAUSED가 실제로 발생하는 위치.
+            Path("app/domains/purchase_task/supplier_incident_service.py"),
+            # 2026-09-15 전면 감사 후속 Phase 9F —
+            # VIRTUAL_STOCK_ZERO_PROPOSED가 실제로 발생하는 위치.
+            Path("app/domains/price_stock_safety/service.py"),
+            # 2026-09-15 전면 감사 후속 Phase 9J —
+            # RECALL_PRODUCT_BLOCKED가 실제로 발생하는 위치.
+            Path("app/domains/recall_notice/service.py"),
         ]
         source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
         for event_code, definition in EVENT_CATALOG.items():

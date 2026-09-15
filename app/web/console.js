@@ -2139,6 +2139,421 @@
   }
 
   // --------------------------------------------------
+  // 2026-09-15 전면 감사 후속(Phase 9H, HOMEZ_USER_OPERATION_
+  // SETTINGS.md 10-5) — 상품 속성 비교(매입처/판매채널/HOMEZ 현재
+  // 값) 목록·상세·해소. ai-proposals와 동일한 탭 목록 → 상세 패턴을
+  // 그대로 따른다.
+  // --------------------------------------------------
+
+  let pacCurrentStatus = "BLOCKED";
+
+  async function loadProductAttrComparison() {
+    wirePacToolbarOnce();
+
+    document.querySelectorAll(".pac-tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.status === pacCurrentStatus);
+    });
+
+    const wrap = el("pac-table-wrap");
+    wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let rows;
+    try {
+      const qs = pacCurrentStatus ? `?status_filter=${encodeURIComponent(pacCurrentStatus)}` : "";
+      rows = await apiFetch(`/product-attribute-comparisons${qs}`);
+    } catch (err) {
+      renderErrorState(wrap, err);
+      return;
+    }
+
+    if (!rows || rows.length === 0) {
+      renderEmptyState(wrap, HomezI18n.t("pac.empty_title"), HomezI18n.t("pac.empty_sub"));
+      return;
+    }
+
+    const colProduct = HomezI18n.t("pac.col_product");
+    const colStatus = HomezI18n.t("pac.col_status");
+    const colCreated = HomezI18n.t("pac.col_created_at");
+    const colResolved = HomezI18n.t("pac.col_resolved_at");
+
+    wrap.innerHTML = `
+      <table class="responsive-cards">
+        <thead><tr><th>${colProduct}</th><th>${colStatus}</th><th>${colCreated}</th><th>${colResolved}</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr class="row-clickable" data-id="${r.id}" tabindex="0">
+            <td data-label="${colProduct}">${escapeHtml(r.product_identifier)}</td>
+            <td data-label="${colStatus}">${statusPillHtml(r.overall_status)}</td>
+            <td data-label="${colCreated}">${fmtDate(r.created_at)}</td>
+            <td data-label="${colResolved}">${r.resolved_at ? fmtDate(r.resolved_at) : "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll("tr[data-id]").forEach((tr) => {
+      const openIt = () => navigateTo("product-attr-comparison-detail", { id: Number(tr.dataset.id) });
+      tr.addEventListener("click", openIt);
+      tr.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          openIt();
+        }
+      });
+    });
+  }
+
+  function wirePacToolbarOnce() {
+    if (wirePacToolbarOnce._wired) return;
+    wirePacToolbarOnce._wired = true;
+
+    document.querySelectorAll(".pac-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        pacCurrentStatus = btn.dataset.status;
+        loadProductAttrComparison();
+      });
+    });
+  }
+
+  let pacDetailCurrentId = null;
+
+  async function loadProductAttrComparisonDetail(opts = {}) {
+    const id = opts.id || pacDetailCurrentId;
+    pacDetailCurrentId = id;
+    wirePacDetailBackOnce();
+
+    const body = el("pac-detail-body");
+    body.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    if (!id) {
+      renderEmptyState(body, HomezI18n.t("pac.empty_title"), "");
+      return;
+    }
+
+    let run;
+    try {
+      run = await apiFetch(`/product-attribute-comparisons/${id}`);
+    } catch (err) {
+      renderErrorState(body, err);
+      return;
+    }
+
+    renderPacDetail(body, run);
+  }
+
+  function wirePacDetailBackOnce() {
+    if (wirePacDetailBackOnce._wired) return;
+    wirePacDetailBackOnce._wired = true;
+    el("pac-detail-back-btn").addEventListener("click", () => navigateTo("product-attr-comparison"));
+  }
+
+  function pacFieldLabel(fieldName) {
+    const key = `pac.field_${String(fieldName || "").toLowerCase()}`;
+    const translated = HomezI18n.t(key);
+    return translated && translated !== key ? translated : fieldName;
+  }
+
+  function pacNeedsSelection(item) {
+    return item.match_status !== "MATCHED";
+  }
+
+  // 매입처/판매채널/HOMEZ 현재 값 중 실제로 존재하는(중복 제거한)
+  // 값만 선택지로 보여준다 — 아무 라디오도 기본 선택하지 않는다
+  // (임의 기본값 금지, HOMEZ_USER_OPERATION_SETTINGS.md 10-5).
+  function pacSelectionInputHtml(item) {
+    const options = [item.supplier_value, item.sales_channel_value, item.homez_current_value]
+      .filter((v, idx, arr) => v != null && v !== "" && arr.indexOf(v) === idx);
+
+    const radios = options.map((v) => `
+      <label><input type="radio" name="pac-radio-${item.id}" value="${escapeHtml(v)}"> ${escapeHtml(v)}</label>
+    `).join("");
+
+    return `
+      <div class="pac-selection">
+        ${radios || `<p class="field-hint">${escapeHtml(HomezI18n.t("pac.no_candidate_values"))}</p>`}
+        <label>${escapeHtml(HomezI18n.t("pac.custom_value_label"))}
+          <input type="text" class="pt-cc-form-input" id="pac-custom-${item.id}"></label>
+      </div>
+    `;
+  }
+
+  function renderPacDetail(body, run) {
+    const resolved = !!run.resolved_at;
+
+    const rowsHtml = run.items.map((item) => `
+      <tr>
+        <td data-label="${escapeHtml(HomezI18n.t("pac.col_field"))}">${escapeHtml(pacFieldLabel(item.field_name))}</td>
+        <td data-label="${escapeHtml(HomezI18n.t("pac.col_supplier_value"))}">
+          ${escapeHtml(item.supplier_value ?? "—")}
+          ${item.supplier_source ? `<div class="field-hint">${escapeHtml(item.supplier_source)}${item.supplier_confirmed_at ? " · " + fmtDate(item.supplier_confirmed_at) : ""}</div>` : ""}
+        </td>
+        <td data-label="${escapeHtml(HomezI18n.t("pac.col_sales_channel_value"))}">
+          ${escapeHtml(item.sales_channel_value ?? "—")}
+          ${item.sales_channel_source ? `<div class="field-hint">${escapeHtml(item.sales_channel_source)}${item.sales_channel_confirmed_at ? " · " + fmtDate(item.sales_channel_confirmed_at) : ""}</div>` : ""}
+        </td>
+        <td data-label="${escapeHtml(HomezI18n.t("pac.col_homez_current_value"))}">
+          ${escapeHtml(item.homez_current_value ?? "—")}
+          ${item.homez_current_source ? `<div class="field-hint">${escapeHtml(item.homez_current_source)}${item.homez_current_confirmed_at ? " · " + fmtDate(item.homez_current_confirmed_at) : ""}</div>` : ""}
+        </td>
+        <td data-label="${escapeHtml(HomezI18n.t("pac.col_match_status"))}">${statusPillHtml(item.match_status)}</td>
+        <td data-label="${escapeHtml(HomezI18n.t("pac.col_selection"))}">
+          ${resolved
+            ? escapeHtml(item.selected_value ?? "—")
+            : (pacNeedsSelection(item) ? pacSelectionInputHtml(item) : "—")}
+        </td>
+      </tr>
+    `).join("");
+
+    body.innerHTML = `
+      <div class="view-header">
+        <h1>${escapeHtml(run.product_identifier)}</h1>
+        ${statusPillHtml(run.overall_status)}
+      </div>
+      <div class="dash-card">
+        <dl class="kv-list">
+          <dt>${escapeHtml(HomezI18n.t("pac.col_created_at"))}</dt><dd>${fmtDate(run.created_at)}</dd>
+          ${run.resolved_at ? `<dt>${escapeHtml(HomezI18n.t("pac.detail_resolved_at"))}</dt><dd>${fmtDate(run.resolved_at)}</dd>` : ""}
+          ${run.resolution_note ? `<dt>${escapeHtml(HomezI18n.t("pac.detail_resolution_note"))}</dt><dd>${escapeHtml(run.resolution_note)}</dd>` : ""}
+        </dl>
+      </div>
+      <table class="responsive-cards pac-compare-table">
+        <thead><tr>
+          <th>${escapeHtml(HomezI18n.t("pac.col_field"))}</th>
+          <th>${escapeHtml(HomezI18n.t("pac.col_supplier_value"))}</th>
+          <th>${escapeHtml(HomezI18n.t("pac.col_sales_channel_value"))}</th>
+          <th>${escapeHtml(HomezI18n.t("pac.col_homez_current_value"))}</th>
+          <th>${escapeHtml(HomezI18n.t("pac.col_match_status"))}</th>
+          <th>${escapeHtml(HomezI18n.t("pac.col_selection"))}</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      ${resolved ? "" : `
+        <div class="detail-panel">
+          <h2>${escapeHtml(HomezI18n.t("pac.resolve_heading"))}</h2>
+          <p class="field-hint">${escapeHtml(HomezI18n.t("pac.resolve_hint"))}</p>
+          <label class="field-label" for="pac-resolution-note">${escapeHtml(HomezI18n.t("pac.resolve_note_label"))}</label>
+          <textarea id="pac-resolution-note" class="pt-cc-form-input" maxlength="500"></textarea>
+          <p class="field-error" id="pac-resolve-error"></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-primary" id="pac-resolve-submit-btn">${escapeHtml(HomezI18n.t("pac.resolve_submit_btn"))}</button>
+          </div>
+        </div>
+      `}
+    `;
+
+    if (resolved) return;
+
+    const submitBtn = el("pac-resolve-submit-btn");
+    submitBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const errEl = el("pac-resolve-error");
+      errEl.textContent = "";
+
+      const note = el("pac-resolution-note").value.trim();
+      if (!note) {
+        errEl.textContent = HomezI18n.t("pac.resolve_missing_note");
+        return;
+      }
+
+      const selectedValues = {};
+      let missingCount = 0;
+      run.items.filter(pacNeedsSelection).forEach((item) => {
+        const checkedRadio = document.querySelector(`input[name="pac-radio-${item.id}"]:checked`);
+        const customInput = document.getElementById(`pac-custom-${item.id}`);
+        const customValue = customInput ? customInput.value.trim() : "";
+        const value = customValue || (checkedRadio ? checkedRadio.value : "");
+        if (!value) {
+          missingCount += 1;
+        } else {
+          selectedValues[item.id] = value;
+        }
+      });
+      if (missingCount > 0) {
+        errEl.textContent = HomezI18n.t("pac.resolve_missing_selection");
+        return;
+      }
+
+      try {
+        await apiFetch(`/product-attribute-comparisons/${run.id}/resolve`, {
+          method: "POST",
+          body: JSON.stringify({ resolution_note: note, selected_values: selectedValues }),
+        });
+        toast(HomezI18n.t("pac.resolve_success"), "success");
+        loadProductAttrComparisonDetail({ id: run.id });
+      } catch (err) {
+        errEl.textContent = (err && err.message) || HomezI18n.t("pac.action_error");
+      }
+    }));
+  }
+
+  // --------------------------------------------------
+  // 2026-09-15 전면 감사 후속(Phase 9J, HOMEZ_USER_OPERATION_
+  // SETTINGS.md 10-18) — 리콜/판매중지 확인 차단 목록·상세·해제.
+  // --------------------------------------------------
+
+  let rcbCurrentStatus = "BLOCKED";
+
+  async function loadRecallBlocks() {
+    wireRcbToolbarOnce();
+
+    document.querySelectorAll(".rcb-tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.status === rcbCurrentStatus);
+    });
+
+    const wrap = el("rcb-table-wrap");
+    wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let rows;
+    try {
+      const qs = rcbCurrentStatus ? `?status_filter=${encodeURIComponent(rcbCurrentStatus)}` : "";
+      rows = await apiFetch(`/recall-notices/product-blocks${qs}`);
+    } catch (err) {
+      renderErrorState(wrap, err);
+      return;
+    }
+
+    if (!rows || rows.length === 0) {
+      renderEmptyState(wrap, HomezI18n.t("rcb.empty_title"), HomezI18n.t("rcb.empty_sub"));
+      return;
+    }
+
+    const colProduct = HomezI18n.t("rcb.col_product");
+    const colReason = HomezI18n.t("rcb.col_reason");
+    const colStatus = HomezI18n.t("rcb.col_status");
+    const colBlockedAt = HomezI18n.t("rcb.col_blocked_at");
+
+    wrap.innerHTML = `
+      <table class="responsive-cards">
+        <thead><tr><th>${colProduct}</th><th>${colReason}</th><th>${colStatus}</th><th>${colBlockedAt}</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr class="row-clickable" data-id="${r.id}" tabindex="0">
+            <td data-label="${colProduct}">${escapeHtml(r.product_identifier)}</td>
+            <td data-label="${colReason}">${escapeHtml(r.reason)}</td>
+            <td data-label="${colStatus}">${statusPillHtml(r.status)}</td>
+            <td data-label="${colBlockedAt}">${fmtDate(r.blocked_at)}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll("tr[data-id]").forEach((tr) => {
+      const openIt = () => navigateTo("recall-blocks-detail", { id: Number(tr.dataset.id) });
+      tr.addEventListener("click", openIt);
+      tr.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          openIt();
+        }
+      });
+    });
+  }
+
+  function wireRcbToolbarOnce() {
+    if (wireRcbToolbarOnce._wired) return;
+    wireRcbToolbarOnce._wired = true;
+
+    document.querySelectorAll(".rcb-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        rcbCurrentStatus = btn.dataset.status;
+        loadRecallBlocks();
+      });
+    });
+  }
+
+  let rcbDetailCurrentId = null;
+
+  async function loadRecallBlocksDetail(opts = {}) {
+    const id = opts.id || rcbDetailCurrentId;
+    rcbDetailCurrentId = id;
+    wireRcbDetailBackOnce();
+
+    const body = el("rcb-detail-body");
+    body.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    if (!id) {
+      renderEmptyState(body, HomezI18n.t("rcb.empty_title"), "");
+      return;
+    }
+
+    let block;
+    try {
+      block = await apiFetch(`/recall-notices/product-blocks/${id}`);
+    } catch (err) {
+      renderErrorState(body, err);
+      return;
+    }
+
+    renderRcbDetail(body, block);
+  }
+
+  function wireRcbDetailBackOnce() {
+    if (wireRcbDetailBackOnce._wired) return;
+    wireRcbDetailBackOnce._wired = true;
+    el("rcb-detail-back-btn").addEventListener("click", () => navigateTo("recall-blocks"));
+  }
+
+  function renderRcbDetail(body, block) {
+    const isBlocked = block.status === "BLOCKED";
+
+    body.innerHTML = `
+      <div class="view-header">
+        <h1>${escapeHtml(block.product_identifier)}</h1>
+        ${statusPillHtml(block.status)}
+      </div>
+      <div class="dash-card">
+        <dl class="kv-list">
+          <dt>${escapeHtml(HomezI18n.t("rcb.col_reason"))}</dt><dd>${escapeHtml(block.reason)}</dd>
+          <dt>${escapeHtml(HomezI18n.t("rcb.col_blocked_at"))}</dt><dd>${fmtDate(block.blocked_at)}</dd>
+          ${block.unblock_approved_at ? `<dt>${escapeHtml(HomezI18n.t("rcb.detail_unblocked_at"))}</dt><dd>${fmtDate(block.unblock_approved_at)}</dd>` : ""}
+          ${block.unblock_justification ? `<dt>${escapeHtml(HomezI18n.t("rcb.detail_justification"))}</dt><dd>${escapeHtml(block.unblock_justification)}</dd>` : ""}
+        </dl>
+      </div>
+      ${!isBlocked ? "" : `
+        <div class="detail-panel">
+          <h2>${escapeHtml(HomezI18n.t("rcb.unblock_heading"))}</h2>
+          <p class="field-hint">${escapeHtml(HomezI18n.t("rcb.unblock_hint"))}</p>
+          <label class="field-label" for="rcb-justification">${escapeHtml(HomezI18n.t("rcb.unblock_justification_label"))}</label>
+          <textarea id="rcb-justification" class="pt-cc-form-input" maxlength="500"></textarea>
+          <p class="field-error" id="rcb-unblock-error"></p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-danger" id="rcb-unblock-submit-btn">${escapeHtml(HomezI18n.t("rcb.unblock_submit_btn"))}</button>
+          </div>
+        </div>
+      `}
+    `;
+
+    if (!isBlocked) return;
+
+    const submitBtn = el("rcb-unblock-submit-btn");
+    submitBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const errEl = el("rcb-unblock-error");
+      errEl.textContent = "";
+
+      const justification = el("rcb-justification").value.trim();
+      if (!justification) {
+        errEl.textContent = HomezI18n.t("rcb.unblock_missing_justification");
+        return;
+      }
+
+      const { confirmed } = await confirmDialog({
+        title: HomezI18n.t("rcb.unblock_confirm_title"),
+        body: HomezI18n.t("rcb.unblock_confirm_body"),
+        okLabel: HomezI18n.t("rcb.unblock_submit_btn"),
+      });
+      if (!confirmed) return;
+
+      try {
+        await apiFetch(`/recall-notices/product-blocks/${block.id}/unblock`, {
+          method: "POST",
+          body: JSON.stringify({ justification }),
+        });
+        toast(HomezI18n.t("rcb.unblock_success"), "success");
+        loadRecallBlocksDetail({ id: block.id });
+      } catch (err) {
+        errEl.textContent = (err && err.message) || HomezI18n.t("rcb.action_error");
+      }
+    }));
+  }
+
+  // --------------------------------------------------
   // 운영 우선순위
   // --------------------------------------------------
 
@@ -5826,6 +6241,10 @@
     "retail-purchase-detail": loadRetailPurchaseDetail,
     "purchase-task": loadPurchaseTask,
     "purchase-task-detail": loadPurchaseTaskDetail,
+    "product-attr-comparison": loadProductAttrComparison,
+    "product-attr-comparison-detail": loadProductAttrComparisonDetail,
+    "recall-blocks": loadRecallBlocks,
+    "recall-blocks-detail": loadRecallBlocksDetail,
     candidates: loadCandidates,
     trend: loadTrend,
     "new-product": loadNewProduct,
@@ -13651,12 +14070,18 @@
 
   function genericStatusPillClass(status) {
     const s = String(status || "").toUpperCase();
-    if (["CANCELLED", "REJECTED", "FAILED", "MISMATCH", "OUT_OF_STOCK", "REVERSED"].includes(s)) return "danger";
-    if (["HELD", "PENDING", "REQUESTED", "PENDING_SETTLEMENT", "PENDING_APPROVAL", "PARTIALLY_SHIPPED"].includes(s)) return "warn";
+    if ([
+      "CANCELLED", "REJECTED", "FAILED", "MISMATCH", "MISMATCHED",
+      "OUT_OF_STOCK", "REVERSED", "BLOCKED",
+    ].includes(s)) return "danger";
+    if ([
+      "HELD", "PENDING", "REQUESTED", "PENDING_SETTLEMENT", "PENDING_APPROVAL",
+      "PARTIALLY_SHIPPED", "UNCONFIRMED",
+    ].includes(s)) return "warn";
     if ([
       "DELIVERED", "COMPLETED", "RECEIVED", "CONFIRMED", "MATCHED", "APPROVED",
       "SYNCED", "DEPOSITED", "RESERVED", "SHIPPED", "IN_TRANSIT", "RESTOCKED",
-      "EXCHANGED", "RETURNED", "READY",
+      "EXCHANGED", "RETURNED", "READY", "PASSED", "UNBLOCKED", "SUCCESS",
     ].includes(s)) return "ok";
     return "neutral";
   }

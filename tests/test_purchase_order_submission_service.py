@@ -44,6 +44,10 @@ from app.domains.purchase_task.order_submission_service import (
     PurchaseOrderSubmissionService,
 )
 from app.domains.purchase_task.constants import SalesApplicationStatus
+from app.domains.price_stock_safety.model import VirtualStockZeroProposal
+from app.domains.product_attribute_match.model import ProductAttributeComparisonItem
+from app.domains.product_attribute_match.model import ProductAttributeComparisonRun
+from app.domains.recall_notice.model import RecallProductBlock
 from app.domains.role.model import Role  # noqa: F401 - Company relationship 등록용
 from app.domains.user.model import User  # noqa: F401 - Company relationship 등록용
 
@@ -90,6 +94,10 @@ class OrderSubmissionServiceTestCaseBase(unittest.TestCase):
                 PurchaseOrderApproval.__table__,
                 PurchaseTaskPolicySetting.__table__,
                 EmergencyStop.__table__, FunctionAutomationState.__table__,
+                VirtualStockZeroProposal.__table__,
+                ProductAttributeComparisonRun.__table__,
+                ProductAttributeComparisonItem.__table__,
+                RecallProductBlock.__table__,
             ],
         )
         self.SessionLocal = sessionmaker(
@@ -341,6 +349,14 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
         self.assertEqual(attempt.external_order_code, "ORDER-SUCCESS-1")
         self.assertIsNotNone(attempt.finished_at)
+
+        # 2026-09-15 Phase 9C(7-16) — 실제 발주 성공은 연결의 휴면
+        # 판정 기준 시각(last_successful_order_at)도 함께 갱신해야
+        # 한다.
+        refreshed_connection = self.db.query(PurchaseChannelConnection).get(
+            connection.id,
+        )
+        self.assertIsNotNone(refreshed_connection.last_successful_order_at)
 
     def test_explicit_rejection_records_rejected_not_unknown(self):
 
@@ -1297,6 +1313,59 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_pending_zero_stock_proposal_blocks_before_point_check(self):
+        """2026-09-15 Phase 9F(8-19) — 같은 상품에 PENDING 가상재고 0
+        제안이 있으면 포인트·상품가 조회 자체를 시도하지 않고 먼저
+        차단한다(어댑터가 전혀 호출되지 않아야 한다)."""
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+        )
+        self.db.add(VirtualStockZeroProposal(
+            company_id=self.company_a.id, connection_id=connection.id,
+            product_code=VALID_KWARGS["product_code"],
+            reason="테스트 — 판매 가능 여부 확인 불가",
+        ))
+        self.db.commit()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id,
+                idempotency_key="k-zero-stock-pending",
+                confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("가상재고 0 제안", str(ctx.exception))
+
+    def test_blocked_attribute_comparison_blocks_before_point_check(self):
+        """2026-09-15 Phase 9G(10-4) — 이 상품에 대해 가장 최근 실행된
+        속성 비교가 BLOCKED이고 아직 해소되지 않았으면 포인트·상품가
+        조회 자체를 시도하지 않고 먼저 차단한다."""
+
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+        )
+        ProductAttributeMatchService(self.db).run_comparison(
+            company_id=self.company_a.id,
+            product_identifier=VALID_KWARGS["product_code"],
+            supplier_values={"NAME": ("상품A", "SUPPLIER", None)},
+            sales_channel_values={"NAME": ("상품B", "CHANNEL", None)},
+            homez_current_values={},
+        )
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id,
+                idempotency_key="k-attribute-mismatch-pending",
+                confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("속성 비교", str(ctx.exception))
 
     def test_point_query_failure_blocks(self):
 

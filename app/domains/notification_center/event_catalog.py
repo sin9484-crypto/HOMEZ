@@ -272,6 +272,35 @@ EVENT_CATALOG: dict[str, NotificationEventDefinition] = {
             description_en="A sales channel credential expired or needs reauthentication.",
         ),
         _e(
+            "SUPPLIER_CONNECTION_ORDER_AUTO_PAUSED", NotificationCategory.SECURITY,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko=(
+                "반복된 매입처 사건(품절·오배송·취소·배송지연)으로 "
+                "연결의 발주 기능이 자동으로 일시중지됐습니다 "
+                "(HOMEZ_USER_OPERATION_SETTINGS.md 7-11)."
+            ),
+            description_en=(
+                "A purchase channel connection's ordering function was "
+                "auto-paused after repeated supplier incidents."
+            ),
+        ),
+        _e(
+            "VIRTUAL_STOCK_ZERO_PROPOSED", NotificationCategory.PRODUCT,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko=(
+                "매입처 판매 가능 여부를 확인할 수 없어 가상재고 0 "
+                "제안이 생성됐습니다(HOMEZ_USER_OPERATION_SETTINGS.md "
+                "8-19). 기존 주문에 영향이 있을 수 있으니 직접 확인이 "
+                "필요합니다."
+            ),
+            description_en=(
+                "A virtual-stock-zero proposal was created because "
+                "supplier sellability could not be confirmed."
+            ),
+        ),
+        _e(
             "SUPPLIER_LOOKUP_REPEATED_FAILURE", NotificationCategory.SECURITY,
             NotificationSeverity.HIGH, default_email_immediate=True,
             wired=True,
@@ -282,6 +311,20 @@ EVENT_CATALOG: dict[str, NotificationEventDefinition] = {
             description_en=(
                 "Real lookups against a purchase channel connection have "
                 "failed repeatedly."
+            ),
+        ),
+        _e(
+            "RECALL_PRODUCT_BLOCKED", NotificationCategory.PRODUCT,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko=(
+                "리콜/판매중지가 확인돼 상품이 차단됐습니다"
+                "(HOMEZ_USER_OPERATION_SETTINGS.md 10-18). 신규 등록·"
+                "가격 확대·가상재고 증가·자동발주가 모두 막혔습니다."
+            ),
+            description_en=(
+                "A product was blocked because a recall/stop-sale was "
+                "confirmed."
             ),
         ),
         _e(

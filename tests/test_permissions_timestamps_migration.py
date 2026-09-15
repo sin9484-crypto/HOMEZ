@@ -332,6 +332,37 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # consecutive_failure_count 컬럼 1개 추가. 동일한 이유로
             # 추가. 실제 운영 DB에는 아직 미적용이다.
             "20260915_04_add_purchase_channel_connection_consecutive_failure.sql",
+            # 2026-09-15 전면 감사 후속(Phase 9A/9B/9C, 7-8/7-11/7-16
+            # — 매입처 API 호출제한·캐시, 사건 반복 자동일시중지, 휴면
+            # 재점검) — purchase_channel_connections에 4개 컬럼(rate_
+            # limited_until/order_paused_at/order_paused_reason/
+            # last_successful_order_at) 추가 + 신규 테이블 2개
+            # (purchase_channel_connection_incidents,
+            # supplier_incident_auto_pause_settings). 동일한 이유로
+            # 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260915_05_add_supplier_incident_and_connection_health_fields.sql",
+            # 2026-09-15 전면 감사 후속(Phase 9A/9D/9E, 7-8/8-5/8-6 —
+            # 가격·재고 조회 캐시 및 TTL) — 신규 테이블 3개(price_cache
+            # _ttl_settings/stock_cache_ttl_settings/price_stock_quote
+            # _caches). 동일한 이유로 추가. 실제 운영 DB에는 아직
+            # 미적용이다.
+            "20260915_06_create_price_stock_quote_cache_schema.sql",
+            # 2026-09-15 전면 감사 후속(Phase 9F, 8-19 — 판매가능여부
+            # 확인불가 시 가상재고 0 제안) — 신규 테이블 1개(virtual_
+            # stock_zero_proposals). 동일한 이유로 추가. 실제 운영
+            # DB에는 아직 미적용이다.
+            "20260915_07_create_virtual_stock_zero_proposal_schema.sql",
+            # 2026-09-15 전면 감사 후속(Phase 9G, 10-4 — 상품 속성
+            # 불일치 시 자동등록·자동발주 차단) — 신규 테이블 2개
+            # (product_attribute_comparison_runs/_items). 동일한
+            # 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260915_08_create_product_attribute_match_schema.sql",
+            # 2026-09-15 전면 감사 후속(Phase 9I/9J, 10-17/10-18 —
+            # 리콜/판매중지 매일 확인 및 확인된 문제 상품 차단) — 신규
+            # 테이블 4개(recall_notices/recall_check_runs/recall_check
+            # _job_states/recall_product_blocks). 동일한 이유로 추가.
+            # 실제 운영 DB에는 아직 미적용이다.
+            "20260915_09_create_recall_notice_schema.sql",
         ]
 
         all_files = sorted(

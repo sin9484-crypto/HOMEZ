@@ -24,13 +24,25 @@ File : app/domains/price_stock_safety/service.py
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timedelta
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ForbiddenException
+from app.core.exceptions import NotFoundException
+from app.domains.price_stock_safety.constants import DEFAULT_PRICE_CACHE_TTL_MINUTES
 from app.domains.price_stock_safety.constants import DEFAULT_PRICE_REVIEW_CYCLE_DAYS
+from app.domains.price_stock_safety.constants import DEFAULT_STOCK_CACHE_TTL_MINUTES
+from app.domains.notification_center.operational_events import dispatch_operational_event
+from app.domains.price_stock_safety.model import PriceCacheTtlSetting
 from app.domains.price_stock_safety.model import PriceReviewCycleSetting
+from app.domains.price_stock_safety.model import PriceStockQuoteCache
+from app.domains.price_stock_safety.model import StockCacheTtlSetting
 from app.domains.price_stock_safety.model import VirtualStockThreshold
+from app.domains.price_stock_safety.model import VirtualStockZeroProposal
+from app.domains.price_stock_safety.model import VirtualStockZeroProposalStatus
 from app.domains.price_stock_safety.repository import PriceStockSafetyRepository
 
 
@@ -142,6 +154,255 @@ class PriceStockSafetyService:
         )
 
         return self.repository.add_review_cycle_setting(record)
+
+    # ------------------------------
+    # 가격/재고 캐시 유효시간(TTL) — Phase 9D(8-5)/9E(8-6)
+    # ------------------------------
+
+    def get_price_cache_ttl_minutes(self, company_id: int) -> int:
+
+        record = self.repository.get_latest_price_cache_ttl_setting(company_id)
+        return (
+            DEFAULT_PRICE_CACHE_TTL_MINUTES if record is None
+            else record.ttl_minutes
+        )
+
+    def set_price_cache_ttl_minutes(
+        self, *, company_id: int, user_id: int, is_admin: bool,
+        ttl_minutes: int,
+    ) -> PriceCacheTtlSetting:
+
+        if not is_admin:
+            raise ForbiddenException("가격 캐시 유효시간 변경은 관리자만 가능합니다.")
+        if ttl_minutes <= 0:
+            raise BadRequestException("유효시간(분)은 0보다 커야 합니다.")
+
+        record = PriceCacheTtlSetting(
+            company_id=company_id, ttl_minutes=ttl_minutes, set_by=user_id,
+        )
+        return self.repository.add_price_cache_ttl_setting(record)
+
+    def get_stock_cache_ttl_minutes(self, company_id: int) -> int:
+
+        record = self.repository.get_latest_stock_cache_ttl_setting(company_id)
+        return (
+            DEFAULT_STOCK_CACHE_TTL_MINUTES if record is None
+            else record.ttl_minutes
+        )
+
+    def set_stock_cache_ttl_minutes(
+        self, *, company_id: int, user_id: int, is_admin: bool,
+        ttl_minutes: int,
+    ) -> StockCacheTtlSetting:
+
+        if not is_admin:
+            raise ForbiddenException("재고 캐시 유효시간 변경은 관리자만 가능합니다.")
+        if ttl_minutes <= 0:
+            raise BadRequestException("유효시간(분)은 0보다 커야 합니다.")
+
+        record = StockCacheTtlSetting(
+            company_id=company_id, ttl_minutes=ttl_minutes, set_by=user_id,
+        )
+        return self.repository.add_stock_cache_ttl_setting(record)
+
+    # ------------------------------
+    # 가격/재고 조회 캐시 — Phase 9A(7-8)
+    # ------------------------------
+
+    def get_cached_price(
+        self, company_id: int, connection_id: int, product_code: str,
+        option_id: str,
+    ) -> tuple[float, datetime] | None:
+        """만료되지 않은 캐시된 가격이 있으면 (금액, 확인시각)을
+        반환한다. 없거나 만료됐으면 None — 호출자가 다시 실제
+        조회해야 한다는 뜻이다(이 메서드는 절대 추측값을 만들지
+        않는다)."""
+
+        record = self.repository.get_quote_cache(
+            company_id, connection_id, product_code, option_id,
+        )
+        if (
+            record is None or record.price_amount is None
+            or record.price_expires_at is None
+            or record.price_expires_at <= datetime.utcnow()
+        ):
+            return None
+        return record.price_amount, record.price_confirmed_at
+
+    def get_cached_stock(
+        self, company_id: int, connection_id: int, product_code: str,
+        option_id: str,
+    ) -> tuple[bool, datetime] | None:
+
+        record = self.repository.get_quote_cache(
+            company_id, connection_id, product_code, option_id,
+        )
+        if (
+            record is None or record.in_stock is None
+            or record.stock_expires_at is None
+            or record.stock_expires_at <= datetime.utcnow()
+        ):
+            return None
+        return record.in_stock, record.stock_confirmed_at
+
+    def store_price_quote(
+        self, *, company_id: int, connection_id: int, product_code: str,
+        option_id: str, price_amount: float, confirmed_at: datetime | None = None,
+    ) -> PriceStockQuoteCache:
+        """SUPPORTED(성공) 조회 결과만 저장해야 한다 — 오류·인증실패·
+        RESULT_UNKNOWN 응답은 절대 이 메서드로 넘기지 않는다(호출부
+        책임, 이 메서드 자신은 결과의 "성공 여부"를 판단할 방법이
+        없다 — 이미 성공한 값만 받는다는 계약)."""
+
+        confirmed_at = confirmed_at or datetime.utcnow()
+        ttl_minutes = self.get_price_cache_ttl_minutes(company_id)
+        return self.repository.upsert_quote_cache(
+            company_id=company_id, connection_id=connection_id,
+            product_code=product_code, option_id=option_id,
+            price_amount=price_amount, price_confirmed_at=confirmed_at,
+            price_expires_at=confirmed_at + timedelta(minutes=ttl_minutes),
+        )
+
+    def store_stock_quote(
+        self, *, company_id: int, connection_id: int, product_code: str,
+        option_id: str, in_stock: bool, confirmed_at: datetime | None = None,
+    ) -> PriceStockQuoteCache:
+
+        confirmed_at = confirmed_at or datetime.utcnow()
+        ttl_minutes = self.get_stock_cache_ttl_minutes(company_id)
+        return self.repository.upsert_quote_cache(
+            company_id=company_id, connection_id=connection_id,
+            product_code=product_code, option_id=option_id,
+            in_stock=in_stock, stock_confirmed_at=confirmed_at,
+            stock_expires_at=confirmed_at + timedelta(minutes=ttl_minutes),
+        )
+
+    # ------------------------------
+    # 가상재고 0 제안 — Phase 9F(8-19)
+    # ------------------------------
+
+    def propose_zero_stock(
+        self, *, company_id: int, connection_id: int, product_code: str,
+        reason: str,
+    ) -> VirtualStockZeroProposal:
+        """공급처 판매 가능 여부를 확인할 수 없을 때 호출한다. 이미
+        같은 상품에 대한 PENDING 제안이 있으면 중복으로 새로 만들지
+        않고 기존 제안을 그대로 반환한다(같은 문제를 반복 제안하지
+        않는다 — 8-16의 "임계치에 처음 도달할 때만 알림" 원칙과
+        같은 정신)."""
+
+        existing = self.repository.get_pending_zero_stock_proposal(
+            company_id, connection_id, product_code,
+        )
+        if existing is not None:
+            return existing
+
+        if not reason or not reason.strip():
+            raise BadRequestException("제안 사유를 입력해야 합니다.")
+
+        proposal = VirtualStockZeroProposal(
+            company_id=company_id, connection_id=connection_id,
+            product_code=product_code, reason=reason.strip(),
+        )
+        proposal = self.repository.add_zero_stock_proposal(proposal)
+
+        self._notify_zero_stock_proposal(proposal)
+
+        return proposal
+
+    def _notify_zero_stock_proposal(
+        self, proposal: VirtualStockZeroProposal,
+    ) -> None:
+
+        try:
+            from app.domains.user.model import User
+
+            for user in (
+                self.db.query(User)
+                .filter(
+                    User.company_id == proposal.company_id,
+                    User.is_active.is_(True),
+                )
+                .all()
+            ):
+                if (user.role or "").strip().upper() != "SUPER_ADMIN":
+                    continue
+
+                dispatch_operational_event(
+                    self.db, "VIRTUAL_STOCK_ZERO_PROPOSED",
+                    company_id=proposal.company_id, user_id=user.id,
+                    idempotency_key=f"virtual-stock-zero-proposal:{proposal.id}",
+                    title="가상재고 0 제안이 생성됐습니다",
+                    message=(
+                        f"상품 {proposal.product_code}의 매입처 판매 가능 "
+                        f"여부를 확인할 수 없습니다({proposal.reason}) — "
+                        "가상재고를 0으로 낮추는 제안이 만들어졌습니다. "
+                        "이미 들어온 주문이 있는지 직접 확인하고 승인/거부를 "
+                        "결정해 주세요(자동으로 취소되지 않습니다)."
+                    ),
+                    link_path="price-stock-safety",
+                    entity_ref=f"virtual_stock_zero_proposal:{proposal.id}",
+                    reason="SUPPLIER_SELLABILITY_UNCONFIRMED",
+                    entity_summary=f"상품 {proposal.product_code}",
+                )
+        except Exception:  # noqa: BLE001 — 알림 실패가 제안 생성을 되돌리면 안 된다
+            pass
+
+    def has_pending_zero_stock_proposal(
+        self, company_id: int, product_code: str,
+    ) -> bool:
+
+        return self.repository.has_pending_zero_stock_proposal(
+            company_id, product_code,
+        )
+
+    def list_zero_stock_proposals(
+        self, company_id: int, *, status: str | None = None,
+    ) -> list[VirtualStockZeroProposal]:
+
+        return self.repository.list_zero_stock_proposals(
+            company_id, status=status,
+        )
+
+    def resolve_zero_stock_proposal(
+        self, proposal_id: int, company_id: int, *, is_admin: bool,
+        resolved_by: int, approve: bool, resolution_note: str,
+    ) -> VirtualStockZeroProposal:
+        """승인(APPROVED)이든 거부(REJECTED)든 항상 사람이 직접
+        결정해야 한다 — 재고 확인이 나중에 성공해도 이 메서드를
+        거치지 않으면 이 제안은 영원히 PENDING으로 남는다(자동
+        복구 없음)."""
+
+        if not is_admin:
+            raise ForbiddenException(
+                "가상재고 0 제안 승인/거부는 관리자만 가능합니다.",
+            )
+
+        proposal = self.repository.get_zero_stock_proposal(
+            proposal_id, company_id,
+        )
+        if proposal is None:
+            raise NotFoundException("가상재고 0 제안을 찾을 수 없습니다.")
+        if proposal.status != VirtualStockZeroProposalStatus.PENDING:
+            raise BadRequestException(
+                f"이미 처리된 제안입니다(현재 상태: {proposal.status}).",
+            )
+        if not resolution_note or not resolution_note.strip():
+            raise BadRequestException(
+                "처리 사유(무엇을 확인했는지)를 입력해야 합니다.",
+            )
+
+        proposal.status = (
+            VirtualStockZeroProposalStatus.APPROVED if approve
+            else VirtualStockZeroProposalStatus.REJECTED
+        )
+        proposal.resolved_by = resolved_by
+        proposal.resolved_at = datetime.utcnow()
+        proposal.resolution_note = resolution_note.strip()
+        self.db.commit()
+        self.db.refresh(proposal)
+
+        return proposal
 
 
 __all__ = ["PriceStockSafetyService"]

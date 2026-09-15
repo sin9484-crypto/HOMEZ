@@ -502,6 +502,13 @@ class PurchaseOrderSubmissionService:
             external_order_code=order_code,
         )
 
+        # 2026-09-15 Phase 9C(7-16) — 이 연결로 발주가 실제로
+        # 성공했으므로 휴면 판정 기준 시각을 지금으로 갱신한다. 조회
+        # 성공(verified_at)과는 별개의 사실이다 — "확인 가능"과
+        # "실제로 샀다"를 구분한다.
+        connection.last_successful_order_at = datetime.utcnow()
+        self.db.commit()
+
         # 2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 실제 발주가
         # 확실히 성공했을 때만 승인을 CONSUMED로 남긴다(하루 한도
         # 집계의 유일한 금액 출처 — Order_approval_service.py::
@@ -585,6 +592,44 @@ class PurchaseOrderSubmissionService:
         ID를 요구한다)."""
 
         from app.domains.purchase_task.channel_adapter import CapabilitySupport
+
+        # 2026-09-15 Phase 9F(HOMEZ_USER_OPERATION_SETTINGS.md 8-19)
+        # — 이 상품에 대해 아직 처리되지 않은(PENDING) 가상재고 0
+        # 제안이 있으면 신규 자동발주를 차단한다. 사람이 승인/거부를
+        # 결정하기 전까지는(price_stock_safety::resolve_zero_stock_
+        # proposal) 판매 가능 여부가 불확실하다고 본다.
+        from app.domains.price_stock_safety.service import PriceStockSafetyService
+
+        if PriceStockSafetyService(self.db).has_pending_zero_stock_proposal(
+            company_id, product_code,
+        ):
+            raise ConflictException(
+                f"상품({product_code})의 판매 가능 여부 확인 불가로 "
+                "가상재고 0 제안이 대기 중입니다 — 관리자가 확인·승인/"
+                "거부하기 전까지 이 상품은 신규 발주를 시도하지 않습니다.",
+            )
+
+        # 2026-09-15 Phase 9G(HOMEZ_USER_OPERATION_SETTINGS.md 10-4)
+        # — 이 상품에 대해 가장 최근 실행된 속성 비교(이름/옵션/수량/
+        # 사이즈/제조사/원산지)가 불일치·확인불가로 차단(BLOCKED)된
+        # 채 아직 해소되지 않았으면 발주를 시도하지 않는다. 비교를
+        # 아예 실행한 적이 없으면(레코드 없음) 이 게이트는 통과한다
+        # — "비교를 실행하라"는 별개 정책이다.
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        ProductAttributeMatchService(self.db).assert_attributes_confirmed_or_block(
+            company_id, product_code,
+        )
+
+        # 2026-09-15 Phase 9J(HOMEZ_USER_OPERATION_SETTINGS.md 10-18)
+        # — 리콜/판매중지가 확인돼 차단된 상품은 자동발주를 시도하지
+        # 않는다. 해제는 관리자의 사유 입력과 승인이 있어야만 가능하다
+        # (RecallNoticeService.unblock_product).
+        from app.domains.recall_notice.service import RecallNoticeService
+
+        RecallNoticeService(self.db).assert_not_blocked(company_id, product_code)
 
         point_result = adapter.check_member_point()
         if point_result.support != CapabilitySupport.SUPPORTED:

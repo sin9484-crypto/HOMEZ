@@ -381,8 +381,54 @@ class ChannelConnectionResponse(BaseModel):
     is_active: bool
     disconnected_at: Optional[datetime]
     memo: Optional[str]
+    # 2026-09-15 Phase 9A/9B/9C — 화면에서 재시도 대기·발주 일시중지·
+    # 휴면 여부를 판단할 수 있도록 그대로 노출한다.
+    consecutive_failure_count: int
+    rate_limited_until: Optional[datetime]
+    order_paused_at: Optional[datetime]
+    order_paused_reason: Optional[str]
+    last_successful_order_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+
+class SupplierIncidentRecordRequest(BaseModel):
+    """2026-09-15 Phase 9B(7-11) — 품절/오배송/취소/배송지연 사건을
+    수동으로 기록한다(자동 감지 경로가 생기기 전까지는 사람이 확인한
+    사실을 입력한다)."""
+
+    incident_type: str
+    detail: Optional[str] = None
+
+
+class SupplierIncidentResponse(BaseModel):
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    connection_id: int
+    incident_type: str
+    detail: Optional[str]
+    recorded_by: Optional[int]
+    occurred_at: datetime
+    created_at: datetime
+
+
+class SupplierIncidentAutoPauseSettingRequest(BaseModel):
+
+    window_days: int = Field(gt=0)
+    max_incident_count: int = Field(gt=0)
+
+
+class SupplierIncidentAutoPauseSettingResponse(BaseModel):
+
+    window_days: int
+    max_incident_count: int
+
+
+class ReactivateOrderFunctionRequest(BaseModel):
+
+    confirmation_note: str = Field(min_length=1)
 
 
 class AssignChannelConnectionRequest(BaseModel):

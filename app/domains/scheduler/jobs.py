@@ -13,7 +13,7 @@ SchedulerService`)에 실제로 등록되는 Job 함수들.
 실행되므로 `Depends(get_db)`를 재사용할 수 없다 — 각 함수가 직접
 `SessionLocal()`을 열고 `finally`에서 닫는다.
 
-**이번 Phase에서 실제로 등록하는 Job은 "백업 복구 리허설" 하나뿐이다.**
+**2026-09-10 Phase 6 시점에는 "백업 복구 리허설" 하나만 등록했다.**
 감사에서 이미 확인됐듯("시스템 전체에 스케줄러가 없음", Critical #3)
 문서가 요구하는 주기 실행 대상은 트렌드 갱신·주문 수집·가격/재고
 모니터링·알림 정기 스윕까지 더 있지만, 이번 Phase에서는 다음 이유로
@@ -50,6 +50,18 @@ run_weekly_rehearsal()`)가 Phase 5에서 이미 완성·단독 테스트됐고,
 (2) 실제 외부 API를 전혀 호출하지 않으며(로컬 파일 시스템만
 다룸), (3) 원본 DB는 읽기만 한다 — 그래서 안전하게 지금 연결할 수
 있었다.
+
+2026-09-15 전면 감사 후속(Phase 9I, 10-17) — 리콜/판매중지 매일 확인
+Job을 두 번째로 등록했다(`RECALL_NOTICE_CHECK_JOB_ID`, 매일
+05:00(Asia/Seoul)). 이 Job은 항상 등록되지만, 실제로 무언가를 하려면
+두 조건이 모두 필요하다: (1) `recall_check_job_states`의 최신 모드가
+ACTIVE여야 한다(기본값 PAUSED — 등록만 하고 사용자가 켜기 전까지는
+매일 트리거돼도 즉시 반환한다), (2) 그리고 실제 리콜/판매중지 데이터
+소스 Provider가 선정돼야 한다(`app/domains/recall_notice/provider.py::
+get_real_provider()`는 아직 항상 NotImplementedError를 던진다 — 어느
+소스를 공식으로 쓸지 결정되지 않았다). 둘 중 하나라도 아니면 Job은
+조용히 건너뛰고 경고 로그만 남긴다 — 실제 외부 호출은 이번 Phase에
+전혀 없다.
 =========================================================
 """
 
@@ -69,6 +81,7 @@ from app.domains.restore.service import RestoreService
 logger = logging.getLogger(__name__)
 
 BACKUP_REHEARSAL_JOB_ID = "weekly_backup_restore_rehearsal"
+RECALL_NOTICE_CHECK_JOB_ID = "daily_recall_notice_check"
 
 
 def run_backup_rehearsal_job(
@@ -154,6 +167,58 @@ def run_backup_rehearsal_job(
         db.close()
 
 
+def run_recall_notice_check_job(
+    *, session_factory: Callable[[], Session] | None = None,
+) -> None:
+    """
+    2026-09-15 전면 감사 후속(Phase 9I, HOMEZ_USER_OPERATION_SETTINGS.md
+    10-17) — 리콜/판매중지 매일 확인 Job. 기본 모드는 PAUSED다(공통
+    규칙 15) — 사용자가 명시적으로 ACTIVE로 바꾸기 전까지는 아무 일도
+    하지 않는다. ACTIVE로 바뀌어도, 실제 Provider가 아직 선정되지
+    않았으므로(app/domains/recall_notice/provider.py::get_real_provider())
+    여전히 아무 외부 호출도 하지 않는다 — 이 상태를 조용히 성공한
+    것처럼 남기지 않고 경고 로그로 남긴다.
+    """
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    db = session_factory()
+    try:
+        from app.domains.recall_notice.constants import RecallCheckJobMode
+        from app.domains.recall_notice.provider import get_real_provider
+        from app.domains.recall_notice.service import RecallNoticeService
+
+        service = RecallNoticeService(db)
+        if service.get_job_mode() != RecallCheckJobMode.ACTIVE:
+            logger.info(
+                "리콜/판매중지 확인 Job — 모드가 ACTIVE가 아니어서 "
+                "건너뜁니다.",
+            )
+            return
+
+        try:
+            provider = get_real_provider()
+        except NotImplementedError:
+            logger.warning(
+                "리콜/판매중지 확인 Job — ACTIVE 상태이지만 실제 "
+                "Provider가 아직 선정되지 않아 이번 실행은 건너뜁니다.",
+            )
+            return
+
+        result = service.run_daily_check(provider)
+        logger.info(
+            "리콜/판매중지 확인 Job 완료: status=%s found=%s new=%s",
+            result.status, result.notices_found_count,
+            result.new_notices_count,
+        )
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("리콜/판매중지 확인 Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -188,11 +253,29 @@ def register_all_jobs() -> None:
         day_of_week="sun", hour=4, minute=0,
         job_id=BACKUP_REHEARSAL_JOB_ID,
     )
-    logger.info("Scheduler jobs registered: %s", BACKUP_REHEARSAL_JOB_ID)
+
+    # 2026-09-15 전면 감사 후속(Phase 9I, 10-17) — 매일
+    # 05:00(Asia/Seoul) 리콜/판매중지 확인. 등록은 항상 하지만
+    # 실행되는지 여부는 run_recall_notice_check_job() 내부의 모드
+    # 검사(기본 PAUSED)가 결정한다 — "Job을 만들지 않음"과 "Job은
+    # 있지만 기본 비활성"은 서로 다르다(전자는 사용자가 켤 방법 자체가
+    # 없다).
+    SchedulerService.add_cron_job(
+        run_recall_notice_check_job,
+        day_of_week="*", hour=5, minute=0,
+        job_id=RECALL_NOTICE_CHECK_JOB_ID,
+    )
+
+    logger.info(
+        "Scheduler jobs registered: %s, %s",
+        BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
+    )
 
 
 __all__ = [
     "BACKUP_REHEARSAL_JOB_ID",
+    "RECALL_NOTICE_CHECK_JOB_ID",
     "run_backup_rehearsal_job",
+    "run_recall_notice_check_job",
     "register_all_jobs",
 ]

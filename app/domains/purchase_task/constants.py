@@ -508,11 +508,62 @@ class ChannelConnectionEventType:
     STATUS_CHANGED = "STATUS_CHANGED"
     DEACTIVATED = "DEACTIVATED"
     REACTIVATED = "REACTIVATED"
+    # 2026-09-15 Phase 9B(7-11) — 연결 전체의 활성/비활성(DEACTIVATED/
+    # REACTIVATED)과는 다른 축이다: 연결은 계속 활성이어도 "발주"
+    # 기능만 반복 사건으로 일시중지될 수 있다.
+    ORDER_FUNCTION_PAUSED = "ORDER_FUNCTION_PAUSED"
+    ORDER_FUNCTION_REACTIVATED = "ORDER_FUNCTION_REACTIVATED"
 
     ALL = (
         CREATED, VERIFIED, LABEL_RENAMED, STATUS_CHANGED,
         DEACTIVATED, REACTIVATED,
+        ORDER_FUNCTION_PAUSED, ORDER_FUNCTION_REACTIVATED,
     )
+
+
+class SupplierIncidentType:
+    """2026-09-15 Phase 9B(HOMEZ_USER_OPERATION_SETTINGS.md 7-11 —
+    "품절, 오배송, 취소 또는 배송 지연이 반복되면 자동발주를 일시
+    중지하고 사용자에게 재사용 여부를 묻는다"). 서로 다른 사건으로
+    구분해 기록한다 — 하나의 카운터로 뭉뚱그리면 "무엇이 반복됐는지"
+    를 사용자에게 정확히 알릴 수 없다."""
+
+    STOCKOUT = "STOCKOUT"
+    MISSHIP = "MISSHIP"
+    CANCELLATION = "CANCELLATION"
+    DELIVERY_DELAY = "DELIVERY_DELAY"
+    AUTH_FAILURE = "AUTH_FAILURE"
+
+    ALL = (STOCKOUT, MISSHIP, CANCELLATION, DELIVERY_DELAY, AUTH_FAILURE)
+
+    LABELS_KO = {
+        STOCKOUT: "품절",
+        MISSHIP: "오배송",
+        CANCELLATION: "취소",
+        DELIVERY_DELAY: "배송 지연",
+        AUTH_FAILURE: "인증 실패",
+    }
+
+
+# 2026-09-15 Phase 9B — 이 기간(일) 안에 이 횟수 이상 사건이 쌓이면
+# 해당 연결의 발주 기능을 자동으로 일시중지한다. 문서에 구체적
+# 수치가 없어 추측하지 않고, 회사별로 설정 가능한 기본값으로 둔다
+# (SupplierIncidentAutoPauseSetting, price_stock_safety의 append-only
+# 설정 패턴과 동일).
+DEFAULT_SUPPLIER_INCIDENT_WINDOW_DAYS = 30
+DEFAULT_SUPPLIER_INCIDENT_MAX_COUNT = 3
+
+# 2026-09-15 Phase 9C(7-16 — "일정 기간 거래가 없던 공급처는 다시
+# 사용하기 전에 자동 점검한다"). 이 기간(일) 이상
+# last_successful_order_at이 갱신되지 않은 연결은 "휴면"으로 보고,
+# 다음 발주 전에 자격증명·상품·옵션·가격·재고를 재확인해야 한다.
+DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS = 60
+
+# 2026-09-15 Phase 9A(7-8 — API 호출 제한). 429 응답을 받으면 이
+# 초만큼은 같은 연결에 대한 새 실제 조회를 시도하지 않는다. 온채널
+# 응답에 Retry-After류 값이 없으므로(onchannel_client.py 참고)
+# 추측하지 않고 HOMEZ 자체의 보수적인 고정값을 쓴다.
+RATE_LIMIT_BACKOFF_SECONDS = 60
 
 
 class EmailSendStatus:

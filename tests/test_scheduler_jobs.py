@@ -29,7 +29,11 @@ from app.domains.company.model import Company
 from app.domains.restore.service import RehearsalResult
 from app.domains.restore.service import RestoreService
 from app.domains.role.model import Role  # noqa: F401 - Company relationship 등록용
+from app.domains.recall_notice.constants import RecallCheckJobMode
+from app.domains.recall_notice.model import RecallCheckRun
+from app.domains.recall_notice.service import RecallNoticeService
 from app.domains.scheduler.jobs import run_backup_rehearsal_job
+from app.domains.scheduler.jobs import run_recall_notice_check_job
 from app.domains.user.model import User  # noqa: F401 - Company relationship 등록용
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -217,6 +221,81 @@ class BackupRehearsalJobTestCase(unittest.TestCase):
 
         backup_files = list(self.backups_dir.glob("homez_backup_*.db"))
         self.assertEqual(len(backup_files), 0)
+
+
+class RecallNoticeCheckJobTestCase(unittest.TestCase):
+    """2026-09-15 전면 감사 후속(Phase 9I, HOMEZ_USER_OPERATION_
+    SETTINGS.md 10-17) — run_recall_notice_check_job() 검증. 실제
+    homez.db/SessionLocal은 전혀 쓰지 않는다."""
+
+    def setUp(self):
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.remove(path)
+        self.db_path = Path(path)
+        self.backups_dir = Path(tempfile.mkdtemp(prefix="homez_recall_job_"))
+
+        result = bootstrap_environment(
+            db_path=self.db_path, migrations_dir=MIGRATIONS_DIR,
+            backups_dir=self.backups_dir,
+        )
+        self.assertTrue(result.is_new_install)
+
+        self.engine = create_engine(f"sqlite:///{self.db_path}")
+        self.SessionLocal = sessionmaker(bind=self.engine)
+
+    def tearDown(self):
+
+        self.engine.dispose()
+        if self.db_path.exists():
+            self.db_path.unlink()
+        shutil.rmtree(self.backups_dir, ignore_errors=True)
+
+    def test_default_paused_mode_does_not_run_check(self):
+
+        run_recall_notice_check_job(session_factory=self.SessionLocal)
+
+        db = self.SessionLocal()
+        try:
+            self.assertEqual(db.query(RecallCheckRun).count(), 0)
+        finally:
+            db.close()
+
+    def test_active_mode_without_real_provider_still_does_not_crash_or_run(self):
+        """모드를 ACTIVE로 바꿔도, 실제 Provider가 아직 선정되지
+        않았으므로(get_real_provider()가 NotImplementedError) 여전히
+        아무 외부 호출도 없고 RecallCheckRun도 생기지 않는다 — 예외가
+        스케줄러 밖으로 새지 않는다."""
+
+        db = self.SessionLocal()
+        RecallNoticeService(db).set_job_mode(
+            RecallCheckJobMode.ACTIVE, set_by=1, is_admin=True,
+        )
+        db.close()
+
+        run_recall_notice_check_job(session_factory=self.SessionLocal)
+
+        db = self.SessionLocal()
+        try:
+            self.assertEqual(db.query(RecallCheckRun).count(), 0)
+        finally:
+            db.close()
+
+    def test_unexpected_exception_does_not_propagate(self):
+
+        db = self.SessionLocal()
+        RecallNoticeService(db).set_job_mode(
+            RecallCheckJobMode.ACTIVE, set_by=1, is_admin=True,
+        )
+        db.close()
+
+        with patch(
+            "app.domains.recall_notice.provider.get_real_provider",
+            side_effect=RuntimeError("예상 밖 오류(테스트 주입)"),
+        ):
+            # 예외가 밖으로 전파되면 안 된다.
+            run_recall_notice_check_job(session_factory=self.SessionLocal)
 
 
 if __name__ == "__main__":

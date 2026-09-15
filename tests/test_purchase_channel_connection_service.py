@@ -33,6 +33,8 @@ from app.domains.purchase_task.constants import ChannelConnectionStatus
 from app.domains.purchase_task.constants import ConnectionMethod
 from app.domains.purchase_task.model import PurchaseChannelConnection
 from app.domains.purchase_task.model import PurchaseChannelConnectionEvent
+from app.domains.purchase_task.model import PurchaseChannelConnectionIncident
+from app.domains.purchase_task.model import SupplierIncidentAutoPauseSetting
 from app.domains.role.model import Role  # noqa: F401 - Company relationship 등록용
 from app.domains.user.model import User  # noqa: F401 - Company relationship 등록용
 
@@ -51,6 +53,11 @@ class ChannelConnectionServiceTestCaseBase(unittest.TestCase):
             tables=[
                 Company.__table__, PurchaseChannelConnection.__table__,
                 PurchaseChannelConnectionEvent.__table__,
+                # 2026-09-15 Phase 9B — _record_real_check_failure()가
+                # 인증 실패를 SupplierIncidentService로도 기록하므로,
+                # 이 경량 fixture도 그 두 테이블을 갖춰야 한다.
+                PurchaseChannelConnectionIncident.__table__,
+                SupplierIncidentAutoPauseSetting.__table__,
             ],
         )
         self.SessionLocal = sessionmaker(
@@ -702,6 +709,85 @@ class CredentialReverificationWindowTestCase(ChannelConnectionServiceTestCaseBas
             self.service.verify_connection_ready_for_order_submission(
                 c.id, self.company_a.id,
             )
+
+
+class OrderFunctionPauseAndDormancyTestCase(ChannelConnectionServiceTestCaseBase):
+    """2026-09-15 Phase 9B(7-11)/9C(7-16) —
+    verify_connection_ready_for_order_submission()의 두 가지 신규
+    방어선."""
+
+    def _make_connected_credential_connection(self, *, verified_hours_ago=1):
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company_a.id, auth_key="test-jwt")
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        row.status = ChannelConnectionStatus.CONNECTED
+        row.verified_at = datetime.utcnow() - timedelta(hours=verified_hours_ago)
+        self.db.commit()
+        return c
+
+    def test_order_paused_connection_blocks_submission(self):
+
+        from app.core.exceptions import ConflictException
+
+        c = self._make_connected_credential_connection()
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        row.order_paused_at = datetime.utcnow()
+        row.order_paused_reason = "테스트: 반복 사건으로 일시중지"
+        self.db.commit()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.verify_connection_ready_for_order_submission(
+                c.id, self.company_a.id,
+            )
+        self.assertIn("일시중지", str(ctx.exception))
+
+    def test_dormant_connection_with_fresh_verification_still_passes(self):
+        """휴면(last_successful_order_at이 오래되거나 없음)이어도
+        조회 인증이 최근에 성공했으면(verified_at 신선) 차단하지
+        않는다 — 이 검사는 "재확인 없이 그냥 통과"만 막을 뿐, 재확인
+        자체가 있으면 여전히 정상 발주 가능해야 한다."""
+
+        from app.domains.purchase_task.constants import (
+            DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS,
+        )
+
+        c = self._make_connected_credential_connection(verified_hours_ago=1)
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        row.last_successful_order_at = datetime.utcnow() - timedelta(
+            days=DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS + 30,
+        )
+        self.db.commit()
+
+        # 온채널 발주 계약 항목이 미확인 상태라 최종적으로는 다른
+        # 이유로 막힐 수 있다 — 이 테스트가 확인하려는 것은 "휴면
+        # 판정 자체가 조기에 막지 않는다"이므로, 그 예외라면 실패로
+        # 보지 않는다.
+        try:
+            self.service.verify_connection_ready_for_order_submission(
+                c.id, self.company_a.id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.assertNotIn("휴면", str(exc))
+            self.assertNotIn("dormant", str(exc).lower())
+
+    def test_never_ordered_connection_is_treated_as_dormant_without_blocking_when_verified(self):
+        """last_successful_order_at이 아예 None(한 번도 발주 성공
+        이력이 없음)도 휴면으로 취급하되, verified_at이 신선하면
+        마찬가지로 조기 차단하지 않는다."""
+
+        c = self._make_connected_credential_connection(verified_hours_ago=1)
+        row = self.db.query(PurchaseChannelConnection).get(c.id)
+        self.assertIsNone(row.last_successful_order_at)
+
+        try:
+            self.service.verify_connection_ready_for_order_submission(
+                c.id, self.company_a.id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.assertNotIn("휴면", str(exc))
 
 
 class AdditionalAuthRequiredSelfReportTestCase(ChannelConnectionServiceTestCaseBase):
@@ -1552,6 +1638,485 @@ class RepeatedLookupFailureNotificationTestCase(unittest.TestCase):
                 self.service.lookup_product(c.id, self.company.id, "CH1")
 
         self.assertEqual(len(self._notification_rows()), 2)
+
+    def test_two_connections_in_same_company_have_independent_streaks(self):
+        """2026-09-15 전면 감사 후속(Phase 9K, 8-16 재감사) — 같은
+        회사 안의 두 연결이 각자 독립된 연속 실패 카운터를 갖고,
+        각자 임계치에 도달할 때 각각 알림을 만든다(연결 A의 실패가
+        연결 B의 카운터에 영향을 주지 않는다)."""
+
+        from app.domains.purchase_task.constants import (
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD,
+        )
+
+        c1 = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="연결1",
+        )
+        c2 = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="연결2",
+        )
+        self.service.save_credential(c1.id, self.company.id, auth_key="k1")
+        self.service.save_credential(c2.id, self.company.id, auth_key="k2")
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+
+        # c1만 임계치 미만으로 실패시킨다 — 아직 알림이 없어야 한다.
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD - 1):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c1.id, self.company.id, "CH1")
+        self.assertEqual(len(self._notification_rows()), 0)
+
+        row_c1 = self.db.query(PurchaseChannelConnection).get(c1.id)
+        row_c2 = self.db.query(PurchaseChannelConnection).get(c2.id)
+        self.assertEqual(
+            row_c1.consecutive_failure_count,
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD - 1,
+        )
+        self.assertEqual(
+            row_c2.consecutive_failure_count, 0,
+            "연결 c1의 실패가 연결 c2의 카운터에 영향을 주면 안 된다.",
+        )
+
+        # c2를 임계치까지 실패시킨다 — c1은 아직 임계치 미만이므로
+        # c2만의 알림 1건만 생겨야 한다.
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c2.id, self.company.id, "CH1")
+
+        self.assertEqual(len(self._notification_rows()), 1)
+
+        # 이제 c1도 임계치에 도달시키면 독립적으로 두 번째 알림이
+        # 생긴다(연결별로 서로 다른 idempotency_key).
+        with self.assertRaises(ValueError):
+            self.service.lookup_product(c1.id, self.company.id, "CH1")
+
+        self.assertEqual(len(self._notification_rows()), 2)
+
+    def test_two_companies_do_not_cross_notify_or_collide(self):
+        """2026-09-15 전면 감사 후속(Phase 9K, 8-16 재감사) — 다른
+        회사의 연결이 임계치에 도달해도 이 회사(self.company)
+        관리자에게는 알림이 가지 않는다."""
+
+        other_company = Company(
+            name="다른 회사(8-16 재감사)", business_number="333-33-33334",
+            ceo="테스트", phone="02-000-0001",
+            email="supplier-notify-other@example.com", address="테스트",
+        )
+        self.db.add(other_company)
+        self.db.commit()
+
+        other_admin = User(
+            company_id=other_company.id, username="otherlookupadmin",
+            email="otherlookupadmin@example.com", password_hash="x",
+            name="다른 회사 관리자", role_id=self.role.id, is_active=True,
+        )
+        self.db.add(other_admin)
+        self.db.commit()
+
+        from app.domains.purchase_task.constants import (
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD,
+        )
+
+        c_other = self.service.create_connection(
+            other_company.id, mall_code="ONCHANNEL", account_label="다른회사연결",
+        )
+        self.service.save_credential(c_other.id, other_company.id, auth_key="x")
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c_other.id, other_company.id, "CH1")
+
+        notified_user_ids = {row[0] for row in self._notification_rows()}
+        self.assertNotIn(
+            self.admin.id, notified_user_ids,
+            "다른 회사 연결의 실패 알림이 이 회사 관리자에게 가면 안 된다.",
+        )
+
+        from sqlalchemy import text
+
+        rows_for_other_company = self.db.execute(
+            text(
+                "SELECT user_id FROM notification_email_logs "
+                "WHERE event_code = 'SUPPLIER_LOOKUP_REPEATED_FAILURE' "
+                "AND company_id = :cid",
+            ),
+            {"cid": other_company.id},
+        ).fetchall()
+        self.assertEqual(len(rows_for_other_company), 1)
+        self.assertEqual(rows_for_other_company[0][0], other_admin.id)
+
+    def test_failure_count_and_notification_persist_across_restart(self):
+        """2026-09-15 전면 감사 후속(Phase 9K, 8-16 재감사) — "재시작"
+        을 새 세션·새 서비스 인스턴스로 흉내낸다. 메모리 상태가 아니라
+        DB에 커밋된 카운터만으로 스트릭이 이어져야 한다."""
+
+        from app.domains.purchase_task.constants import (
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD,
+        )
+
+        c = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(c.id, self.company.id, auth_key="x")
+        self._install_fake_adapter(error=ValueError("일반 오류"))
+
+        for _ in range(CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD - 1):
+            with self.assertRaises(ValueError):
+                self.service.lookup_product(c.id, self.company.id, "CH1")
+
+        # "재시작" — 새 세션, 새 서비스 인스턴스(같은 파일 DB).
+        restarted_db = self.SessionLocal()
+        self.addCleanup(restarted_db.close)
+        restarted_service = PurchaseChannelConnectionService(
+            restarted_db, credential_store=self.credential_store,
+        )
+
+        row_before = restarted_db.query(PurchaseChannelConnection).get(c.id)
+        self.assertEqual(
+            row_before.consecutive_failure_count,
+            CONSECUTIVE_LOOKUP_FAILURE_NOTIFY_THRESHOLD - 1,
+            "재시작 후에도 DB에 커밋된 카운터를 그대로 읽어야 한다.",
+        )
+
+        import unittest.mock as mock
+
+        class _FakeAdapter:
+            def lookup_product(self_inner, external_product_id):
+                raise ValueError("일반 오류")
+
+        patcher = mock.patch(
+            "app.domains.purchase_task.channel_connection_service.get_purchase_channel_adapter",
+            return_value=_FakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        with self.assertRaises(ValueError):
+            restarted_service.lookup_product(c.id, self.company.id, "CH1")
+
+        self.assertEqual(
+            len(self._notification_rows()), 1,
+            "재시작 이전 실패까지 포함해 정확히 임계치에 도달한 시점에 알림이 나가야 한다.",
+        )
+
+
+class CachedLookupTestCase(unittest.TestCase):
+    """2026-09-15 전면 감사 후속(Phase 9A, HOMEZ_USER_OPERATION_
+    SETTINGS.md 7-8) — lookup_product_cached() 검증. bootstrap_
+    environment()로 price_stock_safety 테이블까지 갖춘 전체 스키마를
+    쓴다(경량 fixture에는 그 테이블들이 없다)."""
+
+    def setUp(self):
+
+        from pathlib import Path
+
+        from app.database.bootstrap import bootstrap_environment
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.remove(path)
+        self.db_path = Path(path)
+        self.backups_dir = Path(tempfile.mkdtemp())
+
+        repo_root = Path(__file__).resolve().parent.parent
+        result = bootstrap_environment(
+            db_path=self.db_path,
+            migrations_dir=repo_root / "migrations",
+            backups_dir=self.backups_dir,
+        )
+        self.assertTrue(result.is_new_install)
+
+        self.engine = create_engine(f"sqlite:///{self.db_path}")
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+
+        self.company = Company(
+            name="캐시 조회 테스트 회사", business_number="444-44-44441",
+            ceo="테스트", phone="02-000-0000",
+            email="cached-lookup@example.com", address="테스트",
+        )
+        self.db.add(self.company)
+        self.db.commit()
+
+        self.credential_store = InMemoryCredentialStore()
+        self.service = PurchaseChannelConnectionService(
+            self.db, credential_store=self.credential_store,
+        )
+
+        self.connection = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(
+            self.connection.id, self.company.id, auth_key="x",
+        )
+
+    def tearDown(self):
+
+        self.db.close()
+        self.engine.dispose()
+        if self.db_path.exists():
+            self.db_path.unlink()
+
+    def _install_fake_adapter(self, *, error=None, result=None, call_log=None):
+
+        import unittest.mock as mock
+
+        class _FakeAdapter:
+            def lookup_product(self_inner, external_product_id):
+                if call_log is not None:
+                    call_log.append(external_product_id)
+                if error is not None:
+                    raise error
+                return result
+
+        patcher = mock.patch(
+            "app.domains.purchase_task.channel_connection_service.get_purchase_channel_adapter",
+            return_value=_FakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _supported_result(price=12000, in_stock=True):
+
+        from decimal import Decimal
+
+        from app.domains.purchase_task.channel_adapter import (
+            CapabilitySupport, ChannelProductOption, ProductLookupResult,
+        )
+
+        return ProductLookupResult(
+            support=CapabilitySupport.SUPPORTED,
+            external_product_id="CH1", title="테스트 상품",
+            options=(
+                ChannelProductOption(
+                    option_id="opt-1", label="기본",
+                    price=Decimal(price), in_stock=in_stock,
+                ),
+            ),
+            detail="ok",
+        )
+
+    def test_first_call_hits_real_api_and_populates_cache(self):
+
+        call_log = []
+        self._install_fake_adapter(
+            result=self._supported_result(), call_log=call_log,
+        )
+
+        result = self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-1",
+        )
+
+        self.assertFalse(result["from_cache"])
+        self.assertEqual(result["price_amount"], 12000)
+        self.assertTrue(result["in_stock"])
+        self.assertEqual(len(call_log), 1)
+
+    def test_second_call_within_ttl_serves_from_cache_no_network_call(self):
+
+        call_log = []
+        self._install_fake_adapter(
+            result=self._supported_result(), call_log=call_log,
+        )
+
+        self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-1",
+        )
+        second = self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-1",
+        )
+
+        self.assertTrue(second["from_cache"])
+        self.assertEqual(second["price_amount"], 12000)
+        self.assertEqual(
+            len(call_log), 1,
+            "캐시가 유효한 동안은 실제 네트워크 조회가 다시 나가면 안 된다.",
+        )
+
+    def test_error_response_is_not_cached(self):
+        """오류·인증실패·RESULT_UNKNOWN 응답은 정상 캐시로 저장하지
+        않는다 — 실패한 조회 다음에 곧바로 성공 조회를 하면 그 성공
+        값이 캐시에 남아야 하고, 실패 자체가 캐시에 뭔가를 남기면
+        안 된다."""
+
+        call_log = []
+        self._install_fake_adapter(
+            error=ValueError("일시적 오류"), call_log=call_log,
+        )
+
+        with self.assertRaises(ValueError):
+            self.service.lookup_product_cached(
+                self.connection.id, self.company.id, "CH1", option_id="opt-1",
+            )
+
+        from app.domains.price_stock_safety.service import (
+            PriceStockSafetyService,
+        )
+
+        cache = PriceStockSafetyService(self.db)
+        self.assertIsNone(
+            cache.get_cached_price(
+                self.company.id, self.connection.id, "CH1", "opt-1",
+            ),
+        )
+
+    def test_rate_limited_connection_blocks_without_network_call(self):
+
+        from datetime import datetime, timedelta
+
+        from app.core.exceptions import ConflictException
+        from app.domains.purchase_task.model import PurchaseChannelConnection
+
+        row = self.db.query(PurchaseChannelConnection).get(self.connection.id)
+        row.rate_limited_until = datetime.utcnow() + timedelta(seconds=30)
+        self.db.commit()
+
+        call_log = []
+        self._install_fake_adapter(
+            result=self._supported_result(), call_log=call_log,
+        )
+
+        with self.assertRaises(ConflictException):
+            self.service.lookup_product_cached(
+                self.connection.id, self.company.id, "CH1", option_id="opt-1",
+            )
+        self.assertEqual(
+            len(call_log), 0,
+            "재시도 제한 중에는 네트워크를 아예 타면 안 된다(자동 반복호출 금지).",
+        )
+
+    def test_429_response_sets_rate_limited_until(self):
+
+        from app.domains.purchase_task.model import PurchaseChannelConnection
+        from app.domains.purchase_task.onchannel_client import (
+            OnchannelRateLimitedError,
+        )
+
+        self._install_fake_adapter(
+            error=OnchannelRateLimitedError("429 — 호출 제한"),
+        )
+
+        with self.assertRaises(OnchannelRateLimitedError):
+            self.service.lookup_product_cached(
+                self.connection.id, self.company.id, "CH1", option_id="opt-1",
+            )
+
+        row = self.db.query(PurchaseChannelConnection).get(self.connection.id)
+        self.assertIsNotNone(row.rate_limited_until)
+
+    def test_lookup_failure_proposes_zero_stock_then_reraises(self):
+        """2026-09-15 Phase 9F(8-19) — 실제 조회 자체가 실패하면 판매
+        가능 여부를 확인할 방법이 없으므로 가상재고 0 제안을 만들고,
+        예외는 그대로 다시 던진다(호출부가 실패를 못 보게 삼키지
+        않는다)."""
+
+        from app.domains.price_stock_safety.service import (
+            PriceStockSafetyService,
+        )
+
+        self._install_fake_adapter(error=ValueError("일시적 오류"))
+
+        with self.assertRaises(ValueError):
+            self.service.lookup_product_cached(
+                self.connection.id, self.company.id, "CH1", option_id="opt-1",
+            )
+
+        self.assertTrue(
+            PriceStockSafetyService(self.db).has_pending_zero_stock_proposal(
+                self.company.id, "CH1",
+            ),
+        )
+
+    def test_unsupported_capability_proposes_zero_stock(self):
+
+        from decimal import Decimal
+
+        from app.domains.price_stock_safety.service import (
+            PriceStockSafetyService,
+        )
+        from app.domains.purchase_task.channel_adapter import (
+            CapabilitySupport, ProductLookupResult,
+        )
+
+        unsupported = ProductLookupResult(
+            support=CapabilitySupport.NOT_SUPPORTED,
+            external_product_id="CH1", title="테스트 상품",
+            options=(), detail="이 매입처는 조회를 지원하지 않음",
+        )
+        self._install_fake_adapter(result=unsupported)
+
+        result = self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-1",
+        )
+
+        self.assertIsNone(result["in_stock"])
+        self.assertTrue(
+            PriceStockSafetyService(self.db).has_pending_zero_stock_proposal(
+                self.company.id, "CH1",
+            ),
+        )
+
+    def test_option_with_unconfirmed_in_stock_proposes_zero_stock(self):
+        """support=SUPPORTED로 조회 자체는 성공해도, 요청한 옵션의
+        in_stock이 None(확인 불가)이면 가상재고 0 제안을 만든다 —
+        조회 성공을 임의로 판매 가능 판단으로 확장하지 않는다."""
+
+        from app.domains.price_stock_safety.service import (
+            PriceStockSafetyService,
+        )
+
+        self._install_fake_adapter(
+            result=self._supported_result(in_stock=None),
+        )
+
+        result = self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-1",
+        )
+
+        self.assertIsNone(result["in_stock"])
+        self.assertTrue(
+            PriceStockSafetyService(self.db).has_pending_zero_stock_proposal(
+                self.company.id, "CH1",
+            ),
+        )
+
+    def test_confirmed_in_stock_option_does_not_propose_zero_stock(self):
+
+        from app.domains.price_stock_safety.service import (
+            PriceStockSafetyService,
+        )
+
+        self._install_fake_adapter(result=self._supported_result())
+
+        self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-1",
+        )
+
+        self.assertFalse(
+            PriceStockSafetyService(self.db).has_pending_zero_stock_proposal(
+                self.company.id, "CH1",
+            ),
+        )
+
+    def test_missing_requested_option_proposes_zero_stock(self):
+
+        from app.domains.price_stock_safety.service import (
+            PriceStockSafetyService,
+        )
+
+        self._install_fake_adapter(result=self._supported_result())
+
+        result = self.service.lookup_product_cached(
+            self.connection.id, self.company.id, "CH1", option_id="opt-does-not-exist",
+        )
+
+        self.assertIsNone(result["in_stock"])
+        self.assertTrue(
+            PriceStockSafetyService(self.db).has_pending_zero_stock_proposal(
+                self.company.id, "CH1",
+            ),
+        )
 
 
 class OnchannelOrderContractStatusTestCase(unittest.TestCase):

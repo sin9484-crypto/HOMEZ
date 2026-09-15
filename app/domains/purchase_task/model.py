@@ -666,6 +666,35 @@ class PurchaseChannelConnection(Base):
         Integer, nullable=False, default=0,
     )
 
+    # 2026-09-15 Phase 9A(7-8) — 429(호출 제한) 응답을 받으면 이
+    # 시각까지 이 연결에 대한 새 실제 조회를 시도하지 않는다(자동
+    # 반복호출 금지 + 재시도 가능 시각 표시). None이면 현재 제한
+    # 없음.
+    rate_limited_until: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+    )
+
+    # 2026-09-15 Phase 9B(7-11) — 품절/오배송/취소/배송지연이 설정
+    # 가능한 기간·횟수를 넘으면 이 연결의 "발주" 기능만 일시중지한다
+    # (회사 전체 FunctionCode.PURCHASE_ORDER와는 별개 — 특정 연결
+    # 하나만 막는다). None이면 정상. 사람이 원인을 확인하고
+    # 명시적으로 재활성화(reactivate)하기 전까지 자동으로 풀리지
+    # 않는다.
+    order_paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+    )
+    order_paused_reason: Mapped[str | None] = mapped_column(
+        String(500), nullable=True,
+    )
+
+    # 2026-09-15 Phase 9C(7-16) — 이 연결로 마지막 발주가 실제로
+    # 성공한 시각. 일정 기간(휴면 판정 기준) 이상 값이 갱신되지
+    # 않았으면 다음 발주 전에 자격증명·상품·옵션·가격·재고를
+    # 재확인해야 한다(select_connection_for_task 등 호출부가 판단).
+    last_successful_order_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, index=True,
     )
@@ -708,6 +737,58 @@ class PurchaseChannelConnectionEvent(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False,
+    )
+
+
+class PurchaseChannelConnectionIncident(Base):
+    """2026-09-15 Phase 9B(HOMEZ_USER_OPERATION_SETTINGS.md 7-11) —
+    append-only 사건 기록. 품절/오배송/취소/배송지연/인증실패를
+    각각 별도 행으로 남긴다(하나의 카운터로 합치지 않음 — "무엇이
+    반복됐는지"를 사용자에게 정확히 알리기 위함). 이 사건들이
+    설정 가능한 기간·횟수를 넘으면
+    PurchaseChannelConnection.order_paused_at이 채워진다(서비스
+    로직, model.py 자체는 판정하지 않는다)."""
+
+    __tablename__ = "purchase_channel_connection_incidents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    connection_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, index=True,
+    )
+
+    incident_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 이 사건을 기록한 사람(관리자가 수동 기록) — 시스템이 자동
+    # 감지해 기록하는 경로가 생기면 그때는 None으로 남긴다(사람이
+    # 아니라는 사실을 구분하기 위함, 값을 지어내지 않는다).
+    recorded_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+
+
+class SupplierIncidentAutoPauseSetting(Base):
+    """2026-09-15 Phase 9B — append-only 설정(price_stock_safety의
+    VirtualStockThreshold와 동일한 패턴: "최신 행이 현재 값"). 회사별
+    로 "며칠 안에 몇 번"을 넘으면 자동일시중지할지 조정할 수 있게
+    한다."""
+
+    __tablename__ = "supplier_incident_auto_pause_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    window_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_incident_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    set_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    set_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True,
     )
 
 
