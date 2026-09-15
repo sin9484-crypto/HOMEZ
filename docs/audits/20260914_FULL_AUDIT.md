@@ -842,16 +842,56 @@ with_different_key_same_task_blocked_at_db_level`). 전부 통과.
 재발 방지를 위해 앞으로 새 Migration 테스트 파일을 만들 때는
 처음부터 자동 계산 방식(`name >= NEW_MIGRATION`)을 쓴다.
 
-### 13.4 잔여 위험과 다음 단계
+### 13.4 Phase 4 — 결제·환불 Provider 연결 전 트랜잭션 공백 축소(IA-011)
+
+**수정 전 재현**: IA-011이 지적한 세 지점을 코드로 확인했다.
+(1) `register_method()`가 Credential Store 저장(외부성 있는 부수
+효과) 뒤에 DB commit을 하므로, commit이 실패하면 DB에는 없는데
+Credential Store에만 남는 고아 토큰이 생긴다. (2) `set_default_method()`
+는 "기존 기본값 해제"(`clear_default_for_company()`, 자체 commit)와
+"새 기본값 지정"이 별도 commit 2개라, 두 번째만 실패해도 회사에
+기본 결제수단이 아예 없는 상태로 남을 수 있다. (3) `mark_executed()`
+는 외부 Executor 호출을 로컬 상태 전이보다 먼저 실행하므로, 호출
+직후~commit 사이에 프로세스가 죽으면 외부 실행은 성공했는데 로컬은
+여전히 APPROVED로 남아 재시도가 Executor를 또 호출할 위험이 있다.
+
+**수정 내용**: (1)(2)는 `clear_default_for_company()`의 자체 commit을
+제거해 호출부가 단일 트랜잭션으로 묶게 했고, `register_method()`는
+DB commit 실패 시 Credential Store 저장분을 최선노력으로 되돌린다.
+(3)은 `Refund.execution_attempt_started_at`(nullable) 컬럼을 추가해
+Executor 호출 "직전"에 그 시도 자체를 durable commit하고(발주 시도의
+IN_FLIGHT 패턴과 동일), status가 APPROVED인데 이 값이 남아 있으면
+`confirm_retry_after_uncertain_execution=True`라는 명시적 확인 없이는
+재실행을 거부한다. 확정적 사전 거부(`RefundExecutionError`)는
+"결과불명"이 아니므로 마커를 지워 정상 재시도를 막지 않는다.
+
+**중요한 제약**: 현재 Payment/Refund는 전부 Fake Provider/Fake
+Executor만 사용하므로 이 결함들은 지금 당장 실금전 피해로 이어지지
+않는다 — 독립 감사 문서 자체도 "실제 Provider로 교체하기 전에
+필요하다"고 명시한다. 이번 수정은 그 교체 이전에 필요한 구조적
+방어선을 미리 놓은 것이며, 발주 시도(`PurchaseOrderSubmissionAttempt`)
+수준의 완전한 시도 장부(멱등성 키, RESULT_UNKNOWN 인간 확정 흐름
+등)까지는 이번 라운드에서 만들지 않았다 — 실제 Provider 연동
+시점에 별도로 재평가가 필요하다.
+
+**테스트 결과**: payment 신규 2건(commit 실패 시 기존 기본값 유지
+확인, Credential Store 롤백 확인), refund 신규 2건(불확정 실행 후
+재시도 차단→명시적 확인 후 통과, 확정적 거부는 마커를 지워 정상
+재시도 허용), Migration 신규 4건(전체 체인 적용, 재적용 실패, 컬럼
+nullable 확인, 기존 행 보존). `tests/test_payment_*.py` 32/32,
+`tests/test_refund_*.py` 33/33 통과.
+
+### 13.5 잔여 위험과 다음 단계
 
 - IA-004(Critical, idempotency key 중복발주)의 원래 경로는
   `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른
   키로 우회하는 하위 경로는 Phase 3에서 DB 제약으로 닫았다.
+- IA-011의 구조적 완화는 Phase 4에서 마쳤지만, 완전한 시도 장부는
+  실제 Provider 연동 전 별도 작업으로 남아 있다.
 - 수취인 정보 결합은 여전히 미해결 — 온채널 실제 발주 재개를 막는
   근거 중 하나로 유지한다.
 - 개발본/설치본 DB 선택은 여전히 사용자 결정 대기(11.6-1).
-- Phase 4(결제/환불 Provider 원자성), Phase 5(백업 암호화 재감사),
-  Phase 6(테스트 격리), Phase 8(실행 게이트 배선), Phase 9(안전 기능
-  7-8/7-11/7-16/8-5/8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이
-  라운드에서 착수하지 않았다 — 아래 최종 보고에서 범위 한계를
-  명시한다.
+- Phase 5(백업 암호화 재감사), Phase 6(테스트 격리), Phase 8(실행
+  게이트 배선), Phase 9(안전 기능 7-8/7-11/7-16/8-5/8-6/8-16/8-19/
+  10-4/10-5/10-17/10-18)는 이 라운드에서 착수하지 않았다 — 아래
+  최종 보고에서 범위 한계를 명시한다.
