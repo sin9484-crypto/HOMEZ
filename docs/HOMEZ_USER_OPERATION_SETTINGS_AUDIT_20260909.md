@@ -174,15 +174,15 @@
 | 7-5 | 정확한 수량 없고 판매가능여부만 제공되면 그 상태 사용 | IMPLEMENTED | `ChannelProductOption.in_stock: bool\|None` 설계 | — | — | — |
 | 7-6 | 재고/판매가능여부 확인불가 시 자동발주 안 함 | IMPLEMENTED | any_price_unknown 등이 조회실패 케이스도 포함해 차단 | — | — | — |
 | 7-7 | 판매채널 가상재고 기준 이하 시 신규판매 중지 | PARTIALLY_IMPLEMENTED | 2026-09-10 Phase 10: `app/domains/price_stock_safety`(`VirtualStockThreshold`+게이트 판정 함수) 신설, `InventorySku`(실물창고)와 명확히 분리 | 판정 함수가 받는 "표시 재고 수치"를 실제 판매채널 리스팅에서 읽어오는 필드 자체가 없음(marketplace_listing 도메인에 새로 설계 필요) | 리스팅 표시재고 필드 설계 | GPT가 코드로 구현 가능(보강) |
-| 7-8 | 매입처 API 호출제한 준수 조회간격·캐시TTL | NOT_IMPLEMENTED | 429 사후방어만 존재, 사전 호출간격/캐시TTL 로직 없음 | — | — | GPT가 코드로 구현 가능 |
+| 7-8 | 매입처 API 호출제한 준수 조회간격·캐시TTL | IMPLEMENTED [2026-09-15 Phase 9A] | `PurchaseChannelConnection.rate_limited_until`(429 시 자동 백오프, 재시도시각 노출)+`PriceStockQuoteCache`(가격/재고 독립 TTL, 회사·연결·상품·옵션별 격리)+`lookup_product_cached()`(캐시 히트 시 네트워크 미호출, 실패·인증실패·UNKNOWN은 캐시 안 함) — 온채널 발주 직전 조회는 여전히 캐시를 쓰지 않음(가격 인상을 놓치지 않기 위한 의도적 예외, 변경 없음). `tests/test_purchase_channel_connection_service.py::CachedLookupTestCase`(10개)+`tests/test_price_stock_safety_domain.py` Fake-clock TTL 경계 테스트로 검증 | — | — | — |
 | 7-9 | 모델명·옵션·수량·크기·제조사 일치 상품만 자동연결 | PARTIALLY_IMPLEMENTED | `min_match_confidence`(기본 0.98)+match_tier(BLOCKED/NEEDS_REVIEW) 존재 | 필드단위 개별비교인지 단일 스칼라 판단인지 매칭 알고리즘 소스 미확인 | 실제 매칭 서비스 파일 확인 | GPT가 코드로 구현 가능(부분) |
 | 7-10 | 배송기록 부족 공급처는 사용자 확인대상 | NOT_IMPLEMENTED | `CompanySupplierRelation`에 배송이력/신뢰도 필드 전무, approval_status만 존재 | 배송이력 기반 자동판단 없음 | — | GPT가 코드로 구현 가능 |
-| 7-11 | 품절·오배송·취소·지연 반복 시 자동발주 일시중지+재사용질의 | NOT_IMPLEMENTED | 반복실패 카운터/자동일시정지 로직 미발견 | 개념 자체 미구현 | — | GPT가 코드로 구현 가능 |
+| 7-11 | 품절·오배송·취소·지연 반복 시 자동발주 일시중지+재사용질의 | IMPLEMENTED [2026-09-15 Phase 9B] | `SupplierIncidentService`(품절/오배송/취소/배송지연/인증실패 5종 `PurchaseChannelConnectionIncident` append-only 기록, 회사별 설정 가능한 기간·건수 임계치 — `SupplierIncidentAutoPauseSetting`) — 임계치 도달 시 그 연결의 ORDER 기능만 `order_paused_at`으로 낮추고(다른 연결·다른 기능엔 영향 없음, 회사 전체 `FunctionAutomationState`와 별개 계층) SUPER_ADMIN에게 통지. **자동 재활성화 없음** — `reactivate_order_function()`은 관리자+확인사유(confirmation_note) 입력이 있어야만 해제됨. `tests/test_supplier_incident_service.py`(15개)+`tests/test_purchase_channel_connection_service.py::OrderFunctionPauseAndDormancyTestCase`로 검증 | — | — | — |
 | 7-12 | 반품조건·비용 확인불가 상품은 자동발주 안 함 | IMPLEMENTED(조건만) | `require_return_allowed`(기본True)+RETURN_NOT_ALLOWED 하드블록 | "비용" 조건은 없고 "가능여부(bool)"만 검사 | — | GPT가 코드로 구현 가능(비용검사 보완) |
 | 7-13 | 실제 반품은 통지+승인 후 진행 | IMPLEMENTED | RETURN_EXCHANGE_APPROVAL_NEEDED 알림, approve()가 REQUESTED 상태에서만 명시적 전이 | — | — | — |
 | 7-14 | 새 공급처 첫 주문만 자택검증 | NOT_IMPLEMENTED | "첫 주문/자택/home_verification" 전역 grep 없음 | 개념 자체 미구현 | — | GPT가 코드로 구현 가능 |
 | 7-15 | 이후 지연·품절·오배송·취소율 자동 기록 | NOT_IMPLEMENTED | 관련 자동집계 필드 전무(7-10, 7-11과 동일 근본원인) | — | — | GPT가 코드로 구현 가능 |
-| 7-16 | 일정기간 무거래 공급처는 재사용 전 자동점검 | NOT_IMPLEMENTED | 관련 로직/필드 미발견, 스케줄러 부재와 결합 | — | — | GPT가 코드로 구현 가능 |
+| 7-16 | 일정기간 무거래 공급처는 재사용 전 자동점검 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9C] | `PurchaseChannelConnection.last_successful_order_at`(실제 발주 성공 시에만 갱신)+`verify_connection_ready_for_order_submission()`이 회사별 설정 가능한 휴면 판정 기간(`DEFAULT_DORMANT_CONNECTION_THRESHOLD_DAYS`)을 넘긴 연결을 감지해 `STATUS_CHANGED` 감사 이벤트로 기록 | 이 감지가 "재확인을 강제로 요구"하는 독립 차단 게이트는 아직 아니다 — 기존의 `verified_at` 최신성 검사(이미 있던 게이트)에 얹혀서만 동작한다("점검을 새로 강제"하는 코드가 아니라 "이미 있는 강제에 정보만 더한" 수준) | 휴면 감지 자체를 독립 차단 게이트로 승격할지 여부 | GPT가 코드로 구현 가능(독립 게이트 승격) |
 | 7-17 | 가격·배송·재고·반품 평가비중 설정화면에서 조절 | PARTIALLY_IMPLEMENTED | `axis_weights_json` Model·평가로직 실재 | 편집 API/화면 전혀 없음(백엔드 전용) | — | GPT가 코드로 구현 가능(UI/Router 추가) |
 
 ### 8. 가격·재고·배송 관리
@@ -193,8 +193,8 @@
 | 8-2 | 가격 인상 시 자동발주 중지+통지 | IMPLEMENTED | 2026-09-10 Phase 10: `PurchaseTaskCandidate.expected_amount_at_creation`으로 기준선을 실제로 기록·비교(Critical 결함 #21 해결), PRICE_CHANGE 기능 강등+통지까지 end-to-end 검증(4개 테스트) | — | — | — |
 | 8-3 | 발주 직전 옵션 구매가능 상태 항상 자동확인 | IMPLEMENTED(사람 트리거 기준) | 7-4와 동일 근거 | 동일 제약 | — | — |
 | 8-4 | 판매가능·재고 확인불가 시 중지+통지 | PARTIALLY_IMPLEMENTED | 차단 로직 확인됨 | 실제 알림 dispatch까지 이어지는지 미확인 | notification_center 연결 확인 | GPT가 코드로 구현 가능(보완) |
-| 8-5 | 가격정보 기본TTL 30분, 설정변경 가능 | NOT_IMPLEMENTED | `price_valid_until`은 수동입력 필드일 뿐 | 자동TTL 개념 부재 | — | GPT가 코드로 구현 가능 |
-| 8-6 | 재고정보 기본TTL 10분, 설정변경 가능 | NOT_IMPLEMENTED | 동일 | — | — | GPT가 코드로 구현 가능 |
+| 8-5 | 가격정보 기본TTL 30분, 설정변경 가능 | IMPLEMENTED [2026-09-15 Phase 9D] | `PriceCacheTtlSetting`(append-only, 기본 30분, 회사별 변경 가능)+`PriceStockQuoteCache.price_confirmed_at/price_expires_at`(출처·회사·연결·상품·옵션별 저장) — 만료된 가격은 캐시에서 반환되지 않고(재조회 유도), 발주 직전 조회는 이 캐시를 절대 쓰지 않아(9G 설계 원칙과 동일) 만료가격으로 발주되는 경로 자체가 없다. 가격 인상은 기존 8-2 게이트가 별도로 잡는다 | — | — | — |
+| 8-6 | 재고정보 기본TTL 10분, 설정변경 가능 | IMPLEMENTED [2026-09-15 Phase 9E] | `StockCacheTtlSetting`(기본 10분, 회사별 변경 가능)+`PriceStockQuoteCache.stock_confirmed_at/stock_expires_at`이 가격 TTL과 완전히 독립적으로 만료된다(Fake-clock 테스트로 "가격은 유효, 재고만 만료" 케이스 확인). 만료·조회실패·해석불가는 전부 "재고 있음"으로 취급하지 않는다(8-19 게이트가 이어받음) | — | — | — |
 | 8-7 | 배송기간 변경으로 약속일 어려우면 발주중지+통지 | PARTIALLY_IMPLEMENTED | `max_delivery_days` 초과 시 DELIVERY_DEADLINE_EXCEEDED 하드블록 | 채널 약속일 필드 자체 연동인지 고정상한인지 불명확 | 채널 약속배송일 연동 확인 | GPT가 코드로 구현 가능(보완) |
 | 8-8 | 배송지연만으로 기존주문 자동취소 안 함 | IMPLEMENTED(원칙확인) | 자동취소 로직 전역 미발견 | — | — | — |
 | 8-9 | 배송비 변경 시 마진 재계산, 미달 시 발주중지 | NOT_IMPLEMENTED | 온채널 경로는 배송비를 애초에 추정하지 않음(shipping_fee_known:False 고정) | 변경감지 자체가 성립할 전제 없음 | — | GPT가 코드로 구현 가능 |
@@ -204,10 +204,10 @@
 | 8-13 | 옵션변경·신규옵션 필요 시 사용자 확인요청 | PARTIALLY_IMPLEMENTED | mismatch 경고 화면표시는 존재 | 명시적 확인요청 알림 dispatch 미확인 | notification 연결 확인 | GPT가 코드로 구현 가능(보완) |
 | 8-14 | 매입처 조회실패 시 오래된 캐시로 결제·발주 안 함 | IMPLEMENTED(설계원칙) | 실패 그대로 전파, 캐시 레이어 자체 없음(물리적으로 불가능) | 캐시TTL 기능 자체 없음(8-5/8-6과 표리관계) | — | — |
 | 8-15 | 조회는 재시도 가능하나 결제·발주는 자동재시도 안 함 | IMPLEMENTED | 자동 재시도 루프 전역 미발견 | — | — | — |
-| 8-16 | 매입처 조회실패 지속 시 사용자에게 통지 | NOT_IMPLEMENTED | 연속실패 카운터/알림트리거 미발견 | — | — | GPT가 코드로 구현 가능 |
+| 8-16 | 매입처 조회실패 지속 시 사용자에게 통지 | IMPLEMENTED [2026-09-15 Phase 9, 재확인 Phase 9K] | `PurchaseChannelConnection.consecutive_failure_count`(실패 종류 무관 항상 증가, 성공 시 0으로 리셋)+임계치 "최초 도달" 순간에만 회사 SUPER_ADMIN 전원에게 `SUPPLIER_LOOKUP_REPEATED_FAILURE` 통지(idempotency_key에 스트릭별 시각 포함 — 서로 다른 스트릭끼리 중복判定 안 됨). **Phase 9K 재감사**로 연결별 독립 카운터, 회사간 교차알림 없음, 재시작 후에도 DB 기준 카운터 지속을 각각 전용 회귀로 추가 검증(`tests/test_purchase_channel_connection_service.py::RepeatedLookupFailureNotificationTestCase`, 6개) | — | — | — |
 | 8-17 | 판매채널 가상재고 초기 낮게, 기본수량 변경가능 | NOT_IMPLEMENTED | 가상재고 개념 부재(7-7과 동일) | — | — | GPT가 코드로 구현 가능 |
 | 8-18 | 주문접수 시 판매채널 표시수량 자동감소 | PARTIALLY_IMPLEMENTED | `InventoryService.reserve()` 원자적 감소, `sync_channel_stock()` 채널동기화 시도 | sync_channel_stock()는 Fake Provider 전용, 실채널 반영 미확인. 실물창고 개념이지 "가상재고" 개념 아님 | 실채널 재고 API 연동 확인 | GPT가 코드로 구현 가능(실채널 연동) |
-| 8-19 | 판매가능여부 확인불가 시 가상재고 0+신규판매중지 | NOT_IMPLEMENTED | 가상재고 개념 자체 부재 | — | — | GPT가 코드로 구현 가능 |
+| 8-19 | 판매가능여부 확인불가 시 가상재고 0+신규판매중지 | IMPLEMENTED [2026-09-15 Phase 9F] | `VirtualStockZeroProposal`(PENDING→APPROVED/REJECTED)이 `lookup_product_cached()`의 조회실패·support≠SUPPORTED·요청옵션 in_stock=None 3가지 경로에서 자동 생성되고 SUPER_ADMIN에게 통지 — **실제 판매채널에는 아무것도 자동 반영하지 않는다**(제안일 뿐). 같은 상품에 PENDING 제안이 있으면 그 상품의 신규 발주를 차단(`order_submission_service.py`). 재고 확인이 나중에 성공해도 자동 해소되지 않음 — 관리자가 비어있지 않은 resolution_note로 승인/거부해야만 해소. `tests/test_price_stock_safety_domain.py`(11개)+`CachedLookupTestCase`(5개 트리거 경로 테스트)로 검증 | — | — | — |
 
 ### 9. 반품·환불·정산
 
@@ -238,8 +238,8 @@
 | 10-1 | 매입처 공식API를 우선자료로, API로만 제한 안 함 | PARTIALLY_IMPLEMENTED | `ProductCandidateEvidence.evidence_type`이 여러 출처 구분 설계, 실API 경로 존재 | API 외 자료 수집·병합 한 흐름 확인 못함 | — | — |
 | 10-2 | 지정URL·검색결과의 공개정보·설명·이미지 함께 분석 | PARTIALLY_IMPLEMENTED | `url_import_service.py`/`product_page_extraction.py`/`image_search_providers.py` 파일 존재 | 실제 라이브 연동(네이버 검색 API 등) 여부, FAKE/실 비율 미조사 | provider별 FAKE/실 여부 개별 확인 | VERIFICATION_REQUIRED |
 | 10-3 | 웹페이지 내용은 분석자료로만, 페이지 내 명령 실행 안 함 | VERIFICATION_REQUIRED | 코드베이스 전역 관례로 확인되나 해당 파일 라인단위 확인은 못함 | 프롬프트 인젝션 방지 코드 직접 검증 필요 | `product_page_extraction.py` 상세 리뷰 | — |
-| 10-4 | 자료 간 상품명·옵션·수량·크기·제조사·원산지 불일치 시 자동등록 중지 | NOT_IMPLEMENTED | 발견된 mismatch는 "주문시점 vs 온채널 카탈로그"(제목+수량만) 뿐 | 크기/제조사/원산지 비교, 자료간(API vs URL vs 검색) 비교 로직 부재 | — | GPT가 코드로 구현 가능 |
-| 10-5 | 불일치값 나란히 표시, 사용자 선택 | NOT_IMPLEMENTED | 위 항목 없어 UI도 없음(단순 텍스트 경고만) | — | — | GPT가 코드로 구현 가능 |
+| 10-4 | 자료 간 상품명·옵션·수량·크기·제조사·원산지 불일치 시 자동등록 중지 | IMPLEMENTED [2026-09-15 Phase 9G] | `app/domains/product_attribute_match`(신규 도메인) — 상품명/옵션/수량/사이즈/제조사/원산지 6개 필드를 매입처·판매채널·HOMEZ 현재 값 3소스로 정규화(공백 접기+대소문자 무시) 비교. **문자열 유사도는 절대 쓰지 않는다**(정규화 후 완전 일치만 MATCHED). 소스가 1개뿐이면 UNCONFIRMED(비교 불가를 "일치"로 오판하지 않음), 2개 이상이 다르면 MISMATCHED. 불일치·확인불가 항목이 하나라도 있으면 `ProductAttributeComparisonRun.overall_status=BLOCKED` — 실제 발주(`order_submission_service.py`)와 실제 쿠팡 전송(`listing_wizard_live_service.py::preflight()`) 양쪽에 차단 게이트로 배선됨(비교를 실행한 적 없으면 통과 — "비교를 강제 실행"은 별개 정책). `tests/test_product_attribute_match_service.py`(20개)+두 실제 call-site 테스트로 검증 | 매입처 어댑터 계약(`ChannelProductOption`/`ProductLookupResult`)이 현재 제조사/원산지/사이즈/수량 필드를 아예 갖고 있지 않다 — 실제 데이터가 있는 상품명 외 5개 필드는 이 어댑터 계약이 확장되기 전까지 "비교기가 준비돼 있어도 실제 매입처 값을 자동으로 채워 넣는 호출부"가 없다(수동 API로 값을 직접 넣는 것은 가능) | 온채널 실제 API 응답에 제조사/원산지/사이즈 필드가 있는지 확인(검증 필요) | GPT가 계약 확장 가능(실제 API 필드 확인 후) |
+| 10-5 | 불일치값 나란히 표시, 사용자 선택 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9H] | 콘솔에 "상품 속성 비교" 화면(목록→상세) 신규 추가 — 상세 화면이 필드별로 매입처 값/판매채널 값/HOMEZ 현재 값을 각각 출처·확인시각과 함께 나란히 표시하고, 불일치·확인불가 항목마다 라디오(발견된 값들)+직접입력 중 하나를 사람이 고르게 한다(**서버가 기본값을 미리 선택해두지 않음**), 처리 사유 입력 후에만 제출 가능 | 기존 HOMEZ 화면 패턴(목록/탭/상세, `responsive-cards` 테이블, `.pill` 상태뱃지)을 그대로 재사용해 작성했으나, **이 세션에서 실제 브라우저로 렌더링·클릭 동작을 검증하지 못했다**(Node 문법 검사만 통과) — 좁은 화면에서 실제로 값이 겹치지 않는지도 미검증 | 실제 콘솔 로그인 후 목록→상세→해소 흐름 브라우저 검증, 375px 폭에서 겹침 여부 확인 | GPT가 코드는 완료, 브라우저 실사용 검증은 사용자와 함께 진행 필요 |
 | 10-6 | 네이버이미지API·매입처이미지·지정URL에서 이미지후보 수집 | VERIFICATION_REQUIRED | `image_search_providers.py` 존재, 네이버 자격증명 화면 존재(타 문서 기록) | 실제 라이브 호출 여부 미확인 | provider 상세 확인 | VERIFICATION_REQUIRED |
 | 10-7 | 파일해시+이미지유사도로 중복이미지 반복노출 방지 | PARTIALLY_IMPLEMENTED | `MediaAsset.sha256_hex`로 정확중복(해시) 구현 | "이미지 유사도"(근사중복) 검사 미발견 | — | GPT가 코드로 구현 가능(유사도 검사 추가) |
 | 10-8 | AI가 기본이미지로 배경제거·밝기보정·크기변경·배경제작·변형 여러 개 생성 | PARTIALLY_IMPLEMENTED | `ImageGenerationJob/Result` 모델 완비, `image_processing_providers.py` 존재 | `provider_code`가 FAKE/DISABLED뿐 — 실 AI 이미지생성 미가동(모델 주석 명시) | 실 Provider 연동상태 확인 | GPT가 코드로 구현 가능(실Provider 연동) |
@@ -251,8 +251,8 @@
 | 10-14 | 확인안된 항목은 정확히 `확인 필요`로 표시 | VERIFICATION_REQUIRED | 원칙은 코드전역 확인되나 정확히 이 라벨문자열이 무게/성분/인증번호 필드에 쓰이는지 미매칭 | UI 라벨 표기 재확인 필요 | console.js/i18n에서 문자열 실사용 확인 | — |
 | 10-15 | 자료제공처명·원문URL·확인화면 등 함께 표시 | PARTIALLY_IMPLEMENTED | `MediaAsset.source_url/source_domain`, 정책 근거(`official_source_url`) 존재 | 상품스펙 필드별 출처URL 노출은 별도확인 못함 | 상품스펙 근거표시 UI 확인 | — |
 | 10-16 | 식품·어린이제품·전기제품 등 필수정보 확인불가 시 자동등록 안 함 | PARTIALLY_IMPLEMENTED | `RESTRICTED_CATEGORY_CERTIFICATION_REQUIRED` 규칙(KC인증 등 필수증빙, 공식출처 근거), severity ACTION_REQUIRED | severity가 BLOCKING이 아닌 ACTION_REQUIRED — 실제 등록차단 여부는 평가엔진 판정로직 추가확인 필요, 쿠팡 한정 | ChannelPolicyEvaluation 판정 로직 확인 | GPT가 코드로 구현 가능(엔진 판정 확인·보완) |
-| 10-17 | 판매중지·회수대상 여부 매일 자동확인 | NOT_IMPLEMENTED | "리콜"은 정적 블랙리스트 키워드로만 존재 | 능동적 리콜데이터 조회·매일확인 기능 전무, 스케줄러 부재 | — | GPT가 코드로 구현 가능(단, 공식 리콜 출처는 외부 답변 필요할 수 있음) |
-| 10-18 | 문제 확인되면 신규판매·자동발주 즉시중지+통지 | NOT_IMPLEMENTED | 위 항목 없어 트리거 자체 없음 | — | — | GPT가 코드로 구현 가능 |
+| 10-17 | 판매중지·회수대상 여부 매일 자동확인 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9I, 외부 데이터 소스 미선정] | `app/domains/recall_notice`(신규 도메인) — `RecallNoticeProvider` Protocol 계약+`FakeRecallNoticeProvider`(부분실패 시뮬레이션 지원)로 매일확인 메커니즘 전체(수집→dedupe→`RecallCheckRun` 기록, 이미 처리한 항목은 실패 도중에도 보존)를 구현·검증. 스케줄러 Job(`RECALL_NOTICE_CHECK_JOB_ID`, 매일 05:00 Asia/Seoul)을 `app/main.py` lifespan에 실제로 등록. `tests/test_recall_notice_service.py`(23개, 일일실행/중복공고/부분실패/재시작 전부 커버)+`tests/test_scheduler_jobs.py::RecallNoticeCheckJobTestCase`(3개)로 검증 | **실제 리콜/판매중지 공식 데이터 출처가 아직 선정되지 않았다**(정부/제조사/판매채널 중 무엇을 공식으로 쓸지 미결정) — `get_real_provider()`는 의도적으로 항상 `NotImplementedError`를 던진다. Job 자동화 모드도 기본 PAUSED로 남아 있어, 실제 Provider가 정해지고 사용자가 ACTIVE로 바꾸기 전까지는 어떤 자동 확인도 실행되지 않는다 | 공식 리콜 데이터 출처 확정(정부 API/제조사 발표/판매채널 정책 중 택1) | 외부 답변 필요(공식 리콜 데이터 출처) |
+| 10-18 | 문제 확인되면 신규판매·자동발주 즉시중지+통지 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9J] | `RecallProductBlock`(회사별 완전 격리, PENDING 개념 없이 즉시 BLOCKED로 시작)이 실제 발주(`order_submission_service.py`)와 실제 쿠팡 전송(`listing_wizard_live_service.py::preflight()`) 양쪽을 차단. 기존 접수 주문은 자동취소하지 않고 사용자 확인대상으로만 남김(다른 원칙과 일관). 해제는 관리자+비어있지 않은 justification 입력이 있어야만 가능하고, 자동 재차단 방지 없음(과거 해제가 영구 면제를 주지 않음 — 같은 상품이 다시 리콜되면 새 BLOCKED 행 생성). `tests/test_recall_notice_service.py`의 차단/해제 12개 테스트로 검증 | "서버 관리자"에게 별도로 알리는 전용 채널이 이 저장소에 아직 없다(회사 스코프 알림 인프라만 존재) — 회사 SUPER_ADMIN 알림(`RECALL_PRODUCT_BLOCKED`)은 실제로 발송되지만, "서버 관리자" 몫은 감사로그(`write_audit_log`) 기록으로만 대체했다. 또한 "가격 확대"/"가상재고 증가" 전용 자동 call-site는 이번 세션에서 별도로 찾아 배선하지 못했다(발주·등록 차단만 실제 배선됨) — 리콜 데이터 자체가 아직 없어(10-17) 이 게이트가 실제로 트리거되는 사례는 없다 | 플랫폼 "서버 관리자" 알림 채널 설계, 가격확대·가상재고증가 실제 call-site 특정 | GPT가 코드로 구현 가능(서버 관리자 채널·나머지 call-site 배선) |
 | 10-19 | 일반정보 하루1회, 가격·재고는 8번 더 짧은 주기 자동갱신 | NOT_IMPLEMENTED | 스케줄러 완전부재 — 8번의 TTL도 미구현 | — | — | GPT가 코드로 구현 가능 |
 
 ### 11. 개인정보·보안
@@ -359,29 +359,31 @@
 | 14-24 | 화면에 `수동/반자동/자동/일시중지` 한국어 상태명+설명 표시 | IMPLEMENTED (Phase 3) | `FunctionMode.LABELS_KO`/`DESCRIPTIONS_KO`가 정확히 이 4개 한국어 이름(+오류)과 설명을 갖고, `/console/api/function-modes` 응답과 console.js 렌더링에 그대로 노출됨 | 기존 전역 단일 모드 화면(`safety.mode_title`)은 여전히 영문 상수로 표시됨(그대로 둠 — 기능별 화면과 병존) | — | — |
 | 14-25 | 자동화단계는 토글/단계선택 컨트롤로 쉽게 조절 | PARTIALLY_IMPLEMENTED | 기능별 select+버튼 컨트롤 존재(Phase 3) | 토글 형태(더 간단한 UI)는 아님, select+버튼 방식 — Phase 13에서 UX 개선 여지 | — | — |
 
-### 섹션별 요약 개수 — Phase 0 정합화 완료 (2026-09-09)
+### 섹션별 요약 개수 — 2026-09-15 전면 감사 후속 Phase 11 재계산
 
-> **Phase 0 정정 내역**: 최초 통합 시 4개 행(3-6, 4-14, 14-5, 14-19)의 기본 판정 칸에 `BLOCKED_BY_USER_APPROVAL`을 직접 넣어, 기본 판정 4종(IMPLEMENTED/PARTIALLY_IMPLEMENTED/NOT_IMPLEMENTED/VERIFICATION_REQUIRED)의 합이 전체 기준 수(223)와 일치하지 않는 정합성 오류가 있었다. 이번 정합화로 그 4건을 기본 판정으로 재분류하고(3-6·4-14·14-5→NOT_IMPLEMENTED, 14-19→VERIFICATION_REQUIRED) `BLOCKED_BY_USER_APPROVAL`은 대괄호 보조 태그로 위 표에 남겨뒀다(해당 행 참고). 아래 집계는 이 정정을 반영한, 전체 223개 세부기준을 프로그램으로 직접 파싱해 재계산한 값이다(수기 집계 아님).
+> **Phase 11 정정 내역**: 이 요약표는 2026-09-09 Phase 0 정합화 이후 **한 번도 재계산되지 않은 채 방치**돼 있었다 — 그 사이 2026-09-09~2026-09-15에 걸친 여러 Phase(결제/환불/스케줄러/환율/가상재고 등 도메인 신설, 그리고 이번 세션의 Phase 9A~9K)가 개별 행(1~14번 표)의 판정을 수십 건 갱신했는데도, 이 표의 숫자는 옛 2026-09-09 기준선(58/52/84/29) 그대로였다. **이전 보고가 "10개 항목이 모두 끝난 것처럼" 읽힐 수 있었던 프레이밍 오류를 여기서 바로잡는다** — 실제로 이번 세션이 완결 처리한 항목은 7-8, 7-11, 8-5, 8-6, 8-16, 8-19, 10-4의 7개(IMPLEMENTED)뿐이고, 7-16·10-5·10-17·10-18의 4개는 각각 이유가 다른 PARTIALLY_IMPLEMENTED로 남는다(아래 개별 표·§11-A 참고). 이 표는 **223개 전체 행을 프로그램으로 다시 파싱해** 재계산한 값이며(수기 집계 아님), 프로그램 파싱 특성상 세션 도중 갱신되지 않은 나머지 ~200여 개 행은 각 행이 마지막으로 갱신된 시점의 판정을 그대로 반영한다 — "이번 세션이 그 항목들을 재검증했다"는 뜻이 아니다.
 
 | 섹션 | 전체 세부기준 | 구현완료 | 부분구현 | 미구현 | 검증필요 | [보조] 외부답변대기 | [보조] 사용자설정필요 | [보조] 사용자승인필요 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1. 기본 운영 설정 | 6 | 3 | 1 | 1 | 1 | 0 | 1 | 0 |
-| 2. 판매채널 운영 방식 | 10 | 3 | 2 | 4 | 1 | 1 | 0 | 0 |
+| 2. 판매채널 운영 방식 | 10 | 3 | 3 | 3 | 1 | 1 | 0 | 0 |
 | 3. 매입처 운영 방식 | 11 | 3 | 1 | 3 | 4 | 0 | 0 | 1 |
 | 4. 결제수단 운영 방식 | 14 | 2 | 4 | 6 | 2 | 4 | 0 | 1 |
 | 5. 자동결제 한도 | 11 | 4 | 4 | 3 | 0 | 0 | 3 | 0 |
-| 6. 수익성 기준 | 15 | 3 | 5 | 7 | 0 | 0 | 2 | 0 |
-| 7. 상품·공급처 평가 | 17 | 7 | 2 | 7 | 1 | 0 | 0 | 1 |
-| 8. 가격·재고·배송 관리 | 19 | 6 | 5 | 7 | 1 | 0 | 0 | 1 |
-| 9. 반품·환불·정산 | 17 | 6 | 3 | 8 | 0 | 0 | 0 | 0 |
-| 10. 상품·이미지·규제 데이터 | 19 | 3 | 6 | 5 | 5 | 1 | 0 | 0 |
-| 11. 개인정보·보안 | 22 | 6 | 5 | 9 | 2 | 1 | 0 | 0 |
-| 12. AI 분석·학습 기반 | 20 | 3 | 4 | 13 | 0 | 0 | 0 | 0 |
-| 13. 운영 UI·관제 | 17 | 1 | 8 | 1 | 7 | 0 | 0 | 0 |
-| 14. 실데이터 검증·출시 판정 | 25 | 8 | 2 | 10 | 5 | 0 | 0 | 7 |
-| **합계(기본 판정 4종만 — 전체 기준 수와 정확히 일치)** | **223** | **58** | **52** | **84** | **29** | **7** | **6** | **11** |
+| 6. 수익성 기준 | 15 | 5 | 5 | 5 | 0 | 0 | 2 | 0 |
+| 7. 상품·공급처 평가 | 17 | 9 | 4 | 3 | 1 | 0 | 0 | 1 |
+| 8. 가격·재고·배송 관리 | 19 | 11 | 4 | 3 | 1 | 0 | 0 | 1 |
+| 9. 반품·환불·정산 | 17 | 9 | 3 | 5 | 0 | 0 | 0 | 0 |
+| 10. 상품·이미지·규제 데이터 | 19 | 4 | 9 | 1 | 5 | 1 | 0 | 0 |
+| 11. 개인정보·보안 | 22 | 11 | 2 | 6 | 3 | 1 | 0 | 0 |
+| 12. AI 분석·학습 기반 | 20 | 6 | 7 | 7 | 0 | 0 | 0 | 0 |
+| 13. 운영 UI·관제 | 17 | 3 | 7 | 0 | 7 | 0 | 0 | 0 |
+| 14. 실데이터 검증·출시 판정 | 25 | 10 | 4 | 6 | 5 | 0 | 0 | 7 |
+| **합계(기본 판정 4종만 — 전체 기준 수와 정확히 일치)** | **223** | **83** | **58** | **52** | **30** | **7** | **6** | **11** |
 
-**검산**: 58 + 52 + 84 + 29 = 223 = 전체 세부기준 수. 보조 태그(외부답변대기 7 + 사용자설정필요 6 + 사용자승인필요 11 = 24건)는 기본 판정 위에 얹힌 부가 정보이며 별도로 합산하지 않는다(중복 계상 금지).
+**검산**: 83 + 58 + 52 + 30 = 223 = 전체 세부기준 수(재계산 스크립트로 `grep`/정규식 파싱해 재확인, 수기 집계 아님). 보조 태그(외부답변대기 7 + 사용자설정필요 6 + 사용자승인필요 11 = 24건)는 기본 판정 위에 얹힌 부가 정보이며 별도로 합산하지 않는다(중복 계상 금지) — 이번 Phase 11에서 손댄 11개 행 중 어느 것도 보조 태그가 붙은 행이 아니므로 보조 태그 집계 자체는 2026-09-09 값과 동일하다.
+
+**2026-09-09 → 2026-09-15 변화**: 구현완료 58→83(+25), 부분구현 52→58(+6), 미구현 84→52(−32), 검증필요 29→30(+1). 이 전체 변화분 중 이번 세션(Phase 9A~9K)이 직접 만든 변화는 7건의 미구현→구현완료(7-8/7-11/8-5/8-6/8-16/8-19/10-4)와 4건의 미구현→부분구현(7-16/10-5/10-17/10-18)뿐이다 — 나머지 변화는 2026-09-09~09-14 사이의 이전 세션들(결제/환불/스케줄러/환율/개인정보/로그인잠금 등)이 만든 것으로, 이번 세션은 그 항목들을 재검증하지 않았고 그 판정을 있는 그대로 가져왔을 뿐이다.
 
 (개수는 각 조사 세션이 문서 불릿을 실제로 몇 개로 분리했는지에 따라 소폭 편차가 있을 수 있음 — 정확한 개별 판정은 위 개별 표를 원본으로 한다.)
 
@@ -405,7 +407,7 @@
 - **Critical/High 결함 수정**(2절 참고): 배송비 미확인 시 실제 차단(6-3), 마진율 UI 소수→퍼센트 통일(6-15), 로그인 실패 잠금 DB컬럼+로직 추가(11-18), 자동결제 한도 이중구조 정리(5-4), 감사로그 강제 마스킹 게이트(11-13/13-16)
 - ~~**스케줄러 인프라 신설**: `app/domains/scheduler` 구현+`app/main.py` 연결 — 2-5, 2-8, 9-13, 10-17, 10-19, 11-17 등 수십 개 항목이 동시에 해소됨~~ **[2026-09-10 Phase 6에서 인프라만 해소, 원래 예상은 과했음]** 인프라(`SchedulerService`+`app/main.py` 연결)는 실제로 완료됐고 11-17(백업 복구 리허설)은 그 위에서 실제로 연결·자동화됐다. 하지만 2-5(가격 검토)/2-8(주문 수집)/9-13/10-17/10-19처럼 **실제 외부 API를 호출하는 항목들은 인프라만으로 저절로 해소되지 않는다** — 각각 (a) 자동화 모드 게이트 연결, (b) 시스템-주체 감사 표현 방식 결정, (c) 일부는 저장소 계층 자체(가격/재고 모니터링)를 새로 설계해야 하는 별도 작업이 남아있다(상세 조사 결과: `docs/HOMEZ_PROJECT_STATE.md` 2026-09-10 후속 17). "인프라만 만들면 수십 개가 한 번에 풀린다"는 원래 감사의 이 추정은 과했다 — 항목별로 개별 배선이 필요하다.
 - **환불(refund) 도메인 신설**: 9-4~9-10 전체
-- **가상재고 개념 신설**: 7-7, 7-8, 8-17, 8-19
+- ~~**가상재고 개념 신설**: 7-7, 7-8, 8-17, 8-19~~ **[2026-09-15 Phase 9A/9F 완료]** 7-8(호출제한·캐시TTL)·8-19(판매가능 확인불가 시 가상재고 0 제안)는 IMPLEMENTED. 7-7(가상재고 임계값 게이트)은 이미 이전 Phase에서 PARTIALLY_IMPLEMENTED. 8-17(초기 가상재고를 낮게 설정+기본수량 변경)은 여전히 손대지 않음(별도 작업 필요) — `InventorySku`(실물창고)와 `VirtualStockThreshold`/`PriceStockQuoteCache`(가상재고·가격/재고 안전장치)는 이제 명확히 분리된 별도 계층이다.
 - **환율(currency/exchange) 도메인 신설**: 6-10, 6-11
 - **알림 이벤트 배선 보강**(`wired=False` 항목들): 13-4, 13-8, 13-9
 - **자동모드 기능별 스키마 확장**: 13-10, 14-20~14-25 (모델·Migration 설계는 GPT가 가능하나, 실제 DB 적용은 기존 원칙대로 사용자 승인 필요)
@@ -436,7 +438,7 @@
 1. **즉시(안전 결함 우선)**: 로그인 실패 잠금 미구현(11-18), 세션 3시간/종료시 파기 정책(11-11) 재설계, 배송비 미확인 시 실제 차단(6-3), 마진율 UI 소수/퍼센트 불일치(6-15), 자동결제 한도 이중구조 정리(5-4) — 전부 Critical/High이며 코드만으로 해결 가능.
 2. **구조 기반 마련**: 스케줄러 인프라 신설(다수 항목의 공통 선행조건), `AutomationModeState`를 기능별 스코프로 확장(13-10, 14-20~14-25의 선행조건).
 3. **핵심 도메인 신설**: 결제(payment) 도메인, 환불(refund) 도메인 — 각각 4/5/9/11/13/14번의 상당 부분을 동시에 해소.
-4. **부가 도메인**: 환율(currency/exchange), 가상재고 개념, 매입처 반복실패 자동일시정지(3-11/7-11).
+4. ~~**부가 도메인**: 환율(currency/exchange), 가상재고 개념, 매입처 반복실패 자동일시정지(3-11/7-11).~~ **[2026-09-15 Phase 9A~9J 완료]** 매입처 반복실패 자동일시정지(7-11)·호출제한/캐시(7-8)·가격·재고 TTL(8-5/8-6)·가상재고 0 제안(8-19)·상품 속성 비교 차단(10-4)·리콜 차단 메커니즘(10-17/10-18, Provider 미선정)까지 전부 코드·테스트로 구현됨. 남은 것: 7-16(휴면 공급처 독립 게이트 승격), 10-5 브라우저 검증, 10-17 실제 데이터 소스 선정, 10-18 서버 관리자 알림 채널.
 5. **AI 학습 파이프라인**(12번 후반 13개 항목) — 실제 완료 주문 데이터가 쌓이기 전에는 코드만 준비하고 실적용은 보류.
 6. **실데이터 검증 실행**(14번) — 위 1~4가 정리된 뒤, 사용자 승인 하에 백업 실행 확인 → 실제 상품 2건 전체과정 검증 → 긴급중지 Fake 검증.
 
