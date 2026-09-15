@@ -34,6 +34,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.desktop import restore_helper
+from tests.support.real_credential_gate import requires_real_credential_manager
 from app.domains.backup.service import TRIGGER_SOURCE_MANUAL
 from app.domains.backup.service import BackupService
 from app.domains.backup.service import sha256_of_file
@@ -957,6 +958,7 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
         self.assertEqual(outcome["status"], "failed")
         self.assertIn("SHA-256", outcome["reason"])
 
+    @requires_real_credential_manager
     def test_full_subprocess_helper_cli_end_to_end(self):
         """
         가장 강한 증거 — 실제 별도 프로세스 경계를 넘어 CLI 진입점
@@ -971,12 +973,14 @@ class RestoreHelperModuleTestCase(unittest.TestCase):
         띄우므로 InMemoryCredentialStore를 공유할 방법이 없다 — 그래서
         이 테스트만 예외적으로 실제 Windows Credential Manager를
         쓴다(백업 생성도 같은 실제 저장소를 써야 서로 다른 프로세스가
-        같은 암호화 키를 본다). 이 저장소의 나머지 테스트는 전부
-        InMemoryCredentialStore만 쓴다 — 이 테스트 하나가 실제
-        Credential Manager를 건드리는 유일한 예외이며, 향후 Phase 6
-        (테스트 격리)에서 이 테스트를 별도 스위트로 분리하는 것을
-        검토해야 한다(이 세션의 안전 회귀 실행에서는 이 사실을 알고
-        포함/제외를 판단해야 한다).
+        같은 암호화 키를 본다).
+
+        2026-09-15 Phase 6(테스트 격리, IA-012) — 그래서 이 테스트는
+        `@requires_real_credential_manager`로 기본 전체 회귀에서
+        제외되고, `HOMEZ_RUN_REAL_CREDENTIAL_TESTS=1`을 명시적으로
+        설정했을 때만 실행된다(tests/support/real_credential_gate.py
+        참고). 이 파일의 나머지 테스트는 전부 InMemoryCredentialStore만
+        쓴다.
         """
 
         from app.core.windows_credential_store import WindowsCredentialStore

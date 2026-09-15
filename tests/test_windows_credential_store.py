@@ -9,6 +9,15 @@ WindowsCredentialStore()의 실제 save/read/delete/exists를 직접
 검증한다(각 테스트는 자기 자신이 만든 target만 정리하고 끝낸다 — 실제
 OS 저장소에 잔여물을 남기지 않는다). InMemoryCredentialStore/
 AlwaysFailingCredentialStore(테스트 fixture)도 함께 검증한다.
+
+2026-09-15 전면 감사 후속(Phase 6, 테스트 격리 — IA-012) —
+`WindowsCredentialStoreTestCase`는 실제 Windows Credential Manager에
+쓰기 때문에 `@requires_real_credential_manager`로 기본 전체 회귀
+(`python -m unittest discover -s tests`)에서 제외된다.
+`HOMEZ_RUN_REAL_CREDENTIAL_TESTS=1`을 명시적으로 설정했을 때만
+실행된다(tests/support/real_credential_gate.py 참고). 이 파일의
+다른 클래스(InMemoryCredentialStoreTestCase 등)는 실제 OS 자원을
+건드리지 않으므로 기본 회귀에 그대로 남는다.
 =========================================================
 """
 
@@ -24,6 +33,7 @@ from app.core.windows_credential_store import (
     InMemoryCredentialStore,
     WindowsCredentialStore,
 )
+from tests.support.real_credential_gate import requires_real_credential_manager
 
 
 def _fresh_target() -> str:
@@ -32,6 +42,7 @@ def _fresh_target() -> str:
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows 전용 Credential Manager 테스트")
+@requires_real_credential_manager
 class WindowsCredentialStoreTestCase(unittest.TestCase):
 
     def setUp(self):
