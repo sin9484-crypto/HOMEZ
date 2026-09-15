@@ -938,7 +938,43 @@ test_full_subprocess_helper_cli_end_to_end`는 완전히 별도의 OS
 `app/domains/restore/service.py`의 2026-08-17 "낡은 전제를 실제
 안전 요구사항에 맞게 명시적 승인 하에 갱신" 원칙과 동일).
 
-### 13.6 잔여 위험과 다음 단계
+### 13.6 Phase 6 — 테스트 격리(IA-012)
+
+**대상**: IA-012가 지적한 대로 `tests/test_windows_credential_store.py
+::WindowsCredentialStoreTestCase`는 기본 `python -m unittest discover
+-s tests` 실행 시 실제 Windows Credential Manager에 save/read/delete를
+직접 수행했다. Phase 5 작업 중 같은 문제의 두 번째 사례
+(`tests/test_restore_helper.py::
+test_full_subprocess_helper_cli_end_to_end` — 완전히 별도 OS
+프로세스를 띄워 실제 Credential Manager를 써야만 동작)도 새로
+발견했다.
+
+**수정 내용**: `tests/support/real_credential_gate.py`에 재사용
+가능한 `@requires_real_credential_manager` 데코레이터를 추가했다
+(env var `HOMEZ_RUN_REAL_CREDENTIAL_TESTS=1`로 명시적 opt-in). 두
+지점 모두에 적용 — 삭제나 무력화가 아니라 실행 시점을 사용자가
+의식적으로 선택하게 한다. 기본 회귀에서는 자동으로 건너뛰고(skip,
+실패 아님), 환경변수를 설정하면 그대로 실제 저장소를 검증한다
+(양쪽 다 직접 확인함 — 기본 실행 시 36건 중 7건 skip, opt-in 실행
+시 두 지점 모두 실제 Windows Credential Manager에서 정상 통과).
+
+**real homez.db 참조 테스트 조사(별도 범주, 이번 라운드 게이트
+추가 안 함)**: `REAL_DB_PATH`를 참조하는 파일 9개
+(`test_audit_logs_migration.py`, `test_bootstrap_production_db_guard.py`,
+`test_marketplace_fulfillment_migration.py`,
+`test_media_listing_package_migration.py`, `test_migration_approval.py`,
+`test_migration_restricted_mode.py`,
+`test_migration_restricted_mode_db_path_contract.py`,
+`test_notification_delivery_migration.py`,
+`test_store_connection_migration.py`)를 전수 조사했다 — 전부
+읽기 전용(`mode=ro` 커넥션, `PRAGMA query_only=ON`, `open(path, "rb")`,
+또는 `stat()` 전후 비교로 무변경을 직접 증명)이고, 실제 homez.db가
+없는 환경에서는 이미 자동으로 건너뛴다. IA-012가 지적한 것은 실제
+자격증명 저장소에 대한 **쓰기**(save/delete)였고, 이 9개 파일은
+쓰기가 전혀 없는 다른 위험 범주다 — 이번 라운드에서는 추가 게이트
+없이 평가 결과만 기록하고 넘어간다(범위 판단, 회피 아님).
+
+### 13.7 잔여 위험과 다음 단계
 
 - IA-004(Critical, idempotency key 중복발주)의 원래 경로는
   `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른
@@ -948,13 +984,13 @@ test_full_subprocess_helper_cli_end_to_end`는 완전히 별도의 OS
 - 백업 암호화는 Phase 5에서 실제로 연결됐지만, `MigrationRunner.
   create_backup()`/부트스트랩 경로는 여전히 평문 — 다음 라운드
   재검토 대상.
-- `test_full_subprocess_helper_cli_end_to_end`가 실제 Windows
-  Credential Manager를 쓰는 유일한 테스트로 새로 확인됨 — Phase 6
-  테스트 격리 대상 목록에 추가.
+- IA-012(실제 Windows Credential Manager 접촉)는 Phase 6에서
+  해소됐다 — 기본 전체 회귀는 이제 정직하게 "자격증명 무접촉"이라고
+  말할 수 있다. 읽기 전용 real-DB 테스트 9개는 별도 범주로 평가만
+  하고 게이트를 추가하지 않았다(13.6 참고).
 - 수취인 정보 결합은 여전히 미해결 — 온채널 실제 발주 재개를 막는
   근거 중 하나로 유지한다.
 - 개발본/설치본 DB 선택은 여전히 사용자 결정 대기(11.6-1).
-- Phase 6(테스트 격리), Phase 8(실행 게이트 배선), Phase 9(안전 기능
-  7-8/7-11/7-16/8-5/8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이
-  라운드에서 착수하지 않았다 — 아래 최종 보고에서 범위 한계를
-  명시한다.
+- Phase 8(실행 게이트 배선), Phase 9(안전 기능 7-8/7-11/7-16/8-5/
+  8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이 라운드에서 착수하지
+  않았다 — 아래 최종 보고에서 범위 한계를 명시한다.
