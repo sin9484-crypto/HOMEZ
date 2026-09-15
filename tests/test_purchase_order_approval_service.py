@@ -501,6 +501,81 @@ class ConsumedApprovalImmutabilityTestCase(OrderApprovalServiceTestCaseBase):
         self.assertEqual(approval.status, PurchaseOrderApprovalStatus.ACTIVE)
 
 
+class OptionBindingTestCase(OrderApprovalServiceTestCaseBase):
+    """2026-09-15 후속(전면 감사 Phase 2, 승인-실행 결합 완성) —
+    독립 감사 IA-005의 잔여 부분: 승인 시점 옵션 구성과 실제 발주
+    시점 옵션이 달라도(상품코드는 같은데 옵션만 바뀐 경우) 기존
+    코드는 이를 구분하지 못했다. 옵션 스냅샷을 승인 시점에 저장하고
+    실행 직전 재검증에서 대조한다."""
+
+    def _confirm_shipping(self, task, *, amount=3000):
+
+        return self.service.confirm_shipping_cost(
+            4, self.company_a.id, task.id, "CH1",
+            shipping_cost_amount=amount,
+            source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+            confirmed_by=1,
+        )
+
+    def test_different_options_at_submission_blocked(self):
+
+        task = self._create_task(coupang_sale_amount=30000.0, coupang_fee_amount=3000.0)
+        self._confirm_shipping(task, amount=3000)
+        self.service.finalize_approval(
+            4, self.company_a.id, task.id,
+            item_amount=10000, current_points=1_000_000, triggered_by=1,
+            options=[{"id": "OPT1", "qty": 1}, {"id": "OPT2", "qty": 2}],
+        )
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.revalidate_before_submission(
+                4, self.company_a.id, task.id,
+                current_product_code="CH1", current_item_amount=10000,
+                current_points=1_000_000, current_shipping_cost_hint=3000,
+                current_options=[{"id": "OPT1", "qty": 5}],  # 수량이 다름
+            )
+        self.assertIn("옵션", str(ctx.exception))
+
+    def test_same_options_in_different_order_still_passes(self):
+        """옵션을 고르는 순서만 다른 경우(실제 구성은 동일)는 통과해야
+        한다 — 순서 자체는 실제 변경이 아니다."""
+
+        task = self._create_task(coupang_sale_amount=30000.0, coupang_fee_amount=3000.0)
+        self._confirm_shipping(task, amount=3000)
+        self.service.finalize_approval(
+            4, self.company_a.id, task.id,
+            item_amount=10000, current_points=1_000_000, triggered_by=1,
+            options=[{"id": "OPT1", "qty": 1}, {"id": "OPT2", "qty": 2}],
+        )
+
+        approval = self.service.revalidate_before_submission(
+            4, self.company_a.id, task.id,
+            current_product_code="CH1", current_item_amount=10000,
+            current_points=1_000_000, current_shipping_cost_hint=3000,
+            current_options=[{"id": "OPT2", "qty": 2}, {"id": "OPT1", "qty": 1}],
+        )
+        self.assertEqual(approval.status, PurchaseOrderApprovalStatus.ACTIVE)
+
+    def test_no_snapshot_skips_option_check(self):
+        """옵션을 넘기지 않고 승인한 기존 방식(하위호환)은 옵션
+        재검증 자체를 생략한다 — 추측으로 막지 않는다."""
+
+        task = self._create_task(coupang_sale_amount=30000.0, coupang_fee_amount=3000.0)
+        self._confirm_shipping(task, amount=3000)
+        self.service.finalize_approval(
+            4, self.company_a.id, task.id,
+            item_amount=10000, current_points=1_000_000, triggered_by=1,
+        )
+
+        approval = self.service.revalidate_before_submission(
+            4, self.company_a.id, task.id,
+            current_product_code="CH1", current_item_amount=10000,
+            current_points=1_000_000, current_shipping_cost_hint=3000,
+            current_options=[{"id": "ANYTHING", "qty": 99}],
+        )
+        self.assertEqual(approval.status, PurchaseOrderApprovalStatus.ACTIVE)
+
+
 class DailyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
 
     def test_consumed_and_active_rows_within_24h_counted(self):

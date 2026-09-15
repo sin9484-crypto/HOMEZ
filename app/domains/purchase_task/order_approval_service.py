@@ -34,6 +34,7 @@ submission_service.py의 Gate D를 통과시킨다 — 그 외에는 여전히
 from __future__ import annotations
 
 import functools
+import json
 import threading
 from datetime import datetime
 from datetime import timedelta
@@ -219,19 +220,46 @@ class PurchaseOrderApprovalService:
                 "체크해야 합니다 — 미입력과 0원 확인은 다른 사실입니다.",
             )
 
+    @staticmethod
+    def _normalize_options(options: list[dict] | None) -> list[dict] | None:
+        """2026-09-15 후속(전면 감사 Phase 2) — 옵션 목록을 id 기준
+        정렬한 {id, qty} 리스트로 정규화한다. "옵션을 고르는 순서만
+        다른 같은 요청"과 "실제 옵션 구성이 바뀐 요청"을 구분하기
+        위한 유일한 목적이다 — 옵션 자체에는 개인정보가 없다."""
+
+        if options is None:
+            return None
+        normalized = sorted(
+            (
+                {"id": str(opt.get("id")), "qty": int(opt.get("qty") or 0)}
+                for opt in options
+            ),
+            key=lambda o: o["id"],
+        )
+        return normalized
+
     # ---------------- Phase 7: 최종 승인 ----------------
 
     @_synchronized(_finalize_approval_lock)
     def finalize_approval(
         self, connection_id: int, company_id: int, purchase_task_id: int,
         *, item_amount: int, current_points: int, triggered_by: int,
+        options: list[dict] | None = None,
     ) -> PurchaseOrderApproval:
         """배송비 확인이 끝난 승인 행에 대해, 호출자가 이미 실측한
         최신 상품가(`item_amount`)·포인트 잔액(`current_points`)을
         받아 최종 한도·마진 재확인을 수행한다. 이 메서드 자신은
         온채널에 어떤 네트워크 호출도 하지 않는다(호출자가 이미
         Gate D의 실측 단계에서 받은 값을 그대로 넘긴다 — 같은 값을
-        두 번 조회하지 않는다)."""
+        두 번 조회하지 않는다).
+
+        `options`(선택, [{id, qty}, ...])를 넘기면 승인 시점 옵션
+        구성을 정규화해 스냅샷으로 저장한다 — 실행 직전
+        `revalidate_before_submission()`이 이 스냅샷과 실제 제출
+        시점 옵션을 대조해 "승인된 것과 다른 옵션으로 바꿔치기"를
+        차단한다(2026-09-15 전면 감사 Phase 2, 승인-실행 결합).
+        넘기지 않으면(호출부가 아직 옵션을 모르는 경우) 옵션
+        재검증은 생략된다 — 이 사실을 추측으로 메우지 않는다."""
 
         approval = self.get_approval(connection_id, company_id, purchase_task_id)
         if approval is None or approval.shipping_cost_amount is None:
@@ -398,6 +426,11 @@ class PurchaseOrderApprovalService:
         approval.current_points_snapshot = current_points
         approval.margin_amount_snapshot = margin_amount
         approval.margin_rate_snapshot = margin_rate
+        normalized_options = self._normalize_options(options)
+        if normalized_options is not None:
+            approval.options_snapshot_json = json.dumps(
+                normalized_options, ensure_ascii=False,
+            )
 
         if blocked_reasons:
             approval.status = PurchaseOrderApprovalStatus.PENDING_SHIPPING_COST
@@ -485,6 +518,7 @@ class PurchaseOrderApprovalService:
         self, connection_id: int, company_id: int, purchase_task_id: int,
         *, current_product_code: str, current_item_amount: int, current_points: int,
         current_shipping_cost_hint: int | None,
+        current_options: list[dict] | None = None,
     ) -> PurchaseOrderApproval:
         """실제 온채널 발주 호출 바로 직전에 승인이 여전히 유효한지
         마지막으로 대조한다 — 승인 이후 가격이 바뀌었거나 만료됐으면
@@ -504,6 +538,17 @@ class PurchaseOrderApprovalService:
                 "승인된 상품과 실제 발주 상품이 다릅니다 — 기존 승인을 다른 "
                 "상품에 사용할 수 없습니다.",
             )
+        if approval.options_snapshot_json and current_options is not None:
+            approved_options = json.loads(approval.options_snapshot_json)
+            submitted_options = self._normalize_options(current_options)
+            if approved_options != submitted_options:
+                approval.status = PurchaseOrderApprovalStatus.INVALIDATED_PRICE_CHANGE
+                approval.invalidated_reason = (
+                    "승인 시점 옵션 구성과 실제 발주 옵션이 다릅니다 — 승인된 "
+                    "옵션 외에는 이 승인을 사용할 수 없습니다."
+                )
+                self.db.commit()
+                raise ConflictException(approval.invalidated_reason)
         if approval.item_amount_snapshot != current_item_amount:
             approval.status = PurchaseOrderApprovalStatus.INVALIDATED_PRICE_CHANGE
             approval.invalidated_reason = (

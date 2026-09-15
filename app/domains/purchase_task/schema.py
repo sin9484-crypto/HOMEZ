@@ -579,11 +579,16 @@ class FinalizeOrderApprovalRequest(BaseModel):
     최종 승인으로 전환한다. 이 요청 자체는 온채널에 네트워크 호출을
     하지 않는다 — item_amount/current_points는 호출부(프론트엔드)가
     직전에 /order-submission-review로 이미 실측한 값을 그대로
-    넘긴다(같은 값을 두 번 조회하지 않는다)."""
+    넘긴다(같은 값을 두 번 조회하지 않는다).
+
+    2026-09-15 후속(전면 감사 Phase 2) — `options`(선택)를 함께
+    보내면 승인 시점 옵션 구성이 스냅샷으로 저장되고, 실제 발주
+    직전 재검증이 이 스냅샷과 대조해 옵션 바꿔치기를 차단한다."""
 
     connection_id: int
     item_amount: int = Field(ge=0)
     current_points: int
+    options: Optional[list[OrderSubmissionReviewOptionInput]] = None
 
 
 class SubmitRealOrderRequest(BaseModel):

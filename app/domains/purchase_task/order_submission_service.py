@@ -641,6 +641,7 @@ class PurchaseOrderSubmissionService:
             current_product_code=product_code,
             current_item_amount=item_subtotal, current_points=point_result.point,
             current_shipping_cost_hint=None,
+            current_options=options,
         )
 
         required_points = item_subtotal + (approval.shipping_cost_amount or 0)

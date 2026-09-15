@@ -1070,6 +1070,10 @@ def finalize_order_approval(
         data.connection_id, current_user.company_id, task_id,
         item_amount=data.item_amount, current_points=data.current_points,
         triggered_by=current_user.id,
+        options=(
+            [opt.model_dump() for opt in data.options]
+            if data.options is not None else None
+        ),
     )
     return _order_approval_to_response(approval)
 

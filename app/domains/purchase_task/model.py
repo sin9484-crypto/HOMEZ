@@ -971,6 +971,17 @@ class PurchaseOrderApproval(Base):
     margin_rate_snapshot: Mapped[float | None] = mapped_column(
         Float, nullable=True,
     )
+    # 2026-09-15 후속(전면 감사 Phase 2 — 승인-실행 결합 완성) —
+    # 승인 시점에 검토된 옵션 구성(id·수량만, PII 아님)의 정규화된
+    # 스냅샷. JSON 배열, id 기준 정렬 후 저장해 "순서만 다른 같은
+    # 요청"과 "실제 옵션이 바뀐 요청"을 구분할 수 있게 한다. 이
+    # 필드가 None인 기존 행(이 Migration 이전에 만들어진 승인)은
+    # 옵션 재검증을 생략한다(추측으로 채우지 않는다) — 잔여 위험으로
+    # 별도 기록한다. 실행 직전 재검증(revalidate_before_submission)
+    # 이 이 스냅샷과 실제 제출 시점 옵션을 대조한다.
+    options_snapshot_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+    )
 
     approved_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -63,32 +63,15 @@ NEW_MIGRATION = "20260908_00_create_purchase_channel_connection_schema.sql"
 # Migration 파일은 전부 여기 추가해야 한다"는 이 파일의 유지보수
 # 규칙을 다시 명시해둔다 — 이 세트를 갱신하지 않은 채 새 Migration을
 # 추가하면 이 테스트가 항상 이렇게 깨진다.
+#
+# 2026-09-15 전면 감사 후속 — tests/test_purchase_channel_connection_
+# migration.py와 동일하게, 이제 이 집합을 손으로 갱신하지 않는다.
+# NEW_MIGRATION과 같거나 사전순으로 뒤인 .sql 파일 전부를 자동
+# 계산한다.
 EXCLUDED_FROM_PRIOR_STATE = {
-    NEW_MIGRATION,
-    "20260908_01_create_purchase_order_submission_attempts.sql",
-    "20260909_00_add_login_lockout_columns.sql",
-    "20260909_01_create_function_automation_state_schema.sql",
-    # 2026-09-10 최종 회귀에서 재발견 — HOMEZ V7 개인 베타 Phase
-    # 7~12(결제/환불/환율/공급처능력/가격재고안전/가격기준선/AI학습
-    # 기반)가 추가한 7개. Phase 6에서 이미 겪은 것과 동일한 패턴
-    # (새 Migration을 추가하면 이 집합을 매번 갱신해야 한다).
-    "20260910_00_create_payment_domain_schema.sql",
-    "20260910_01_create_refund_domain_schema.sql",
-    "20260910_02_create_currency_domain_schema.sql",
-    "20260910_03_create_supplier_capability_schema.sql",
-    "20260910_04_add_purchase_task_candidate_price_baseline.sql",
-    "20260910_05_create_price_stock_safety_schema.sql",
-    "20260910_06_create_ai_learning_schema.sql",
-    # 2026-09-10 Phase 3(판매신청 게이트) — 동일한 이유로 추가.
-    "20260910_07_create_purchase_sales_application_schema.sql",
-    # 2026-09-11 반자동 완료 라운드(Phase 5·7, 발주 승인) — 동일한
-    # 이유로 추가. tests/test_purchase_channel_connection_migration.py
-    # 와 완전히 같은 패턴 — 그 파일에 남긴 것과 동일한 메모를 그대로
-    # 반복한다: 다음에 이 파일을 다시 만지게 되면 날짜 문자열 하드코딩
-    # 대신 자동 계산 방식으로 바꾸는 편이 낫다.
-    "20260911_00_create_purchase_order_approval_schema.sql",
-    # 2026-09-11 후속(운영 전 최종 검증 라운드) — 동일한 이유로 추가.
-    "20260911_01_add_unknown_resolution_and_tracking_refresh.sql",
+    name
+    for name in os.listdir(MIGRATIONS_DIR)
+    if name.endswith(".sql") and name >= NEW_MIGRATION
 }
 
 

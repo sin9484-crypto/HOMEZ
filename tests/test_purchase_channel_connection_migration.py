@@ -43,36 +43,18 @@ NEW_MIGRATION = "20260908_00_create_purchase_channel_connection_schema.sql"
 # 2026-09-10 Phase 6 회귀 중 동일한 원인으로
 # tests/test_migration_restricted_mode_schema_error_handling.py가 깨진
 # 것을 발견·수정하면서 이 파일도 같은 패턴을 공유함을 확인해 함께
-# 갱신한다 — HOMEZ V7 개인 베타 Phase 1/3이 추가한 20260909_00/
-# 20260909_01도 사전순으로 NEW_MIGRATION보다 뒤라 제외해야 한다.
+# 갱신한다.
+#
+# 2026-09-15 전면 감사 후속 — 이 집합을 파일이 추가될 때마다 손으로
+# 갱신해야 하는 하드코딩 목록으로 두지 않는다(이 패턴이 최소 10개
+# 파일 인스턴스에서 반복 재발했다). 대신 "migrations/ 디렉터리의
+# 모든 .sql 중 NEW_MIGRATION과 사전순으로 같거나 뒤인 파일 전부"를
+# 매 테스트 실행마다 자동으로 계산한다 — 새 Migration이 몇 개가
+# 추가되든 이 파일을 다시 고칠 필요가 없다.
 EXCLUDED_FROM_PRIOR_STATE = {
-    NEW_MIGRATION,
-    "20260908_01_create_purchase_order_submission_attempts.sql",
-    "20260909_00_add_login_lockout_columns.sql",
-    "20260909_01_create_function_automation_state_schema.sql",
-    # 2026-09-10 최종 회귀에서 재발견 — Phase 7~12가 추가한 7개
-    # (tests/test_migration_restricted_mode_schema_error_handling.py
-    # 와 동일한 패턴, 동일한 이유로 함께 갱신).
-    "20260910_00_create_payment_domain_schema.sql",
-    "20260910_01_create_refund_domain_schema.sql",
-    "20260910_02_create_currency_domain_schema.sql",
-    "20260910_03_create_supplier_capability_schema.sql",
-    "20260910_04_add_purchase_task_candidate_price_baseline.sql",
-    "20260910_05_create_price_stock_safety_schema.sql",
-    "20260910_06_create_ai_learning_schema.sql",
-    # 2026-09-10 Phase 3(판매신청 게이트) — 동일한 이유로 추가.
-    "20260910_07_create_purchase_sales_application_schema.sql",
-    # 2026-09-11 반자동 완료 라운드(Phase 5·7, 발주 승인) — 동일한
-    # 이유로 추가. 이 패턴이 파일이 추가될 때마다 반복해서 깨지는
-    # 것으로 보아, 이 테스트가 "새 Migration 파일이 추가되면 이 집합도
-    # 함께 갱신해야 한다"는 사실을 구조적으로 강제하지 못하고 있다는
-    # 뜻이다 — 다음에 이 파일을 다시 만지게 되면 날짜 문자열 하드코딩
-    # 대신 "이 디렉터리의 모든 .sql 중 NEW_MIGRATION보다 사전순으로
-    # 뒤인 파일 전부"를 자동으로 계산하는 방식으로 바꾸는 편이 낫다.
-    "20260911_00_create_purchase_order_approval_schema.sql",
-    # 2026-09-11 후속(운영 전 최종 검증 라운드) — UNKNOWN 수동
-    # 확정·송장 재조회 컬럼/테이블. 동일한 이유로 추가.
-    "20260911_01_add_unknown_resolution_and_tracking_refresh.sql",
+    name
+    for name in os.listdir(MIGRATIONS_DIR)
+    if name.endswith(".sql") and name >= NEW_MIGRATION
 }
 
 

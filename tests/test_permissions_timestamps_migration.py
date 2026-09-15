@@ -308,6 +308,11 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 2026-09-11 후속(운영 전 최종 검증 라운드) — 동일한
             # 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
             "20260911_01_add_unknown_resolution_and_tracking_refresh.sql",
+            # 2026-09-15 전면 감사 후속(Phase 2, 승인-실행 결합
+            # 완성) — purchase_order_approvals에 options_snapshot_json
+            # 컬럼 1개 추가. 동일한 이유로 추가. 실제 운영 DB에는
+            # 아직 미적용이다.
+            "20260915_00_add_purchase_order_approval_options_snapshot.sql",
         ]
 
         all_files = sorted(
