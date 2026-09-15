@@ -33,7 +33,7 @@ class PaymentRouterGuardCoverageTestCase(unittest.TestCase):
             )
 
     def test_sensitive_mutations_require_recent_auth_header(self):
-        """등록/비활성화/한도변경 3개 경로는 X-Recent-Auth-Token 헤더
+        """등록/비활성화/기본값 지정/한도변경 경로는 X-Recent-Auth-Token 헤더
         파라미터를 선언하고 있어야 한다 — 정적으로 시그니처를
         확인한다(실제 재인증 로직은 test_payment_domain.py가 서비스
         계층에서 검증하지 않으므로, 라우터가 그 검증을 실제로
@@ -45,6 +45,7 @@ class PaymentRouterGuardCoverageTestCase(unittest.TestCase):
         recent_auth_required = {
             "register_payment_method",
             "deactivate_payment_method",
+            "set_default_payment_method",
             "set_auto_payment_limit",
         }
 

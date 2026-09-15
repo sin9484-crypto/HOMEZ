@@ -411,7 +411,9 @@ class ExpiryAndRevalidationTestCase(OrderApprovalServiceTestCaseBase):
         with self.assertRaises(ConflictException):
             self.service.revalidate_before_submission(
                 4, self.company_a.id, task.id,
+                current_product_code="CH1",
                 current_item_amount=5500,  # 가격이 500원 인상됨
+                current_points=1_000_000,
                 current_shipping_cost_hint=None,
             )
         reloaded = self.service.get_approval(4, self.company_a.id, task.id)
@@ -434,7 +436,9 @@ class ExpiryAndRevalidationTestCase(OrderApprovalServiceTestCaseBase):
 
         approval = self.service.revalidate_before_submission(
             4, self.company_a.id, task.id,
-            current_item_amount=5000, current_shipping_cost_hint=1000,
+            current_product_code="CH1",
+            current_item_amount=5000, current_points=1_000_000,
+            current_shipping_cost_hint=1000,
         )
         self.assertEqual(approval.status, PurchaseOrderApprovalStatus.ACTIVE)
 
@@ -444,8 +448,57 @@ class ExpiryAndRevalidationTestCase(OrderApprovalServiceTestCaseBase):
         with self.assertRaises(ConflictException):
             self.service.revalidate_before_submission(
                 4, self.company_a.id, task.id,
-                current_item_amount=5000, current_shipping_cost_hint=None,
+                current_product_code="CH1",
+                current_item_amount=5000, current_points=1_000_000,
+                current_shipping_cost_hint=None,
             )
+
+
+class ConsumedApprovalImmutabilityTestCase(OrderApprovalServiceTestCaseBase):
+
+    def _active_approval(self):
+        task = self._create_task()
+        self.service.confirm_shipping_cost(
+            4, self.company_a.id, task.id, "CH1", shipping_cost_amount=1000,
+            source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+            confirmed_by=1,
+        )
+        approval = self.service.finalize_approval(
+            4, self.company_a.id, task.id,
+            item_amount=5000, current_points=1_000_000, triggered_by=1,
+        )
+        return task, approval
+
+    def test_consumed_approval_cannot_be_rewritten_by_shipping_reconfirmation(self):
+        task, approval = self._active_approval()
+        self.service.mark_consumed(approval)
+
+        with self.assertRaises(ConflictException):
+            self.service.confirm_shipping_cost(
+                4, self.company_a.id, task.id, "CH1",
+                shipping_cost_amount=1200,
+                source=ShippingCostConfirmationSource.ONCHANNEL_PRODUCT_PAGE,
+                confirmed_by=1,
+            )
+
+        self.db.refresh(approval)
+        self.assertEqual(approval.status, PurchaseOrderApprovalStatus.CONSUMED)
+        self.assertEqual(approval.shipping_cost_amount, 1000)
+
+    def test_approval_cannot_be_used_for_a_different_product(self):
+        task, approval = self._active_approval()
+
+        with self.assertRaises(ConflictException):
+            self.service.revalidate_before_submission(
+                4, self.company_a.id, task.id,
+                current_product_code="OTHER-PRODUCT",
+                current_item_amount=5000,
+                current_points=1_000_000,
+                current_shipping_cost_hint=1000,
+            )
+
+        self.db.refresh(approval)
+        self.assertEqual(approval.status, PurchaseOrderApprovalStatus.ACTIVE)
 
 
 class DailyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
@@ -617,7 +670,7 @@ class MonthlyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
     def test_monthly_limit_uses_recommended_default_when_unset(self):
         """monthly_purchase_budget_amount만 설정하지 않았으면(None)
         '무제한'이 아니라 RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT
-        (300만원)를 기본 상한으로 강제해야 한다. per_order_max·
+        (50만원)를 기본 상한으로 강제해야 한다. per_order_max·
         daily_limit은 이 건 하나가 절대 걸리지 않도록 넉넉히 열어
         둬서, 월간 기본값만 단독으로 검증한다."""
 
@@ -645,7 +698,7 @@ class MonthlyLimitAggregationTestCase(OrderApprovalServiceTestCaseBase):
             self.service.finalize_approval(
                 4, self.company_a.id, task.id,
                 # per_order_max·daily_limit(각 1000만원)는 통과하지만
-                # RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT(300만원)는
+                # RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT(50만원)는
                 # 초과 — 이 값이 실제로 강제됨을 증명한다.
                 item_amount=3_500_000, current_points=100_000_000, triggered_by=1,
             )

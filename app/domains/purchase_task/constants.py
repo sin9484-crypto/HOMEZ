@@ -694,8 +694,8 @@ class TrackingRefreshResult:
 # 이유: 이 게이트는 실제 온채널 발주(되돌릴 수 없는 금전 행동)
 # 직전이므로, 설정을 안 했다는 사실을 "무제한 허용"으로 읽지 않고
 # 안전한 시작값으로 읽는다.
-RECOMMENDED_PER_ORDER_MAX_AMOUNT = 100_000
-RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT = 300_000
+RECOMMENDED_PER_ORDER_MAX_AMOUNT = 50_000
+RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT = 100_000
 # 2026-09-12 후속(V7 기준선 정리, Phase 4 자동결제 한도 실행경로
 # 감사) — per_order_max_amount·daily_purchase_limit_amount와 같은
 # 이유로 월간 한도도 같은 게이트에서 같은 규칙을 따라야 하는데,
@@ -703,7 +703,7 @@ RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT = 300_000
 # per_order_max/daily만 재확인하고 monthly_purchase_budget_amount는
 # PurchaseTask 생성 시점의 policy_service.evaluate()에서만 한 번
 # 확인되고 이 최종 게이트에서는 재확인되지 않았다).
-RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT = 3_000_000
+RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT = 500_000
 RECOMMENDED_MIN_MARGIN_RATE = 0.15
 RECOMMENDED_MIN_NET_PROFIT = 5_000
 RECOMMENDED_MIN_RESIDUAL_POINTS = 100_000

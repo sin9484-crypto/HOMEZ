@@ -38,6 +38,7 @@ from app.domains.purchase_task.channel_connection_service import (
     PurchaseChannelConnectionService,
 )
 from app.domains.purchase_task.constants import OrderSubmissionStatus
+from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
 from app.domains.purchase_task.constants import TrackingRefreshResult
 from app.domains.purchase_task.constants import UnknownResolutionStatus
 from app.domains.purchase_task.model import PurchaseChannelConnection
@@ -321,7 +322,7 @@ class UnresolvedUnknownBlocksRetryTestCase(OrderResolutionTestCaseBase):
 
         connection = self._make_ready_connection()
         self.assertFalse(
-            self.service._has_unresolved_unknown_attempt(999, self.company_a.id),
+            self.service._has_blocking_task_attempt(999, self.company_a.id),
         )
 
 
@@ -423,25 +424,46 @@ class ResolveUnknownAttemptTestCase(OrderResolutionTestCaseBase):
         self.assertEqual(resolved.unknown_resolved_by, 7)
         self.assertIsNotNone(resolved.unknown_resolved_at)
 
+    def test_order_confirmed_consumes_matching_active_approval(self):
+        connection = self._make_ready_connection()
+        attempt = self._make_unknown_attempt(connection=connection, task_id=306)
+        approval = PurchaseOrderApproval(
+            company_id=self.company_a.id, connection_id=connection.id,
+            purchase_task_id=306, product_code="CH1234567",
+            status=PurchaseOrderApprovalStatus.ACTIVE,
+            shipping_cost_amount=0, shipping_cost_is_free_confirmed=True,
+        )
+        self.db.add(approval)
+        self.db.commit()
+
+        self.service.resolve_unknown_attempt(
+            attempt.id, self.company_a.id,
+            resolution=UnknownResolutionStatus.ORDER_CONFIRMED,
+            order_code="OC-CONFIRMED-2", resolved_by=7,
+        )
+
+        self.db.refresh(approval)
+        self.assertEqual(approval.status, PurchaseOrderApprovalStatus.CONSUMED)
+
 
 class AttemptHistoryTestCase(OrderResolutionTestCaseBase):
 
     def test_history_is_ordered_oldest_first(self):
 
         connection = self._make_ready_connection()
-        self._patch_contract_confirmed()
-        self._install_fake_adapter(result="OC-1")
-        self.service.submit_order(
-            connection.id, self.company_a.id, idempotency_key="pt-400-1",
-            confirm_real_submission=True, purchase_task_id=400, **VALID_KWARGS,
+        first = self.service._create_locked_attempt(
+            connection_id=connection.id, company_id=self.company_a.id,
+            purchase_task_id=400, idempotency_key="pt-400-1",
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            options=[{"id": 1, "qty": 1}], triggered_by=1,
         )
-        self._install_fake_adapter(result="OC-2")
-        self.service.submit_order(
-            connection.id, self.company_a.id, idempotency_key="pt-400-2",
-            confirm_real_submission=True, purchase_task_id=400,
-            product_code="CH9999999", options=[{"id": 2, "qty": 1}],
-            recv_name="홍길동", recv_tell="02-000-0000", recv_mobile="010-0000-0000",
-            zipcode="00000", address="서울시 어딘가",
+        first.status = OrderSubmissionStatus.REJECTED
+        self.db.commit()
+        self.service._create_locked_attempt(
+            connection_id=connection.id, company_id=self.company_a.id,
+            purchase_task_id=400, idempotency_key="pt-400-2",
+            mall_code="ONCHANNEL", product_code="CH9999999",
+            options=[{"id": 2, "qty": 1}], triggered_by=1,
         )
 
         history = self.service.list_attempts(400, self.company_a.id)

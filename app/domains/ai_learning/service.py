@@ -157,7 +157,7 @@ class AiLearningService:
         시작... 누적 주문이 1,000건을 넘으면 최소 100건으로
         상향"."""
 
-        if total_completed_orders > RAISE_THRESHOLD_TOTAL_ORDERS:
+        if total_completed_orders >= RAISE_THRESHOLD_TOTAL_ORDERS:
             return RAISED_MIN_SAMPLE_SIZE
 
         return INITIAL_MIN_SAMPLE_SIZE

@@ -80,9 +80,11 @@ from app.domains.purchase_task.channel_connection_service import (
     PurchaseChannelConnectionService,
 )
 from app.domains.purchase_task.constants import OrderSubmissionStatus
+from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
 from app.domains.purchase_task.constants import SalesApplicationStatus
 from app.domains.purchase_task.constants import UnknownResolutionStatus
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
+from app.domains.purchase_task.model import PurchaseOrderApproval
 from app.domains.purchase_task.model import PurchaseOrderUnknownResolutionEvent
 from app.domains.purchase_task.sales_application_service import (
     PurchaseSalesApplicationService,
@@ -182,23 +184,38 @@ class PurchaseOrderSubmissionService:
             f"{options_fingerprint}-a{prior_count + 1}"
         )
 
-    def _has_unresolved_unknown_attempt(
+    def _has_blocking_task_attempt(
         self, purchase_task_id: int, company_id: int,
     ) -> bool:
+        """Return whether this business order must never be submitted again.
 
-        row = (
+        OnChannel does not deduplicate ``sale_code``.  The lock therefore has
+        to be scoped to the HOMEZ purchase task, not to an attempt key.  Only
+        an explicit ORDER_NOT_CONFIRMED resolution permits a new attempt.
+        """
+
+        rows = (
             self.db.query(PurchaseOrderSubmissionAttempt)
             .filter(
                 PurchaseOrderSubmissionAttempt.purchase_task_id == purchase_task_id,
                 PurchaseOrderSubmissionAttempt.company_id == company_id,
-                PurchaseOrderSubmissionAttempt.status == OrderSubmissionStatus.RESULT_UNKNOWN,
-                PurchaseOrderSubmissionAttempt.unknown_resolution_status.in_(
-                    UnknownResolutionStatus.BLOCKS_RETRY,
-                ),
             )
-            .first()
+            .all()
         )
-        return row is not None
+        for row in rows:
+            if row.status in (
+                OrderSubmissionStatus.PENDING,
+                OrderSubmissionStatus.IN_FLIGHT,
+                OrderSubmissionStatus.SUCCEEDED,
+            ):
+                return True
+            if (
+                row.status == OrderSubmissionStatus.RESULT_UNKNOWN
+                and row.unknown_resolution_status
+                != UnknownResolutionStatus.ORDER_NOT_CONFIRMED
+            ):
+                return True
+        return False
 
     # ---------------- UNKNOWN 수동 확인·확정 ----------------
 
@@ -264,6 +281,23 @@ class PurchaseOrderSubmissionService:
         )
         self.db.add(event)
 
+        # 사람이 온채널 관리자 화면에서 실제 주문 생성을 확인한 경우,
+        # 그 사실은 성공 응답과 동일하게 금액 예약을 소비 확정한다.
+        # attempt의 RESULT_UNKNOWN은 원래 HTTP 관측 사실로 보존하고,
+        # resolution event가 사후 확인 사실을 별도로 남긴다.
+        if resolution == UnknownResolutionStatus.ORDER_CONFIRMED:
+            approval = (
+                self.db.query(PurchaseOrderApproval)
+                .filter(
+                    PurchaseOrderApproval.company_id == company_id,
+                    PurchaseOrderApproval.connection_id == attempt.connection_id,
+                    PurchaseOrderApproval.purchase_task_id == attempt.purchase_task_id,
+                )
+                .first()
+            )
+            if approval is not None:
+                approval.status = PurchaseOrderApprovalStatus.CONSUMED
+
         self.db.commit()
         self.db.refresh(attempt)
         return attempt
@@ -317,14 +351,14 @@ class PurchaseOrderSubmissionService:
         # 전까지) 새 idempotency_key로도 새 시도 자체를 만들지 않는다
         # — "해당 PurchaseTask 후속 자동화 중지"를 작업 단위로 강제한다
         # (개별 idempotency_key 잠금과는 별개의, 더 넓은 차단이다).
-        if purchase_task_id is not None and self._has_unresolved_unknown_attempt(
+        if purchase_task_id is not None and self._has_blocking_task_attempt(
             purchase_task_id, company_id,
         ):
             raise ConflictException(
-                "이 매입 작업에 아직 해소되지 않은 결과불명(RESULT_UNKNOWN) "
-                "발주 시도가 있습니다 — 온채널 관리자 화면에서 실제 주문 "
-                "생성 여부를 먼저 확인하고 확정해야 새 발주를 시도할 수 "
-                "있습니다.",
+                "이 매입 작업에는 진행 중이거나 이미 성공/생성 확인된 발주가 "
+                "있습니다 — 같은 업무 주문을 다시 전송하지 않습니다. 결과불명 "
+                "시도는 온채널 관리자 화면에서 주문이 생성되지 않았음을 명시적으로 "
+                "확정한 경우에만 새 시도가 가능합니다.",
             )
 
         self._validate_inputs(
@@ -604,7 +638,9 @@ class PurchaseOrderSubmissionService:
         approval_service = PurchaseOrderApprovalService(self.db)
         approval = approval_service.revalidate_before_submission(
             connection_id, company_id, purchase_task_id,
-            current_item_amount=item_subtotal, current_shipping_cost_hint=None,
+            current_product_code=product_code,
+            current_item_amount=item_subtotal, current_points=point_result.point,
+            current_shipping_cost_hint=None,
         )
 
         required_points = item_subtotal + (approval.shipping_cost_amount or 0)

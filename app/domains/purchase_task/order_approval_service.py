@@ -152,6 +152,14 @@ class PurchaseOrderApprovalService:
             )
 
         approval = self.get_approval(connection_id, company_id, purchase_task_id)
+        if (
+            approval is not None
+            and approval.status == PurchaseOrderApprovalStatus.CONSUMED
+        ):
+            raise ConflictException(
+                "이미 실제 발주에 사용된 승인은 배송비를 다시 입력해 변경할 수 "
+                "없습니다. 기존 발주 결과를 먼저 확인하세요.",
+            )
         shipping_changed = (
             approval is not None
             and (
@@ -229,6 +237,14 @@ class PurchaseOrderApprovalService:
         if approval is None or approval.shipping_cost_amount is None:
             raise ConflictException(
                 "배송비를 먼저 확인해야 최종 승인을 진행할 수 있습니다.",
+            )
+        if approval.status in (
+            PurchaseOrderApprovalStatus.ACTIVE,
+            PurchaseOrderApprovalStatus.CONSUMED,
+        ):
+            raise ConflictException(
+                "이미 활성화됐거나 실제 발주에 사용된 승인은 다시 최종 승인할 "
+                "수 없습니다. 조건을 바꾸려면 새 배송비 확인 절차부터 시작하세요.",
             )
 
         from app.domains.purchase_task.model import PurchaseTask
@@ -355,11 +371,11 @@ class PurchaseOrderApprovalService:
 
             min_margin_rate = (
                 setting.min_margin_rate
-                if setting.min_margin_rate else RECOMMENDED_MIN_MARGIN_RATE
+                if setting.min_margin_rate is not None else RECOMMENDED_MIN_MARGIN_RATE
             )
             min_net_profit = (
                 setting.min_net_profit
-                if setting.min_net_profit else RECOMMENDED_MIN_NET_PROFIT
+                if setting.min_net_profit is not None else RECOMMENDED_MIN_NET_PROFIT
             )
             if margin_rate < min_margin_rate:
                 blocked_reasons.append(
@@ -406,7 +422,10 @@ class PurchaseOrderApprovalService:
         self.db.refresh(approval)
         return approval
 
-    def _sum_reserved_amount(self, company_id: int, since: datetime) -> int:
+    def _sum_reserved_amount(
+        self, company_id: int, since: datetime, *,
+        exclude_approval_id: int | None = None,
+    ) -> int:
         """2026-09-14 전면 감사 후속(Phase 5.1 발견·재현된 결함 수정) —
         기존에는 `CONSUMED`(실제로 발주까지 이어진 건)만 합산했다.
         그러나 아직 `CONSUMED`가 아닌 `ACTIVE` 승인(사람이 이미
@@ -418,9 +437,7 @@ class PurchaseOrderApprovalService:
         3건이 전부 ACTIVE로 통과, 합계 24만원). `CONSUMED` +
         "아직 만료되지 않은 ACTIVE"를 함께 합산해 이 결함을 닫는다."""
 
-        rows = (
-            self.db.query(PurchaseOrderApproval)
-            .filter(
+        query = self.db.query(PurchaseOrderApproval).filter(
                 PurchaseOrderApproval.company_id == company_id,
                 PurchaseOrderApproval.updated_at >= since,
                 (
@@ -430,10 +447,11 @@ class PurchaseOrderApprovalService:
                         & (PurchaseOrderApproval.expires_at.is_not(None))
                         & (PurchaseOrderApproval.expires_at > datetime.utcnow())
                     )
-                ),
+                )
             )
-            .all()
-        )
+        if exclude_approval_id is not None:
+            query = query.filter(PurchaseOrderApproval.id != exclude_approval_id)
+        rows = query.all()
         return sum(
             (row.item_amount_snapshot or 0) + (row.shipping_cost_amount or 0)
             for row in rows
@@ -465,7 +483,8 @@ class PurchaseOrderApprovalService:
 
     def revalidate_before_submission(
         self, connection_id: int, company_id: int, purchase_task_id: int,
-        *, current_item_amount: int, current_shipping_cost_hint: int | None,
+        *, current_product_code: str, current_item_amount: int, current_points: int,
+        current_shipping_cost_hint: int | None,
     ) -> PurchaseOrderApproval:
         """실제 온채널 발주 호출 바로 직전에 승인이 여전히 유효한지
         마지막으로 대조한다 — 승인 이후 가격이 바뀌었거나 만료됐으면
@@ -479,6 +498,11 @@ class PurchaseOrderApprovalService:
             raise ConflictException(
                 "유효한 발주 승인이 없습니다(만료됐거나 아직 승인되지 "
                 "않았습니다) — 배송비 확인부터 다시 진행하세요.",
+            )
+        if approval.product_code != current_product_code:
+            raise ConflictException(
+                "승인된 상품과 실제 발주 상품이 다릅니다 — 기존 승인을 다른 "
+                "상품에 사용할 수 없습니다.",
             )
         if approval.item_amount_snapshot != current_item_amount:
             approval.status = PurchaseOrderApprovalStatus.INVALIDATED_PRICE_CHANGE
@@ -498,6 +522,59 @@ class PurchaseOrderApprovalService:
             )
             self.db.commit()
             raise ConflictException(approval.invalidated_reason)
+
+        from app.domains.purchase_task.policy_service import PurchaseTaskPolicyService
+
+        setting = PurchaseTaskPolicyService(self.db).get_or_create_default_settings(
+            company_id,
+        )
+        required_points = current_item_amount + (approval.shipping_cost_amount or 0)
+        if current_points < required_points:
+            raise ConflictException(
+                f"배송비 포함 최종 필요 포인트({required_points})가 현재 잔액"
+                f"({current_points})보다 많습니다 — 발주를 시도하지 않습니다.",
+            )
+        per_order_max = (
+            setting.per_order_max_amount
+            if setting.per_order_max_amount is not None
+            else RECOMMENDED_PER_ORDER_MAX_AMOUNT
+        )
+        daily_limit = (
+            setting.daily_purchase_limit_amount
+            if setting.daily_purchase_limit_amount is not None
+            else RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT
+        )
+        monthly_limit = (
+            setting.monthly_purchase_budget_amount
+            if setting.monthly_purchase_budget_amount is not None
+            else RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT
+        )
+        min_residual = (
+            setting.min_residual_points
+            if setting.min_residual_points is not None
+            else RECOMMENDED_MIN_RESIDUAL_POINTS
+        )
+        reserved_today = self._sum_reserved_amount(
+            company_id, datetime.utcnow() - timedelta(hours=24),
+            exclude_approval_id=approval.id,
+        )
+        reserved_month = self._sum_reserved_amount(
+            company_id, datetime.utcnow() - timedelta(days=30),
+            exclude_approval_id=approval.id,
+        )
+        blocked = []
+        if required_points > per_order_max:
+            blocked.append("건당 발주 한도 초과")
+        if reserved_today + required_points > daily_limit:
+            blocked.append("하루 발주 한도 초과")
+        if reserved_month + required_points > monthly_limit:
+            blocked.append("월간 발주 한도 초과")
+        if current_points - required_points < min_residual:
+            blocked.append("발주 후 최소 잔여 포인트 미달")
+        if blocked:
+            raise ConflictException(
+                "발주 직전 재검증에서 조건이 변경되었습니다: " + ", ".join(blocked),
+            )
         return approval
 
     @_synchronized(_finalize_approval_lock)

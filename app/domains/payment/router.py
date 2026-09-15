@@ -152,7 +152,12 @@ def set_default_payment_method(
     method_id: int,
     current_user: User = Depends(SuperAdminGuard),
     service: PaymentService = Depends(get_payment_service),
+    recent_auth_token: str | None = Header(
+        default=None, alias="X-Recent-Auth-Token",
+    ),
 ):
+
+    _require_recent_auth(recent_auth_token, current_user.id)
 
     return service.set_default_method(
         company_id=current_user.company_id,

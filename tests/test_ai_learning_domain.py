@@ -249,20 +249,20 @@ class AiLearningDomainTestCase(unittest.TestCase):
         )
         self.assertEqual(INITIAL_MIN_SAMPLE_SIZE, 50)
 
-    def test_required_sample_size_at_exactly_threshold_stays_fifty(self):
+    def test_required_sample_size_below_threshold_stays_fifty(self):
 
         self.assertEqual(
             self.service.get_required_sample_size(
-                RAISE_THRESHOLD_TOTAL_ORDERS,
+                RAISE_THRESHOLD_TOTAL_ORDERS - 1,
             ),
             INITIAL_MIN_SAMPLE_SIZE,
         )
 
-    def test_required_sample_size_raises_beyond_threshold(self):
+    def test_required_sample_size_raises_at_threshold(self):
 
         self.assertEqual(
             self.service.get_required_sample_size(
-                RAISE_THRESHOLD_TOTAL_ORDERS + 1,
+                RAISE_THRESHOLD_TOTAL_ORDERS,
             ),
             RAISED_MIN_SAMPLE_SIZE,
         )

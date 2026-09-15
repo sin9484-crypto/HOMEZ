@@ -36,6 +36,7 @@ from app.domains.purchase_task.model import PurchaseChannelConnectionEvent
 from app.domains.automation_safety.model import EmergencyStop
 from app.domains.automation_safety.model import FunctionAutomationState
 from app.domains.purchase_task.model import PurchaseOrderApproval
+from app.domains.purchase_task.model import PurchaseTaskPolicySetting
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
 from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
 from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
@@ -87,6 +88,7 @@ class OrderSubmissionServiceTestCaseBase(unittest.TestCase):
                 PurchaseOrderSubmissionAttempt.__table__,
                 PurchaseSalesApplicationAttempt.__table__,
                 PurchaseOrderApproval.__table__,
+                PurchaseTaskPolicySetting.__table__,
                 EmergencyStop.__table__, FunctionAutomationState.__table__,
             ],
         )
@@ -490,6 +492,47 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
     def setUp(self):
         super().setUp()
         self._patch_contract_confirmed()
+
+    def _task_attempt(self, *, status, resolution="UNRESOLVED"):
+        attempt = self.service._create_locked_attempt(
+            connection_id=1, company_id=self.company_a.id,
+            purchase_task_id=777, idempotency_key=f"task-lock-{status}-{resolution}",
+            mall_code="ONCHANNEL", product_code="CH1",
+            options=[{"id": 1, "qty": 1}], triggered_by=1,
+        )
+        attempt.status = status
+        attempt.unknown_resolution_status = resolution
+        self.db.commit()
+        return attempt
+
+    def test_task_lock_blocks_pending_inflight_and_succeeded_attempts(self):
+        for status in (
+            OrderSubmissionStatus.PENDING,
+            OrderSubmissionStatus.IN_FLIGHT,
+            OrderSubmissionStatus.SUCCEEDED,
+        ):
+            with self.subTest(status=status):
+                attempt = self._task_attempt(status=status)
+                self.assertTrue(self.service._has_blocking_task_attempt(777, self.company_a.id))
+                self.db.delete(attempt)
+                self.db.commit()
+
+    def test_confirmed_unknown_blocks_retry_but_confirmed_absence_allows_it(self):
+        from app.domains.purchase_task.constants import UnknownResolutionStatus
+
+        attempt = self._task_attempt(
+            status=OrderSubmissionStatus.RESULT_UNKNOWN,
+            resolution=UnknownResolutionStatus.ORDER_CONFIRMED,
+        )
+        self.assertTrue(self.service._has_blocking_task_attempt(777, self.company_a.id))
+        self.db.delete(attempt)
+        self.db.commit()
+
+        self._task_attempt(
+            status=OrderSubmissionStatus.RESULT_UNKNOWN,
+            resolution=UnknownResolutionStatus.ORDER_NOT_CONFIRMED,
+        )
+        self.assertFalse(self.service._has_blocking_task_attempt(777, self.company_a.id))
 
     def test_repeated_click_with_same_idempotency_key_blocked_after_first_success(self):
 
