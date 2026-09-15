@@ -796,16 +796,62 @@ IA-003(최신 잔여포인트) → IA-005(상품 불일치). 이 감사는 이 5
   변경이 기존 매입 작업 흐름에 회귀를 일으키지 않았는지 확인했다
   (결과는 아래 13.3, 실행 완료 후 갱신).
 
-### 13.3 잔여 위험과 다음 단계
+### 13.3 Phase 3 — 업무 주문 단위 중복 방지를 DB 제약으로 강제
 
-- IA-004(Critical, idempotency key 중복발주)는 `_has_blocking_task_attempt`
-  로 Phase 1에서 이미 닫혔음을 재확인(테스트
-  `test_task_lock_blocks_pending_inflight_and_succeeded_attempts`).
+**수정 전 재현**: `_has_blocking_task_attempt()`는 INSERT 이전에
+실행하는 SELECT다. 같은 purchase_task_id에 대해 옵션이 달라
+`compute_idempotency_key()`가 서로 다른 키를 계산하는 두 요청이
+동시에 들어오면(또는 첫 요청이 네트워크 호출 대기 중인 넓은 구간에
+두 번째 요청이 끼어들면), 둘 다 이 SELECT 시점에는 "아직 없음"을
+관측하고 통과할 수 있다 — 기존 (company_id, idempotency_key)
+UNIQUE 제약은 완전히 같은 키에서만 두 번째 INSERT를 막으므로, 키가
+다르면 이 방어선도 작동하지 않는다. 이는 IA-004(Critical, 중복
+발주)의 근본 원인(idempotency key 계산 자체의 TOCTOU)과 같은
+클래스의, 아직 닫히지 않은 하위 경로였다.
+
+**수정 내용**: `purchase_order_submission_attempts`에 부분 UNIQUE
+INDEX(`uq_purchase_order_submission_attempts_active_task`, 컬럼
+(company_id, purchase_task_id), WHERE 조건은
+`_has_blocking_task_attempt()`가 앱 레벨에서 판단하는 "차단 대상"
+조건과 정확히 동일)를 추가했다 — 같은 업무 주문에 대해 PENDING/
+IN_FLIGHT/SUCCEEDED이거나 미확정 RESULT_UNKNOWN인 행이 동시에
+하나만 존재하도록 SQLite 자신이 두 번째 INSERT를 거부한다.
+`_create_locked_attempt()`가 이 인덱스 위반과 기존 idempotency_key
+위반을 오류 메시지로 구분해 번역한다. Migration
+(`20260915_01_add_purchase_order_submission_attempts_active_task_
+index.sql`)은 컬럼이 아니라 인덱스만 추가하므로 기존 데이터를
+건드리지 않으며, 임시 SQLite에서만 검증했다(실제 homez.db 미적용).
+
+**테스트 결과**: 신규 Migration 테스트 7건 — 이 중
+`ActiveTaskUniqueIndexBehaviorTestCase`는 애플리케이션 코드를 거치지
+않고 서로 다른 sqlite3 커넥션 두 개로 직접 경쟁 상태를 재현해(같은
+purchase_task_id, 다른 idempotency_key로 동시 INSERT) 두 번째가
+정확히 이 인덱스 때문에 거부되는지 확인했고, 반대로 다른 회사·다른
+작업·이전 시도가 REJECTED/ORDER_NOT_CONFIRMED로 종결된 뒤의 정당한
+새 시도는 차단하지 않는지도 함께 확인했다. 서비스 레벨에서도
+`_create_locked_attempt()`를 사전 검사 없이 직접 두 번 호출해 같은
+경쟁 상태를 재현하는 테스트를 추가했다(`test_concurrent_attempt_
+with_different_key_same_task_blocked_at_db_level`). 전부 통과.
+`tests/test_purchase_*.py` 전체 회귀 405/405 통과.
+
+**부수 결함**: 이 새 Migration 파일 추가로 Phase 2에서 새로 만든
+`test_purchase_order_approval_options_snapshot_migration.py`가 같은
+"이전 상태 하드코딩"(이번엔 `if name == NEW_MIGRATION` 형태) 패턴으로
+다시 깨졌다 — 새로 만든 파일에 처음부터 자동 계산 방식을 적용하지
+않았던 것이 원인이다. 다른 5개 파일과 동일한 방식으로 수정했다.
+재발 방지를 위해 앞으로 새 Migration 테스트 파일을 만들 때는
+처음부터 자동 계산 방식(`name >= NEW_MIGRATION`)을 쓴다.
+
+### 13.4 잔여 위험과 다음 단계
+
+- IA-004(Critical, idempotency key 중복발주)의 원래 경로는
+  `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른
+  키로 우회하는 하위 경로는 Phase 3에서 DB 제약으로 닫았다.
 - 수취인 정보 결합은 여전히 미해결 — 온채널 실제 발주 재개를 막는
   근거 중 하나로 유지한다.
 - 개발본/설치본 DB 선택은 여전히 사용자 결정 대기(11.6-1).
-- Phase 3(작업 단위 중복 방지 DB 제약), Phase 4(결제/환불 Provider
-  원자성), Phase 5(백업 암호화 재감사), Phase 6(테스트 격리),
-  Phase 8(실행 게이트 배선), Phase 9(안전 기능 7-8/7-11/7-16/8-5/
-  8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이 라운드에서 착수하지
-  않았다 — 아래 최종 보고에서 범위 한계를 명시한다.
+- Phase 4(결제/환불 Provider 원자성), Phase 5(백업 암호화 재감사),
+  Phase 6(테스트 격리), Phase 8(실행 게이트 배선), Phase 9(안전 기능
+  7-8/7-11/7-16/8-5/8-6/8-16/8-19/10-4/10-5/10-17/10-18)는 이
+  라운드에서 착수하지 않았다 — 아래 최종 보고에서 범위 한계를
+  명시한다.
