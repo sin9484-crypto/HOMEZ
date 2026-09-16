@@ -2668,6 +2668,8 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "pac.field_size": "Size",
   "pac.field_manufacturer": "Manufacturer",
   "pac.field_origin_country": "Origin country",
+  "pac.field_model_name": "Model name",
+  "pac.field_certification_identifiers": "Certification info",
 
   // 2026-09-15 — Confirmed recall/stop-sale product blocking.
   "nav.recall_blocks": "Recall / Stop-Sale Blocks",

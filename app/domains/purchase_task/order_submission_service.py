@@ -650,6 +650,30 @@ class PurchaseOrderSubmissionService:
                 "상품·옵션 가격을 확인할 수 없습니다 — 발주를 시도하지 "
                 "않습니다.",
             )
+
+        # 2026-09-16 전면 감사 후속(10-4, Adapter 계약 확장) — 방금
+        # 조회한 결과로 이 상품의 속성 비교를 최신화한다. 이 호출
+        # "자체"는 이번 발주 시도를 막지 않는다(위 assert_attributes_
+        # confirmed_or_block()은 이미 이전 판정을 확인하고 지나간
+        # 뒤다) — 제조사·원산지·수량·크기가 여전히 미확인이면 이
+        # 비교가 BLOCKED로 남고, 같은 상품의 다음 발주 시도부터
+        # 그 판정에 걸린다(반복·자동 실행을 실제로 막는 지점).
+        try:
+            from app.domains.product_attribute_match.service import (
+                supplier_values_from_channel_lookup,
+            )
+
+            ProductAttributeMatchService(self.db).run_comparison(
+                company_id=company_id, product_identifier=product_code,
+                connection_id=connection_id,
+                supplier_values=supplier_values_from_channel_lookup(
+                    product, source_label="매입처 실제 조회(발주 직전)",
+                ),
+                sales_channel_values={}, homez_current_values={},
+            )
+        except Exception:  # noqa: BLE001 — 비교 기록 실패가 발주 흐름을 막지 않는다
+            pass
+
         option_by_id = {opt.option_id: opt for opt in product.options}
         item_subtotal = 0
         for requested in options:

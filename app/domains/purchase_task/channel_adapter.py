@@ -131,6 +131,28 @@ class ChannelProductOption:
 
 
 @dataclass(frozen=True)
+class ChannelAttributeValue:
+    """2026-09-16 전면 감사 후속(10-4, HOMEZ_USER_OPERATION_
+    SETTINGS.md) — 공급처가 실제로 확인해 준 속성 값 하나(제조사/
+    원산지/모델명/포장수량/규격/인증정보 등). `value=None`은
+    "확인하지 못했다"는 뜻이지, 빈 문자열이나 추측값으로 채우지
+    않는다 — `interpretable=False`가 항상 함께 온다(둘을 따로
+    둔 이유는 향후 "응답에 필드는 있었지만 해석 불가"와 "애초에
+    확인할 방법이 없음"을 구분할 여지를 남기기 위함일 뿐, 현재
+    구현은 항상 둘을 묶어서 UNKNOWN으로 취급한다)."""
+
+    value: str | None
+    source: str | None
+    confirmed_at: datetime | None
+    interpretable: bool
+
+
+UNKNOWN_ATTRIBUTE = ChannelAttributeValue(
+    value=None, source=None, confirmed_at=None, interpretable=False,
+)
+
+
+@dataclass(frozen=True)
 class ChannelShippingInfo:
     """2026-09-11 후속(반자동 완료 라운드) — 매입처가 상품 상세
     응답에서 제공하는 배송비 "제안값"일 뿐, 확정값이 아니다. Gate D
@@ -147,6 +169,22 @@ class ChannelShippingInfo:
 
 @dataclass(frozen=True)
 class ProductLookupResult:
+    """2026-09-16 전면 감사 후속(10-4) — 아래 6개 속성 필드는 전부
+    `ChannelAttributeValue`(값+출처+확인시각+해석가능여부)로만
+    채운다. 기본값은 전부 `UNKNOWN_ATTRIBUTE`다 — 기존 Adapter
+    구현체(Fake, 기본 UNKNOWN Adapter)는 아무것도 바꾸지 않아도
+    그대로 동작한다(하위 호환). 실제 온채널 Adapter도 마찬가지로
+    기본값(UNKNOWN)을 그대로 쓴다 — 공식 스펙(`docs/HOMEZ_
+    ONCHANNEL_OPENAPI_SPEC_20260908.json`)의 `GET seller/product/
+    {code}` 응답에 `gosi_info`(정보고시) 필드가 존재하긴 하지만
+    스펙 자체가 "상세 필드는 정보고시 API를 참고하라"고만 적혀
+    있을 뿐 내부 키를 전혀 문서화하지 않았고, 그 정보고시 API
+    (`GET common/gosi`) 역시 스펙에 응답 스키마가 없다 — 추측으로
+    `gosi_info`의 내부 키를 매핑하면 이 계약 전체가 지켜온
+    "미확인을 확정값으로 취급하지 않는다" 원칙을 정면으로 어기는
+    것이므로, 온채널 쪽 확인 답변이나 실제 인증 호출로 그 키가
+    확정되기 전까지는 이 6개 필드를 전부 정직하게 UNKNOWN으로
+    둔다."""
 
     support: str
     external_product_id: str | None
@@ -154,6 +192,12 @@ class ProductLookupResult:
     options: tuple[ChannelProductOption, ...]
     detail: str
     shipping_info: ChannelShippingInfo | None = None
+    manufacturer: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
+    origin_country: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
+    model_name: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
+    package_quantity: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
+    size_specification: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
+    certification_identifiers: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
 
 
 @dataclass(frozen=True)
@@ -939,6 +983,8 @@ __all__ = [
     "ConnectionCheckResult",
     "LoginRequirementResult",
     "ChannelProductOption",
+    "ChannelAttributeValue",
+    "UNKNOWN_ATTRIBUTE",
     "ChannelShippingInfo",
     "ProductLookupResult",
     "ChannelProductSummary",

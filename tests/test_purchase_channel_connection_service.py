@@ -2119,6 +2119,246 @@ class CachedLookupTestCase(unittest.TestCase):
         )
 
 
+class ChannelAttributeComparisonTriggerTestCase(unittest.TestCase):
+    """2026-09-16 전면 감사 후속(10-4, Adapter 계약 확장) —
+    `lookup_product()`가 실제 조회 결과의 제조사/원산지/모델명/
+    포장수량/규격/인증정보를 자동으로 속성 비교에 반영하는지
+    검증한다. bootstrap_environment()로 product_attribute_match
+    테이블까지 갖춘 전체 스키마를 쓴다."""
+
+    def setUp(self):
+
+        from pathlib import Path
+
+        from app.database.bootstrap import bootstrap_environment
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.remove(path)
+        self.db_path = Path(path)
+        self.backups_dir = Path(tempfile.mkdtemp())
+
+        repo_root = Path(__file__).resolve().parent.parent
+        result = bootstrap_environment(
+            db_path=self.db_path,
+            migrations_dir=repo_root / "migrations",
+            backups_dir=self.backups_dir,
+        )
+        self.assertTrue(result.is_new_install)
+
+        self.engine = create_engine(f"sqlite:///{self.db_path}")
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+
+        self.company = Company(
+            name="속성비교트리거 테스트 회사", business_number="555-55-55544",
+            ceo="테스트", phone="02-000-0000",
+            email="attr-trigger@example.com", address="테스트",
+        )
+        self.db.add(self.company)
+        self.db.commit()
+
+        self.credential_store = InMemoryCredentialStore()
+        self.service = PurchaseChannelConnectionService(
+            self.db, credential_store=self.credential_store,
+        )
+
+        self.connection = self.service.create_connection(
+            self.company.id, mall_code="ONCHANNEL", account_label="A",
+        )
+        self.service.save_credential(
+            self.connection.id, self.company.id, auth_key="x",
+        )
+
+    def tearDown(self):
+
+        self.db.close()
+        self.engine.dispose()
+        if self.db_path.exists():
+            self.db_path.unlink()
+
+    def _install_fake_adapter(self, result):
+
+        import unittest.mock as mock
+
+        class _FakeAdapter:
+            def lookup_product(self_inner, external_product_id):
+                return result
+
+        patcher = mock.patch(
+            "app.domains.purchase_task.channel_connection_service.get_purchase_channel_adapter",
+            return_value=_FakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _result(*, manufacturer=None, origin_country=None):
+
+        from decimal import Decimal
+
+        from app.domains.purchase_task.channel_adapter import (
+            CapabilitySupport, ChannelAttributeValue, ChannelProductOption,
+            ProductLookupResult, UNKNOWN_ATTRIBUTE,
+        )
+
+        def _attr(value):
+            if value is None:
+                return UNKNOWN_ATTRIBUTE
+            return ChannelAttributeValue(
+                value=value, source="FAKE", confirmed_at=datetime.utcnow(),
+                interpretable=True,
+            )
+
+        return ProductLookupResult(
+            support=CapabilitySupport.SUPPORTED,
+            external_product_id="CH1", title="테스트 상품",
+            options=(
+                ChannelProductOption(
+                    option_id="opt-1", label="기본",
+                    price=Decimal(10000), in_stock=True,
+                ),
+            ),
+            detail="ok",
+            manufacturer=_attr(manufacturer),
+            origin_country=_attr(origin_country),
+        )
+
+    def _latest_run(self):
+
+        from app.domains.product_attribute_match.model import (
+            ProductAttributeComparisonRun,
+        )
+
+        return (
+            self.db.query(ProductAttributeComparisonRun)
+            .order_by(ProductAttributeComparisonRun.id.desc())
+            .first()
+        )
+
+    def test_all_required_fields_unknown_blocks(self):
+        """온채널처럼 제조사·원산지 등을 전혀 확인해 주지 않는
+        매입처 응답은 필수 항목이 전부 미확인 상태가 되어 비교가
+        BLOCKED로 남아야 한다."""
+
+        self._install_fake_adapter(self._result())
+
+        self.service.lookup_product(self.connection.id, self.company.id, "CH1")
+
+        run = self._latest_run()
+        self.assertIsNotNone(run)
+        self.assertEqual(run.overall_status, "BLOCKED")
+
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        self.assertTrue(
+            ProductAttributeMatchService(self.db).has_blocking_attribute_mismatch(
+                self.company.id, "CH1",
+            ),
+        )
+
+    def test_manufacturer_confirmed_by_supplier_alone_is_still_unconfirmed(self):
+        """매입처 한 곳만 값을 줘도(판매채널·HOMEZ 현재 값이 아직
+        없으므로) "일치"로 확정하지 않는다 — 소스가 하나뿐이면
+        UNCONFIRMED다."""
+
+        self._install_fake_adapter(self._result(manufacturer="acme corp"))
+
+        self.service.lookup_product(self.connection.id, self.company.id, "CH1")
+
+        run = self._latest_run()
+        manufacturer_item = next(
+            i for i in run.items if i.field_name == "MANUFACTURER"
+        )
+        self.assertEqual(manufacturer_item.match_status, "UNCONFIRMED")
+        self.assertEqual(manufacturer_item.supplier_value, "acme corp")
+
+    def test_repeated_lookup_updates_comparison_with_latest_values(self):
+        """같은 상품을 다시 조회하면 새 비교 실행이 추가된다(과거
+        실행을 덮어쓰지 않는다 — 이력이 남는다)."""
+
+        self._install_fake_adapter(self._result(manufacturer="acme"))
+        self.service.lookup_product(self.connection.id, self.company.id, "CH1")
+        first_run_id = self._latest_run().id
+
+        self._install_fake_adapter(self._result(manufacturer="beta corp"))
+        self.service.lookup_product(self.connection.id, self.company.id, "CH1")
+        second_run = self._latest_run()
+
+        self.assertNotEqual(first_run_id, second_run.id)
+        manufacturer_item = next(
+            i for i in second_run.items if i.field_name == "MANUFACTURER"
+        )
+        self.assertEqual(manufacturer_item.supplier_value, "beta corp")
+
+    def test_malformed_or_unsupported_lookup_does_not_record_comparison(self):
+        """support가 SUPPORTED가 아니면(형식오류·미지원 등) 속성
+        비교 자체를 기록하지 않는다 — 애초에 근거가 될 실제 응답이
+        없기 때문이다(다른 게이트인 8-19가 이 경우를 별도로 처리)."""
+
+        from app.domains.purchase_task.channel_adapter import (
+            CapabilitySupport, ProductLookupResult,
+        )
+
+        self._install_fake_adapter(ProductLookupResult(
+            support=CapabilitySupport.UNKNOWN,
+            external_product_id=None, title=None, options=(),
+            detail="형식 오류",
+        ))
+
+        self.service.lookup_product(self.connection.id, self.company.id, "CH1")
+
+        self.assertIsNone(self._latest_run())
+
+    def test_order_submission_pre_check_also_records_comparison(self):
+        """order_submission_service.py의 발주 직전 조회(연결
+        서비스를 거치지 않고 adapter를 직접 호출하는 별도 경로)도
+        독립적으로 같은 방식으로 비교를 기록해야 한다."""
+
+        import unittest.mock as mock
+
+        from app.domains.purchase_task.order_submission_service import (
+            PurchaseOrderSubmissionService,
+        )
+
+        class _FakePointResult:
+            support = "SUPPORTED"
+            point = 1_000_000
+            point_interpretable = True
+
+        class _FakeAdapter:
+            def check_member_point(self_inner):
+                return _FakePointResult()
+
+            def lookup_product(self_inner, external_product_id):
+                return ChannelAttributeComparisonTriggerTestCase._result(
+                    manufacturer="acme",
+                )
+
+        submission_service = PurchaseOrderSubmissionService(
+            self.db, credential_store=self.credential_store,
+        )
+        patcher = mock.patch(
+            "app.domains.purchase_task.order_submission_service.get_purchase_channel_adapter",
+            return_value=_FakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        try:
+            submission_service._verify_point_balance_and_shipping_or_block(
+                _FakeAdapter(), connection_id=self.connection.id,
+                company_id=self.company.id, product_code="CH1",
+                options=[{"id": "opt-1", "qty": 1}], purchase_task_id=None,
+            )
+        except Exception:
+            pass  # 배송비 미확인 등 다른 이유로 차단돼도 무방 — 비교 기록 자체만 본다.
+
+        self.assertIsNotNone(self._latest_run())
+
+
 class OnchannelOrderContractStatusTestCase(unittest.TestCase):
     """2026-09-09 후속("계약 상태 세분화") — 사용자가 요청한 감사:
     "단일 boolean을 임의로 True로 바꾸면 전체 발주가 허용되는

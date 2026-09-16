@@ -248,4 +248,41 @@ class ProductAttributeMatchService:
         return run
 
 
-__all__ = ["ProductAttributeMatchService"]
+def supplier_values_from_channel_lookup(
+    result, *, source_label: str,
+) -> dict[str, tuple[str | None, str | None, datetime | None]]:
+    """2026-09-16 전면 감사 후속(10-4, Adapter 계약 확장) —
+    `app.domains.purchase_task.channel_adapter.ProductLookupResult`를
+    `run_comparison()`의 `supplier_values` 인자로 바로 쓸 수 있는
+    dict로 바꾼다. 실제 매입처를 조회하는 호출부가 여럿(연결
+    서비스의 `lookup_product()`, 발주 직전 게이트가 직접 쓰는
+    adapter 호출)이라 이 변환 로직을 한 곳에만 둔다 — 각 호출부가
+    각자 다시 구현하면 필드 하나를 빠뜨리는 식으로 어긋나기 쉽다.
+
+    `title`(상품명)만 매입처가 실제로 채워주는 필드이므로 소스
+    라벨을 붙여 확인된 값으로 취급하고, 나머지 6개(제조사/원산지/
+    모델명/포장수량/규격/인증정보)는 `ChannelAttributeValue`가 이미
+    갖고 있는 출처·확인시각을 그대로 옮긴다(값이 없으면 출처·
+    확인시각도 전부 None — 추측으로 채우지 않는다)."""
+
+    now = datetime.utcnow()
+
+    def _attr(attr_value) -> tuple[str | None, str | None, datetime | None]:
+        return (attr_value.value, attr_value.source, attr_value.confirmed_at)
+
+    return {
+        ProductAttributeField.NAME: (
+            (result.title, source_label, now) if result.title else (None, None, None)
+        ),
+        ProductAttributeField.MANUFACTURER: _attr(result.manufacturer),
+        ProductAttributeField.ORIGIN_COUNTRY: _attr(result.origin_country),
+        ProductAttributeField.MODEL_NAME: _attr(result.model_name),
+        ProductAttributeField.QUANTITY: _attr(result.package_quantity),
+        ProductAttributeField.SIZE: _attr(result.size_specification),
+        ProductAttributeField.CERTIFICATION_IDENTIFIERS: _attr(
+            result.certification_identifiers,
+        ),
+    }
+
+
+__all__ = ["ProductAttributeMatchService", "supplier_values_from_channel_lookup"]

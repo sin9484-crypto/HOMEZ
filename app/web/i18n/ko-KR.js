@@ -2738,6 +2738,8 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "pac.field_size": "사이즈",
   "pac.field_manufacturer": "제조사",
   "pac.field_origin_country": "원산지",
+  "pac.field_model_name": "모델명",
+  "pac.field_certification_identifiers": "인증정보",
 
   // 2026-09-15 전면 감사 후속(Phase 9J, HOMEZ_USER_OPERATION_SETTINGS.md
   // 10-18) — 리콜/판매중지 확인 차단.

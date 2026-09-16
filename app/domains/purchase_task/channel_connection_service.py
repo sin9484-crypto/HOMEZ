@@ -725,6 +725,48 @@ class PurchaseChannelConnectionService:
             triggered_by=triggered_by,
             credential_fingerprint_before=credential_fingerprint_before,
         )
+
+        # 2026-09-16 전면 감사 후속(10-4, Adapter 계약 확장) — 실제
+        # 조회 결과의 상품명·제조사·원산지·모델명·포장수량·규격·
+        # 인증정보를 이 상품에 대한 최신 속성 비교로 남긴다. **이
+        # 메서드는 order_submission_service.py의 발주 직전 조회
+        # 경로가 아니다** — 그 경로는 여전히 `adapter.lookup_product()`
+        # 를 직접 호출한다(가격 인상을 놓치지 않기 위함, 변경 없음).
+        # 그 경로에서도 동일하게 기록하도록
+        # order_submission_service.py에 같은 호출을 별도로 심어
+        # 둔다(중복이 아니라, 두 경로가 서로 다른 세션·트랜잭션
+        # 경계를 갖는 독립된 실제 조회이기 때문). 판매채널·HOMEZ
+        # 현재 값은 이 계층에 없으므로 매입처 값만 넘긴다 — 소스가
+        # 하나뿐이면 비교기 자체 규칙상 UNCONFIRMED가 되므로, 온채널이
+        # 아직 공식적으로 노출하지 않는 필드(현재는 상품명 외 전부)는
+        # 그 사실 그대로 차단 상태를 만든다(추측으로 채워 통과시키지
+        # 않는다).
+        from app.domains.purchase_task.constants import CapabilitySupport
+
+        # getattr로 접근한다 — 일부 테스트 전용 Adapter는 반환값 형태를
+        # 신경 쓰지 않고 단순 dict 등을 돌려주기도 한다(그 테스트들은
+        # "실제로 호출됐는지"만 검증하지 결과 구조는 보지 않는다).
+        # `.support`가 없으면 비교 기록을 조용히 건너뛴다 — 크래시로
+        # 조회 결과 자체를 못 돌려주게 만들지 않는다.
+        if getattr(result, "support", None) == CapabilitySupport.SUPPORTED:
+            try:
+                from app.domains.product_attribute_match.service import (
+                    ProductAttributeMatchService,
+                    supplier_values_from_channel_lookup,
+                )
+
+                ProductAttributeMatchService(self.db).run_comparison(
+                    company_id=company_id, product_identifier=external_product_id,
+                    connection_id=connection_id,
+                    supplier_values=supplier_values_from_channel_lookup(
+                        result, source_label="매입처 실제 조회(연결 서비스)",
+                    ),
+                    sales_channel_values={}, homez_current_values={},
+                    triggered_by=triggered_by,
+                )
+            except Exception:  # noqa: BLE001 — 비교 기록 실패가 조회 결과 반환을 막지 않는다
+                pass
+
         return result
 
     def lookup_product_cached(
