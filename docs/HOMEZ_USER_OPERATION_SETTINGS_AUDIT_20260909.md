@@ -251,7 +251,7 @@
 | 10-14 | 확인안된 항목은 정확히 `확인 필요`로 표시 | VERIFICATION_REQUIRED | 원칙은 코드전역 확인되나 정확히 이 라벨문자열이 무게/성분/인증번호 필드에 쓰이는지 미매칭 | UI 라벨 표기 재확인 필요 | console.js/i18n에서 문자열 실사용 확인 | — |
 | 10-15 | 자료제공처명·원문URL·확인화면 등 함께 표시 | PARTIALLY_IMPLEMENTED | `MediaAsset.source_url/source_domain`, 정책 근거(`official_source_url`) 존재 | 상품스펙 필드별 출처URL 노출은 별도확인 못함 | 상품스펙 근거표시 UI 확인 | — |
 | 10-16 | 식품·어린이제품·전기제품 등 필수정보 확인불가 시 자동등록 안 함 | PARTIALLY_IMPLEMENTED | `RESTRICTED_CATEGORY_CERTIFICATION_REQUIRED` 규칙(KC인증 등 필수증빙, 공식출처 근거), severity ACTION_REQUIRED | severity가 BLOCKING이 아닌 ACTION_REQUIRED — 실제 등록차단 여부는 평가엔진 판정로직 추가확인 필요, 쿠팡 한정 | ChannelPolicyEvaluation 판정 로직 확인 | GPT가 코드로 구현 가능(엔진 판정 확인·보완) |
-| 10-17 | 판매중지·회수대상 여부 매일 자동확인 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9I, 외부 데이터 소스 미선정] | `app/domains/recall_notice`(신규 도메인) — `RecallNoticeProvider` Protocol 계약+`FakeRecallNoticeProvider`(부분실패 시뮬레이션 지원)로 매일확인 메커니즘 전체(수집→dedupe→`RecallCheckRun` 기록, 이미 처리한 항목은 실패 도중에도 보존)를 구현·검증. 스케줄러 Job(`RECALL_NOTICE_CHECK_JOB_ID`, 매일 05:00 Asia/Seoul)을 `app/main.py` lifespan에 실제로 등록. `tests/test_recall_notice_service.py`(23개, 일일실행/중복공고/부분실패/재시작 전부 커버)+`tests/test_scheduler_jobs.py::RecallNoticeCheckJobTestCase`(3개)로 검증 | **실제 리콜/판매중지 공식 데이터 출처가 아직 선정되지 않았다**(정부/제조사/판매채널 중 무엇을 공식으로 쓸지 미결정) — `get_real_provider()`는 의도적으로 항상 `NotImplementedError`를 던진다. Job 자동화 모드도 기본 PAUSED로 남아 있어, 실제 Provider가 정해지고 사용자가 ACTIVE로 바꾸기 전까지는 어떤 자동 확인도 실행되지 않는다 | 공식 리콜 데이터 출처 확정(정부 API/제조사 발표/판매채널 정책 중 택1) | 외부 답변 필요(공식 리콜 데이터 출처) |
+| 10-17 | 판매중지·회수대상 여부 매일 자동확인 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9I, 2026-09-16 공식 출처 확인·실제 Provider 코드 준비 완료] | `app/domains/recall_notice`(신규 도메인) — `RecallNoticeProvider` Protocol 계약+`FakeRecallNoticeProvider`(부분실패 시뮬레이션 지원)로 매일확인 메커니즘 전체(수집→dedupe→`RecallCheckRun` 기록, 이미 처리한 항목은 실패 도중에도 보존)를 구현·검증. 스케줄러 Job(`RECALL_NOTICE_CHECK_JOB_ID`, 매일 05:00 Asia/Seoul)을 `app/main.py` lifespan에 실제로 등록. `tests/test_recall_notice_service.py`(23개)+`tests/test_scheduler_jobs.py::RecallNoticeCheckJobTestCase`(3개)로 검증. **2026-09-16 추가**: 식약처(MFDS) "식품 회수·판매중지 정보"(공공데이터포털 #15074318, 서비스ID I0490) 공식 API 요청/응답 스펙을 문서로 완전히 확인(`docs/HOMEZ_RECALL_DATA_SOURCE_RESEARCH_20260916.md`), 그 스펙대로 파싱하는 실제(미호출) `MfdsRecallNoticeProvider` 작성(`app/domains/recall_notice/mfds_provider.py`), 파싱 로직을 합성 JSON 20개 테스트로 검증(`tests/test_recall_notice_mfds_provider.py`, 실제 네트워크 없음) | **실제 인증키가 아직 발급·등록되지 않았다** — `get_real_provider()`는 여전히 `NotImplementedError`를 던지며 `MfdsRecallNoticeProvider`를 반환하지 않는다. 파싱 로직은 문서 스펙과 동일한 구조의 합성 데이터로만 검증했고, 실제 서버 응답을 한 번도 관측하지 않았으므로 최초 1회 실제 호출로 재검증이 필요하다. Job 자동화 모드도 기본 PAUSED로 남아 있다. 일반 공산품 대상 KATS 후보(#15116894)는 요청/응답 스펙이 아직 완전히 확인되지 않았다 | MFDS 인증키 발급 신청(식품안전나라 회원가입)과 Credential Manager 등록, `get_real_provider()` 연결 및 실제 최초 1회 호출 검증 — 모두 사용자 승인 필요 | 사용자의 명시적 실행 승인 필요(MFDS 인증키 발급·실제 최초 호출 검증) — 더 이상 "출처 자체를 모른다"는 의미의 외부 답변 대기가 아니다 |
 | 10-18 | 문제 확인되면 신규판매·자동발주 즉시중지+통지 | PARTIALLY_IMPLEMENTED [2026-09-15 Phase 9J] | `RecallProductBlock`(회사별 완전 격리, PENDING 개념 없이 즉시 BLOCKED로 시작)이 실제 발주(`order_submission_service.py`)와 실제 쿠팡 전송(`listing_wizard_live_service.py::preflight()`) 양쪽을 차단. 기존 접수 주문은 자동취소하지 않고 사용자 확인대상으로만 남김(다른 원칙과 일관). 해제는 관리자+비어있지 않은 justification 입력이 있어야만 가능하고, 자동 재차단 방지 없음(과거 해제가 영구 면제를 주지 않음 — 같은 상품이 다시 리콜되면 새 BLOCKED 행 생성). `tests/test_recall_notice_service.py`의 차단/해제 12개 테스트로 검증 | "서버 관리자"에게 별도로 알리는 전용 채널이 이 저장소에 아직 없다(회사 스코프 알림 인프라만 존재) — 회사 SUPER_ADMIN 알림(`RECALL_PRODUCT_BLOCKED`)은 실제로 발송되지만, "서버 관리자" 몫은 감사로그(`write_audit_log`) 기록으로만 대체했다. 또한 "가격 확대"/"가상재고 증가" 전용 자동 call-site는 이번 세션에서 별도로 찾아 배선하지 못했다(발주·등록 차단만 실제 배선됨) — 리콜 데이터 자체가 아직 없어(10-17) 이 게이트가 실제로 트리거되는 사례는 없다 | 플랫폼 "서버 관리자" 알림 채널 설계, 가격확대·가상재고증가 실제 call-site 특정 | GPT가 코드로 구현 가능(서버 관리자 채널·나머지 call-site 배선) |
 | 10-19 | 일반정보 하루1회, 가격·재고는 8번 더 짧은 주기 자동갱신 | NOT_IMPLEMENTED | 스케줄러 완전부재 — 8번의 TTL도 미구현 | — | — | GPT가 코드로 구현 가능 |
 
@@ -419,6 +419,7 @@
 - **3-6**: 첫 실발주를 사용자 자택 배송지로 검증(실금전 지출)
 - **4-14**: 자택 테스트발주 성공 후 소액한도 자동결제 시작
 - **7-3, 8-11**: 실제 온채널 계정으로 API 최초 1회 호출 검증(현재까지 이 세션들에서 단 한 번도 실행 안 됨)
+- **10-17**(2026-09-16 이동, 이전에는 §7 외부 답변 필요 목록에 있었음 — 이제 공식 출처(MFDS I0490)가 확정되고 Provider 코드도 준비됐으므로 남은 건 실행 승인뿐): MFDS 인증키 발급 신청, Credential Manager 등록, `get_real_provider()` 연결 및 실제 최초 1회 호출 검증
 - **14-1, 14-3~14-8, 14-19**: 실데이터 시험(백업 실행 확인, 저가상품 안내, 실제 상품 2건 전체과정 검증) — 문서 14번 전체가 요구하는 실행 승인 대상
 
 ---
@@ -427,7 +428,6 @@
 
 - **4-2, 4-6**: 해외 매입처의 카드/PayPal 결제 지원 여부(해외 매입처 확정 후)
 - **4-12, 4-13**: PG사(결제사업자) 토큰/가상카드 계약 및 공식 문서
-- **10-17**: 공식 리콜/판매중지 데이터 출처 확보
 - **10-4**(2026-09-16 추가, 판정 자체는 IMPLEMENTED — 비교기·차단 게이트는 실제로 동작하나 온채널 쪽 제조사/원산지/수량/사이즈 실데이터만 막혀 있음): 온채널 `gosi_info`(정보고시)/`GET common/gosi`의 실제 내부 필드 키 확인
 - **11-8**: 법적 개인정보 보관기간 기준(개인정보보호법 등) 및 판매채널(쿠팡/네이버)의 공식 보관정책 조사
 - **2-1**: 쿠팡 실제 Live 등록 안정화 여부, 네이버 스마트스토어 공식 API 정책 재확인
