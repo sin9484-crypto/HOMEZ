@@ -43,6 +43,11 @@ class MultiChannelCollectionEntry:
     updated_fulfillment_count: int = 0
     duplicate_fulfillment_count: int = 0
     failed_order_count: int = 0
+    # 2026-09-16 개인 베타 잔여 작업(Phase 7, 2-8 운영 화면) — 신규
+    # 미연결(SKU 매핑 필요) 항목 수. 기존 필드는 그대로 두고 끝에
+    # 추가했다(기본값 있음 — 위치 인자로 생성하는 기존 호출부를
+    # 깨지 않는다).
+    new_unresolved_item_count: int = 0
     error_codes: tuple[str, ...] = ()
 
 
@@ -93,6 +98,7 @@ def _run_coupang_connection(
             updated_fulfillment_count=result.updated_fulfillment_count,
             duplicate_fulfillment_count=result.duplicate_fulfillment_count,
             failed_order_count=result.failed_order_count,
+            new_unresolved_item_count=result.new_unresolved_item_count,
             error_codes=result.error_codes,
         ))
     return entries

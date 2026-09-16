@@ -158,6 +158,18 @@ def _record_skip(
     db.commit()
 
 
+def _record_counts(state: OrderAutoCollectionState, result) -> None:
+    """운영 화면의 "신규·중복·미연결·실패 주문수" 표시용 — 실제
+    시도가 있었던 tick/수동 트리거에서만 호출한다(NOT_DUE/게이트
+    차단 등 시도 자체가 없었던 경우는 이전 값을 그대로 둔다 — 0으로
+    덮어써서 "이번에 0건이었다"고 오해하게 만들지 않는다)."""
+
+    state.last_new_fulfillment_count = sum(e.new_fulfillment_count for e in result.entries)
+    state.last_duplicate_fulfillment_count = sum(e.duplicate_fulfillment_count for e in result.entries)
+    state.last_unresolved_item_count = sum(e.new_unresolved_item_count for e in result.entries)
+    state.last_failed_order_count = sum(e.failed_order_count for e in result.entries)
+
+
 def _notify_repeated_failure(
     db: Session, company_id: int, *, consecutive_failures: int, detail: str,
 ) -> None:
@@ -286,6 +298,8 @@ def _run_one_company(
             company_id, detail,
         )
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.FAILED, detail)
+
+    _record_counts(state, result)
 
     if result.total_connections == 0:
         state.last_status = OrderCollectionTickOutcome.SUCCEEDED
@@ -426,6 +440,8 @@ def trigger_company_now(
         return OrderCollectionTickCompanyEntry(
             company_id, OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED, str(exc)[:200],
         )
+
+    _record_counts(state, result)
 
     if result.failed_runs > 0 and result.succeeded_runs == 0:
         detail = ", ".join(

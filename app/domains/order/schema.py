@@ -124,6 +124,43 @@ class OrderCollectionPositionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# 2026-09-16 개인 베타 잔여 작업(Phase 7, HOMEZ_USER_OPERATION_SETTINGS.md
+# 2-8 운영 화면) — 개인정보(구매자/수취인 정보)를 전혀 포함하지
+# 않는다(회사 단위 집계값만). `app/domains/order/auto_collection_
+# scheduler.py`가 채우는 `OrderAutoCollectionState` 그대로 반영한다.
+
+class OrderCollectionOpsStatusResponse(BaseModel):
+    company_id: int
+    function_mode: str
+    interval_minutes: int
+    last_attempted_at: Optional[datetime]
+    last_succeeded_at: Optional[datetime]
+    next_due_at: Optional[datetime]
+    last_status: Optional[str]
+    last_skip_reason: Optional[str]
+    last_error_summary: Optional[str]
+    consecutive_failure_count: int
+    last_new_fulfillment_count: Optional[int]
+    last_duplicate_fulfillment_count: Optional[int]
+    last_unresolved_item_count: Optional[int]
+    last_failed_order_count: Optional[int]
+
+
+class OrderCollectionOpsTriggerResponse(BaseModel):
+    company_id: int
+    outcome: str
+    detail: str = ""
+
+
+class OrderCollectionOpsIntervalUpdateRequest(BaseModel):
+    interval_minutes: int = Field(ge=1, le=1440)
+
+
+class OrderCollectionOpsResumeResponse(BaseModel):
+    company_id: int
+    function_mode: str
+
+
 class UnresolvedOrderItemResponse(BaseModel):
     id: int
     fulfillment_id: int

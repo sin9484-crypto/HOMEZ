@@ -46,6 +46,10 @@ from app.domains.order.schema import OrderExceptionReviewActionResponse
 from app.domains.order.schema import OrderExceptionResponse
 from app.domains.order.schema import OrderIngestionEventResponse
 from app.domains.order.schema import OrderCollectionPositionResponse
+from app.domains.order.schema import OrderCollectionOpsStatusResponse
+from app.domains.order.schema import OrderCollectionOpsTriggerResponse
+from app.domains.order.schema import OrderCollectionOpsIntervalUpdateRequest
+from app.domains.order.schema import OrderCollectionOpsResumeResponse
 from app.domains.order.schema import OrderItemResponse
 from app.domains.order.schema import OrderResponse
 from app.domains.order.schema import OrderSensitiveDetailResponse
@@ -77,6 +81,208 @@ def get_order_credential_store() -> CredentialStore:
 def get_coupang_order_provider_factory():
     """FastAPI dependency override seam for isolated tests; production is real."""
     return CoupangOrderCollectionProvider
+
+
+# --------------------------------------------------
+# 2026-09-16 개인 베타 잔여 작업(Phase 7, HOMEZ_USER_OPERATION_SETTINGS.md
+# 2-8 운영 화면) — 회사 단위 자동 주문 감지 운영 상태·수동 확인·
+# 주기 변경·일시중지/재개. 개인정보(구매자/수취인)를 전혀 다루지
+# 않는다(집계값만).
+#
+# 이미 존재하는 `POST /orders/collect/all`(위쪽)은 이 Phase 이전에
+# 만들어진 별개의 수동 전체수집 버튼이다 — `auto_collection_
+# scheduler`의 5개 게이트(EmergencyStop/Migration제한모드/자동화
+# 여부/중복실행방지/자격증명만료)를 거치지 않는다. 이 Phase는 그
+# 엔드포인트를 건드리지 않는다(기존 호출부 보호) — 대신 게이트를
+# 전부 거치는 새 엔드포인트(`/collection-ops/trigger`)를 추가해
+# 운영 화면 전용으로 쓴다.
+# --------------------------------------------------
+
+@router.get(
+    "/collection-ops/status",
+    response_model=OrderCollectionOpsStatusResponse,
+)
+def get_collection_ops_status(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    from datetime import timedelta
+
+    from app.domains.automation_safety.constants import FunctionCode
+    from app.domains.automation_safety.service import SafetyService
+    from app.domains.order.auto_collection_scheduler import (
+        get_or_create_auto_collection_state,
+    )
+
+    company_id = current_user.company_id
+    state = get_or_create_auto_collection_state(db, company_id)
+    db.commit()
+    function_mode = SafetyService(db).get_function_mode(
+        company_id, FunctionCode.ORDER_COLLECTION,
+    )
+
+    next_due_at = None
+    if state.last_attempted_at is not None:
+        next_due_at = state.last_attempted_at + timedelta(minutes=state.interval_minutes)
+
+    return OrderCollectionOpsStatusResponse(
+        company_id=company_id, function_mode=function_mode,
+        interval_minutes=state.interval_minutes,
+        last_attempted_at=state.last_attempted_at,
+        last_succeeded_at=state.last_succeeded_at,
+        next_due_at=next_due_at,
+        last_status=state.last_status, last_skip_reason=state.last_skip_reason,
+        last_error_summary=state.last_error_summary,
+        consecutive_failure_count=state.consecutive_failure_count,
+        last_new_fulfillment_count=state.last_new_fulfillment_count,
+        last_duplicate_fulfillment_count=state.last_duplicate_fulfillment_count,
+        last_unresolved_item_count=state.last_unresolved_item_count,
+        last_failed_order_count=state.last_failed_order_count,
+    )
+
+
+@router.post(
+    "/collection-ops/trigger",
+    response_model=OrderCollectionOpsTriggerResponse,
+)
+def trigger_collection_ops_now(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_order_credential_store),
+    provider_factory=Depends(get_coupang_order_provider_factory),
+):
+    """"지금 확인" 수동 버튼. 반복 클릭이나 마침 진행 중인 자동
+    tick과 겹쳐도 기존 `OrderCollectionCursorService.acquire()` 잠금이
+    막아 준다(새 락 로직을 추가하지 않았다) — 겹치면 예외 없이
+    SKIPPED_ALREADY_RUNNING으로 돌아온다."""
+
+    from app.domains.order.auto_collection_scheduler import trigger_company_now
+
+    entry = trigger_company_now(
+        db, credential_store, current_user.company_id,
+        provider_factory=provider_factory,
+    )
+
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id,
+        action="ORDER_COLLECTION_OPS_MANUAL_TRIGGER", entity="company",
+        entity_id=str(current_user.company_id),
+        description=f"주문 자동 감지 수동 확인: outcome={entry.outcome}",
+    )
+    db.commit()
+
+    return OrderCollectionOpsTriggerResponse(
+        company_id=entry.company_id, outcome=entry.outcome, detail=entry.detail,
+    )
+
+
+@router.post(
+    "/collection-ops/interval",
+    response_model=OrderCollectionOpsStatusResponse,
+)
+def update_collection_ops_interval(
+    data: OrderCollectionOpsIntervalUpdateRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    from app.domains.automation_safety.constants import FunctionCode
+    from app.domains.automation_safety.service import SafetyService
+    from app.domains.order.auto_collection_scheduler import set_interval_minutes
+
+    company_id = current_user.company_id
+    state = set_interval_minutes(db, company_id, data.interval_minutes)
+
+    write_audit_log(
+        db, user_id=current_user.id, company_id=company_id,
+        action="ORDER_COLLECTION_OPS_INTERVAL_CHANGED", entity="company",
+        entity_id=str(company_id),
+        description=f"주문 자동 감지 주기 변경: {data.interval_minutes}분",
+    )
+    db.commit()
+
+    return get_collection_ops_status(current_user=current_user, db=db)
+
+
+@router.post(
+    "/collection-ops/pause",
+    response_model=OrderCollectionOpsResumeResponse,
+)
+def pause_collection_ops(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """일시중지(자동화를 낮추는 방향)는 재인증이 필요하지 않다 —
+    더 안전한 방향으로의 전환이기 때문이다(재개만 재인증 대상)."""
+
+    from app.domains.automation_safety.constants import FunctionCode
+    from app.domains.automation_safety.constants import FunctionMode
+    from app.domains.automation_safety.service import SafetyService
+
+    company_id = current_user.company_id
+    SafetyService(db).set_function_mode(
+        company_id, FunctionCode.ORDER_COLLECTION, FunctionMode.PAUSED,
+        set_by=current_user.id, is_admin=True, reason="운영 화면에서 수동 일시중지",
+    )
+    db.commit()
+
+    return OrderCollectionOpsResumeResponse(
+        company_id=company_id, function_mode=FunctionMode.PAUSED,
+    )
+
+
+@router.post(
+    "/collection-ops/resume",
+    response_model=OrderCollectionOpsResumeResponse,
+)
+def resume_collection_ops(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    recent_auth_token: str | None = Header(
+        default=None, alias="X-Recent-Auth-Token",
+    ),
+):
+    """자동 감지를 켜는(재개하는) 방향은 재인증이 필요하다
+    (HOMEZ_USER_OPERATION_SETTINGS.md 2-8 운영 화면 요구사항 —
+    "중지·재개는 재인증 필요"). 기존 배송정보 열람(`GET /orders/
+    {order_id}/sensitive-detail`)과 동일한 `consume_recent_auth_token`
+    메커니즘을 재사용한다 — 새 재인증 방식을 만들지 않았다.
+
+    정직한 공개: 범용 기능별 자동화 모드 화면(`POST /console/api/
+    function-modes/{function_code}`)으로도 같은 회사의 ORDER_COLLECTION
+    을 AUTOMATIC으로 바꿀 수 있고, 그 경로는 재인증을 요구하지
+    않는다(이 Phase 이전부터 있던 범용 화면이며 10개 기능 전체가
+    공유한다 — 이번 범위에서 바꾸지 않았다). 이 전용 엔드포인트는
+    "운영 화면에서 재개할 때"의 안전장치이지, 유일한 경로를 막는
+    것은 아니다."""
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise UnauthorizedException(
+            "ORDER_COLLECTION_RESUME_RECENT_AUTH_REQUIRED: 주문 자동 감지를 "
+            "다시 켜려면 현재 비밀번호를 다시 확인해야 합니다.",
+        )
+
+    from app.domains.automation_safety.constants import FunctionCode
+    from app.domains.automation_safety.constants import FunctionMode
+    from app.domains.automation_safety.service import SafetyService
+
+    company_id = current_user.company_id
+    SafetyService(db).set_function_mode(
+        company_id, FunctionCode.ORDER_COLLECTION, FunctionMode.AUTOMATIC,
+        set_by=current_user.id, is_admin=True, reason="운영 화면에서 재인증 후 재개",
+    )
+    db.commit()
+
+    write_audit_log(
+        db, user_id=current_user.id, company_id=company_id,
+        action="ORDER_COLLECTION_OPS_RESUMED", entity="company",
+        entity_id=str(company_id),
+        description="주문 자동 감지 재개(재인증 완료)",
+    )
+    db.commit()
+
+    return OrderCollectionOpsResumeResponse(
+        company_id=company_id, function_mode=FunctionMode.AUTOMATIC,
+    )
 
 
 # --------------------------------------------------

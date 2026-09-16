@@ -142,6 +142,15 @@ class OrderAutoCollectionState(Base):
     last_error_summary: Mapped[str | None] = mapped_column(String(300), nullable=True)
     consecutive_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # 2026-09-16 개인 베타 잔여 작업(Phase 7, 2-8 운영 화면) — 마지막
+    # 실행에서 나온 신규/중복/미연결/실패 주문 수(운영 화면의
+    # "신규·중복·미연결·실패 주문수" 표시용). 실행하지 않았으면
+    # 전부 NULL — 0과 "아직 실행 안 됨"을 구분한다.
+    last_new_fulfillment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_duplicate_fulfillment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_unresolved_item_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_failed_order_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,

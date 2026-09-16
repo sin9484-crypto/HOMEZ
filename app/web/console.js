@@ -6256,6 +6256,140 @@
     dialog.showModal();
   }
 
+  // 2026-09-16 개인 베타 잔여 작업(Phase 7, HOMEZ_USER_OPERATION_
+  // SETTINGS.md 2-8 운영 화면) — 회사 단위 자동 주문 감지 운영
+  // 상태·수동 확인·주기 변경·일시중지/재개. 구매자·수취인 개인정보를
+  // 전혀 다루지 않는다(회사 단위 집계값만 — 백엔드
+  // OrderCollectionOpsStatusResponse도 동일 원칙).
+  async function loadOrderCollectionOps() {
+    const wrap = el("odo-wrap");
+    wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+
+    let data;
+    try {
+      data = await apiFetch("/orders/collection-ops/status");
+    } catch (err) {
+      renderErrorState(wrap, err);
+      return;
+    }
+
+    const nextDueHtml = data.next_due_at
+      ? escapeHtml(fmtDate(data.next_due_at))
+      : escapeHtml(HomezI18n.t("odo.next_due_now"));
+    const errorText = data.last_error_summary || data.last_skip_reason || "";
+    const isPausedOrError = data.function_mode === "PAUSED" || data.function_mode === "ERROR";
+
+    wrap.innerHTML = `
+      <div class="detail-panel">
+        <h3>${escapeHtml(HomezI18n.t("odo.status_heading"))}</h3>
+        <dl class="kv-list">
+          <dt>${escapeHtml(HomezI18n.t("odo.function_mode_label"))}</dt>
+          <dd>${statusPillHtmlLabeled(data.function_mode, "odo.function_mode.")}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.status_label"))}</dt>
+          <dd>${data.last_status ? statusPillHtmlLabeled(data.last_status, "odo.status.") : escapeHtml(HomezI18n.t("odo.na"))}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.last_attempted_label"))}</dt>
+          <dd>${data.last_attempted_at ? escapeHtml(fmtDate(data.last_attempted_at)) : escapeHtml(HomezI18n.t("odo.na"))}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.last_succeeded_label"))}</dt>
+          <dd>${data.last_succeeded_at ? escapeHtml(fmtDate(data.last_succeeded_at)) : escapeHtml(HomezI18n.t("odo.na"))}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.next_due_label"))}</dt>
+          <dd>${nextDueHtml}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.consecutive_failure_label"))}</dt>
+          <dd>${data.consecutive_failure_count}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.error_label"))}</dt>
+          <dd>${errorText ? escapeHtml(errorText) : escapeHtml(HomezI18n.t("odo.no_error"))}</dd>
+        </dl>
+
+        <h3>${escapeHtml(HomezI18n.t("odo.counts_heading"))}</h3>
+        <div class="stat-grid">
+          <div class="stat-card accent-teal"><div class="stat-label">${escapeHtml(HomezI18n.t("odo.count_new"))}</div><div class="stat-value">${data.last_new_fulfillment_count ?? "—"}</div></div>
+          <div class="stat-card"><div class="stat-label">${escapeHtml(HomezI18n.t("odo.count_duplicate"))}</div><div class="stat-value">${data.last_duplicate_fulfillment_count ?? "—"}</div></div>
+          <div class="stat-card accent-yellow"><div class="stat-label">${escapeHtml(HomezI18n.t("odo.count_unresolved"))}</div><div class="stat-value">${data.last_unresolved_item_count ?? "—"}</div></div>
+          <div class="stat-card accent-pink"><div class="stat-label">${escapeHtml(HomezI18n.t("odo.count_failed"))}</div><div class="stat-value">${data.last_failed_order_count ?? "—"}</div></div>
+        </div>
+
+        <div class="field-row">
+          <label class="field"><span class="field-label">${escapeHtml(HomezI18n.t("odo.interval_label"))}</span>
+            <input id="odo-interval-input" type="number" min="1" max="1440" value="${Number(data.interval_minutes) || 5}"></label>
+        </div>
+        <div class="dialog-actions" style="justify-content:flex-start;">
+          <button id="odo-interval-save-btn" class="btn btn-secondary btn-sm">${escapeHtml(HomezI18n.t("odo.interval_save_btn"))}</button>
+        </div>
+
+        <div class="dialog-actions" style="justify-content:flex-start;">
+          <button id="odo-trigger-btn" class="btn btn-primary">${escapeHtml(HomezI18n.t("odo.trigger_btn"))}</button>
+          ${isPausedOrError
+            ? `<button id="odo-resume-btn" class="btn btn-secondary">${escapeHtml(HomezI18n.t("odo.resume_btn"))}</button>`
+            : `<button id="odo-pause-btn" class="btn btn-ghost">${escapeHtml(HomezI18n.t("odo.pause_btn"))}</button>`}
+        </div>
+      </div>
+    `;
+
+    el("odo-trigger-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      try {
+        const result = await apiFetch("/orders/collection-ops/trigger", { method: "POST" });
+        toast(HomezI18n.t("odo.trigger_success", { outcome: result.outcome }), "success");
+        loadOrderCollectionOps();
+      } catch (err) {
+        toast((err && err.message) || HomezI18n.t("odo.trigger_error"), "error");
+      }
+    }));
+
+    el("odo-interval-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const minutes = Number(el("odo-interval-input").value);
+      try {
+        await apiFetch("/orders/collection-ops/interval", {
+          method: "POST",
+          body: JSON.stringify({ interval_minutes: minutes }),
+        });
+        toast(HomezI18n.t("odo.interval_save_success"), "success");
+        loadOrderCollectionOps();
+      } catch (err) {
+        toast((err && err.message) || HomezI18n.t("odo.interval_save_error"), "error");
+      }
+    }));
+
+    const pauseBtn = el("odo-pause-btn");
+    if (pauseBtn) {
+      pauseBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const { confirmed } = await confirmDialog({
+          title: HomezI18n.t("odo.pause_confirm_title"),
+          body: HomezI18n.t("odo.pause_confirm_body"),
+        });
+        if (!confirmed) return;
+        try {
+          await apiFetch("/orders/collection-ops/pause", { method: "POST" });
+          toast(HomezI18n.t("odo.pause_success"), "success");
+          loadOrderCollectionOps();
+        } catch (err) {
+          toast((err && err.message) || HomezI18n.t("odo.pause_error"), "error");
+        }
+      }));
+    }
+
+    const resumeBtn = el("odo-resume-btn");
+    if (resumeBtn) {
+      resumeBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const { confirmed } = await confirmDialog({
+          title: HomezI18n.t("odo.resume_confirm_title"),
+          body: HomezI18n.t("odo.resume_confirm_body"),
+        });
+        if (!confirmed) return;
+        const token = await promptRecentAuthToken();
+        if (token === null) return;
+        try {
+          await apiFetch("/orders/collection-ops/resume", {
+            method: "POST",
+            headers: { "X-Recent-Auth-Token": token },
+          });
+          toast(HomezI18n.t("odo.resume_success"), "success");
+          loadOrderCollectionOps();
+        } catch (err) {
+          toast((err && err.message) || HomezI18n.t("odo.resume_error"), "error");
+        }
+      }));
+    }
+  }
+
   const VIEW_LOADERS = {
     overview: loadOverview,
     "ai-proposals": loadAiProposals,
@@ -6271,6 +6405,7 @@
     "product-attr-comparison-detail": loadProductAttrComparisonDetail,
     "recall-blocks": loadRecallBlocks,
     "recall-blocks-detail": loadRecallBlocksDetail,
+    "order-collection-ops": loadOrderCollectionOps,
     candidates: loadCandidates,
     trend: loadTrend,
     "new-product": loadNewProduct,
