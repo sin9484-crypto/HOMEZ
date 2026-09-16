@@ -363,6 +363,21 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # _job_states/recall_product_blocks). 동일한 이유로 추가.
             # 실제 운영 DB에는 아직 미적용이다.
             "20260915_09_create_recall_notice_schema.sql",
+            # 2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18 — 서버
+            # 관리자 전용 알림 채널) — 신규 테이블 2개
+            # (platform_alert_recipients/_delivery_logs). 동일한
+            # 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260916_00_create_platform_alert_schema.sql",
+            # 2026-09-16 개인 베타 잔여 작업(Phase 6, 2-8 — 신규 주문
+            # 5분 자동 감지) — 신규 테이블 1개
+            # (order_auto_collection_states). 동일한 이유로 추가.
+            # 실제 운영 DB에는 아직 미적용이다.
+            "20260916_01_create_order_auto_collection_state_schema.sql",
+            # 2026-09-16 개인 베타 잔여 작업(Phase 7, 2-8 운영 화면) —
+            # order_auto_collection_states에 컬럼 4개(신규/중복/
+            # 미연결/실패 주문수) 추가(ALTER TABLE ADD COLUMN). 동일한
+            # 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260916_02_add_order_auto_collection_state_last_run_counts.sql",
         ]
 
         all_files = sorted(

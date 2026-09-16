@@ -120,6 +120,22 @@ def refresh_restricted_mode_state() -> RestrictedModeState:
       - Migration 적용(app/core/migration_approval.py::approve_migration)
         성공 직후 — 방금 적용한 파일이 더 이상 pending에 남지 않도록
         즉시 재계산.
+
+    2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — 서버 관리자
+    알림(Migration 제한 모드 진입)은 **의도적으로 이 함수 안에서
+    보내지 않는다.** 처음에는 여기서 바로 `SessionLocal()`을 열어
+    보냈으나, 그러면 이 함수가 FastAPI lifespan 시작 시(스키마가
+    아직 적용되지 않았을 수도 있는 가장 이른 시점)마다 즉시 ORM
+    세션을 여는 부작용이 생겨, "이 진단 경로는 세션을 전혀 열지
+    않는다"는 기존 설계 불변식(`_diagnose_pending()`이 굳이 원시
+    `sqlite3`(mode=ro)만 쓰는 이유와 같다)을 깨고
+    `tests/test_homez_desktop.py::test_successful_start_and_shutdown_full_cycle`
+    (스키마 미적용 상태에서도 `/health`·`/console`만 호출하면
+    SessionLocal이 단 한 번도 불려서는 안 된다는 기존 회귀)를
+    실패시켰다. 대신 실제로 쓰기 요청이 제한 모드에 막히는 순간
+    (`app/main.py::_enforce_migration_restricted_mode()`의 423
+    분기 — 이미 그 시점에 실제 영향이 발생했다는 뜻이므로 세션을
+    여는 비용이 정당화된다)에만 알린다.
     """
 
     global _state
@@ -136,43 +152,7 @@ def refresh_restricted_mode_state() -> RestrictedModeState:
     with _lock:
         _state = new_state
 
-    if new_state.restricted:
-        _notify_server_admin_restricted_mode(new_state)
-
     return new_state
-
-
-def _notify_server_admin_restricted_mode(state: "RestrictedModeState") -> None:
-    """2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — Migration
-    제한 모드 진입을 서버 관리자에게 알린다. 이 함수가 실패해도
-    (예: platform_alert 테이블 자체가 아직 없는 아주 오래된 DB)
-    제한 모드 판정 자체(이미 위에서 확정됨)는 전혀 영향받지 않는다
-    — best-effort. 같은 pending 파일 집합으로는 서버가 재시작될
-    때마다 중복 알림을 보내지 않도록, pending 파일 목록을 그대로
-    멱등키에 포함한다(집합이 바뀌면 새 알림)."""
-
-    try:
-        from app.database.session import SessionLocal
-        from app.domains.platform_alert.constants import PlatformAlertEventCode
-        from app.domains.platform_alert.service import PlatformAlertService
-
-        key_material = ",".join(sorted(state.pending_files)) or (state.error or "unknown")
-        db = SessionLocal()
-        try:
-            PlatformAlertService(db).dispatch_alert(
-                PlatformAlertEventCode.MIGRATION_RESTRICTED_MODE_ENTERED,
-                title="Migration 제한 모드 활성화",
-                message=(
-                    f"미적용 Migration {len(state.pending_files)}건 또는 진단 오류로 "
-                    f"제한 모드가 활성화됐습니다: {state.error or ', '.join(state.pending_files)}"
-                ),
-                entity_ref="migration_restricted_mode",
-                idempotency_key=f"migration_restricted_mode:{key_material}",
-            )
-        finally:
-            db.close()
-    except Exception:  # noqa: BLE001 - 알림 실패가 제한 모드 판정을 막지 않는다
-        pass
 
 
 def is_restricted_mode() -> bool:

@@ -288,6 +288,42 @@ _MIGRATION_RESTRICTED_MODE_WRITE_WHITELIST = frozenset({
 MIGRATION_RESTRICTED_MODE_ERROR_CODE = "MIGRATION_RESTRICTED_MODE"
 
 
+def _notify_server_admin_restricted_mode_blocked_write() -> None:
+    """2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — Migration
+    제한 모드가 실제로 쓰기 요청 하나를 막은 순간에만 서버 관리자
+    에게 알린다(진단 시점이 아니라 실제 영향이 생긴 시점). 같은
+    pending 파일 집합으로는 반복 요청마다 중복 알림을 보내지 않도록
+    (idempotency_key가 이미 platform_alert 레이어에서 막아 준다),
+    매 요청마다 여기 도달해도 실제 DB 쓰기는 최초 1회만 일어난다.
+    알림 실패가 423 응답 자체를 막지 않는다 — best-effort."""
+
+    try:
+        from app.core.migration_restricted_mode import get_restricted_mode_state
+        from app.database.session import SessionLocal
+        from app.domains.platform_alert.constants import PlatformAlertEventCode
+        from app.domains.platform_alert.service import PlatformAlertService
+
+        state = get_restricted_mode_state()
+        key_material = ",".join(sorted(state.pending_files)) or (state.error or "unknown")
+        db = SessionLocal()
+        try:
+            PlatformAlertService(db).dispatch_alert(
+                PlatformAlertEventCode.MIGRATION_RESTRICTED_MODE_ENTERED,
+                title="Migration 제한 모드가 쓰기 요청을 차단했습니다",
+                message=(
+                    f"미적용 Migration {len(state.pending_files)}건 또는 진단 오류로 "
+                    f"제한 모드가 활성화돼 쓰기 요청이 차단됐습니다: "
+                    f"{state.error or ', '.join(state.pending_files)}"
+                ),
+                entity_ref="migration_restricted_mode",
+                idempotency_key=f"migration_restricted_mode:{key_material}",
+            )
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 - 알림 실패가 423 응답 자체를 막지 않는다
+        pass
+
+
 @app.middleware("http")
 async def _enforce_migration_restricted_mode(request, call_next):
 
@@ -296,6 +332,7 @@ async def _enforce_migration_restricted_mode(request, call_next):
         and request.url.path not in _MIGRATION_RESTRICTED_MODE_WRITE_WHITELIST
         and is_restricted_mode()
     ):
+        _notify_server_admin_restricted_mode_blocked_write()
         return JSONResponse(
             status_code=423,
             content={

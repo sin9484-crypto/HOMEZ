@@ -48,6 +48,8 @@ from app.domains.notification_center.model import Notification
 from app.domains.notification_center.model import NotificationRead
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
+from app.domains.product_attribute_match.model import ProductAttributeComparisonItem
+from app.domains.product_attribute_match.model import ProductAttributeComparisonRun
 from app.domains.purchase_task.channel_connection_service import (
     PurchaseChannelConnectionService,
 )
@@ -118,6 +120,15 @@ class OrderSubmissionReviewTestCaseBase(unittest.TestCase):
                 ExecutionLimit.__table__, ExecutionUsage.__table__,
                 ExecutionPeriodUsage.__table__, Role.__table__, User.__table__,
                 Notification.__table__, NotificationRead.__table__,
+                # 2026-09-16 개인 베타 잔여 작업(Phase 2에서 이미 배선,
+                # Phase 10 전체회귀에서 이 픽스처의 공백이 드러남) —
+                # _verify_point_balance_and_shipping_or_block()이 실제
+                # 조회 성공 후 항상 ProductAttributeMatchService.
+                # run_comparison()을 호출한다(10-4 게이트). 이 테이블이
+                # 없으면 SUPPORTED 응답을 쓰는 테스트가 전부
+                # PendingRollbackError로 깨진다.
+                ProductAttributeComparisonRun.__table__,
+                ProductAttributeComparisonItem.__table__,
             ],
         )
         with self.engine.begin() as conn:
