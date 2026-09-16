@@ -1180,6 +1180,26 @@ class PurchaseChannelConnectionService:
         rehearsal_failure()와 동일한 패턴). 알림 발송 실패가 원
         업무(조회 자체)를 되돌리면 안 된다 — best-effort."""
 
+        # 2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — 회사 관리자
+        # 알림(아래)과 완전히 별개인 서버 관리자 채널. 키는 회사
+        # 관리자 쪽과 동일한 (connection, 스트릭, 시각) 조합을 써서
+        # 같은 사건을 같은 방식으로 dedupe한다.
+        from app.domains.platform_alert.hooks import notify_repeated_provider_error
+
+        notify_repeated_provider_error(
+            self.db,
+            detail=(
+                f"connection_id={connection.id} company_id={connection.company_id} "
+                f"consecutive_failures={connection.consecutive_failure_count} "
+                f"error_type={type(exc).__name__}"
+            ),
+            entity_ref=f"purchase_channel_connection:{connection.id}",
+            idempotency_key=(
+                f"supplier-lookup-failure:{connection.id}:"
+                f"{connection.consecutive_failure_count}:{occurred_at.isoformat()}"
+            ),
+        )
+
         try:
             from app.domains.user.model import User
 

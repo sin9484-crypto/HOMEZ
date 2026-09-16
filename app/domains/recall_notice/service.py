@@ -159,11 +159,22 @@ class RecallNoticeService:
 
     def _notify_block(self, block: RecallProductBlock) -> None:
         """사용자 관리자(회사 SUPER_ADMIN)에게는 기존 알림 배선을
-        그대로 쓴다. **"서버 관리자"에게 별도로 알리는 전용 채널은
-        아직 이 저장소에 없다**(company-scoped 알림 인프라만 존재) —
-        그 부분은 감사 로그(write_audit_log)로 남기는 것으로
-        대체하고, 전용 플랫폼 관리자 채널은 별도 결정이 필요하다고
-        정직하게 남겨 둔다(추측으로 새 채널을 만들지 않는다)."""
+        그대로 쓴다. 2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) —
+        "서버 관리자" 전용 채널(`platform_alert`)이 새로 생겨, 아래
+        두 통지(회사 관리자용/서버 관리자용)는 서로 완전히 독립된
+        전달기록을 남긴다(감사 로그가 알림 전달 성공의 대체물이
+        아니듯, 이 둘도 서로의 대체물이 아니다)."""
+
+        from app.domains.platform_alert.hooks import (
+            notify_recall_sale_stop_detected,
+        )
+
+        notify_recall_sale_stop_detected(
+            self.db,
+            detail=f"product_identifier={block.product_identifier} reason={block.reason}",
+            entity_ref=f"recall_product_block:{block.id}",
+            idempotency_key=f"recall-product-block:{block.id}",
+        )
 
         try:
             from app.core.audit_db import write_audit_log

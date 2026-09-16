@@ -315,6 +315,15 @@ class StoreConnectionService:
         try:
             self.credential_store.save(target_name, credential_dict)
         except CredentialStoreError as exc:
+            from app.domains.platform_alert.hooks import (
+                notify_credential_store_error,
+            )
+
+            notify_credential_store_error(
+                self.db, detail=f"save() 실패: {type(exc).__name__}: {exc}",
+                entity_ref=f"company:{company_id}",
+                idempotency_key=f"credential_store_error:save:{target_name}",
+            )
             raise ServiceUnavailableException(
                 "자격증명 보안 저장소를 사용할 수 없어 저장을 차단했습니다.",
             ) from exc
@@ -423,6 +432,17 @@ class StoreConnectionService:
                 "저장된 자격증명을 보안 저장소에서 찾을 수 없습니다.",
             ) from exc
         except CredentialStoreError as exc:
+            from app.domains.platform_alert.hooks import (
+                notify_credential_store_error,
+            )
+
+            notify_credential_store_error(
+                self.db, detail=f"read() 실패: {type(exc).__name__}: {exc}",
+                entity_ref=f"store_connection:{connection_id}",
+                idempotency_key=(
+                    f"credential_store_error:read:{connection.credential_reference}"
+                ),
+            )
             raise ServiceUnavailableException(
                 "자격증명 보안 저장소를 사용할 수 없습니다.",
             ) from exc
@@ -556,6 +576,15 @@ class StoreConnectionService:
         try:
             self.credential_store.save(new_target_name, credential_dict)
         except CredentialStoreError as exc:
+            from app.domains.platform_alert.hooks import (
+                notify_credential_store_error,
+            )
+
+            notify_credential_store_error(
+                self.db, detail=f"rotate save() 실패: {type(exc).__name__}: {exc}",
+                entity_ref=f"store_connection:{connection_id}",
+                idempotency_key=f"credential_store_error:rotate:{new_target_name}",
+            )
             raise ServiceUnavailableException(
                 "자격증명 보안 저장소를 사용할 수 없어 교체를 차단했습니다.",
             ) from exc

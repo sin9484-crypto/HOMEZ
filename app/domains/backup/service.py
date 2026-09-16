@@ -145,6 +145,15 @@ class BackupService:
             verify.close()
 
         if integrity != "ok":
+            from app.domains.platform_alert.hooks import (
+                notify_db_integrity_check_failed,
+            )
+
+            notify_db_integrity_check_failed(
+                self.repository.db,
+                detail=f"backup_path={backup_path} integrity_check={integrity}",
+                idempotency_key=f"db_integrity:backup:{backup_path.name}",
+            )
             raise BackupError(
                 f"백업 무결성 검증 실패: {backup_path} "
                 f"(integrity_check={integrity}) — 이 백업은 이력에 "

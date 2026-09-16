@@ -136,7 +136,43 @@ def refresh_restricted_mode_state() -> RestrictedModeState:
     with _lock:
         _state = new_state
 
+    if new_state.restricted:
+        _notify_server_admin_restricted_mode(new_state)
+
     return new_state
+
+
+def _notify_server_admin_restricted_mode(state: "RestrictedModeState") -> None:
+    """2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — Migration
+    제한 모드 진입을 서버 관리자에게 알린다. 이 함수가 실패해도
+    (예: platform_alert 테이블 자체가 아직 없는 아주 오래된 DB)
+    제한 모드 판정 자체(이미 위에서 확정됨)는 전혀 영향받지 않는다
+    — best-effort. 같은 pending 파일 집합으로는 서버가 재시작될
+    때마다 중복 알림을 보내지 않도록, pending 파일 목록을 그대로
+    멱등키에 포함한다(집합이 바뀌면 새 알림)."""
+
+    try:
+        from app.database.session import SessionLocal
+        from app.domains.platform_alert.constants import PlatformAlertEventCode
+        from app.domains.platform_alert.service import PlatformAlertService
+
+        key_material = ",".join(sorted(state.pending_files)) or (state.error or "unknown")
+        db = SessionLocal()
+        try:
+            PlatformAlertService(db).dispatch_alert(
+                PlatformAlertEventCode.MIGRATION_RESTRICTED_MODE_ENTERED,
+                title="Migration 제한 모드 활성화",
+                message=(
+                    f"미적용 Migration {len(state.pending_files)}건 또는 진단 오류로 "
+                    f"제한 모드가 활성화됐습니다: {state.error or ', '.join(state.pending_files)}"
+                ),
+                entity_ref="migration_restricted_mode",
+                idempotency_key=f"migration_restricted_mode:{key_material}",
+            )
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 - 알림 실패가 제한 모드 판정을 막지 않는다
+        pass
 
 
 def is_restricted_mode() -> bool:

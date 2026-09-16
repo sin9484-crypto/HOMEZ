@@ -625,13 +625,24 @@ class RestoreService:
         self, company_id: int, error_message: str,
     ) -> None:
 
+        day_key = datetime.now().strftime("%Y%m%d")
+
+        # 2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — 회사 관리자
+        # 알림(아래)과는 완전히 별개의 서버 관리자 채널. 이 알림이
+        # 실패해도(플랫폼 알림 자체의 예외는 hooks.py가 이미 삼킨다)
+        # 회사 관리자 알림 시도는 그대로 이어진다.
+        from app.domains.platform_alert.hooks import notify_backup_restore_failed
+
+        notify_backup_restore_failed(
+            self.db, detail=f"company_id={company_id} weekly_rehearsal: {error_message}",
+            idempotency_key=f"backup_restore_rehearsal:{company_id}:{day_key}",
+        )
+
         try:
             from app.domains.notification_center.delivery_service import (
                 NotificationDeliveryService,
             )
             from app.domains.user.model import User
-
-            day_key = datetime.now().strftime("%Y%m%d")
 
             for user in (
                 self.db.query(User)

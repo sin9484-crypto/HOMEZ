@@ -754,6 +754,25 @@ class PurchaseOrderSubmissionService:
         except IntegrityError as exc:
             self.db.rollback()
             message = str(getattr(exc, "orig", exc))
+
+            # 2026-09-16 개인 베타 잔여 작업(Phase 5, 10-18) — DB 제약이
+            # 실제로 중복 발주 시도를 차단한 순간을 서버 관리자에게
+            # 알린다. 알림 실패는 아래 raise(사용자에게 보이는 차단
+            # 응답)를 절대 막지 않는다(hooks.py가 이미 best-effort).
+            from app.domains.platform_alert.hooks import (
+                notify_duplicate_order_payment_blocked,
+            )
+
+            notify_duplicate_order_payment_blocked(
+                self.db,
+                detail=(
+                    f"company_id={company_id} purchase_task_id={purchase_task_id} "
+                    f"idempotency_key={idempotency_key} db_message={message[:200]}"
+                ),
+                entity_ref=f"purchase_task:{purchase_task_id}",
+                idempotency_key=f"duplicate-order-blocked:{company_id}:{idempotency_key}",
+            )
+
             if "purchase_task_id" in message:
                 raise ConflictException(
                     "이 매입 작업에는 진행 중이거나 이미 성공/생성 확인된 "
