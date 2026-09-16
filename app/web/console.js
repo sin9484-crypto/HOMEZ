@@ -2334,7 +2334,7 @@
           <textarea id="pac-resolution-note" class="pt-cc-form-input" maxlength="500"></textarea>
           <p class="field-error" id="pac-resolve-error"></p>
           <div class="dialog-actions">
-            <button type="button" class="btn btn-primary" id="pac-resolve-submit-btn">${escapeHtml(HomezI18n.t("pac.resolve_submit_btn"))}</button>
+            <button type="button" class="btn btn-primary" id="pac-resolve-submit-btn" disabled>${escapeHtml(HomezI18n.t("pac.resolve_submit_btn"))}</button>
           </div>
         </div>
       `}
@@ -2342,7 +2342,33 @@
 
     if (resolved) return;
 
+    // 2026-09-16 전면 감사 후속(10-5) — 처리 사유와 모든 불일치·
+    // 확인불가 항목의 선택값이 채워지기 전까지는 제출 버튼을 실제로
+    // 비활성화한다(클릭 후 오류 메시지만 보여주는 것으로 그치지
+    // 않는다). 라디오·직접입력·사유 입력 어디서든 값이 바뀔 때마다
+    // 다시 검사한다.
     const submitBtn = el("pac-resolve-submit-btn");
+    const needsSelectionItems = run.items.filter(pacNeedsSelection);
+
+    function pacCurrentSelectionValue(itemId) {
+      const checkedRadio = document.querySelector(`input[name="pac-radio-${itemId}"]:checked`);
+      const customInput = document.getElementById(`pac-custom-${itemId}`);
+      const customValue = customInput ? customInput.value.trim() : "";
+      return customValue || (checkedRadio ? checkedRadio.value : "");
+    }
+
+    function pacRefreshSubmitEnabled() {
+      const noteFilled = el("pac-resolution-note").value.trim() !== "";
+      const allSelected = needsSelectionItems.every(
+        (item) => pacCurrentSelectionValue(item.id) !== "",
+      );
+      submitBtn.disabled = !(noteFilled && allSelected);
+    }
+
+    body.addEventListener("input", pacRefreshSubmitEnabled);
+    body.addEventListener("change", pacRefreshSubmitEnabled);
+    pacRefreshSubmitEnabled();
+
     submitBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
       const errEl = el("pac-resolve-error");
       errEl.textContent = "";
