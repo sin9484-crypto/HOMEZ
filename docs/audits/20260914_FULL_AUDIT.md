@@ -1301,7 +1301,84 @@ Provider+InMemoryCredentialStore 기반 자동화 테스트를 통과했다는
 렌더링조차 검증하지 못했다. 10-17/10-18은 실제 리콜 데이터가
 아직 없어 차단 게이트가 실제로 트리거되는 사례 자체가 없다.
 
-### 13.14 잔여 위험과 다음 단계
+### 13.14 Phase 10B 재검증 — HEAD `2e422b0`에서 처음부터 다시 실행한
+최종 전체 회귀
+
+사용자 후속 지시(2026-09-16, "[HOMEZ 최종 검증 — 현재 HEAD 전체
+회귀 재실행 및 잔여 한계 확정]")에 따라, 13.12절의 회귀는 실패
+2건을 고친 뒤 **집중 재검증만 통과했을 뿐 수정된 최종 HEAD에서
+전체 회귀를 처음부터 다시 실행한 적이 없다**는 지적을 받고
+`IMPLEMENTATION_COMPLETE_FINAL_FULL_REGRESSION_REQUIRED` 판정으로
+이 절의 작업을 시작했다.
+
+**Phase 1 — 기준선 확인**: 시작 시점 `git status` clean,
+HEAD=origin/main=`2e422b0`(fetch로 재확인). 실행 중인 python
+프로세스 없음(`Get-CimInstance Win32_Process`로 확인 — 중복 실행
+없음). `HOMEZ_RUN_REAL_CREDENTIAL_TESTS` 환경변수 미설정 확인.
+실제 `homez.db`(3,420,160 bytes, 2026-09-14 11:20:34 UTC)와 설치판
+`%LOCALAPPDATA%\HOMEZ\data\homez.db`(2,953,216 bytes, 2026-08-29
+12:02:41 UTC) 파일 메타데이터만 기록(열지 않음).
+
+**Phase 2 — 전체 회귀 실행**: `.\venv\Scripts\python.exe -m
+unittest discover -s tests -p "test_*.py" -v`를 HEAD `2e422b0`에서
+1회 실행(저장소 밖 임시 로그 파일에 출력, 실행 도중 코드·테스트
+미수정).
+
+**결과: 4,411건 실행, 6,479.396초, failures=0, errors=0, skipped=7
+(의도된 real-credential skip), exit code=0.**
+
+**로그에 나타난 두 종류의 비-실패 노이즈(직접 원인 확인 완료,
+실패 아님)**:
+1. `ERROR:    [Errno 10048] ... bind on address ('127.0.0.1', ...)`
+   2줄 — `test_homez_desktop.py::StartServerTestCase::
+   test_start_server_rejects_other_service_on_port`/
+   `test_worker_not_started_when_server_start_fails`가 "포트에 이미
+   다른 서비스가 떠 있음" 시나리오를 의도적으로 재현할 때 uvicorn이
+   자체적으로 찍는 로거 출력이다(loopback 전용, 각 호출 직후 `ok`로
+   통과). 같은 파일 220번줄 주석이 "회귀 실행 중 실제로 두 차례
+   관측됐다"고 이미 명시해 둔, 알려진 정상 부작용이다.
+2. CP949로 디코딩해야 읽히는 한글 3줄(`오류: 내부 DB 경로 설정이
+   일치하지 않습니다.` 등) — `test_live_gate4_fix_defects.py`가
+   `app/desktop/main.py::run()`을 목(mock) 의존성과 함께 직접
+   호출해 "DB 경로 불일치"·"채널 정책 카탈로그 시딩 실패" 시나리오의
+   fail-closed 동작(`exit_code=1`+에러 다이얼로그, 서버 미기동)을
+   검증하는 테스트들의 `print()` 부수효과다 — 실제 DB나 실제
+   Credential Manager는 전혀 접촉하지 않는다(전부 mock).
+   `grep -c "^FAIL:|^ERROR:"`로 unittest 자신의 실패 보고 형식과
+   혼동되지 않는지 별도 확인했다(두 건 다 위 uvicorn 로거 출력일 뿐,
+   unittest의 `ERROR: test_name (...)` 형식이 아님).
+
+**Phase 3 — 실패 처리**: 해당 없음(failures=0, errors=0이므로
+수정할 것이 없었다). 코드·테스트를 전혀 건드리지 않았다.
+
+**Phase 4 — 잔여 부분구현 4개 재확인(확대하지 않음)**: 10-4는
+IMPLEMENTED로 유지하되 "빠진 부분" 칸에 매입처 Adapter가
+제조사·원산지·크기·수량 원본 필드를 제공하지 않는다는 한계를
+그대로 남겼다. 10-5·10-17·10-18은 PARTIALLY_IMPLEMENTED를 그대로
+유지했다(각각 브라우저 미검증/외부 데이터 소스 미선정/서버 관리자
+채널 부재). 이번 재검증에서 이 4개 중 어느 것도 완료로 격상하지
+않았다 — 코드 변경 자체가 없었으므로 격상할 근거도 없다.
+
+**Phase 5 — 223개 집계 재검산**: `docs/HOMEZ_USER_OPERATION_
+SETTINGS_AUDIT_20260909.md`를 프로그램으로 다시 파싱 —
+223개 행, IMPLEMENTED 83 + PARTIALLY_IMPLEMENTED 58 +
+NOT_IMPLEMENTED 52 + VERIFICATION_REQUIRED 30 = **223**(검산
+일치, 13.13절 값과 동일 — 코드 변경이 없었으므로 재계산 결과도
+동일하다). 4가지 기본 판정 외 예상치 못한 토큰 없음.
+
+**Phase 6 — 문서·Git**: 코드 수정이 없었으므로 결함 수정 커밋은
+생성하지 않는다 — 이 절(감사 문서)만 별도 커밋한다. 작업 트리에
+비밀정보·DB·백업·로그 원문·임시파일이 없는지 커밋 전 `git status`로
+확인한다.
+
+**최종 판정: `FINAL_SAFE_REGRESSION_VERIFIED`** — 최종 HEAD에서
+전체 회귀를 처음부터 실행했고(failures=0, errors=0), 실제
+Credential Manager 테스트는 skip됐고, 실제 DB·외부 API·실거래는
+전혀 접촉하지 않았고, 작업 트리는 clean하며 HEAD=origin/main이고,
+223개 집계 검산을 통과했고, 잔여 부분구현·검증필요 항목을 그대로
+명시했다.
+
+### 13.15 잔여 위험과 다음 단계
 
 - IA-004(Critical, idempotency key 중복발주)의 원래 경로는
   `_has_blocking_task_attempt`로 Phase 1에서 닫혔고, 옵션이 다른

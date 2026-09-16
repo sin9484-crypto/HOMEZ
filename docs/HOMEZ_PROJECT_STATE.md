@@ -11562,3 +11562,30 @@ DDL-diff 정규식이 `VARCHAR(500)` 같은 괄호 타입을 처리 못하던 �
 `get_real_provider()`가 항상 실패하도록 의도적으로 막아뒀다. (4)
 10-18의 "서버 관리자" 전용 알림 채널이 이 저장소에 아직 없어
 감사로그로만 대체했다.
+
+## 2026-09-16 후속 27 — Phase 10B 재검증: HEAD `2e422b0`에서 전체
+회귀 처음부터 재실행, `FINAL_SAFE_REGRESSION_VERIFIED` 확정
+
+[GitHub 기준 확인] HEAD=origin/main=`2e422b0`(재검증 시작 시점,
+변동없음). 사용자 지적대로 후속 26의 Phase 10B는 실패 2건 수정
+후 집중 재검증만 했을 뿐 수정된 최종 HEAD에서 전체 회귀를 처음부터
+다시 실행하지 않았었다 — 이번 절이 그 공백을 메운다. 상세 근거는
+`docs/audits/20260914_FULL_AUDIT.md` 13.14절이 원본이다.
+
+`python -m unittest discover -s tests -p "test_*.py" -v`를 HEAD
+`2e422b0`에서 1회 재실행: **4,411건, 6,479.396초,
+failures=0, errors=0, skipped=7(의도된 real-credential skip),
+exit code=0**. 코드 수정 없음(수정할 실패가 없었다). 로그에 있던
+"ERROR:"/mojibake처럼 보이는 줄들은 전부 실제 실패가 아니라 기존
+테스트(`test_homez_desktop.py`의 포트충돌 재현, `test_live_gate4_
+fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
+찍는 정상 로그·print 부수효과임을 원본 소스까지 추적해 확인했다.
+
+223개 집계 재검산 결과도 동일(83+58+52+30=223, 코드 변경이
+없었으므로 당연히 동일). 10-4/10-5/10-17/10-18 중 어느 것도
+이번에 완료로 격상하지 않았다.
+
+**최종 판정: `FINAL_SAFE_REGRESSION_VERIFIED`.** 실제 homez.db·
+설치판 DB·Windows Credential Manager·외부 API·실거래(등록/발주/
+결제/환불/취소) 전부 무접촉. 작업 트리는 이 감사 문서 1개만
+변경된 채 clean하게 유지된다.
