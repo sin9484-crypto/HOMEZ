@@ -109,7 +109,46 @@ class OrderSkuResolution(Base):
     )
 
 
+class OrderAutoCollectionState(Base):
+    """2026-09-16 개인 베타 잔여 작업(Phase 6, HOMEZ_USER_OPERATION_
+    SETTINGS.md 2-8) — 회사 단위 자동 주문 감지 스케줄러 설정 및
+    실행 이력. "사용 여부" 자체는 별도 플래그를 두지 않는다 —
+    `app.domains.automation_safety`의 `FunctionCode.ORDER_COLLECTION`
+    함수모드가 AUTOMATIC일 때만 스케줄러가 이 회사를 시도한다(기존
+    기능별 자동화 개념을 재사용, 중복 플래그를 만들지 않는다). 이
+    행은 "언제·얼마나 자주 시도했는지/마지막으로 언제 성공했는지/
+    연속 몇 번 실패했는지"만 기록한다.
+
+    `OrderMultiChannelCollectionService.run_all()`이 회사 단위로 그
+    회사의 모든 판매채널 연결을 한 번에 순회하므로, 이 스케줄러의
+    실행 단위도 회사 단위다(연결별 독립 주기는 기존 서비스를 다시
+    구현해야 해서 만들지 않았다 — "기존 서비스 재사용" 원칙)."""
+
+    __tablename__ = "order_auto_collection_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", name="uq_order_auto_collection_state_company",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_succeeded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_skip_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_error_summary: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    consecutive_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+    )
+
+
 __all__ = [
     "OrderChannelFulfillment", "OrderCollectionCursor", "OrderSkuResolution",
-    "UnresolvedOrderItem",
+    "UnresolvedOrderItem", "OrderAutoCollectionState",
 ]

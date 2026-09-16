@@ -62,6 +62,17 @@ get_real_provider()`는 아직 항상 NotImplementedError를 던진다 — 어�
 소스를 공식으로 쓸지 결정되지 않았다). 둘 중 하나라도 아니면 Job은
 조용히 건너뛰고 경고 로그만 남긴다 — 실제 외부 호출은 이번 Phase에
 전혀 없다.
+
+2026-09-16 개인 베타 잔여 작업(Phase 6, 2-8) — 위 "주문 수집" 절이
+지적했던 게이트 부재 문제가 해소돼 세 번째 Job
+(`ORDER_COLLECTION_TICK_JOB_ID`, 매분 트리거)을 등록했다. 게이트는
+새 모듈 `app.domains.order.auto_collection_scheduler`가 전담한다
+(EmergencyStop/Migration제한모드/`SafetyService.is_function_
+automatic()`/이전실행중복/자격증명만료 5개 모두 확인). 함수모드
+기본값이 MANUAL이므로(공통 규칙: 자동 모드는 명시적으로 켜야만
+동작), 이 Job은 등록만으로는 어떤 회사도 자동 수집하지 않는다 —
+회사가 `FunctionCode.ORDER_COLLECTION`을 AUTOMATIC으로 직접 켠
+뒤에만 그 회사에 한해 동작한다.
 =========================================================
 """
 
@@ -82,6 +93,8 @@ logger = logging.getLogger(__name__)
 
 BACKUP_REHEARSAL_JOB_ID = "weekly_backup_restore_rehearsal"
 RECALL_NOTICE_CHECK_JOB_ID = "daily_recall_notice_check"
+ORDER_COLLECTION_TICK_JOB_ID = "order_collection_tick"
+ORDER_COLLECTION_TICK_INTERVAL_MINUTES = 1
 
 
 def run_backup_rehearsal_job(
@@ -219,6 +232,59 @@ def run_recall_notice_check_job(
         db.close()
 
 
+def run_order_collection_tick_job(
+    *, session_factory: Callable[[], Session] | None = None,
+    credential_store: CredentialStore | None = None,
+) -> None:
+    """2026-09-16 개인 베타 잔여 작업(Phase 6, HOMEZ_USER_OPERATION_
+    SETTINGS.md 2-8) — "신규 주문 5분마다 자동 감지"의 실제 스케줄러
+    Job. 이 함수 자체는 얇은 wrapper다 — 5개 미실행조건 판단·회사
+    순회·연속실패 강등까지 전부 `app.domains.order.
+    auto_collection_scheduler.run_order_collection_tick()`이 한다.
+    이 Job은 1분마다 트리거되지만(설정 가능한 회사별 주기를 outer
+    cron으로는 표현할 수 없어, 매분 깨어나 내부에서 "아직 주기가 안
+    됐다"를 판단하는 tick 패턴을 쓴다 — 기본값 5분이므로 대부분의
+    tick은 즉시 NOT_DUE로 조용히 반환한다), 실제로 뭔가 하려면 위
+    모듈 docstring의 이전 시점 기록(2026-09-10)이 지적했던 게이트
+    부재 문제가 이제 해소됐다."""
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    if credential_store is None:
+        from app.core.windows_credential_store import WindowsCredentialStore
+        credential_store = WindowsCredentialStore()
+
+    db = session_factory()
+    try:
+        from app.domains.order.auto_collection_scheduler import (
+            OrderCollectionTickOutcome,
+            run_order_collection_tick,
+        )
+
+        result = run_order_collection_tick(db, credential_store)
+
+        if result.outcome != "RAN":
+            logger.info("주문 자동 감지 tick 건너뜀: outcome=%s", result.outcome)
+            return
+
+        attempted = [
+            e for e in result.entries
+            if e.outcome != OrderCollectionTickOutcome.NOT_DUE
+        ]
+        if attempted:
+            logger.info(
+                "주문 자동 감지 tick 완료: 시도 %d개 회사 (%s)",
+                len(attempted),
+                ", ".join(f"{e.company_id}={e.outcome}" for e in attempted),
+            )
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("주문 자동 감지 tick Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -266,16 +332,29 @@ def register_all_jobs() -> None:
         job_id=RECALL_NOTICE_CHECK_JOB_ID,
     )
 
+    # 2026-09-16 개인 베타 잔여 작업(Phase 6, 2-8) — 매분 깨어나되,
+    # 실제로 무언가를 시도할지는 회사별 interval_minutes(기본 5분)
+    # 설정이 결정한다(run_order_collection_tick_job 내부).
+    SchedulerService.add_interval_job(
+        run_order_collection_tick_job,
+        minutes=ORDER_COLLECTION_TICK_INTERVAL_MINUTES,
+        job_id=ORDER_COLLECTION_TICK_JOB_ID,
+    )
+
     logger.info(
-        "Scheduler jobs registered: %s, %s",
+        "Scheduler jobs registered: %s, %s, %s",
         BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
+        ORDER_COLLECTION_TICK_JOB_ID,
     )
 
 
 __all__ = [
     "BACKUP_REHEARSAL_JOB_ID",
     "RECALL_NOTICE_CHECK_JOB_ID",
+    "ORDER_COLLECTION_TICK_JOB_ID",
+    "ORDER_COLLECTION_TICK_INTERVAL_MINUTES",
     "run_backup_rehearsal_job",
     "run_recall_notice_check_job",
+    "run_order_collection_tick_job",
     "register_all_jobs",
 ]
