@@ -61,15 +61,30 @@ def _masked_channel_order_id(channel_order_id: str) -> str:
     return "*" * (len(channel_order_id) - 4) + channel_order_id[-4:]
 
 
+RECOVERY_REVIEW_REASON = "EXISTING_ORDER_NOT_FOUND_FOR_NON_ACCEPT_STATUS"
+
+
 @dataclass(frozen=True)
 class RecoveryReviewCandidate:
     """2026-09-17 Phase 7A 사후 감사 2차(Phase 4) — HOMEZ에 Order가
     없는데 ACCEPT 이후 상태로 처음 발견된 주문. 이번 라운드에서는
     이 계약(분류·보고)까지만 구현한다 — 자동으로 Order/PurchaseTask를
     만들지 않으며, 실제 복구 실행(선택적 저장) 기능은 별도 후속
-    작업이다."""
+    작업이다.
 
+    2026-09-18 Phase 7B 진입 전 잔여 4항목 확인(항목 3) — 회사·판매
+    계정·외부 주문·배송 묶음까지 전부 다시 식별할 수 있어야 한다는
+    요구사항에 맞춰 company_id/store_connection_id/마스킹된
+    shipment_box_id를 추가했다. 이 값들은 새 테이블이 아니라 이미
+    커밋되어 있는 `OrderChannelFulfillment` 행(company_id/
+    store_connection_id/channel_order_id/shipment_box_id/raw_status,
+    order_id=NULL)에서 그대로 다시 계산할 수 있다 —
+    `list_recovery_review_candidates()` 참고."""
+
+    company_id: int
+    store_connection_id: int
     masked_channel_order_id: str
+    masked_shipment_box_id: str
     observed_status: str
     observed_at: datetime
     reason: str
@@ -81,6 +96,44 @@ class OrderMaterializationResult:
     orders: dict[str, Order] = field(default_factory=dict)
     recovery_candidates: tuple[RecoveryReviewCandidate, ...] = ()
     rejected_unknown_status_count: int = 0
+
+
+def list_recovery_review_candidates(
+    db: Session, company_id: int, *, store_connection_id: int | None = None,
+) -> list[RecoveryReviewCandidate]:
+    """2026-09-18 Phase 7B 진입 전 잔여 4항목 확인(항목 3) — 복구 후보
+    목록을 별도 테이블 없이, 이미 커밋된 `OrderChannelFulfillment`
+    행에서 그대로 다시 계산한다("응답에만 존재"하지 않고 DB에서
+    다시 조회 가능함을 증명하는 함수). `order_id IS NULL`이면서
+    `raw_status`가 `EXISTING_ORDER_ONLY_STATUSES`에 속하는 행만
+    복구 후보다 — `order_id IS NULL`이지만 상태 자체가 알 수 없는
+    값(`REJECTED_UNKNOWN_STATUS`, fail-closed로 애초에 저장 거부된
+    데이터 품질 문제)은 복구 후보가 아니므로 제외한다. 프로세스
+    재시작 여부와 무관하게(새 DB 세션으로도) 항상 같은 결과를
+    반환한다 — 조회만 하고 아무 것도 쓰지 않는다."""
+
+    query = (
+        db.query(OrderChannelFulfillment)
+        .filter(OrderChannelFulfillment.company_id == company_id)
+        .filter(OrderChannelFulfillment.order_id.is_(None))
+        .filter(OrderChannelFulfillment.raw_status.in_(EXISTING_ORDER_ONLY_STATUSES))
+    )
+    if store_connection_id is not None:
+        query = query.filter(
+            OrderChannelFulfillment.store_connection_id == store_connection_id,
+        )
+    return [
+        RecoveryReviewCandidate(
+            company_id=row.company_id,
+            store_connection_id=row.store_connection_id,
+            masked_channel_order_id=_masked_channel_order_id(row.channel_order_id),
+            masked_shipment_box_id=_masked_channel_order_id(row.shipment_box_id),
+            observed_status=row.raw_status,
+            observed_at=row.ordered_at,
+            reason=RECOVERY_REVIEW_REASON,
+        )
+        for row in query.order_by(OrderChannelFulfillment.id.asc()).all()
+    ]
 
 
 def decimal_to_legacy_float(value: Decimal) -> float:
@@ -151,10 +204,15 @@ class CoupangOrderMaterializationService:
             if order is None:
                 if not new_order_eligible:
                     recovery_candidates.append(RecoveryReviewCandidate(
+                        company_id=company_id,
+                        store_connection_id=store_connection_id,
                         masked_channel_order_id=_masked_channel_order_id(channel_order_id),
+                        masked_shipment_box_id=_masked_channel_order_id(
+                            first.channel_fulfillment_id,
+                        ),
                         observed_status=first.raw_status,
                         observed_at=first.ordered_at.replace(tzinfo=None),
-                        reason="EXISTING_ORDER_NOT_FOUND_FOR_NON_ACCEPT_STATUS",
+                        reason=RECOVERY_REVIEW_REASON,
                     ))
                     continue
                 order = Order(
@@ -389,5 +447,6 @@ __all__ = [
     "decimal_to_legacy_float",
     "NEW_ORDER_ELIGIBLE_STATUSES", "EXISTING_ORDER_ONLY_STATUSES",
     "OrderMaterializationOutcome", "OrderMaterializationResult",
-    "RecoveryReviewCandidate",
+    "RecoveryReviewCandidate", "RECOVERY_REVIEW_REASON",
+    "list_recovery_review_candidates",
 ]

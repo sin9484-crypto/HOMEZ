@@ -22,6 +22,7 @@ from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.order.order_materialization import CoupangOrderMaterializationService
 from app.domains.order.order_materialization import decimal_to_legacy_float
+from app.domains.order.order_materialization import list_recovery_review_candidates
 from tests.test_coupang_order_normalizer import order
 
 
@@ -290,6 +291,110 @@ class CoupangOrderMaterializationTest(unittest.TestCase):
         self.assertEqual(resolved, 0)
         self.db.refresh(items[0])
         self.assertEqual(items[0].status, "MAPPING_REQUIRED")
+
+    # ---- 2026-09-18 Phase 7B 진입 전 잔여 4항목 확인(항목 3) ----------------
+    # 복구 후보가 응답에만 존재하지 않고 DB에 지속적으로 보존되며,
+    # 재조회·재시작 후에도 다시 식별 가능하고 중복되지 않는지 검증한다.
+
+    def test_recovery_candidate_is_reidentifiable_via_dedicated_query(self):
+        normalized = normalize_coupang_order(
+            order(status="FINAL_DELIVERY", orderId=9700, shipmentBoxId=87001234),
+        )
+        CoupangOrderCollectionPersistence(self.db).upsert_fulfillment(1, 10, normalized)
+        result = self.service.ensure_orders(1, 10, [normalized])
+        response_candidate = result.recovery_candidates[0]
+
+        queried = list_recovery_review_candidates(self.db, 1)
+        self.assertEqual(len(queried), 1)
+        stored_candidate = queried[0]
+        self.assertEqual(stored_candidate.company_id, 1)
+        self.assertEqual(stored_candidate.store_connection_id, 10)
+        self.assertEqual(stored_candidate.observed_status, "FINAL_DELIVERY")
+        self.assertEqual(stored_candidate.reason, response_candidate.reason)
+        self.assertEqual(
+            stored_candidate.masked_channel_order_id,
+            response_candidate.masked_channel_order_id,
+        )
+        self.assertNotEqual(stored_candidate.masked_shipment_box_id, "87001234")
+        self.assertTrue(stored_candidate.masked_shipment_box_id.endswith("1234"))
+
+    def test_recovery_candidate_survives_fresh_session_simulating_restart(self):
+        """새 세션(프로세스 재시작에 해당)에서도 같은 결과를 조회할 수
+        있어야 한다 — 별도 테이블이 아니라 이미 커밋된
+        OrderChannelFulfillment 행에서 다시 계산되므로, 원래 세션을
+        완전히 닫아도 사라지지 않는다."""
+
+        normalized = normalize_coupang_order(order(status="DELIVERING", orderId=9701))
+        CoupangOrderCollectionPersistence(self.db).upsert_fulfillment(1, 10, normalized)
+        self.service.ensure_orders(1, 10, [normalized])
+        self.db.close()
+
+        fresh_db = sessionmaker(bind=self.engine)()
+        try:
+            queried = list_recovery_review_candidates(fresh_db, 1)
+            self.assertEqual(len(queried), 1)
+            self.assertEqual(queried[0].observed_status, "DELIVERING")
+        finally:
+            fresh_db.close()
+            self.db = sessionmaker(bind=self.engine)()  # tearDown()이 다시 닫을 수 있도록 복구
+
+    def test_recovery_candidate_requery_does_not_duplicate(self):
+        """같은 외부 주문을 두 번 수집해도(예: 다음 tick에서 같은
+        구간이 겹쳐 다시 조회됨) fulfillment 행이 늘어나지 않고,
+        복구 후보 조회 결과도 여전히 1건이다."""
+
+        normalized = normalize_coupang_order(order(status="INSTRUCT", orderId=9702))
+        persistence = CoupangOrderCollectionPersistence(self.db)
+        persistence.upsert_fulfillment(1, 10, normalized)
+        self.service.ensure_orders(1, 10, [normalized])
+        persistence.upsert_fulfillment(1, 10, normalized)
+        self.service.ensure_orders(1, 10, [normalized])
+
+        self.assertEqual(
+            self.db.query(OrderChannelFulfillment)
+            .filter(OrderChannelFulfillment.channel_order_id == "9702")
+            .count(),
+            1,
+        )
+        queried = list_recovery_review_candidates(self.db, 1)
+        self.assertEqual(len(queried), 1)
+
+    def test_recovery_candidate_fulfillment_persists_despite_later_unrelated_failure(self):
+        """복구 후보의 fulfillment 행은 auto_resolve() 등 이후 단계에서
+        무관한 예외가 나더라도(이미 별도 트랜잭션으로 커밋됐으므로)
+        사라지지 않는다 — "보존되지 않은 후보를 남겨두고 체크포인트만
+        전진시키지 않는다"의 반대 방향(후보 보존은 항상 유지됨)을
+        증명한다."""
+
+        normalized = normalize_coupang_order(order(status="NONE_TRACKING", orderId=9703))
+        CoupangOrderCollectionPersistence(self.db).upsert_fulfillment(1, 10, normalized)
+        self.service.ensure_orders(1, 10, [normalized])
+
+        with patch.object(
+            self.service, "auto_resolve", side_effect=RuntimeError("무관한 이후 단계 실패"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.auto_resolve(1, 10, actor_user_id=1)
+
+        queried = list_recovery_review_candidates(self.db, 1)
+        self.assertEqual(len(queried), 1)
+        self.assertEqual(queried[0].observed_status, "NONE_TRACKING")
+
+    def test_recovery_candidate_query_scoped_by_company_and_connection(self):
+        other_service = CoupangOrderMaterializationService(self.db)
+        persistence = CoupangOrderCollectionPersistence(self.db)
+        normalized_a = normalize_coupang_order(order(status="DEPARTURE", orderId=9704))
+        persistence.upsert_fulfillment(1, 10, normalized_a)
+        self.service.ensure_orders(1, 10, [normalized_a])
+        normalized_b = normalize_coupang_order(order(status="DEPARTURE", orderId=9705))
+        persistence.upsert_fulfillment(1, 11, normalized_b)
+        other_service.ensure_orders(1, 11, [normalized_b])
+
+        self.assertEqual(len(list_recovery_review_candidates(self.db, 1)), 2)
+        self.assertEqual(
+            len(list_recovery_review_candidates(self.db, 1, store_connection_id=10)), 1,
+        )
+        self.assertEqual(len(list_recovery_review_candidates(self.db, 2)), 0)
 
 
 if __name__ == "__main__":
