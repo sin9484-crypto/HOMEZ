@@ -113,3 +113,101 @@
 ## 9. Git
 
 절차 위반 기록(이 문서)과 제품 코드 수정은 별도 커밋으로 분리해 push한다(완료 보고에 커밋 해시 기록).
+
+---
+
+# 2차 후속 — High 결함 수정 및 상태 계약 확정 (2026-09-17, 같은 날 후속 라운드)
+
+1차 라운드(위 1~9절) 커밋(`9671279`, `e8442bf`) 이후 "Phase 7A 사후 감사 및 Phase 7B 전
+안전성 보완"의 연장으로, 실제 코드 감사에서 **완료 상태 과거 주문이 신규 Order로 잘못
+생성될 수 있는 구조적 결함(High)**과 **dry-run 최대 호출 수 축소 표시 결함**을 확인해
+이번 라운드에서 수정했다.
+
+## 10. 확정된 결함
+
+| # | 분류 | 내용 |
+|---|---|---|
+| 1 | High | `CoupangOrderMaterializationService.ensure_orders()`가 저장 직전 상태 검증을 전혀 하지 않아, FINAL_DELIVERY 등 완료 상태로 **처음** 조회된 주문(예: "전체 통합 수집" 6개 상태 버튼 경로)이 신규 `Order`(PENDING)로 생성될 수 있었다. 호출 파라미터(`channel_status`)만 신뢰하고 응답 레코드 자체의 상태를 검증하지 않는 구조였다. |
+| 2 | Medium | `plan_manual_trigger()`의 `max_external_get_calls=len(plans)`가 페이지네이션(연결×상태당 최대 `DEFAULT_MAX_PAGES=100`회)을 반영하지 못해 dry-run이 실제 최대 호출 수를 축소 표시했다(코드 주석 스스로 "페이지 추가 시 더 늘 수 있음"이라 인정하고도 계산하지 않았음). |
+| 3 | 연쇄결함(설계 중 발견) | 결함 1을 상태 가드로 막으면 `OrderChannelFulfillment.order_id`가 `NULL`인 채로 남는 레코드가 생기는데, 기존 `auto_resolve()`가 그런 레코드까지 SKU 자동연결 대상에 포함시켜 `resolve_item()`의 `ConflictException`으로 배치 전체를 실패시킬 수 있었다(결함 1을 고치는 과정에서 새로 드러난 잠재적 회귀 — 같은 커밋에서 함께 수정). |
+
+## 11. 상태 계약 — 확정
+
+`app/domains/order/order_materialization.py`에 단일 출처로 정의(값은 기존
+`adapters/coupang_collection.py::ALLOWED_STATUSES`에서 파생돼 드리프트 불가):
+
+- **A. 신규 주문 자동 생성 허용**: `NEW_ORDER_ELIGIBLE_STATUSES = {"ACCEPT"}`
+- **B. 기존 주문 상태 확인에만 허용**: `EXISTING_ORDER_ONLY_STATUSES = ALLOWED_STATUSES - {"ACCEPT"}`(INSTRUCT/DEPARTURE/DELIVERING/FINAL_DELIVERY/NONE_TRACKING) — 취소·반품·교환은 애초에 이 수집 경로가 조회하는 상태 목록(`ALLOWED_STATUSES`)에 없다(Coupang 발주서 상태 API 자체가 취소/반품 상태를 반환하지 않음, 2절에서 이미 확인).
+- **C. 과거 주문 복구 후보**: `OrderMaterializationOutcome.RECOVERY_REVIEW_REQUIRED` — HOMEZ에 Order가 없는데 ACCEPT 이외 상태로 처음 발견된 주문. 자동 저장하지 않고 `RecoveryReviewCandidate`(마스킹된 식별자·발견상태·발견시각·사유·승인필요여부)로만 보고한다.
+- **판정 우선순위**: 그룹의 `raw_status`(응답 레코드 자체)가 `ALLOWED_STATUSES`에 전혀 없으면 `REJECTED_UNKNOWN_STATUS`(fail-closed, 실패로 집계돼 체크포인트 미전진 → 다음 재시도에서 재확인) → 이미 HOMEZ에 Order가 있으면 상태 무관하게 `UPDATED`(신규 생성 아님) → 없고 ACCEPT면 `CREATED` → 없고 ACCEPT가 아니면 `RECOVERY_REVIEW_REQUIRED`(실패 아님, 체크포인트 정상 전진).
+
+## 12. materialization 저장 경계 수정 — 구현 완료
+
+`ensure_orders()`가 `OrderMaterializationResult(orders, recovery_candidates,
+rejected_unknown_status_count)`를 반환하도록 재작성했다:
+
+- 호출자가 요청한 `channel_status` 파라미터가 아니라 **응답 레코드 자체의 `raw_status`**로
+  판단한다(요구사항 6/11 — 요청 파라미터를 신뢰하지 않는다).
+- FINAL_DELIVERY 등 완료 상태에서 신규 Order/OrderItem/PurchaseTask를 만들지 않는다
+  (`auto_resolve()`도 `order_id IS NOT NULL`인 fulfillment만 대상으로 하도록 같이 고쳐,
+  복구후보 레코드가 SKU 자동연결·PurchaseTask 생성 경로에 들어가지 않게 막았다).
+- 알 수 없는 상태는 fail-closed(저장하지 않고 실패로 집계), 이미 존재하는 Order는 상태와
+  무관하게 정상 갱신(신규 생성이 아님)된다.
+- 개인정보가 아닌 `channel_order_id`도 감사로그·복구후보 표시용으로는 뒤 4자리만 남기고
+  마스킹한다(`_masked_channel_order_id()`).
+
+## 13. 과거 주문 복구 계약 — 이번 라운드 범위(정직 공개)
+
+**구현한 것**: 분류 계약(`RecoveryReviewCandidate`)과 집계(`CoupangCollectionRunResult.
+recovery_review_count`/`recovery_candidates`, `MultiChannelCollectionEntry.
+recovery_review_count`)뿐이다. 자동으로 Order/PurchaseTask를 만들지 않고, 발주·결제도
+호출하지 않는다 — 전부 구조로 보장된다(3절/12절).
+
+**구현하지 않은 것(후속 작업)**: 사용자가 복구 후보를 화면에서 미리보고 선택적으로
+저장하는 UI·API, 완료/취소 주문 기본 선택 해제, 복구 후 중복 방지 로직. 이번 라운드는
+"잘못 생성되지 않는다"는 안전장치까지만 구현했고, "복구를 실제로 실행하는" 기능은
+`RECOVERY_REVIEW_REQUIRED` 판정 하나로 남아 있다 — `HISTORICAL_ORDER_RECOVERY_COMPLETE`
+판정은 아직 내리지 않는다.
+
+## 14. dry-run 호출량 결함 수정 — 구현 완료
+
+`OrderCollectionTriggerPlan`에 `active_connection_count`/`max_pages_per_connection`/
+`min_external_get_calls`/`max_external_get_calls`/`retry_count`/`page_limit_note`를
+추가했다. `max_external_get_calls = len(plans) * DEFAULT_MAX_PAGES`로 페이지 상한까지
+반영한 진짜 최대치를 숨기지 않는다. `DEFAULT_MAX_PAGES=100`은 "평소 정상 페이지 수"가
+아니라 nextToken 무한루프를 막는 안전 상한이라는 설명을 코드 주석으로 남겼고, 공식
+쿠팡 문서에서 정확한 호출 빈도 제한 수치를 찾지 못했으므로 근거 없이 임의로 줄이지
+않았다(기존 결정 유지, `adapters/coupang_collection.py:DEFAULT_MAX_PAGES` 참고).
+`CoupangOrderCollectionProvider.collect()`는 페이지 상한 도달 시 이미
+`PAGE_LIMIT_EXCEEDED`로 완전 실패 처리하고(부분 성공 아님), `run()`의 공통 `if not
+result.success:` 경로가 체크포인트를 전진시키지 않으므로 이 부분은 기존 코드가 이미
+요구사항을 충족하고 있었다(신규 서비스-레벨 회귀 테스트로 고정만 했다).
+
+## 15. 기존 주문 상태 동기화 — 재확인, 변경 없음
+
+코드 재조사 결과 이번 라운드에서도 변경하지 않았다(`NOT_IMPLEMENTED` 그대로):
+`POST /orders/{id}/sync-channel-status`는 `get_order_channel_status_adapter()`가
+채널코드와 무관하게 항상 `FakeOrderChannelStatusAdapter`를 반환해 실제 쿠팡 상태를
+가져오지 못한다(`app/domains/order/adapters/fake_provider.py`) — 이 엔드포인트를 실제
+쿠팡 연동 완료로 판정하지 않는다.
+
+## 16. 테스트 결과
+
+| 범위 | 결과 |
+|---|---|
+| 정규화(`test_coupang_order_normalizer.py`) | 신규 3건(상태 누락/빈 문자열 fail-closed, 다중 품목 정규화) 포함 전체 통과 |
+| materialization(`test_coupang_order_materialization.py`) | 신규 8건(5개 비-ACCEPT 상태 자동생성 금지, 복구후보 마스킹, 기존주문 정상갱신, 미지원상태 fail-closed, 다중품목 합산, 혼합배치, 고아 fulfillment 자동연결 금지) 포함 전체 통과 |
+| 수집서비스(`test_coupang_order_collection_service.py`) | 신규 4건(복구후보 집계+체크포인트 전진, 페이지상한 체크포인트 미전진, 미지원상태 fail-closed, 요청ACCEPT-응답상태다름 차단) 포함 전체 통과 |
+| 멀티채널(`test_order_multi_channel_collection_service.py`) | 신규 1건(recovery_review_count 전파) 포함 전체 통과 |
+| dry-run(`test_order_auto_collection_scheduler.py`) | 최소/최대 GET 분리 검증으로 기존 4건 갱신, 전체 통과 |
+| Phase 8 광역 집중회귀 | order/purchase_task/fulfillment(core·concurrency·e2e)·v7 통합e2e 등 343/343 통과(무실패) |
+| Phase 9 전체 회귀 | `venv/Scripts/python.exe -m unittest discover -s tests -p "test_*.py"` — **4,503개, 실패 0, 오류 0, skip 7, 6,702.613초, exit code 0.** 실제 `homez.db` 마지막 수정시각이 회귀 시작 전이라 회귀 중 실제 DB 무접촉 확인. |
+| UI 격리 검증 | 격리 스크래치 DB(`odo_ui_verify.db`, 서버 포트 8960)+실제 브라우저로 데스크톱·모바일(390×844) 모두 확인 — 확인창이 "최소 1회~최대 100회", 연결 1개, ACCEPT, 페이지상한 안내, 발주·결제 미실행 안내를 정확히 표시했고 실제 계획 API 응답과 100% 일치했다. 실행(확인) 클릭 시 실제 Windows Credential Manager에 없는 가짜 credential_reference라 `provider.collect()` 도달 전 단계(자격증명 조회)에서 400으로 안전하게 실패해 실제 쿠팡 API를 호출하지 않았다. 모바일에서 다이얼로그 폭 343px(뷰포트 390px 안에 완전히 들어감), 페이지 가로 스크롤 없음, 콘솔 오류 없음을 확인했다. |
+
+## 17. 판정
+
+- `ORDER_COLLECTION_ACCEPT_ONLY_ISOLATED_VERIFIED` — 이번 라운드 격리 검증 기준으로 유지.
+- `ORDER_MATERIALIZATION_STATUS_GUARD_VERIFIED` — 12절/16절 근거로 신규 판정.
+- `ORDER_RECOVERY_REVIEW_CONTRACT_IMPLEMENTED` — 13절 범위(분류·집계만) 기준으로 신규 판정. `HISTORICAL_ORDER_RECOVERY_COMPLETE`는 아직 판정하지 않는다.
+- `ORDER_STATUS_SYNC_NOT_IMPLEMENTED` — 15절 근거로 유지.
+- 실제 주문을 전혀 사용하지 않았으므로 `ORDER_COLLECTION_LIVE_VERIFIED`, `V7_PERSONAL_BETA_FLOW_VERIFIED`는 이번에도 판정하지 않는다 — Phase 7B는 별도 승인 후에만 진행한다.

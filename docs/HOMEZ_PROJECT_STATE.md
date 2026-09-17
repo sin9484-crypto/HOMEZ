@@ -1,5 +1,45 @@
 # Current Version
 
+**HOMEZ V7 — Phase 7A 사후 감사 2차: 주문수집 High 결함 수정 + 상태 계약 확정
+(2026-09-17, 같은 날 후속 라운드).**
+
+**확정된 결함과 수정.** 실제 코드 감사에서 High 결함 1건을 발견해 수정했다 —
+`CoupangOrderMaterializationService.ensure_orders()`가 저장 직전 상태 검증이
+없어, FINAL_DELIVERY 등 완료 상태로 **처음** 조회된 과거 주문이 신규 `Order`로
+잘못 생성될 수 있었다("전체 통합 수집" 6개 상태 버튼 경로에서 이론상 가능,
+ACCEPT 전용으로 좁힌 자동/수동 신규감지 경로는 애초에 영향 없음). 응답
+레코드 자체의 `raw_status`(호출 파라미터가 아님)로 판정하도록 저장 경계에
+상태 가드를 추가했다 — ACCEPT만 신규 생성 허용, 나머지 5개 상태는 기존
+Order가 있으면 갱신만 하고 없으면 자동 생성하지 않고 "복구 검토 대상"
+(`RECOVERY_REVIEW_REQUIRED`)으로만 집계한다(자동으로 Order·PurchaseTask를
+만들지 않음 — 발주·결제는 구조적으로 이 경로에서 호출되지 않는다). 이 수정
+과정에서 발견한 연쇄 결함(고아 fulfillment가 SKU 자동연결 경로에 들어가
+배치 전체를 실패시킬 수 있었음)도 같이 막았다. 또한 dry-run 실행계획이
+페이지네이션(연결×상태당 최대 100페이지)을 반영하지 못해 최대 호출 수를
+축소 표시하던 결함도 고쳐 "최소~최대" 두 값을 모두 정직하게 보여주도록
+했다. 상세 근거와 시나리오별 테스트 매핑은
+`docs/audits/20260917_APPROVAL_SCOPE_VIOLATION_AND_ORDER_COLLECTION_STRUCTURE.md`
+10~17절.
+
+**과거 주문 복구는 분류 계약만 구현(정직 공개).** 복구 후보를 자동 저장하지
+않는다는 안전장치는 이번에 완성했지만, 사용자가 후보를 미리보고 선택적으로
+저장하는 실제 복구 실행 기능은 아직 없다 — `ORDER_RECOVERY_REVIEW_CONTRACT_
+IMPLEMENTED`까지만 판정하며 `HISTORICAL_ORDER_RECOVERY_COMPLETE`는 판정하지
+않는다. 기존 주문 상태 동기화(배송·완료 상태 갱신)도 재확인 결과 여전히
+`NOT_IMPLEMENTED`다 — `/orders/{id}/sync-channel-status`는 항상 Fake
+Provider에만 연결돼 있다.
+
+**검증 결과.** Phase 8 광역 집중회귀(order/purchase_task/fulfillment/v7
+통합e2e 등) 343/343 통과, Phase 9 전체 회귀 **4,503개 테스트 실패 0·오류
+0·skip 7·6,702.613초**로 통과했다(회귀 시작 전 시각으로 확인된 `homez.db`
+마지막 수정시각 기준 실제 DB 무접촉). 격리 스크래치 DB+실제 브라우저로
+데스크톱·모바일(390×844) 모두에서 확인창이 실제 계획 API 응답과 정확히
+일치함을 확인했다(가로 스크롤·겹침·콘솔 오류 없음). 실제 쿠팡 API·실제
+주문·발주·결제는 이번 라운드에서도 전혀 호출하지 않았다 — Phase 7B(실제
+테스트 주문)는 별도의 명시적 승인 전까지 진행하지 않는다.
+
+---
+
 **HOMEZ V7 — Phase 7A 사후 감사: 승인범위 위반 기록 + 주문 자동감지 구조 개선
 (2026-09-17).**
 
