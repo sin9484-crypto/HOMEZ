@@ -211,3 +211,168 @@ result.success:` 경로가 체크포인트를 전진시키지 않으므로 이 �
 - `ORDER_RECOVERY_REVIEW_CONTRACT_IMPLEMENTED` — 13절 범위(분류·집계만) 기준으로 신규 판정. `HISTORICAL_ORDER_RECOVERY_COMPLETE`는 아직 판정하지 않는다.
 - `ORDER_STATUS_SYNC_NOT_IMPLEMENTED` — 15절 근거로 유지.
 - 실제 주문을 전혀 사용하지 않았으므로 `ORDER_COLLECTION_LIVE_VERIFIED`, `V7_PERSONAL_BETA_FLOW_VERIFIED`는 이번에도 판정하지 않는다 — Phase 7B는 별도 승인 후에만 진행한다.
+
+---
+
+# 3차 후속 — Phase 7B 진입 전 잔여 4항목 확인·수정 (2026-09-18)
+
+16절의 "UI 격리 검증" 행이 실제로는 (a) 실제 Windows Credential Manager에 임의의
+`credential_reference`로 조회를 시도해 400을 받은 것과 (b) 확인창 표시값 검증만
+했을 뿐, **진짜 성공 경로(주문이 실제로 저장되는 경로)는 검증하지 않았다**는
+지적을 받아 이번 라운드에서 다시 했다. 아래 18~21절은 그 지적에 대한 정정과
+추가 검증이다 — 16절의 원문은 삭제하지 않고 그대로 둔다.
+
+## 18. 격리 브라우저 성공 흐름 검증 (항목 2, 재검증)
+
+**방법 변경.** 이전 라운드(16절)는 실제 `WindowsCredentialStore`에 존재하지
+않는 `credential_reference`를 조회해 400을 받는 방식이었다 — 이는 "실제
+Credential Manager를 실제로 조회했다"는 뜻이라 격리 원칙에 어긋난다는 지적을
+받아들인다. 이번에는 FastAPI의 공식 오버라이드 지점
+(`get_order_credential_store()`/`get_coupang_order_provider_factory()` —
+`app/domains/order/router.py`, 후자는 docstring에 "FastAPI dependency override
+seam for isolated tests"라고 이미 명시돼 있었다)을 사용해 `InMemoryCredentialStore`
++ Fake Provider를 실제 서비스 경로(`app.main:app`, 라우터 코드는 무수정)에
+주입했다. 추가로 다음 두 가지 tripwire를 넣어 오버라이드가 실패하면 그 자리에서
+즉시 예외가 나게 했다(둘 다 이번 검증 스크립트에만 있고, 실제로 한 번도
+발동하지 않았다 — 서버 로그에 에러 0건):
+- `requests.Session.request`/`requests.get`/`requests.post`를 막아 Fake Provider를
+  벗어난 실제 네트워크 호출을 차단.
+- `WindowsCredentialStore.read`/`.exists`를 이번 검증 전용 target_name
+  (`isolated-fake-cred`)에 한해 막아, 오버라이드가 빠진 채 실제 Credential
+  Manager로 새는 경로를 차단(다른 무관한 도메인의 실제 사용은 건드리지 않음 —
+  전역 `HOMEZ_FORBID_REAL_CREDENTIAL_STORE=1`은 media_asset 도메인의 무관한
+  Naver 자격증명 조회 때문에 앱 자체가 뜨지 못해 사용하지 않았다).
+- `FakeCoupangProvider.__init__()`에 자체 assertion을 넣어, 주입된
+  자격증명이 아닌 다른 값이 들어오면 즉시 실패하게 했다.
+
+**검증 결과(격리 스크래치 DB `isolated_success_flow.db`, 서버 포트 8970,
+데스크톱+모바일 390×844 모두):**
+
+| 시나리오 | 확인창 표시 | 실행 결과(현재 상태) | DB 대조 |
+|---|---|---|---|
+| 빈 결과 | 최소 1회~최대 100회, 연결 1개 | **성공** | orders=0, fulfillments=0, cursor 전진 |
+| 합성 신규 주문 1건(ACCEPT) | 동일 | **성공**, 신규 1/중복 0/미연결 1 | orders=1(PENDING, channel_order_id 일치), fulfillments=1(order_id 연결됨), order_items=0(SKU 미매핑), purchase_tasks=0 |
+| 같은 주문 재조회 | 동일 | **성공**, 신규 0/중복 1 | orders/fulfillments 행 수 불변(중복 생성 없음) |
+| 자격증명 없음(두 번째 연결 추가, `isolated-missing-cred`는 InMemoryCredentialStore에도 저장하지 않음) | 연결 2개로 확인창 갱신(최소 2회~최대 200회) | **연결 확인 실패로 건너뜀** — "400: 저장된 쿠팡 연결 정보를 찾을 수 없습니다" | 실패 경로 검증으로만 기록(원칙 7) — `InMemoryCredentialStore.read()`가 던진 `CredentialNotFoundError`이며, 실제 Credential Manager는 조회하지 않았다 |
+
+Order·품목·배송 묶음(`shipment_box_id`)·PurchaseTask·중복 카운터·체크포인트를
+전부 DB 직접 조회로 대조했다(위 표). 확인 후 이번 검증용으로 직접 시작한
+서버(serverId 기준)만 종료했다.
+
+## 19. 복구 후보 보존과 체크포인트 감사 (항목 3)
+
+**계약 보강.** `RecoveryReviewCandidate`에 `company_id`/`store_connection_id`/
+`masked_shipment_box_id`를 추가해(기존 `masked_channel_order_id`/
+`observed_status`/`observed_at`/`reason`과 합쳐) 회사·판매계정·외부 주문·배송
+묶음·상태·사유를 전부 다시 식별할 수 있게 했다. 새 테이블은 만들지 않았다 —
+이미 커밋되어 있는 `OrderChannelFulfillment` 행(`order_id IS NULL` +
+`raw_status IN EXISTING_ORDER_ONLY_STATUSES`)에서 그대로 다시 계산하는 읽기
+전용 함수 `list_recovery_review_candidates()`를 추가했다(신규 Migration
+없음 — 기존 스키마로 충분함을 확인).
+
+**검증한 것:**
+- 후보가 **응답에만 존재하지 않고 DB에 지속적으로 보존됨** — 격리 유닛
+  테스트(`test_recovery_candidate_is_reidentifiable_via_dedicated_query`)와
+  격리 브라우저(18절 두 번째 시나리오를 FINAL_DELIVERY 상태로 바꿔 재실행)
+  양쪽에서, 별도 프로세스(완전히 새로운 Python 인터프리터로 같은 스크래치
+  DB 파일만 열어 조회 — 실행 중이던 서버 프로세스와 무관)로 다시 조회해도
+  같은 후보가 그대로 나옴을 확인했다.
+- **프로세스 재시작에 해당하는 상황**(`test_recovery_candidate_survives_fresh_session_simulating_restart`
+  — DB 세션을 완전히 닫고 새 세션으로 재조회)에서도 사라지지 않음.
+- **재조회 시 중복 방지**(`test_recovery_candidate_requery_does_not_duplicate`) —
+  같은 외부 주문을 두 번 수집해도 fulfillment 행이 늘지 않고 후보도 여전히
+  1건.
+- **후보 보존과 체크포인트 전진 사이의 실패·롤백**
+  (`test_recovery_candidate_fulfillment_persists_despite_later_unrelated_failure`) —
+  후보의 fulfillment 행은 `CoupangOrderCollectionPersistence.upsert_fulfillment()`가
+  독립된 트랜잭션으로 이미 커밋한 것이라, 이후 단계(`auto_resolve()` 등)에서
+  무관한 예외가 나도 사라지지 않는다. 반대로 그 무관한 예외는 `run()`의
+  기존 계약대로 배치 전체를 실패로 집계해 체크포인트를 전진시키지 않는다
+  (기존 코드, 이번에 새로 만들지 않음) — 즉 "후보는 항상 보존되고, 체크포인트는
+  그 배치가 진짜로 끝까지 성공했을 때만 전진한다"가 성립한다.
+- 회사·판매계정별로 범위를 좁혀 조회 가능함
+  (`test_recovery_candidate_query_scoped_by_company_and_connection`).
+- 복구 후보에서 `Order`/`PurchaseTask`·발주·결제가 자동 생성되지 않음은
+  12절/16절에 이미 검증돼 있고, 이번 라운드(18절 표)에서도 재확인했다.
+- 실제 복구 실행 UI(사용자가 후보를 보고 선택 저장하는 화면)는 이번에도
+  범위를 넓히지 않았다 — `list_recovery_review_candidates()`는 읽기 전용
+  헬퍼일 뿐, 이를 노출하는 API/화면은 아직 없다.
+
+## 20. 무접촉 보고 정정 (항목 4)
+
+**정정 대상: 1절/9절/16절 및 이전 대화의 최종 보고에서 "`homez.db` 마지막
+수정시각이 회귀 시작 전이므로 무접촉을 확인했다"고 쓴 부분.** 이 표현은
+부정확했다 — mtime 불변은 **쓰기(write)가 없었다는 증거**일 뿐, 읽기를
+포함한 접근이 전혀 없었다는 증거가 아니다. 원문은 삭제하지 않고 이 절에서
+사실대로 정정한다.
+
+- **더 강한 근거를 재조사해 찾았다**: `app/core/config.py::_default_database_url()`은
+  `DATABASE_URL` 환경변수가 설정되지 않으면 **실제 `homez.db`의 절대경로**로
+  기본값을 계산한다(개발 모드 기준 저장소 루트). Phase 1/Phase 9 전체
+  회귀는 `DATABASE_URL`을 명시적으로 설정하지 않고 실행했으므로, 이론상
+  전역 엔진(`app/database/session.py:engine`)이 이 기본값에 바인딩될 수
+  있었다.
+- 그러나 실제로 확인해 보니: (a) `tests/` 전체에서 `TestClient(app)` 패턴을
+  쓰는 파일이 0개다(전부 도메인 서비스에 자체 임시 SQLite 엔진을 직접
+  주입하는 방식), (b) 전역 `app.database.session.SessionLocal`을 직접
+  import하는 테스트 파일은 1개(`tests/support/coupang_order_collection_e2e_server.py`)
+  뿐이고, 그 파일 자신이 import보다 먼저 `DATABASE_URL`을 스크래치 경로로
+  덮어쓰며, 게다가 이 파일은 어떤 `test_*.py`에서도 참조되지 않아 이번
+  discover 패턴에 애초에 포함되지 않는다, (c) 실제 서버/uvicorn을 다루는
+  `tests/test_homez_desktop.py`는 `get_homez_db_path`/`get_engine_db_path`를
+  자체적으로 mock하여 가짜 DB 경로를 쓴다는 것이 자기 docstring에도 명시돼
+  있다. 이 세 가지가 실제 `homez.db` 무접촉의 **구조적 근거**다(mtime보다
+  훨씬 강한 근거).
+- **그럼에도 "확인 불충분"으로 남기는 부분**: 200여 개 테스트 파일 전부를
+  한 줄씩 읽어 감사하지는 않았다 — 위 (a)~(c)는 grep 기반 정적 조사이며,
+  이번 세션에서 발견하지 못한 예외적 경로가 전혀 없다고 100% 단언할 수는
+  없다. 과거(Phase 1/Phase 9) 실행 당시의 프로세스 수준 파일 핸들을
+  사후에 직접 증명할 방법은 없으므로, "완전히 무접촉이었다"는 최종 결론이
+  아니라 "구조적으로 무접촉일 가능성이 매우 높고, mtime 불변과도 모순되지
+  않는다"까지만 주장한다.
+- **이번 라운드(18절)의 격리 브라우저 검증은 이 문제가 없다** — `DATABASE_URL`을
+  스크래치 경로로 명시적으로 설정했고, 자격증명·Provider를 의존성 오버라이드로
+  교체했으며, 네트워크·자격증명 tripwire가 실제로 발동하지 않았음을 서버
+  로그로 확인했다 — "연결 대상(스크래치 DB 경로)·주입된 저장소(InMemory/Fake)·
+  차단 근거(tripwire 무발동)"로 설명 가능한, 더 신뢰할 수 있는 무접촉
+  증거다.
+- 이 절 어디에도 비밀값·개인정보 원문은 기록하지 않았다.
+
+## 21. 테스트 집계 정정 (항목 5)
+
+**정정 대상: 이전 최종 보고의 "4,486 → 4,503, 신규 16건 + 원인불명 1건"에
+가까운 서술.** 재조사 결과를 사실대로 남긴다(전체 회귀를 다시 실행하지
+않고, `unittest.TestLoader().discover()`로 테스트를 **수집만** 하고 실행하지
+않는 방식과, `git worktree`로 만든 격리 사본에서의 동일 수집으로 확인했다 —
+둘 다 이번 세션에서 새로 발견한 결함을 코드로 수정하기 전, 순수 조사
+단계였다):
+
+| 지점 | discover() 수집 개수 |
+|---|---|
+| `e8442bf`(Phase 1 회귀 대상 커밋, 격리 `git worktree`에서 재확인) | **4,487** |
+| 현재 HEAD(`63fc3f4` 이후) | **4,503** |
+
+`git show 63fc3f4`의 전체 diff에서 `+    def test_` 줄을 직접 센 결과도
+정확히 **16개**였고(파일별: normalizer 3·materialization 8·collection_service
+4·multi_channel 1), 제거되거나 이름이 바뀐 테스트는 0개다. 4,487 + 16 =
+4,503 — **정확히 들어맞는다.**
+
+즉 실제 코드 변경으로 추가된 테스트는 정확히 16개이고(이전 보고와 동일),
+**"17건" 자체가 애초에 잘못된 계산이었다** — Phase 1 전체 회귀 실행 로그가
+보고한 "4,486개"라는 숫자가, 같은 커밋(e8442bf)의 코드를 기준으로 한
+순수 discover() 수집 결과(4,487개)보다 1개 적었을 뿐이다. 이 1개 차이의
+원인(어떤 테스트가 그 특정 실행에서 실행되지 않았는지)은 그 실행 프로세스가
+이미 종료돼 사후에 재현·특정할 수 없으므로 **확인 불충분**으로 남긴다 —
+코드에는 어떤 문제도 없다(위 diff 대조로 확정).
+
+## 22. 판정(3차 후속 갱신)
+
+17절의 판정을 대체하지 않고 다음을 추가로 확정한다:
+
+- `ORDER_COLLECTION_ACCEPT_ONLY_ISOLATED_VERIFIED` — 18절의 진짜 성공 경로
+  격리 검증(빈 결과·신규 1건·재조회 중복없음, DB 대조 포함)으로 **근거를
+  보강**했다(이전에는 실패 경로만 있었다).
+- `ORDER_RECOVERY_REVIEW_CONTRACT_IMPLEMENTED` — 19절의 지속성·재조회·
+  재시작·격리 브라우저 검증으로 근거를 보강했다.
+- 실제 신규 주문을 실제 쿠팡 API로 수집한 적은 여전히 없으므로
+  `ORDER_COLLECTION_LIVE_VERIFIED`는 부여하지 않는다.
