@@ -1,5 +1,56 @@
 # Current Version
 
+**HOMEZ V7 — Phase 7A 사후 감사: 승인범위 위반 기록 + 주문 자동감지 구조 개선
+(2026-09-17).**
+
+**절차 결함 — 삭제·소급해석 없이 사실대로 기록.** Phase 7A(주문 자동감지 빈 결과
+수동 실행 승인)에서 승인은 쿠팡 ACCEPT 상태 GET **1회**였으나, 실제로는
+"지금 확인" 버튼이 호출하는 `run_all()`이 연결당 지원하는 6개 상태
+(ACCEPT/INSTRUCT/DEPARTURE/DELIVERING/FINAL_DELIVERY/NONE_TRACKING)를 전부
+순회하는 기존 설계를 실행 전에 확인하지 않아 GET **6회**가 실행됐다
+(`APPROVAL_SCOPE_VIOLATION`, 외부 쓰기·발주·결제·개인정보 노출 없음, DB 변경은
+감사로그 2행/체크포인트 6행/실행상태 1행 갱신에 한정). 전체 기록은
+`docs/audits/20260917_APPROVAL_SCOPE_VIOLATION_AND_ORDER_COLLECTION_STRUCTURE.md`.
+
+**구조 개선(구현 완료, 이번 라운드에서는 코드만 — 실제 API 미호출).**
+`createdAt` 필터가 주문 **생성** 시각 기준이라 좁은 시간창으로 비-ACCEPT
+5개 상태를 조회해도 "기존 주문의 상태 변경"을 구조적으로 포착할 수 없음을
+코드 근거로 확인했다(2절). 이에 따라 자동 tick과 수동 "지금 확인" 양쪽의
+신규 주문 감지 경로를 `NEW_ORDER_DETECTION_STATUSES = {"ACCEPT"}` 하나로
+좁혔다(`app/domains/order/auto_collection_scheduler.py`). 기존 "전체 통합
+수집" 수동 버튼(`POST /orders/collect/all`)은 의도적으로 그대로 6개 상태
+전부를 유지한다(범위 밖, 사용자가 직접 누르는 전체 점검 도구). 계정당
+호출량은 최대 하루 1,728회 → 288회로 감소(83%).
+
+- 실행 전 dry-run 계획 API 신설: `GET /orders/collection-ops/plan`
+  (`plan_manual_trigger()`, 외부 호출·DB 쓰기 0) — Console "지금 확인" 버튼이
+  이제 실행 전 이 계획을 확인창으로 보여주고 사용자가 한 번 더 확인해야
+  실제 실행으로 넘어간다(`app/web/console.js`).
+- `is_restricted_mode()` false positive 근본 수정: 서버 lifespan을 거치지
+  않는 독립 스크립트에서 프로세스 전역 캐시가 비어 있으면 예전엔 무조건
+  제한 모드로 fail-close했으나, 이제 그 자리에서 지연 진단
+  (`refresh_restricted_mode_state()`, 읽기 전용)을 수행한다 — 진단 실패·
+  실제 pending 존재 시에는 여전히 fail-closed(`app/core/
+  migration_restricted_mode.py`). 실제 서버·스케줄러는 애초에 lifespan에서
+  미리 초기화되므로 이 결함의 영향을 받지 않았음을 코드로 확인.
+- 신규/변경 테스트: `test_order_auto_collection_scheduler.py`(13→19),
+  `test_order_multi_channel_collection_service.py`(6→8),
+  `test_migration_restricted_mode.py`(42→46),
+  `test_coupang_order_collection_service.py`(5→6, 교차 상태 중복 방지 공백
+  보완) — 집중 회귀 224/224 통과. 전체 4,464건 회귀는 공용 수집 서비스
+  계약 변경(`run_all(statuses=...)`)에 따라 진행 중이며 결과는 다음 갱신에
+  반영한다.
+
+**남은 제한(정직 공개).** 기존 주문의 상태 동기화(배송중→배송완료 등)와
+배송 추적은 이번 라운드 범위 밖이다 — `createdAt` 필터의 구조적 한계로 이
+경로로는 애초에 달성 불가능하며, 별도 메커니즘(예: 개별 주문 재조회)이
+필요하다. dry-run 계획은 시간창·최대 호출횟수만 미리 보여주며 실제 예상
+주문 **건수**는 API를 호출하지 않고는 알 수 없다. Phase 7B(실제 테스트
+주문 실행)는 이 보고 이후 별도의 명시적 사용자 승인 전까지 진행하지
+않는다.
+
+---
+
 **HOMEZ V7 — 중앙 운영 알림 인수 보완(Codex, 2026-08-23).**
 직전 Gate PT-3의 기반을 유지하면서 카탈로그 정의만 있던 이벤트 중
 7개를 실제 서비스 커밋 완료 지점에 연결했다. 현재 `wired=True`는
