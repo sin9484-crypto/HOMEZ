@@ -6343,9 +6343,12 @@
       const body = [
         HomezI18n.t("odo.trigger_confirm_connections", { count: plan.connections.length }),
         HomezI18n.t("odo.trigger_confirm_statuses", { statuses: plan.statuses.join(", ") }),
-        HomezI18n.t("odo.trigger_confirm_max_calls", { count: plan.max_external_get_calls }),
+        HomezI18n.t("odo.trigger_confirm_calls_range", {
+          min: plan.min_external_get_calls, max: plan.max_external_get_calls,
+        }),
         HomezI18n.t("odo.trigger_confirm_window", { window: windowText }),
         HomezI18n.t("odo.trigger_confirm_writes"),
+        plan.page_limit_note,
         plan.note,
       ].join("\n");
 

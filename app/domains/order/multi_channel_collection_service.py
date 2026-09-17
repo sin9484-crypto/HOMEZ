@@ -48,6 +48,9 @@ class MultiChannelCollectionEntry:
     # 추가했다(기본값 있음 — 위치 인자로 생성하는 기존 호출부를
     # 깨지 않는다).
     new_unresolved_item_count: int = 0
+    # 2026-09-17 Phase 7A 사후 감사 2차 — ACCEPT가 아닌 상태로 처음
+    # 발견됐지만 HOMEZ에 대응 Order가 없는 주문(복구 검토 대상) 수.
+    recovery_review_count: int = 0
     error_codes: tuple[str, ...] = ()
 
 
@@ -112,6 +115,7 @@ def _run_coupang_connection(
             duplicate_fulfillment_count=result.duplicate_fulfillment_count,
             failed_order_count=result.failed_order_count,
             new_unresolved_item_count=result.new_unresolved_item_count,
+            recovery_review_count=result.recovery_review_count,
             error_codes=result.error_codes,
         ))
     return entries

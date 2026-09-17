@@ -26,6 +26,7 @@ from app.domains.order.coupang_normalizer import normalize_coupang_order
 from app.domains.order.order_materialization import (
     CoupangOrderMaterializationService,
 )
+from app.domains.order.order_materialization import RecoveryReviewCandidate
 from app.domains.store_connection.model import StoreConnection
 
 
@@ -41,6 +42,12 @@ class CoupangCollectionRunResult:
     duplicate_fulfillment_count: int = 0
     new_unresolved_item_count: int = 0
     failed_order_count: int = 0
+    # 2026-09-17 Phase 7A 사후 감사 2차(Phase 3/4) — ACCEPT가 아닌
+    # 상태로 처음 발견됐지만 HOMEZ에 대응하는 Order가 없는 주문. 자동
+    # 생성하지 않고 여기 개수·마스킹된 식별자로만 보고한다(실패로
+    # 세지 않음 — 체크포인트는 정상 전진한다).
+    recovery_review_count: int = 0
+    recovery_candidates: tuple[RecoveryReviewCandidate, ...] = ()
     error_codes: tuple[str, ...] = ()
 
 
@@ -188,10 +195,11 @@ class CoupangOrderCollectionService:
                     failed += 1
                     error_codes.append("ORDER_PERSISTENCE_FAILED")
 
+        recovery_candidates: tuple[RecoveryReviewCandidate, ...] = ()
         if normalized_orders:
             try:
                 materializer = CoupangOrderMaterializationService(self.db)
-                materializer.ensure_orders(
+                materialization = materializer.ensure_orders(
                     company_id, connection_id, normalized_orders,
                 )
                 materializer.auto_resolve(
@@ -203,6 +211,16 @@ class CoupangOrderCollectionService:
                 self.db.rollback()
                 failed += 1
                 error_codes.append("ORDER_MATERIALIZATION_FAILED")
+            else:
+                # 2026-09-17 Phase 7A 사후 감사 2차 — 알 수 없는 상태는
+                # fail-closed(실패로 집계, 체크포인트 미전진 → 다음
+                # 재시도에서 다시 조회됨). 복구 검토 대상은 정상적으로
+                # 예상되는 결과이므로 실패로 세지 않는다(체크포인트는
+                # 정상 전진).
+                recovery_candidates = materialization.recovery_candidates
+                if materialization.rejected_unknown_status_count:
+                    failed += materialization.rejected_unknown_status_count
+                    error_codes.append("UNKNOWN_ORDER_STATUS")
 
         if failed:
             position_service.fail(
@@ -224,6 +242,8 @@ class CoupangOrderCollectionService:
             duplicate_fulfillment_count=duplicate_fulfillments,
             new_unresolved_item_count=new_unresolved,
             failed_order_count=failed,
+            recovery_review_count=len(recovery_candidates),
+            recovery_candidates=recovery_candidates,
             error_codes=tuple(dict.fromkeys(error_codes)),
         )
 

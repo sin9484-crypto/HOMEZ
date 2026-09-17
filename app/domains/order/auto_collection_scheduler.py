@@ -510,14 +510,27 @@ class OrderCollectionTriggerPlan:
     것도 쓰지 않는다** — `OrderCollectionCursorService.preview_window()`
     (기존, 락도 안 잡고 쓰기도 안 하는 순수 조회)만 재사용한다.
     수동 확인창(Phase 7A 요구사항 5)과 실제 실행이 반드시 이 함수
-    하나를 공유해야 화면 표시와 실행 계획이 어긋나지 않는다."""
+    하나를 공유해야 화면 표시와 실행 계획이 어긋나지 않는다.
+
+    2026-09-17 Phase 7A 사후 감사 2차(결함 1) — 이전 버전은
+    `max_external_get_calls=len(plans)`로 "연결당 GET 1회"만 가정해
+    페이지네이션을 반영하지 못했다(코드 주석으로 스스로 인정하고도
+    계산하지 않았음). 쿠팡 주문조회는 연결×상태 1개당 최소 1회에서
+    최대 `DEFAULT_MAX_PAGES`(100)회까지 GET을 호출할 수 있으므로
+    (`adapters/coupang_collection.py`), 최소·최대를 모두 계산해
+    숨기지 않는다."""
 
     company_id: int
     connections: tuple[OrderCollectionConnectionPlan, ...]
     statuses: tuple[str, ...]
+    active_connection_count: int
+    max_pages_per_connection: int
+    min_external_get_calls: int
     max_external_get_calls: int
+    retry_count: int
     will_write_order_or_purchase_task: bool
     will_submit_purchase_order_or_payment: bool
+    page_limit_note: str = ""
     note: str = ""
 
 
@@ -528,6 +541,7 @@ def plan_manual_trigger(
     한다 — 승인 지점(Phase 7B 이전의 확인창 등)에서 이 함수의 결과를
     그대로 사용자에게 보여줘야 한다."""
 
+    from app.domains.order.adapters.coupang_collection import DEFAULT_MAX_PAGES
     from app.domains.order.collection_service import OrderCollectionCursorService
 
     now = now or datetime.utcnow()
@@ -557,9 +571,19 @@ def plan_manual_trigger(
         company_id=company_id,
         connections=tuple(plans),
         statuses=tuple(sorted(NEW_ORDER_DETECTION_STATUSES)),
-        max_external_get_calls=len(plans),  # 연결당 상태 1개 = GET 최대 1회(페이지 추가 시 더 늘 수 있음)
+        active_connection_count=len(connections),
+        max_pages_per_connection=DEFAULT_MAX_PAGES,
+        min_external_get_calls=len(plans),  # 페이지네이션 없음(연결×상태 1개당 1회)
+        max_external_get_calls=len(plans) * DEFAULT_MAX_PAGES,  # 연결×상태마다 페이지 상한까지 소진되는 최악의 경우
+        retry_count=0,
         will_write_order_or_purchase_task=True,
         will_submit_purchase_order_or_payment=False,
+        page_limit_note=(
+            f"연결당 페이지 상한({DEFAULT_MAX_PAGES}페이지)에 도달하면 "
+            "그 연결의 이번 실행은 실패로 처리되고 저장된 내용 없이 "
+            "다음 실행에서 같은 구간을 재시도합니다 — 부분 성공으로 "
+            "처리하지 않습니다."
+        ),
         note=(
             "발주·결제·상품등록은 이 실행에서 절대 호출되지 않습니다 — "
             "신규 주문을 읽어 HOMEZ 주문/매입작업 대기열에만 반영합니다."

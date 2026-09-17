@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -13,10 +15,12 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
+from app.core.logger import logger
 from app.domains.automation_safety.service import SafetyService
 from app.domains.inventory.model import InventorySku
 from app.domains.inventory.schema import InventoryReserveRequest
 from app.domains.inventory.service import InventoryService
+from app.domains.order.adapters.coupang_collection import ALLOWED_STATUSES
 from app.domains.order.collection_model import OrderChannelFulfillment
 from app.domains.order.collection_model import OrderSkuResolution
 from app.domains.order.collection_model import UnresolvedOrderItem
@@ -28,6 +32,55 @@ from app.domains.order.model import OrderItem
 
 
 MONEY_SCALE = Decimal("0.0001")
+
+# 2026-09-17 Phase 7A 사후 감사 2차(결함 2, High) — 처음 보는
+# channel_order_id를 신규 Order로 만들어도 되는지는 호출자가 어떤
+# status로 조회했는지가 아니라, 응답 레코드 자체의 raw_status로
+# 판단한다(요구사항 11 — 호출 파라미터를 신뢰하지 않는다). ACCEPT만
+# "신규 주문"이라는 의미가 있고, 나머지 5개(ALLOWED_STATUSES에서
+# ACCEPT를 뺀 값)는 "이미 HOMEZ에 있어야 정상인 주문"이므로 그
+# 상태로 처음 발견되면 자동 생성하지 않고 복구 검토 대상으로만
+# 남긴다. 두 집합은 ALLOWED_STATUSES 하나에서 파생되므로 새 상태가
+# 추가돼도 둘 중 하나에 명시적으로 배정하기 전까지는 아래
+# REJECTED_UNKNOWN_STATUS 분기로 fail-closed된다.
+NEW_ORDER_ELIGIBLE_STATUSES = frozenset({"ACCEPT"})
+EXISTING_ORDER_ONLY_STATUSES = ALLOWED_STATUSES - NEW_ORDER_ELIGIBLE_STATUSES
+
+
+class OrderMaterializationOutcome:
+    CREATED = "CREATED"
+    UPDATED = "UPDATED"
+    RECOVERY_REVIEW_REQUIRED = "RECOVERY_REVIEW_REQUIRED"
+    REJECTED_UNKNOWN_STATUS = "REJECTED_UNKNOWN_STATUS"
+
+
+def _masked_channel_order_id(channel_order_id: str) -> str:
+    """감사로그·복구후보 표시용 — 뒤 4자리만 남기고 마스킹한다."""
+    if len(channel_order_id) <= 4:
+        return "*" * len(channel_order_id)
+    return "*" * (len(channel_order_id) - 4) + channel_order_id[-4:]
+
+
+@dataclass(frozen=True)
+class RecoveryReviewCandidate:
+    """2026-09-17 Phase 7A 사후 감사 2차(Phase 4) — HOMEZ에 Order가
+    없는데 ACCEPT 이후 상태로 처음 발견된 주문. 이번 라운드에서는
+    이 계약(분류·보고)까지만 구현한다 — 자동으로 Order/PurchaseTask를
+    만들지 않으며, 실제 복구 실행(선택적 저장) 기능은 별도 후속
+    작업이다."""
+
+    masked_channel_order_id: str
+    observed_status: str
+    observed_at: datetime
+    reason: str
+    requires_user_approval: bool = True
+
+
+@dataclass(frozen=True)
+class OrderMaterializationResult:
+    orders: dict[str, Order] = field(default_factory=dict)
+    recovery_candidates: tuple[RecoveryReviewCandidate, ...] = ()
+    rejected_unknown_status_count: int = 0
 
 
 def decimal_to_legacy_float(value: Decimal) -> float:
@@ -53,12 +106,14 @@ class CoupangOrderMaterializationService:
         company_id: int,
         store_connection_id: int,
         normalized_orders: list[NormalizedCoupangOrder],
-    ) -> dict[str, Order]:
+    ) -> OrderMaterializationResult:
         grouped: dict[str, list[NormalizedCoupangOrder]] = defaultdict(list)
         for record in normalized_orders:
             grouped[record.channel_order_id].append(record)
 
         result: dict[str, Order] = {}
+        recovery_candidates: list[RecoveryReviewCandidate] = []
+        rejected_unknown_status_count = 0
         channel_code = self._channel_code(store_connection_id)
         for channel_order_id, records in grouped.items():
             order = (
@@ -69,11 +124,39 @@ class CoupangOrderMaterializationService:
                 .first()
             )
             first = records[0]
+            # 2026-09-17 Phase 7A 사후 감사 2차(요구사항 6/7/10/11) —
+            # 호출자가 어떤 status로 조회를 요청했는지가 아니라, 응답
+            # 레코드 자체의 raw_status로 저장 가능 여부를 판단한다.
+            # 그룹 내 레코드들의 raw_status가 서로 다르면(정상적으로는
+            # 발생하지 않아야 하지만) 가장 보수적으로 판단한다 — 하나라도
+            # 신규생성 비대상이면 전체를 신규생성 비대상으로 취급한다.
+            observed_statuses = {r.raw_status for r in records}
+            if not observed_statuses <= ALLOWED_STATUSES:
+                rejected_unknown_status_count += 1
+                logger.warning(
+                    "ORDER_MATERIALIZATION_UNKNOWN_STATUS company_id=%s "
+                    "store_connection_id=%s masked_channel_order_id=%s "
+                    "statuses=%s",
+                    company_id, store_connection_id,
+                    _masked_channel_order_id(channel_order_id),
+                    sorted(observed_statuses - ALLOWED_STATUSES),
+                )
+                continue
+
+            new_order_eligible = observed_statuses <= NEW_ORDER_ELIGIBLE_STATUSES
             total = sum(
                 (item.order_price.amount for record in records for item in record.items),
                 Decimal("0"),
             )
             if order is None:
+                if not new_order_eligible:
+                    recovery_candidates.append(RecoveryReviewCandidate(
+                        masked_channel_order_id=_masked_channel_order_id(channel_order_id),
+                        observed_status=first.raw_status,
+                        observed_at=first.ordered_at.replace(tzinfo=None),
+                        reason="EXISTING_ORDER_NOT_FOUND_FOR_NON_ACCEPT_STATUS",
+                    ))
+                    continue
                 order = Order(
                     company_id=company_id, channel_code=channel_code,
                     channel_order_id=channel_order_id, status=OrderStatus.PENDING,
@@ -120,7 +203,11 @@ class CoupangOrderMaterializationService:
             self.db.commit()
             self.db.refresh(order)
             result[channel_order_id] = order
-        return result
+        return OrderMaterializationResult(
+            orders=result,
+            recovery_candidates=tuple(recovery_candidates),
+            rejected_unknown_status_count=rejected_unknown_status_count,
+        )
 
     def _inventory_sku(self, company_id: int, inventory_sku_id: int) -> InventorySku:
         sku = (
@@ -274,6 +361,14 @@ class CoupangOrderMaterializationService:
             .filter(UnresolvedOrderItem.company_id == company_id)
             .filter(UnresolvedOrderItem.status == "MAPPING_REQUIRED")
             .filter(OrderChannelFulfillment.store_connection_id == store_connection_id)
+            # 2026-09-17 Phase 7A 사후 감사 2차 — ensure_orders()가 복구
+            # 검토 대상(RECOVERY_REVIEW_REQUIRED)으로 분류해 order_id를
+            # 연결하지 않은 fulfillment는 여기서도 건너뛴다. 그런 항목을
+            # resolve_item()에 넘기면 "연결할 HOMEZ 주문이 아직 준비되지
+            # 않았습니다" ConflictException이 발생해 이 배치 전체의
+            # 자동연결이 중단된다 — 복구 승인 전까지는 자동으로 손대지
+            # 않는 것이 정책이므로 애초에 대상에서 제외한다.
+            .filter(OrderChannelFulfillment.order_id.isnot(None))
             .all()
         )
         resolved = 0
@@ -292,4 +387,7 @@ class CoupangOrderMaterializationService:
 __all__ = [
     "CoupangOrderMaterializationService", "MONEY_SCALE",
     "decimal_to_legacy_float",
+    "NEW_ORDER_ELIGIBLE_STATUSES", "EXISTING_ORDER_ONLY_STATUSES",
+    "OrderMaterializationOutcome", "OrderMaterializationResult",
+    "RecoveryReviewCandidate",
 ]

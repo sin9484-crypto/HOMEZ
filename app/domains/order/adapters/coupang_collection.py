@@ -29,6 +29,15 @@ ALLOWED_STATUSES = frozenset({
     "FINAL_DELIVERY", "NONE_TRACKING",
 })
 MAX_WINDOW = timedelta(hours=24)
+# 2026-09-17 Phase 7A 사후 감사 2차(Phase 5) — 이 값은 "평소 정상
+# 페이지 수"가 아니라 nextToken이 계속 반환되는 비정상 상황(Provider
+# 버그·응답 변조 등)에서 무한루프를 막는 안전 상한이다. 정상적인
+# 5분 tick·ACCEPT 단일 상태 조회에서는 사실상 도달하지 않는다.
+# 쿠팡 공식 문서에서 호출 빈도 제한의 구체 수치를 확인하지 못했으므로
+# (근거 없이) 임의로 줄이지 않았다 — 대신 dry-run 계획(`auto_
+# collection_scheduler.py::plan_manual_trigger()`)이 이 값을 그대로
+# 읽어 "최대 GET 횟수"에 정직하게 반영한다(생성자 인자로 계속 override
+# 가능한 설정값이며, 낮출 근거가 생기면 이 상수만 바꾸면 된다).
 DEFAULT_MAX_PAGES = 100
 
 

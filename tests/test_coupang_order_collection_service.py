@@ -149,6 +149,69 @@ class CoupangOrderCollectionServiceTest(unittest.TestCase):
         self.assertEqual(self.db.query(Order).count(), 1)
         self.assertEqual(self.db.query(OrderChannelFulfillment).count(), 1)
 
+    def test_run_reports_recovery_review_count_and_still_advances_checkpoint(self):
+        result = CoupangOrderCollectionResult(
+            True,
+            pages=(CoupangOrderPage((order(status="FINAL_DELIVERY"),), None),),
+            http_status=200,
+        )
+        service, _ = self.service(result)
+        response = service.run(1, self.connection.id, "FINAL_DELIVERY")
+        self.assertEqual(response.status, "SUCCEEDED")
+        self.assertEqual(response.recovery_review_count, 1)
+        self.assertEqual(len(response.recovery_candidates), 1)
+        self.assertEqual(self.db.query(Order).count(), 0)
+        position = self.db.query(OrderCollectionCursor).one()
+        self.assertIsNotNone(position.last_successful_to)
+
+    def test_page_limit_exceeded_does_not_advance_checkpoint(self):
+        result = CoupangOrderCollectionResult(
+            False, error_code="PAGE_LIMIT_EXCEEDED",
+            error_summary="쿠팡 주문 조회의 안전 페이지 한도를 초과했습니다.",
+            http_status=200,
+        )
+        service, _ = self.service(result)
+        response = service.run(1, self.connection.id, "ACCEPT")
+        self.assertEqual(response.status, "FAILED")
+        self.assertEqual(response.error_codes, ("PAGE_LIMIT_EXCEEDED",))
+        position = self.db.query(OrderCollectionCursor).one()
+        self.assertIsNone(position.last_successful_to)
+
+    def test_request_accept_but_response_status_differs_blocks_new_order(self):
+        """요청 파라미터는 ACCEPT였지만 응답 레코드 자체의 raw_status가
+        DELIVERING(알려진 값이지만 신규생성 비대상)이면, 처음 보는
+        주문이라도 신규 Order를 만들지 않고 복구 검토로만 분류한다 —
+        호출 파라미터를 신뢰하지 않는다는 요구사항의 핵심 시나리오."""
+
+        result = CoupangOrderCollectionResult(
+            True,
+            pages=(CoupangOrderPage((order(status="DELIVERING"),), None),),
+            http_status=200,
+        )
+        service, _ = self.service(result)
+        response = service.run(1, self.connection.id, "ACCEPT")
+        self.assertEqual(response.status, "SUCCEEDED")
+        self.assertEqual(response.recovery_review_count, 1)
+        self.assertEqual(self.db.query(Order).count(), 0)
+
+    def test_unknown_status_from_provider_response_is_fail_closed(self):
+        """요청은 ACCEPT였지만 응답 레코드 자체의 상태가 다르고, 그
+        상태가 어떤 알려진 값도 아니면 저장하지 않고 실패로 집계해
+        체크포인트를 전진시키지 않는다 — 다음 재시도에서 다시 잡힌다."""
+
+        result = CoupangOrderCollectionResult(
+            True,
+            pages=(CoupangOrderPage((order(status="SOME_FUTURE_STATUS"),), None),),
+            http_status=200,
+        )
+        service, _ = self.service(result)
+        response = service.run(1, self.connection.id, "ACCEPT")
+        self.assertEqual(response.status, "PARTIAL")
+        self.assertIn("UNKNOWN_ORDER_STATUS", response.error_codes)
+        self.assertEqual(self.db.query(Order).count(), 0)
+        position = self.db.query(OrderCollectionCursor).one()
+        self.assertIsNone(position.last_successful_to)
+
     def test_company_isolation_and_connection_state_are_fail_closed(self):
         service, _ = self.service(CoupangOrderCollectionResult(True))
         with self.assertRaises(NotFoundException):

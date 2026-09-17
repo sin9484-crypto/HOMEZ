@@ -221,7 +221,14 @@ class OrderAutoCollectionSchedulerTestCase(unittest.TestCase):
         self.assertEqual(plan.statuses, ("ACCEPT",))
         self.assertEqual(len(plan.connections), 1)
         self.assertEqual(plan.connections[0].status, "ACCEPT")
-        self.assertEqual(plan.max_external_get_calls, 1)
+        self.assertEqual(plan.active_connection_count, 1)
+        self.assertEqual(plan.min_external_get_calls, 1)
+        # 2026-09-17 Phase 7A 사후 감사 2차(결함 1) — 최대치는
+        # 페이지네이션 상한(DEFAULT_MAX_PAGES)까지 반영해야 하며 최소치와
+        # 같아서는 안 된다(숨기지 않는다).
+        self.assertEqual(plan.max_external_get_calls, plan.max_pages_per_connection)
+        self.assertGreater(plan.max_external_get_calls, plan.min_external_get_calls)
+        self.assertEqual(plan.retry_count, 0)
         self.assertFalse(plan.will_submit_purchase_order_or_payment)
 
     def test_plan_scales_with_number_of_connected_connections(self):
@@ -231,11 +238,14 @@ class OrderAutoCollectionSchedulerTestCase(unittest.TestCase):
         plan = plan_manual_trigger(self.db, 1, now=T0)
 
         self.assertEqual(len(plan.connections), 2)
-        self.assertEqual(plan.max_external_get_calls, 2)
+        self.assertEqual(plan.min_external_get_calls, 2)
+        self.assertEqual(plan.max_external_get_calls, 2 * plan.max_pages_per_connection)
 
     def test_plan_matches_actual_trigger_call_count(self):
-        """확인창(계획)과 실제 실행이 같은 횟수를 말해야 한다 —
-        설명과 실행이 어긋나지 않는지의 핵심 검증."""
+        """확인창(계획)의 최소 호출 수는 실제로 페이지네이션이 없는
+        실행의 실제 호출 횟수와 정확히 일치해야 한다 — 설명과 실행이
+        어긋나지 않는지의 핵심 검증. 최대 호출 수는 실제 호출 횟수보다
+        작을 수 없다(페이지 상한까지의 이론적 상한이므로)."""
 
         self._make_connection(cred_name="cred-1")
         plan = plan_manual_trigger(self.db, 1, now=T0)
@@ -248,7 +258,8 @@ class OrderAutoCollectionSchedulerTestCase(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(plan.max_external_get_calls, len(calls))
+        self.assertEqual(plan.min_external_get_calls, len(calls))
+        self.assertGreaterEqual(plan.max_external_get_calls, len(calls))
 
     def test_plan_excludes_disconnected_connections(self):
 
@@ -258,6 +269,8 @@ class OrderAutoCollectionSchedulerTestCase(unittest.TestCase):
 
         plan = plan_manual_trigger(self.db, 1, now=T0)
         self.assertEqual(len(plan.connections), 0)
+        self.assertEqual(plan.active_connection_count, 0)
+        self.assertEqual(plan.min_external_get_calls, 0)
         self.assertEqual(plan.max_external_get_calls, 0)
 
     # ---------------- 1) 신규주문수집 ----------------

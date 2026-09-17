@@ -2811,7 +2811,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "odo.trigger_confirm_title": "지금 확인을 실행할까요?",
   "odo.trigger_confirm_connections": "조회할 판매계정 수: {count}개",
   "odo.trigger_confirm_statuses": "조회할 주문상태: {statuses}",
-  "odo.trigger_confirm_max_calls": "예상 외부 조회(GET) 최대 횟수: {count}회",
+  "odo.trigger_confirm_calls_range": "예상 외부 조회(GET) 횟수: 최소 {min}회 ~ 최대 {max}회(페이지 상한 도달 시)",
   "odo.trigger_confirm_window": "조회 시간 범위: {window}",
   "odo.trigger_confirm_writes": "신규 주문만 HOMEZ 주문·매입작업 대기열에 기록됩니다.",
   "odo.pause_btn": "일시중지",

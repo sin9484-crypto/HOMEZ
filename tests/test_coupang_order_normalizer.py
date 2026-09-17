@@ -81,6 +81,26 @@ class CoupangOrderNormalizerTest(unittest.TestCase):
         )
         self.assertEqual(result.items[0].channel_sku, "123")
 
+    def test_missing_status_fails_closed(self):
+        raw = order()
+        del raw["status"]
+        with self.assertRaises(CoupangOrderNormalizationError):
+            normalize_coupang_order(raw)
+
+    def test_empty_status_fails_closed(self):
+        with self.assertRaises(CoupangOrderNormalizationError):
+            normalize_coupang_order(order(status=""))
+
+    def test_multiple_order_items_are_all_normalized(self):
+        result = normalize_coupang_order(order(orderItems=[
+            item(sequenceNo="001", vendorItemId=1),
+            item(sequenceNo="002", vendorItemId=2),
+        ]))
+        self.assertEqual(len(result.items), 2)
+        self.assertEqual(
+            [i.channel_item_id for i in result.items], ["001", "002"],
+        )
+
     def test_negative_or_inconsistent_quantity_fails_closed(self):
         for changed in (
             {"shippingCount": -1},

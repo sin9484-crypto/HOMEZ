@@ -177,9 +177,14 @@ class OrderCollectionOpsPlanResponse(BaseModel):
     company_id: int
     connections: list[OrderCollectionPlanConnectionResponse]
     statuses: list[str]
+    active_connection_count: int
+    max_pages_per_connection: int
+    min_external_get_calls: int
     max_external_get_calls: int
+    retry_count: int
     will_write_order_or_purchase_task: bool
     will_submit_purchase_order_or_payment: bool
+    page_limit_note: str
     note: str
 
 

@@ -2740,7 +2740,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "odo.trigger_confirm_title": "Run Check now?",
   "odo.trigger_confirm_connections": "Sales accounts to query: {count}",
   "odo.trigger_confirm_statuses": "Order statuses to query: {statuses}",
-  "odo.trigger_confirm_max_calls": "Max expected external GET calls: {count}",
+  "odo.trigger_confirm_calls_range": "Expected external GET calls: {min} min - {max} max (if the page limit is reached)",
   "odo.trigger_confirm_window": "Query time range: {window}",
   "odo.trigger_confirm_writes": "Only new orders are recorded into the HOMEZ order/purchase-task queue.",
   "odo.pause_btn": "Pause",

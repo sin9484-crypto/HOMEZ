@@ -170,9 +170,14 @@ def get_collection_ops_plan(
             for c in plan.connections
         ],
         statuses=list(plan.statuses),
+        active_connection_count=plan.active_connection_count,
+        max_pages_per_connection=plan.max_pages_per_connection,
+        min_external_get_calls=plan.min_external_get_calls,
         max_external_get_calls=plan.max_external_get_calls,
+        retry_count=plan.retry_count,
         will_write_order_or_purchase_task=plan.will_write_order_or_purchase_task,
         will_submit_purchase_order_or_payment=plan.will_submit_purchase_order_or_payment,
+        page_limit_note=plan.page_limit_note,
         note=plan.note,
     )
 

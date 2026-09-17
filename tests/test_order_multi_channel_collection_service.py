@@ -107,6 +107,33 @@ class OrderMultiChannelCollectionServiceTest(unittest.TestCase):
         self.assertEqual(len(result.entries), 1)
         self.assertEqual(result.entries[0].channel_status, "ACCEPT")
 
+    def test_recovery_review_count_propagates_from_run_result(self):
+        """2026-09-17 Phase 7A 사후 감사 2차 — "전체 통합 수집"(6개
+        상태 전부)에서 FINAL_DELIVERY 등으로 처음 발견된 주문은
+        entry.recovery_review_count로 집계되고, 이 연결의 실행
+        자체는 실패로 세지 않는다(체크포인트 정상 전진)."""
+
+        from app.domains.order.adapters.coupang_collection import CoupangOrderPage
+        from tests.test_coupang_order_normalizer import order as _order
+
+        self._make_connection(cred_name="cred-1")
+
+        def factory(_credentials):
+            return _Provider(CoupangOrderCollectionResult(
+                True,
+                pages=(CoupangOrderPage((_order(status="FINAL_DELIVERY"),), None),),
+                http_status=200,
+            ))
+
+        service = OrderMultiChannelCollectionService(
+            self.db, self.store, provider_factory=factory,
+        )
+        result = service.run_all(1, statuses={"FINAL_DELIVERY"})
+        self.assertEqual(len(result.entries), 1)
+        self.assertEqual(result.entries[0].recovery_review_count, 1)
+        self.assertEqual(result.entries[0].status, "SUCCEEDED")
+        self.assertEqual(self.db.query(Order).count(), 0)
+
     def test_unknown_status_in_statuses_param_is_rejected(self):
         self._make_connection(cred_name="cred-1")
         service = OrderMultiChannelCollectionService(

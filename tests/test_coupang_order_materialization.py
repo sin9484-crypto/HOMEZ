@@ -163,6 +163,134 @@ class CoupangOrderMaterializationTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 decimal_to_legacy_float(value)
 
+    # ---- 2026-09-17 Phase 7A 사후 감사 2차(결함 2, High) ----------------
+    # 완료 상태 등 ACCEPT가 아닌 상태로 처음 발견된 주문이 신규 Order로
+    # 잘못 생성되지 않는지, 대신 복구 검토 대상으로만 분류되는지 검증한다.
+
+    def test_non_accept_status_for_unseen_order_becomes_recovery_candidate(self):
+        for i, status in enumerate((
+            "INSTRUCT", "DEPARTURE", "DELIVERING", "FINAL_DELIVERY", "NONE_TRACKING",
+        )):
+            with self.subTest(status=status):
+                normalized = normalize_coupang_order(
+                    order(status=status, orderId=9000 + i),
+                )
+                result = self.service.ensure_orders(1, 10, [normalized])
+                self.assertEqual(
+                    self.db.query(Order)
+                    .filter(Order.channel_order_id == normalized.channel_order_id)
+                    .count(),
+                    0,
+                )
+                self.assertEqual(len(result.recovery_candidates), 1)
+                candidate = result.recovery_candidates[0]
+                self.assertEqual(candidate.observed_status, status)
+                self.assertTrue(candidate.requires_user_approval)
+                self.assertEqual(result.rejected_unknown_status_count, 0)
+
+    def test_recovery_candidate_does_not_create_purchase_task_or_order_item(self):
+        normalized = normalize_coupang_order(order(status="FINAL_DELIVERY", orderId=9100))
+        self.service.ensure_orders(1, 10, [normalized])
+        self.assertEqual(self.db.query(Order).count(), 0)
+        self.assertEqual(self.db.query(OrderItem).count(), 0)
+
+    def test_recovery_candidate_channel_order_id_is_masked(self):
+        normalized = normalize_coupang_order(
+            order(status="FINAL_DELIVERY", orderId=123456789),
+        )
+        result = self.service.ensure_orders(1, 10, [normalized])
+        candidate = result.recovery_candidates[0]
+        self.assertNotEqual(candidate.masked_channel_order_id, "123456789")
+        self.assertTrue(candidate.masked_channel_order_id.startswith("*"))
+        self.assertTrue(candidate.masked_channel_order_id.endswith("6789"))
+
+    def test_existing_order_updates_normally_regardless_of_later_status(self):
+        first = normalize_coupang_order(order(orderId=9200))
+        self.service.ensure_orders(1, 10, [first])
+        created = (
+            self.db.query(Order).filter(Order.channel_order_id == "9200").one()
+        )
+
+        second = normalize_coupang_order(order(orderId=9200, status="INSTRUCT"))
+        result = self.service.ensure_orders(1, 10, [second])
+
+        self.assertEqual(
+            self.db.query(Order).filter(Order.channel_order_id == "9200").count(), 1,
+        )
+        self.assertEqual(result.recovery_candidates, ())
+        self.assertIn("9200", result.orders)
+        self.assertEqual(result.orders["9200"].id, created.id)
+
+    def test_unknown_raw_status_is_rejected_fail_closed(self):
+        normalized = normalize_coupang_order(
+            order(status="RETURNED_UNKNOWN_STATE", orderId=9300),
+        )
+        result = self.service.ensure_orders(1, 10, [normalized])
+        self.assertEqual(self.db.query(Order).count(), 0)
+        self.assertEqual(result.rejected_unknown_status_count, 1)
+        self.assertEqual(result.recovery_candidates, ())
+
+    def test_multiple_items_are_summed_into_total_amount(self):
+        from tests.test_coupang_order_normalizer import item
+
+        normalized = normalize_coupang_order(order(orderId=9500, orderItems=[
+            item(sequenceNo="001", vendorItemId=1),
+            item(sequenceNo="002", vendorItemId=2),
+        ]))
+        self.service.ensure_orders(1, 10, [normalized])
+        created = self.db.query(Order).filter(Order.channel_order_id == "9500").one()
+        expected_total = sum(
+            (i.order_price.amount for i in normalized.items), Decimal("0"),
+        )
+        self.assertEqual(created.total_amount, decimal_to_legacy_float(expected_total))
+
+    def test_mixed_batch_creates_eligible_order_and_defers_ineligible_one(self):
+        """한 번의 ensure_orders() 호출 안에 신규생성 가능한 주문과
+        불가능한 주문이 섞여 있어도 서로 영향을 주지 않는다."""
+
+        eligible = normalize_coupang_order(order(orderId=9600, status="ACCEPT"))
+        ineligible = normalize_coupang_order(order(orderId=9601, status="DELIVERING"))
+        result = self.service.ensure_orders(1, 10, [eligible, ineligible])
+
+        self.assertIn("9600", result.orders)
+        self.assertEqual(
+            self.db.query(Order).filter(Order.channel_order_id == "9600").count(), 1,
+        )
+        self.assertEqual(
+            self.db.query(Order).filter(Order.channel_order_id == "9601").count(), 0,
+        )
+        self.assertEqual(len(result.recovery_candidates), 1)
+        self.assertEqual(result.recovery_candidates[0].observed_status, "DELIVERING")
+
+    def test_recovery_candidate_fulfillment_is_not_auto_resolved(self):
+        """복구 검토 대상은 order_id가 없는 채로 남는다 — 이 fulfillment를
+        auto_resolve()가 건드리면 resolve_item()의 "연결할 HOMEZ 주문이
+        아직 준비되지 않았습니다" 예외로 배치 전체가 죽는 연쇄 결함이
+        있었다(이번 라운드에서 발견·수정). 미리 SKU 매핑이 있어도
+        건드리지 않아야 한다."""
+
+        normalized = normalize_coupang_order(order(status="FINAL_DELIVERY", orderId=9400))
+        persistence = CoupangOrderCollectionPersistence(self.db)
+        fulfillment, _ = persistence.upsert_fulfillment(1, 10, normalized)
+        items, _ = persistence.preserve_unresolved_items(1, fulfillment.id, normalized)
+
+        result = self.service.ensure_orders(1, 10, [normalized])
+        self.db.refresh(fulfillment)
+        self.assertIsNone(fulfillment.order_id)
+        self.assertEqual(len(result.recovery_candidates), 1)
+
+        self.db.add(OrderSkuResolution(
+            company_id=1, store_connection_id=10,
+            channel_sku=items[0].channel_sku, inventory_sku_id=999999,
+            created_by=1,
+        ))
+        self.db.commit()
+
+        resolved = self.service.auto_resolve(1, 10, actor_user_id=1)
+        self.assertEqual(resolved, 0)
+        self.db.refresh(items[0])
+        self.assertEqual(items[0].status, "MAPPING_REQUIRED")
+
 
 if __name__ == "__main__":
     unittest.main()
