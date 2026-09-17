@@ -85,6 +85,36 @@ class OrderMultiChannelCollectionServiceTest(unittest.TestCase):
         self.assertEqual(result.failed_runs, 0)
         self.assertEqual(result.skipped_marketplace_codes, ())
 
+    def test_statuses_param_narrows_to_accept_only(self):
+        """2026-09-17 Phase 7A 사후 감사 — 신규 주문 자동 감지처럼
+        특정 상태만 필요한 호출부가 `statuses={"ACCEPT"}`로 범위를
+        좁힐 수 있는지 확인한다. 생략 시(기존 "전체 통합 수집" 수동
+        버튼) 동작은 test_single_connection_runs_every_allowed_status
+        가 이미 고정한다."""
+
+        self._make_connection(cred_name="cred-1")
+        calls = []
+
+        def factory(_credentials):
+            return _Provider(
+                CoupangOrderCollectionResult(True, pages=(), http_status=200),
+            )
+
+        service = OrderMultiChannelCollectionService(
+            self.db, self.store, provider_factory=factory,
+        )
+        result = service.run_all(1, statuses={"ACCEPT"})
+        self.assertEqual(len(result.entries), 1)
+        self.assertEqual(result.entries[0].channel_status, "ACCEPT")
+
+    def test_unknown_status_in_statuses_param_is_rejected(self):
+        self._make_connection(cred_name="cred-1")
+        service = OrderMultiChannelCollectionService(
+            self.db, self.store, provider_factory=self._empty_success_factory(),
+        )
+        with self.assertRaises(ValueError):
+            service.run_all(1, statuses={"NOT_A_REAL_STATUS"})
+
     def test_multiple_connections_are_all_collected(self):
         self._make_connection(cred_name="cred-1", idem="create-1")
         self._make_connection(cred_name="cred-2", idem="create-2")

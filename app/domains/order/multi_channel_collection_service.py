@@ -73,17 +73,30 @@ class MultiChannelCollectionRunResult:
 def _run_coupang_connection(
     db: Session, credential_store: CredentialStore, company_id: int,
     connection: StoreConnection, actor_user_id: int,
-    provider_factory=None,
+    provider_factory=None, statuses=None,
 ) -> list[MultiChannelCollectionEntry]:
-    """쿠팡 연결 하나에 대해 지원되는 모든 channel_status를 순회한다
-    — 기존 CoupangOrderCollectionService.run()을 그대로 재사용."""
+    """쿠팡 연결 하나에 대해 `statuses`(없으면 지원되는 모든
+    channel_status)를 순회한다 — 기존 CoupangOrderCollectionService.
+    run()을 그대로 재사용.
+
+    2026-09-17 개인 베타 실데이터 검증 Phase 7A 사후 감사 — 원래는
+    항상 6개 상태 전부를 순회했다. `statuses`를 명시하면 그 부분
+    집합만 조회한다(예: 신규 주문 자동 감지는 ACCEPT만 필요 — 아래
+    `auto_collection_scheduler.py` 참고). 기존 "전체 통합 수집"
+    수동 버튼(`POST /orders/collect/all`)은 `statuses`를 넘기지
+    않아 기존 동작(6개 전부) 그대로 유지된다."""
+
+    allowed = statuses if statuses is not None else COUPANG_ALLOWED_STATUSES
+    unknown = set(allowed) - COUPANG_ALLOWED_STATUSES
+    if unknown:
+        raise ValueError(f"지원하지 않는 쿠팡 주문 상태입니다: {sorted(unknown)}")
 
     service = CoupangOrderCollectionService(
         db, credential_store,
         **({"provider_factory": provider_factory} if provider_factory else {}),
     )
     entries: list[MultiChannelCollectionEntry] = []
-    for channel_status in sorted(COUPANG_ALLOWED_STATUSES):
+    for channel_status in sorted(allowed):
         result: CoupangCollectionRunResult = service.run(
             company_id, connection.id, channel_status,
             actor_user_id=actor_user_id,
@@ -118,7 +131,14 @@ class OrderMultiChannelCollectionService:
 
     def run_all(
         self, company_id: int, *, actor_user_id: int = 0,
+        statuses: "frozenset[str] | set[str] | None" = None,
     ) -> MultiChannelCollectionRunResult:
+        """`statuses`를 생략하면 기존과 동일하게(각 채널이 지원하는
+        모든 상태) 수집한다 — 기존 "전체 통합 수집" 수동 버튼의
+        동작을 바꾸지 않는다. 신규 주문 자동 감지처럼 특정 상태만
+        필요한 호출부는 `statuses={"ACCEPT"}`처럼 명시적으로 좁힐
+        수 있다(2026-09-17 Phase 7A 사후 감사 후속)."""
+
         connections = (
             self.db.query(StoreConnection)
             .filter(StoreConnection.company_id == company_id)
@@ -137,7 +157,7 @@ class OrderMultiChannelCollectionService:
                 continue
             entries.extend(runner(
                 self.db, self.credential_store, company_id, connection,
-                actor_user_id, self.provider_factory,
+                actor_user_id, self.provider_factory, statuses,
             ))
 
         return MultiChannelCollectionRunResult(

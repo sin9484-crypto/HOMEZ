@@ -50,6 +50,8 @@ from app.domains.order.schema import OrderCollectionOpsStatusResponse
 from app.domains.order.schema import OrderCollectionOpsTriggerResponse
 from app.domains.order.schema import OrderCollectionOpsIntervalUpdateRequest
 from app.domains.order.schema import OrderCollectionOpsResumeResponse
+from app.domains.order.schema import OrderCollectionOpsPlanResponse
+from app.domains.order.schema import OrderCollectionPlanConnectionResponse
 from app.domains.order.schema import OrderItemResponse
 from app.domains.order.schema import OrderResponse
 from app.domains.order.schema import OrderSensitiveDetailResponse
@@ -138,6 +140,40 @@ def get_collection_ops_status(
         last_duplicate_fulfillment_count=state.last_duplicate_fulfillment_count,
         last_unresolved_item_count=state.last_unresolved_item_count,
         last_failed_order_count=state.last_failed_order_count,
+    )
+
+
+@router.get(
+    "/collection-ops/plan",
+    response_model=OrderCollectionOpsPlanResponse,
+)
+def get_collection_ops_plan(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-17 Phase 7A 사후 감사(요구사항 5/6) — "지금 확인"을
+    누르기 전 확인창이 이 계획을 그대로 보여준다. 외부 호출·DB
+    쓰기가 전혀 없다(`plan_manual_trigger()` 자체가 순수 조회)."""
+
+    from app.domains.order.auto_collection_scheduler import plan_manual_trigger
+
+    plan = plan_manual_trigger(db, current_user.company_id)
+
+    return OrderCollectionOpsPlanResponse(
+        company_id=plan.company_id,
+        connections=[
+            OrderCollectionPlanConnectionResponse(
+                store_connection_id=c.store_connection_id,
+                marketplace_code=c.marketplace_code,
+                status=c.status, window_from=c.window_from, window_to=c.window_to,
+            )
+            for c in plan.connections
+        ],
+        statuses=list(plan.statuses),
+        max_external_get_calls=plan.max_external_get_calls,
+        will_write_order_or_purchase_task=plan.will_write_order_or_purchase_task,
+        will_submit_purchase_order_or_payment=plan.will_submit_purchase_order_or_payment,
+        note=plan.note,
     )
 
 

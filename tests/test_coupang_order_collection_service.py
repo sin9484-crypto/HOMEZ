@@ -136,6 +136,19 @@ class CoupangOrderCollectionServiceTest(unittest.TestCase):
         self.assertEqual(self.db.query(OrderChannelFulfillment).count(), 1)
         self.assertEqual(self.db.query(UnresolvedOrderItem).count(), 1)
 
+    def test_same_order_across_different_statuses_does_not_duplicate(self):
+        result = CoupangOrderCollectionResult(
+            True, pages=(CoupangOrderPage((order(),), None),), http_status=200,
+        )
+        service, _ = self.service(result)
+        first = service.run(1, self.connection.id, "ACCEPT")
+        second = service.run(1, self.connection.id, "INSTRUCT")
+        self.assertEqual(first.new_fulfillment_count, 1)
+        self.assertEqual(second.duplicate_fulfillment_count, 1)
+        self.assertEqual(second.new_fulfillment_count, 0)
+        self.assertEqual(self.db.query(Order).count(), 1)
+        self.assertEqual(self.db.query(OrderChannelFulfillment).count(), 1)
+
     def test_company_isolation_and_connection_state_are_fail_closed(self):
         service, _ = self.service(CoupangOrderCollectionResult(True))
         with self.assertRaises(NotFoundException):

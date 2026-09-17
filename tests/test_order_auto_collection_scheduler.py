@@ -59,6 +59,7 @@ from app.domains.order.adapters.coupang_collection import CoupangOrderPage
 from app.domains.order.auto_collection_scheduler import CONSECUTIVE_FAILURE_DEMOTE_THRESHOLD
 from app.domains.order.auto_collection_scheduler import OrderCollectionTickOutcome
 from app.domains.order.auto_collection_scheduler import get_or_create_auto_collection_state
+from app.domains.order.auto_collection_scheduler import plan_manual_trigger
 from app.domains.order.auto_collection_scheduler import run_order_collection_tick
 from app.domains.order.auto_collection_scheduler import set_interval_minutes
 from app.domains.order.auto_collection_scheduler import trigger_company_now
@@ -167,6 +168,97 @@ class OrderAutoCollectionSchedulerTestCase(unittest.TestCase):
     def _trigger(self, company_id, **kwargs):
         kwargs.setdefault("is_restricted_mode_check", _NOT_RESTRICTED)
         return trigger_company_now(self.db, self.store, company_id, **kwargs)
+
+    # ---------------- 0) ACCEPT 전용 범위(Phase 7A 사후 감사) ----------------
+
+    def test_tick_only_queries_accept_status_not_all_six(self):
+        """2026-09-17 Phase 7A 사후 감사 — 자동 tick은 신규 주문
+        감지 목적상 ACCEPT 하나만 조회해야 한다. 예전에는 6개 상태를
+        전부 조회해 계정당 tick마다 외부 GET 6회가 나갔다(실제 Live
+        검증에서 승인 범위(1회)를 넘겨 6회가 나간 원인)."""
+
+        self._make_connection(cred_name="cred-1")
+        self._set_automatic(1)
+
+        calls = []
+        result = self._tick(
+            now=T0,
+            provider_factory=self._factory(
+                _empty_success_result(), on_collect=lambda kw: calls.append(kw),
+            ),
+        )
+
+        self.assertEqual(result.entries[0].outcome, OrderCollectionTickOutcome.SUCCEEDED)
+        self.assertEqual(len(calls), 1)  # 6번이 아니라 1번만 외부 호출
+        self.assertEqual(calls[0]["status"], "ACCEPT")
+
+    def test_manual_trigger_only_queries_accept_status_not_all_six(self):
+
+        self._make_connection(cred_name="cred-1")
+
+        calls = []
+        entry = self._trigger(
+            1, now=T0,
+            provider_factory=self._factory(
+                _empty_success_result(), on_collect=lambda kw: calls.append(kw),
+            ),
+        )
+
+        self.assertEqual(entry.outcome, OrderCollectionTickOutcome.SUCCEEDED)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["status"], "ACCEPT")
+
+    # ---------------- dry-run 실행계획(Phase 7A 사후 감사 요구사항 6) ----------------
+
+    def test_plan_reports_accept_only_and_no_external_calls(self):
+        """계획 함수 자체는 외부 호출·DB 쓰기를 전혀 하지 않는다 —
+        Fake Provider조차 넘기지 않고도 계획이 나와야 한다."""
+
+        self._make_connection(cred_name="cred-1")
+        plan = plan_manual_trigger(self.db, 1, now=T0)
+
+        self.assertEqual(plan.company_id, 1)
+        self.assertEqual(plan.statuses, ("ACCEPT",))
+        self.assertEqual(len(plan.connections), 1)
+        self.assertEqual(plan.connections[0].status, "ACCEPT")
+        self.assertEqual(plan.max_external_get_calls, 1)
+        self.assertFalse(plan.will_submit_purchase_order_or_payment)
+
+    def test_plan_scales_with_number_of_connected_connections(self):
+
+        self._make_connection(cred_name="cred-a", idem="idem-a")
+        self._make_connection(cred_name="cred-b", idem="idem-b")
+        plan = plan_manual_trigger(self.db, 1, now=T0)
+
+        self.assertEqual(len(plan.connections), 2)
+        self.assertEqual(plan.max_external_get_calls, 2)
+
+    def test_plan_matches_actual_trigger_call_count(self):
+        """확인창(계획)과 실제 실행이 같은 횟수를 말해야 한다 —
+        설명과 실행이 어긋나지 않는지의 핵심 검증."""
+
+        self._make_connection(cred_name="cred-1")
+        plan = plan_manual_trigger(self.db, 1, now=T0)
+
+        calls = []
+        self._trigger(
+            1, now=T0,
+            provider_factory=self._factory(
+                _empty_success_result(), on_collect=lambda kw: calls.append(kw),
+            ),
+        )
+
+        self.assertEqual(plan.max_external_get_calls, len(calls))
+
+    def test_plan_excludes_disconnected_connections(self):
+
+        conn = self._make_connection(cred_name="cred-1")
+        conn.connection_status = "ERROR"
+        self.db.commit()
+
+        plan = plan_manual_trigger(self.db, 1, now=T0)
+        self.assertEqual(len(plan.connections), 0)
+        self.assertEqual(plan.max_external_get_calls, 0)
 
     # ---------------- 1) 신규주문수집 ----------------
 

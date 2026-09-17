@@ -161,6 +161,28 @@ class OrderCollectionOpsResumeResponse(BaseModel):
     function_mode: str
 
 
+# 2026-09-17 개인 베타 실데이터 검증 Phase 7A 사후 감사(요구사항 5/6)
+# — "지금 확인"을 실제로 누르기 전에 화면에 보여줄 실행 계획.
+# 외부 호출·DB 쓰기를 전혀 하지 않는 순수 조회 결과다.
+
+class OrderCollectionPlanConnectionResponse(BaseModel):
+    store_connection_id: int
+    marketplace_code: str
+    status: str
+    window_from: datetime
+    window_to: datetime
+
+
+class OrderCollectionOpsPlanResponse(BaseModel):
+    company_id: int
+    connections: list[OrderCollectionPlanConnectionResponse]
+    statuses: list[str]
+    max_external_get_calls: int
+    will_write_order_or_purchase_task: bool
+    will_submit_purchase_order_or_payment: bool
+    note: str
+
+
 class UnresolvedOrderItemResponse(BaseModel):
     id: int
     fulfillment_id: int

@@ -6325,6 +6325,36 @@
     `;
 
     el("odo-trigger-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      // 2026-09-17 Phase 7A 사후 감사(요구사항 5/6) — 실제로 누르기
+      // 전에 계획을 먼저 보여준다. 확인창의 표시값과 실제 실행은
+      // 반드시 같은 계획(plan_manual_trigger)에서 나온다 — 설명과
+      // 실행이 어긋나지 않는다.
+      let plan;
+      try {
+        plan = await apiFetch("/orders/collection-ops/plan");
+      } catch (err) {
+        toast((err && err.message) || HomezI18n.t("odo.plan_error"), "error");
+        return;
+      }
+
+      const windowText = plan.connections.length > 0
+        ? `${fmtDate(plan.connections[0].window_from)} ~ ${fmtDate(plan.connections[0].window_to)}`
+        : "-";
+      const body = [
+        HomezI18n.t("odo.trigger_confirm_connections", { count: plan.connections.length }),
+        HomezI18n.t("odo.trigger_confirm_statuses", { statuses: plan.statuses.join(", ") }),
+        HomezI18n.t("odo.trigger_confirm_max_calls", { count: plan.max_external_get_calls }),
+        HomezI18n.t("odo.trigger_confirm_window", { window: windowText }),
+        HomezI18n.t("odo.trigger_confirm_writes"),
+        plan.note,
+      ].join("\n");
+
+      const { confirmed } = await confirmDialog({
+        title: HomezI18n.t("odo.trigger_confirm_title"),
+        body,
+      });
+      if (!confirmed) return;
+
       try {
         const result = await apiFetch("/orders/collection-ops/trigger", { method: "POST" });
         toast(HomezI18n.t("odo.trigger_success", { outcome: result.outcome }), "success");

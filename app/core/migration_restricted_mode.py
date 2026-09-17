@@ -157,15 +157,41 @@ def refresh_restricted_mode_state() -> RestrictedModeState:
 
 def is_restricted_mode() -> bool:
     """
-    캐시된 상태만 읽는다(디스크 I/O 없음) — 요청마다 호출해도 저렴
-    하다. 아직 한 번도 계산되지 않았다면(이론상 lifespan 훅이 아직
-    실행되지 않은 상태) fail-closed로 제한 모드로 취급한다.
+    보통은 캐시된 상태만 읽는다(디스크 I/O 없음) — 요청마다 호출해도
+    저렴하다.
+
+    2026-09-17 개인 베타 실데이터 검증 Phase 7A 사후 감사 — 캐시가
+    아직 한 번도 계산되지 않았을 때(정상적인 서버 lifespan에서는
+    시작 시 항상 계산되므로 일어나지 않지만, 이 함수를 실제 서버
+    lifespan 밖에서 부르는 일회성 스크립트·CLI에서는 실제로
+    일어난다는 것이 이번에 확인됐다) 예전에는 무조건 True(제한
+    모드)로 fail-closed했다. 실제 DB에는 pending Migration이 0건
+    이었는데도 "제한 모드"로 오판정돼, 그 상태에서 만든 주문 자동
+    감지 실행 기록(감사로그)이 사실과 다른 사유를 남기는 부작용이
+    실제로 있었다.
+
+    이제는 캐시가 없을 때 **그 자리에서 한 번 직접 진단한다**
+    (`refresh_restricted_mode_state()`와 동일한 읽기 전용 sqlite3
+    진단 — ORM/`SessionLocal`을 전혀 열지 않으므로 안전하다, Phase 5
+    회귀 참고). 진단 자체가 실패하면(`_diagnose_pending()`이 이미
+    그 안에서 fail-closed 처리) 여전히 제한 모드로 남는다 — "안전
+    기본값은 계속 제한 모드"라는 원칙 자체는 바뀌지 않았고, 다만
+    "안 재 봤으니 무조건 제한"이 "직접 확인했더니 실제로 pending이
+    있어서 제한"으로 더 정확해졌을 뿐이다. 실제 pending Migration을
+    우회하지 않는다 — 이 경로도 여전히 진짜 pending이 있으면 True를
+    반환한다.
     """
 
     with _lock:
-        if _state is None:
-            return True
-        return _state.restricted
+        cached = _state
+
+    if cached is not None:
+        return cached.restricted
+
+    try:
+        return refresh_restricted_mode_state().restricted
+    except Exception:  # noqa: BLE001 - 진단 자체가 예상 밖으로 실패해도 fail-closed 유지
+        return True
 
 
 def get_restricted_mode_state() -> RestrictedModeState:

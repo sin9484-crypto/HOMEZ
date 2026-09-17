@@ -35,6 +35,30 @@ File : app/domains/order/auto_collection_scheduler.py
 이던 같은 회사의 연결 B~Z는 이번 tick에서 시도되지 않고 다음 tick
 (기본 5분 뒤)으로 넘어간다. 회사 자체는 서로 완전히 독립적이다(한
 회사의 예외가 다른 회사의 tick을 막지 않는다).
+
+2026-09-17 개인 베타 실데이터 검증 Phase 7A 사후 감사 — 원래
+`run_all()`을 상태 인자 없이 호출해 쿠팡이 지원하는 6개 주문상태
+(ACCEPT/INSTRUCT/DEPARTURE/DELIVERING/FINAL_DELIVERY/NONE_TRACKING)
+를 전부 조회했다. 실제 Live 검증(승인 범위는 GET 1회였으나 실제로
+6회 호출됨 — 절차 위반으로 별도 기록, `docs/audits/` 참고) 도중
+드러난 구조적 문제: `createdAtFrom/To`는 **주문 생성 시각** 기준
+필터라, ACCEPT가 아닌 나머지 5개 상태로 좁은 최근 구간을 조회해도
+"그 시각에 생성되고 이미 그 상태까지 도달한" 주문만 잡힌다 —
+정상적인 주문 처리는 며칠씩 걸리므로 5분 간격의 좁은 구간에서는
+사실상 항상 빈 결과만 나온다(상태 동기화 목적을 이 필터로는 달성할
+수 없다). 게다가 `CoupangOrderMaterializationService.ensure_orders()`
+는 어느 상태로 수집됐든 처음 보는 channel_order_id면 무조건 신규
+`Order`를 만든다 — 즉 "신규 주문 감지"라는 이 기능의 목적에는
+ACCEPT 하나만 의미가 있고, 나머지 5개는 (a) 목적을 달성하지 못하며
+(b) 불필요한 외부 호출 5회를 계정당 5분마다 반복해 호출 한도만
+소모한다. 그래서 이 스케줄러는 `NEW_ORDER_DETECTION_STATUSES`
+(ACCEPT만)로 명시적으로 좁힌다. 기존 수동 "전체 통합 수집" 버튼
+(`POST /orders/collect/all`)은 여전히 6개 전부를 조회한다 — 그
+버튼은 신규 감지가 아니라 사용자가 의도적으로 누르는 전체 점검
+도구이므로 범위를 바꾸지 않았다. 배송 추적(FINAL_DELIVERY 등
+"기존 주문의 상태 변화")은 이 스케줄러의 책임이 아니다 — 별도
+저빈도 작업(예: 개별 주문 조회 기반)으로 다뤄야 하며, 이번
+라운드에서는 그 별도 작업을 새로 만들지 않았다(범위 밖, 정직 공개).
 =========================================================
 """
 
@@ -63,6 +87,12 @@ from app.domains.store_connection.model import StoreConnection
 
 CONSECUTIVE_FAILURE_DEMOTE_THRESHOLD = 3  # purchase_task의 동일 취지 상수와 동일값
 DEFAULT_INTERVAL_MINUTES = 5
+
+# 2026-09-17 Phase 7A 사후 감사 — "신규 주문 감지"의 정의상 의미가
+# 있는 상태는 ACCEPT뿐이다(모듈 docstring 참고). 자동 tick과 수동
+# "지금 확인" 둘 다 이 상수만 쓴다 — 6개 전부를 조회하는 기존 수동
+# "전체 통합 수집" 버튼과는 의도적으로 범위가 다르다.
+NEW_ORDER_DETECTION_STATUSES = frozenset({"ACCEPT"})
 
 
 class OrderCollectionTickOutcome:
@@ -263,7 +293,7 @@ def _run_one_company(
     try:
         result = OrderMultiChannelCollectionService(
             db, credential_store, provider_factory=provider_factory,
-        ).run_all(company_id)
+        ).run_all(company_id, statuses=NEW_ORDER_DETECTION_STATUSES)
     except ConflictException:
         _record_skip(
             db, state, status=OrderCollectionTickOutcome.SKIPPED_ALREADY_RUNNING,
@@ -423,7 +453,7 @@ def trigger_company_now(
     try:
         result = OrderMultiChannelCollectionService(
             db, credential_store, provider_factory=provider_factory,
-        ).run_all(company_id)
+        ).run_all(company_id, statuses=NEW_ORDER_DETECTION_STATUSES)
     except ConflictException:
         _record_skip(
             db, state, status=OrderCollectionTickOutcome.SKIPPED_ALREADY_RUNNING,
@@ -462,14 +492,93 @@ def trigger_company_now(
     return OrderCollectionTickCompanyEntry(company_id, state.last_status)
 
 
+@dataclass(frozen=True)
+class OrderCollectionConnectionPlan:
+
+    store_connection_id: int
+    marketplace_code: str
+    status: str
+    window_from: datetime
+    window_to: datetime
+
+
+@dataclass(frozen=True)
+class OrderCollectionTriggerPlan:
+    """2026-09-17 Phase 7A 사후 감사(요구사항 6, dry-run/plan) —
+    "지금 확인"을 실제로 누르기 전에 정확히 무엇이 일어날지 미리
+    계산한다. **이 함수는 외부 API를 전혀 호출하지 않고 DB에 아무
+    것도 쓰지 않는다** — `OrderCollectionCursorService.preview_window()`
+    (기존, 락도 안 잡고 쓰기도 안 하는 순수 조회)만 재사용한다.
+    수동 확인창(Phase 7A 요구사항 5)과 실제 실행이 반드시 이 함수
+    하나를 공유해야 화면 표시와 실행 계획이 어긋나지 않는다."""
+
+    company_id: int
+    connections: tuple[OrderCollectionConnectionPlan, ...]
+    statuses: tuple[str, ...]
+    max_external_get_calls: int
+    will_write_order_or_purchase_task: bool
+    will_submit_purchase_order_or_payment: bool
+    note: str = ""
+
+
+def plan_manual_trigger(
+    db: Session, company_id: int, *, now: datetime | None = None,
+) -> OrderCollectionTriggerPlan:
+    """`trigger_company_now()`가 실제로 하게 될 일을 미리 계산만
+    한다 — 승인 지점(Phase 7B 이전의 확인창 등)에서 이 함수의 결과를
+    그대로 사용자에게 보여줘야 한다."""
+
+    from app.domains.order.collection_service import OrderCollectionCursorService
+
+    now = now or datetime.utcnow()
+    connections = (
+        db.query(StoreConnection)
+        .filter(StoreConnection.company_id == company_id)
+        .filter(StoreConnection.marketplace_code == "COUPANG")
+        .filter(StoreConnection.connection_status == "CONNECTED")
+        .order_by(StoreConnection.id.asc())
+        .all()
+    )
+
+    cursor_service = OrderCollectionCursorService(db)
+    plans: list[OrderCollectionConnectionPlan] = []
+    for connection in connections:
+        for status in sorted(NEW_ORDER_DETECTION_STATUSES):
+            window_from, window_to = cursor_service.preview_window(
+                company_id, connection.id, status, now=now,
+            )
+            plans.append(OrderCollectionConnectionPlan(
+                store_connection_id=connection.id,
+                marketplace_code=connection.marketplace_code,
+                status=status, window_from=window_from, window_to=window_to,
+            ))
+
+    return OrderCollectionTriggerPlan(
+        company_id=company_id,
+        connections=tuple(plans),
+        statuses=tuple(sorted(NEW_ORDER_DETECTION_STATUSES)),
+        max_external_get_calls=len(plans),  # 연결당 상태 1개 = GET 최대 1회(페이지 추가 시 더 늘 수 있음)
+        will_write_order_or_purchase_task=True,
+        will_submit_purchase_order_or_payment=False,
+        note=(
+            "발주·결제·상품등록은 이 실행에서 절대 호출되지 않습니다 — "
+            "신규 주문을 읽어 HOMEZ 주문/매입작업 대기열에만 반영합니다."
+        ),
+    )
+
+
 __all__ = [
     "OrderCollectionTickOutcome",
     "OrderCollectionTickCompanyEntry",
     "OrderCollectionTickResult",
+    "OrderCollectionConnectionPlan",
+    "OrderCollectionTriggerPlan",
     "CONSECUTIVE_FAILURE_DEMOTE_THRESHOLD",
     "DEFAULT_INTERVAL_MINUTES",
+    "NEW_ORDER_DETECTION_STATUSES",
     "get_or_create_auto_collection_state",
     "set_interval_minutes",
     "run_order_collection_tick",
     "trigger_company_now",
+    "plan_manual_trigger",
 ]

@@ -678,6 +678,92 @@ class RestartRecomputationTestCase(_TempMigrationEnvMixin, unittest.TestCase):
 
 
 # --------------------------------------------------
+# 12-B. 2026-09-17 Phase 7A 사후 감사 — 캐시 미계산 시 그 자리에서
+# 직접 진단(fail-closed는 "진단 실패 시"에만 적용, "안 재봤음" 자체는
+# 더 이상 무조건 제한 모드가 아니다).
+# --------------------------------------------------
+
+class LazyDiagnosisOnUncomputedCacheTestCase(_TempMigrationEnvMixin, unittest.TestCase):
+    """실제 Phase 7A Live 검증에서 일회성 스크립트가 서버 lifespan을
+    거치지 않아 캐시가 비어 있었고, 실제 DB는 pending 0건이었는데도
+    `is_restricted_mode()`가 무조건 True를 반환해 정상 실행이
+    "제한 모드로 건너뜀"으로 잘못 기록됐다. 이 결함의 재현과 수정
+    고정."""
+
+    def setUp(self):
+
+        self.tmp_root, self.db_path, self.migrations_dir, self.backups_dir = (
+            self._make_temp_env()
+        )
+        self._paths_patcher = patch.object(
+            migration_restricted_mode, "_real_migration_paths",
+            return_value=(self.db_path, self.migrations_dir),
+        )
+        self._paths_patcher.start()
+        migration_restricted_mode.reset_restricted_mode_state_for_tests()
+
+    def tearDown(self):
+
+        self._paths_patcher.stop()
+        migration_restricted_mode.reset_restricted_mode_state_for_tests()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def test_uncomputed_cache_with_zero_pending_migrations_is_not_restricted(self):
+        """실제로 재현된 결함: 캐시 미계산 + 실제 pending 0건인데도
+        예전에는 True(제한 모드)였다. 이제는 그 자리에서 직접
+        진단해 False를 정확히 반환해야 한다."""
+
+        bootstrap_environment(
+            db_path=self.db_path, migrations_dir=self.migrations_dir,
+            backups_dir=self.backups_dir,
+            approved_migration_files=["20260102_00_create_b.sql"],
+        )
+        # "일회성 스크립트가 서버 lifespan 없이 막 시작한 상태"를
+        # 그대로 재현한다 — refresh_restricted_mode_state()를 미리
+        # 부르지 않는다.
+        migration_restricted_mode.reset_restricted_mode_state_for_tests()
+
+        self.assertFalse(migration_restricted_mode.is_restricted_mode())
+
+    def test_lazy_diagnosis_populates_shared_cache_for_subsequent_calls(self):
+
+        bootstrap_environment(
+            db_path=self.db_path, migrations_dir=self.migrations_dir,
+            backups_dir=self.backups_dir,
+            approved_migration_files=["20260102_00_create_b.sql"],
+        )
+        migration_restricted_mode.reset_restricted_mode_state_for_tests()
+
+        first = migration_restricted_mode.is_restricted_mode()
+        state = migration_restricted_mode.get_restricted_mode_state()
+
+        self.assertFalse(first)
+        self.assertFalse(state.restricted)  # 캐시가 실제로 채워졌다(다음 호출은 재진단 없이 재사용)
+        self.assertEqual(state.pending_files, [])
+
+    def test_uncomputed_cache_with_genuinely_pending_migration_still_restricted(self):
+        """진짜로 pending이 있으면(위 두 테스트와 반대 상황) 지연
+        진단도 여전히 True를 정확히 반환해야 한다 — fail-closed 원칙
+        자체는 약화되지 않았다."""
+
+        # 아무 Migration도 적용하지 않은 원래 fixture 그대로(b는
+        # pending 상태) — reset은 setUp에서 이미 됐다.
+        self.assertTrue(migration_restricted_mode.is_restricted_mode())
+        state = migration_restricted_mode.get_restricted_mode_state()
+        self.assertIn("20260102_00_create_b.sql", state.pending_files)
+
+    def test_diagnosis_error_during_lazy_check_still_fails_closed(self):
+        """진단 자체가 예상 밖으로 실패하면(예: checksum 불일치)
+        지연 경로에서도 여전히 True를 반환해야 한다."""
+
+        with patch(
+            "app.database.migration_runner.MigrationRunner.diagnose",
+            side_effect=RuntimeError("시뮬레이션된 진단 실패"),
+        ):
+            self.assertTrue(migration_restricted_mode.is_restricted_mode())
+
+
+# --------------------------------------------------
 # 13. ko-KR/en-US 문구 확인
 # --------------------------------------------------
 
