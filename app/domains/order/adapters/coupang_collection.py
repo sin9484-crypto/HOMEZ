@@ -46,6 +46,12 @@ class CoupangOrderCollectionResult:
     error_summary: str | None = None
     retry_after_seconds: int | None = None
     http_status: int | None = None
+    # 2026-09-17 개인 베타 실데이터 검증 Phase 6 후속 — 쿠팡 응답이
+    # 실패했을 때 code/message만 안전하게 보존한다(Authorization
+    # 헤더·access/secret key·vendor_id·요청 원문은 절대 포함하지
+    # 않는다). 이전에는 상태코드만 정규화하고 실제 응답 바디를 전부
+    # 버려, "왜" 400이 났는지 알 수 없었다(실제 원인 조사 중 발견).
+    provider_error_detail: str | None = None
 
 
 class OrderHttpTransport(Protocol):
@@ -125,6 +131,26 @@ class CoupangOrderCollectionProvider:
         return "HTTP_ERROR", "쿠팡 주문 조회에 실패했습니다."
 
     @staticmethod
+    def _provider_error_detail(response: requests.Response) -> str | None:
+        """실패 응답 바디에서 `code`/`message`만 뽑아 남긴다 — 그
+        외 필드(요청 에코, 내부 식별자 등 무엇이 들어있을지 확신할
+        수 없는 값)는 포함하지 않는다. Authorization 헤더나 요청에
+        쓰인 access/secret key·vendor_id는애초에 응답 바디에 없으므로
+        이 함수가 볼 수도 없다."""
+
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        if not isinstance(body, dict):
+            return None
+        code = body.get("code")
+        message = body.get("message")
+        if code is None and message is None:
+            return None
+        return f"code={code} message={str(message)[:300] if message else None}"[:400]
+
+    @staticmethod
     def _parse_page(payload: Any) -> CoupangOrderPage:
         if not isinstance(payload, dict):
             raise ValueError("INVALID_RESPONSE")
@@ -158,10 +184,17 @@ class CoupangOrderCollectionProvider:
                 False, error_code="INVALID_TIME_RANGE",
                 error_summary="주문 조회 종료 시각은 시작 시각보다 늦어야 합니다.",
             )
-        if created_at_to - created_at_from > MAX_WINDOW:
+        # 2026-09-17 개인 베타 실데이터 검증 Phase 6 — 실제 쿠팡 API로
+        # 정확히 24시간 구간을 조회했더니 400을 받았다(공식 문서:
+        # "An error occurs when searching for more than 24 hours" —
+        # 실제 서버는 24시간과 "같음"도 거부하는 것으로 확인됨). 이전
+        # 코드는 `>` 비교라 정확히 24시간(=MAX_WINDOW)인 구간을
+        # 통과시켰다 — 서버 쪽 제약보다 느슨했다. `>=`로 고쳐 반드시
+        # 24시간보다 짧은 구간만 통과시킨다.
+        if created_at_to - created_at_from >= MAX_WINDOW:
             return CoupangOrderCollectionResult(
                 False, error_code="TIME_RANGE_TOO_LARGE",
-                error_summary="분단위 주문 조회 범위는 24시간 이내여야 합니다.",
+                error_summary="분단위 주문 조회 범위는 24시간보다 짧아야 합니다.",
             )
         if status not in ALLOWED_STATUSES:
             return CoupangOrderCollectionResult(
@@ -214,6 +247,7 @@ class CoupangOrderCollectionProvider:
                 return CoupangOrderCollectionResult(
                     False, tuple(pages), code, summary,
                     self._retry_after(response), response.status_code,
+                    provider_error_detail=self._provider_error_detail(response),
                 )
             try:
                 page = self._parse_page(response.json())
