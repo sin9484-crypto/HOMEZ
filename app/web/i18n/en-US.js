@@ -2766,6 +2766,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "odo.test_budget_result_outcome": "Outcome: {outcome}",
   "odo.test_budget_result_counts": "New {new} / Duplicate {duplicate} / Recovery review {recovery} / Failed {failed}",
   "odo.test_budget_result_errors": "Error codes: {codes}",
+  "odo.test_budget_exhausted": "This connection has used up its test-only call budget.",
 
   "operations_priorities.hint": "Aggregates real state across domains by urgency — reuses existing counts and analyses without new judgment logic.",
   "operations_priorities.empty_title": "No priority items right now",

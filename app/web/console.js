@@ -6418,6 +6418,11 @@
         return;
       }
 
+      if (plan.get_calls_remaining <= 0) {
+        toast(HomezI18n.t("odo.test_budget_exhausted"), "error");
+        return;
+      }
+
       const body = [
         HomezI18n.t("odo.test_budget_confirm_connection", { id: plan.store_connection_id }),
         HomezI18n.t("odo.test_budget_confirm_status_calls", {

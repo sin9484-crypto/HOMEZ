@@ -246,6 +246,9 @@ def get_collection_ops_test_budget_plan(
         retry_count=plan.retry_count,
         will_write_order_or_purchase_task=plan.will_write_order_or_purchase_task,
         will_submit_purchase_order_or_payment=plan.will_submit_purchase_order_or_payment,
+        total_get_limit=plan.total_get_limit,
+        get_calls_used=plan.get_calls_used,
+        get_calls_remaining=plan.get_calls_remaining,
         note=plan.note,
     )
 

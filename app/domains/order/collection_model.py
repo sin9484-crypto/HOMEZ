@@ -157,7 +157,40 @@ class OrderAutoCollectionState(Base):
     )
 
 
+class OrderCollectionTestBudgetUsage(Base):
+    """2026-09-18 Phase 7B 실제 테스트 주문 검증 — 시험 전용 호출
+    예산(연결 1개·ACCEPT·페이지 1장 상한, `auto_collection_scheduler.
+    run_test_budget_collection()`)의 누적 사용량. `max_pages=1`은
+    "한 번의 실행이 몇 페이지까지 받아오는지"만 제한하고, 이 테이블은
+    "총 몇 번 실제로 조회를 시도했는지"를 별도로 센다 — 두 제한은
+    독립적이며 서로를 대신하지 않는다. 반복 클릭·동시 요청·프로세스
+    재시작에도 살아남아야 하므로 프로세스 메모리가 아니라 DB에
+    영구 기록한다. 실제 `provider.collect()` 호출 직전에만 1 증가한다
+    (EmergencyStop·Migration 제한 모드·자격증명 오류 등으로 실제 HTTP
+    요청이 나가기 전에 막힌 시도는 세지 않는다 — 실제로 전송된
+    시도만 예산을 소모한다)."""
+
+    __tablename__ = "order_collection_test_budget_usages"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "store_connection_id", "channel_status",
+            name="uq_order_collection_test_budget_usage_scope",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    store_connection_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    channel_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    get_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+    )
+
+
 __all__ = [
     "OrderChannelFulfillment", "OrderCollectionCursor", "OrderSkuResolution",
     "UnresolvedOrderItem", "OrderAutoCollectionState",
+    "OrderCollectionTestBudgetUsage",
 ]

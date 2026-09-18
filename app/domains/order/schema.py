@@ -203,6 +203,9 @@ class OrderCollectionTestBudgetPlanResponse(BaseModel):
     retry_count: int
     will_write_order_or_purchase_task: bool
     will_submit_purchase_order_or_payment: bool
+    total_get_limit: int
+    get_calls_used: int
+    get_calls_remaining: int
     note: str
 
 

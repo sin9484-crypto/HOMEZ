@@ -618,6 +618,15 @@ def plan_manual_trigger(
 
 TEST_BUDGET_MAX_PAGES = 1
 
+# 2026-09-18 D1 추가 확인 — max_pages=1은 "한 번의 실행이 몇 페이지까지
+# 받아오는지"만 제한한다. 이것과 별개로 "총 몇 번 실제로 조회를
+# 시도했는지"를 DB(order_collection_test_budget_usages)에 영구
+# 기록해서 강제한다 — 반복 클릭·동시 요청·프로세스 재시작에도
+# 살아남는다(프로세스 메모리 카운터가 아니다). 최초수집 1회 +
+# 중복재조회 1회 = 2다.
+TEST_BUDGET_TOTAL_GET_LIMIT = 2
+TEST_BUDGET_EXHAUSTED_ERROR_CODE = "TEST_BUDGET_EXHAUSTED"
+
 
 class TestBudgetRunOutcome:
     SUCCEEDED = "SUCCEEDED"
@@ -625,6 +634,118 @@ class TestBudgetRunOutcome:
     FAILED = "FAILED"
     SKIPPED_EMERGENCY_STOP = "SKIPPED_EMERGENCY_STOP"
     SKIPPED_MIGRATION_RESTRICTED = "SKIPPED_MIGRATION_RESTRICTED"
+
+
+def _reserve_test_budget_call(
+    db: Session, company_id: int, store_connection_id: int, channel_status: str,
+) -> bool:
+    """실제 provider.collect() 호출 바로 직전에만 부른다 — 실제로
+    전송을 시도하는 순간에만 예산을 소모한다(EmergencyStop·Migration
+    제한 모드·자격증명 오류로 그 전에 막힌 시도는 세지 않는다). 조건부
+    UPDATE(WHERE get_calls_used < 한도)로 원자적으로 늘려, 동시에 두
+    요청이 들어와도 둘 다 통과하는 일이 없다(`OrderCollectionCursorService.
+    acquire()`와 같은 패턴 재사용)."""
+
+    from sqlalchemy import update
+    from sqlalchemy.exc import IntegrityError
+
+    from app.domains.order.collection_model import OrderCollectionTestBudgetUsage
+
+    row = (
+        db.query(OrderCollectionTestBudgetUsage)
+        .filter(OrderCollectionTestBudgetUsage.company_id == company_id)
+        .filter(OrderCollectionTestBudgetUsage.store_connection_id == store_connection_id)
+        .filter(OrderCollectionTestBudgetUsage.channel_status == channel_status)
+        .first()
+    )
+    if row is None:
+        row = OrderCollectionTestBudgetUsage(
+            company_id=company_id, store_connection_id=store_connection_id,
+            channel_status=channel_status, get_calls_used=0,
+        )
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            row = (
+                db.query(OrderCollectionTestBudgetUsage)
+                .filter(OrderCollectionTestBudgetUsage.company_id == company_id)
+                .filter(OrderCollectionTestBudgetUsage.store_connection_id == store_connection_id)
+                .filter(OrderCollectionTestBudgetUsage.channel_status == channel_status)
+                .one()
+            )
+        else:
+            db.refresh(row)
+
+    result = db.execute(
+        update(OrderCollectionTestBudgetUsage)
+        .where(OrderCollectionTestBudgetUsage.id == row.id)
+        .where(OrderCollectionTestBudgetUsage.get_calls_used < TEST_BUDGET_TOTAL_GET_LIMIT)
+        .values(
+            get_calls_used=OrderCollectionTestBudgetUsage.get_calls_used + 1,
+            updated_at=datetime.utcnow(),
+        ),
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        return False
+    db.commit()
+    return True
+
+
+def get_test_budget_usage(
+    db: Session, company_id: int, store_connection_id: int,
+    channel_status: str = "ACCEPT",
+) -> int:
+    """지금까지 실제로 소모한 호출 수(0~`TEST_BUDGET_TOTAL_GET_LIMIT`).
+    확인창·상태 조회 전용 — 아무 것도 바꾸지 않는다."""
+
+    from app.domains.order.collection_model import OrderCollectionTestBudgetUsage
+
+    row = (
+        db.query(OrderCollectionTestBudgetUsage)
+        .filter(OrderCollectionTestBudgetUsage.company_id == company_id)
+        .filter(OrderCollectionTestBudgetUsage.store_connection_id == store_connection_id)
+        .filter(OrderCollectionTestBudgetUsage.channel_status == channel_status)
+        .first()
+    )
+    return row.get_calls_used if row is not None else 0
+
+
+class _TestBudgetExhaustedProvider:
+    """실제 provider.collect()를 절대 호출하지 않는다 — 예산이 이미
+    소진됐을 때 반환되는 안전한 자리표시자(성공 경로로 흘려보내지
+    않는다)."""
+
+    def collect(self, **_kwargs):
+        from app.domains.order.adapters.coupang_collection import (
+            CoupangOrderCollectionResult,
+        )
+
+        return CoupangOrderCollectionResult(
+            False, error_code=TEST_BUDGET_EXHAUSTED_ERROR_CODE,
+            error_summary="이 연결의 시험 전용 호출 예산을 모두 사용했습니다.",
+        )
+
+
+class _BudgetGuardedProvider:
+    """실제 조회 직전에 예산을 확인·소모한다 — 이미 소진됐으면
+    내부(실제 또는 Fake) Provider의 collect()를 아예 호출하지 않는다."""
+
+    def __init__(self, inner, db, company_id, store_connection_id, channel_status):
+        self._inner = inner
+        self._db = db
+        self._company_id = company_id
+        self._store_connection_id = store_connection_id
+        self._channel_status = channel_status
+
+    def collect(self, **kwargs):
+        if not _reserve_test_budget_call(
+            self._db, self._company_id, self._store_connection_id, self._channel_status,
+        ):
+            return _TestBudgetExhaustedProvider().collect(**kwargs)
+        return self._inner.collect(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -639,6 +760,9 @@ class TestBudgetPlan:
     retry_count: int
     will_write_order_or_purchase_task: bool
     will_submit_purchase_order_or_payment: bool
+    total_get_limit: int
+    get_calls_used: int
+    get_calls_remaining: int
     note: str = ""
 
 
@@ -678,6 +802,8 @@ def plan_test_budget_run(
     window_from, window_to = OrderCollectionCursorService(db).preview_window(
         company_id, store_connection_id, "ACCEPT", now=now,
     )
+    used = get_test_budget_usage(db, company_id, store_connection_id, "ACCEPT")
+    remaining = max(TEST_BUDGET_TOTAL_GET_LIMIT - used, 0)
     return TestBudgetPlan(
         company_id=company_id,
         store_connection_id=store_connection_id,
@@ -685,13 +811,18 @@ def plan_test_budget_run(
         window_from=window_from,
         window_to=window_to,
         max_pages=TEST_BUDGET_MAX_PAGES,
-        max_external_get_calls=TEST_BUDGET_MAX_PAGES,
+        max_external_get_calls=min(TEST_BUDGET_MAX_PAGES, remaining),
         retry_count=0,
         will_write_order_or_purchase_task=True,
         will_submit_purchase_order_or_payment=False,
+        total_get_limit=TEST_BUDGET_TOTAL_GET_LIMIT,
+        get_calls_used=used,
+        get_calls_remaining=remaining,
         note=(
             "연결 1개·ACCEPT 상태·페이지 1장(외부 GET 최대 1회)으로 "
-            "제한됩니다. 발주·결제·상품등록은 호출되지 않습니다."
+            f"제한됩니다. 이 연결의 전체 시험 예산은 {TEST_BUDGET_TOTAL_GET_LIMIT}회 "
+            f"중 {used}회 사용, {remaining}회 남았습니다. "
+            "발주·결제·상품등록은 호출되지 않습니다."
         ),
     )
 
@@ -727,7 +858,10 @@ def run_test_budget_collection(
     base_factory = provider_factory or CoupangOrderCollectionProvider
 
     def _page_capped_factory(credential):
-        return base_factory(credential, max_pages=TEST_BUDGET_MAX_PAGES)
+        inner = base_factory(credential, max_pages=TEST_BUDGET_MAX_PAGES)
+        return _BudgetGuardedProvider(
+            inner, db, company_id, store_connection_id, "ACCEPT",
+        )
 
     service = CoupangOrderCollectionService(
         db, credential_store, provider_factory=_page_capped_factory,
@@ -774,9 +908,12 @@ __all__ = [
     "trigger_company_now",
     "plan_manual_trigger",
     "TEST_BUDGET_MAX_PAGES",
+    "TEST_BUDGET_TOTAL_GET_LIMIT",
+    "TEST_BUDGET_EXHAUSTED_ERROR_CODE",
     "TestBudgetRunOutcome",
     "TestBudgetPlan",
     "TestBudgetRunResult",
+    "get_test_budget_usage",
     "plan_test_budget_run",
     "run_test_budget_collection",
 ]

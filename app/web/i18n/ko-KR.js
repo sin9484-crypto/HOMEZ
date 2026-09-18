@@ -2837,6 +2837,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "odo.test_budget_result_outcome": "결과: {outcome}",
   "odo.test_budget_result_counts": "신규 {new} / 중복 {duplicate} / 복구검토 {recovery} / 실패 {failed}",
   "odo.test_budget_result_errors": "오류 코드: {codes}",
+  "odo.test_budget_exhausted": "이 연결의 시험 전용 호출 예산을 모두 사용했습니다.",
 
   "operations_priorities.hint": "여러 도메인의 실제 상태를 모아 긴급도순으로 보여줍니다 — 새 판단 로직 없이 기존 집계와 분석 결과만 재사용합니다.",
   "operations_priorities.empty_title": "지금 우선 처리할 업무가 없습니다",

@@ -60,8 +60,12 @@ from app.domains.order.adapters.coupang_collection import CoupangOrderPage
 from app.domains.order.auto_collection_scheduler import CONSECUTIVE_FAILURE_DEMOTE_THRESHOLD
 from app.domains.order.auto_collection_scheduler import OrderCollectionTickOutcome
 from app.domains.order.auto_collection_scheduler import get_or_create_auto_collection_state
+from app.domains.order.auto_collection_scheduler import TEST_BUDGET_EXHAUSTED_ERROR_CODE
 from app.domains.order.auto_collection_scheduler import TEST_BUDGET_MAX_PAGES
+from app.domains.order.auto_collection_scheduler import TEST_BUDGET_TOTAL_GET_LIMIT
 from app.domains.order.auto_collection_scheduler import TestBudgetRunOutcome
+from app.domains.order.auto_collection_scheduler import _reserve_test_budget_call
+from app.domains.order.auto_collection_scheduler import get_test_budget_usage
 from app.domains.order.auto_collection_scheduler import plan_manual_trigger
 from app.domains.order.auto_collection_scheduler import plan_test_budget_run
 from app.domains.order.auto_collection_scheduler import run_order_collection_tick
@@ -71,6 +75,7 @@ from app.domains.order.auto_collection_scheduler import trigger_company_now
 from app.domains.order.collection_model import OrderAutoCollectionState
 from app.domains.order.collection_model import OrderChannelFulfillment
 from app.domains.order.collection_model import OrderCollectionCursor
+from app.domains.order.collection_model import OrderCollectionTestBudgetUsage
 from app.domains.order.collection_model import OrderSkuResolution
 from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.collection_service import OrderCollectionCursorService
@@ -586,6 +591,7 @@ class TestBudgetRunTestCase(unittest.TestCase):
                 UnresolvedOrderItem.__table__, OrderCollectionCursor.__table__,
                 OrderSkuResolution.__table__, Order.__table__,
                 FunctionAutomationState.__table__, EmergencyStop.__table__,
+                OrderCollectionTestBudgetUsage.__table__,
             ],
         )
         self.db = sessionmaker(bind=self.engine)()
@@ -753,6 +759,199 @@ class TestBudgetRunTestCase(unittest.TestCase):
         self.assertEqual(self.db.query(Order).count(), 0)
         position = self.db.query(OrderCollectionCursor).one()
         self.assertIsNone(position.last_successful_to)
+
+    # ---- 2026-09-18 D1 추가 확인 — max_pages(회당 페이지 상한)와
+    # 총예산(TEST_BUDGET_TOTAL_GET_LIMIT, 여러 번의 실행을 합친 총
+    # 호출 수)을 구분해서 검증한다. ----------------------------------
+
+    def test_total_budget_blocks_third_call_without_touching_provider(self):
+        conn = self._make_connection()
+        attempts = []
+
+        def factory(_credentials, *, max_pages=None):
+            def _record(**kwargs):
+                attempts.append(kwargs)
+                return _empty_success_result()
+            return _RecordingProvider(_record)
+
+        for _ in range(TEST_BUDGET_TOTAL_GET_LIMIT):
+            result = run_test_budget_collection(
+                self.db, self.store, 1, conn.id, provider_factory=factory,
+                is_restricted_mode_check=_NOT_RESTRICTED,
+            )
+            self.assertEqual(result.outcome, TestBudgetRunOutcome.SUCCEEDED)
+        self.assertEqual(len(attempts), TEST_BUDGET_TOTAL_GET_LIMIT)
+
+        third = run_test_budget_collection(
+            self.db, self.store, 1, conn.id, provider_factory=factory,
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(third.outcome, TestBudgetRunOutcome.FAILED)
+        self.assertIn(TEST_BUDGET_EXHAUSTED_ERROR_CODE, third.error_codes)
+        # 3번째 시도는 실제(또는 Fake) Provider의 collect()에 도달하지
+        # 않는다 — 예산 소진 후에는 시도 자체를 막는다.
+        self.assertEqual(len(attempts), TEST_BUDGET_TOTAL_GET_LIMIT)
+
+    def test_failed_attempt_still_counts_against_total_budget(self):
+        """"실패 요청도 실제 전송됐다면 호출 예산에 포함한다" — 실제
+        전송을 시도했다가 실패한 응답(네트워크 오류 등)도 예산을
+        소모해야 한다."""
+
+        conn = self._make_connection()
+        failing_result = CoupangOrderCollectionResult(
+            False, error_code="NETWORK_ERROR", error_summary="시뮬레이션된 네트워크 오류",
+        )
+        for _ in range(TEST_BUDGET_TOTAL_GET_LIMIT):
+            result = run_test_budget_collection(
+                self.db, self.store, 1, conn.id,
+                provider_factory=self._page_aware_factory(failing_result),
+                is_restricted_mode_check=_NOT_RESTRICTED,
+            )
+            self.assertEqual(result.outcome, TestBudgetRunOutcome.FAILED)
+
+        self.assertEqual(
+            get_test_budget_usage(self.db, 1, conn.id, "ACCEPT"),
+            TEST_BUDGET_TOTAL_GET_LIMIT,
+        )
+        third = run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(failing_result),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertIn(TEST_BUDGET_EXHAUSTED_ERROR_CODE, third.error_codes)
+
+    def test_budget_blocked_before_send_does_not_count(self):
+        """EmergencyStop처럼 실제 전송 전에 막힌 시도는 예산을
+        소모하지 않는다."""
+
+        conn = self._make_connection()
+        self.safety.activate_emergency_stop("테스트", set_by=1, is_admin=True)
+        run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(get_test_budget_usage(self.db, 1, conn.id, "ACCEPT"), 0)
+
+    def test_budget_persists_across_fresh_session_simulating_restart(self):
+        conn = self._make_connection()
+        connection_id = conn.id
+        run_test_budget_collection(
+            self.db, self.store, 1, connection_id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.db.close()
+
+        fresh_db = sessionmaker(bind=self.engine)()
+        try:
+            self.assertEqual(get_test_budget_usage(fresh_db, 1, connection_id, "ACCEPT"), 1)
+        finally:
+            fresh_db.close()
+            self.db = sessionmaker(bind=self.engine)()  # tearDown 복구
+
+    def test_concurrent_reservation_only_one_of_two_racers_wins(self):
+        """동시 요청 시험 — 예산이 정확히 1회 남았을 때 두 스레드가
+        동시에 예약을 시도하면 하나만 성공해야 한다(조건부 UPDATE의
+        원자성)."""
+
+        import threading
+
+        conn = self._make_connection()
+        connection_id = conn.id  # self.db.close() 이후에도 쓸 수 있도록 값만 미리 뽑아 둔다.
+        # 예산을 1회만 남긴다.
+        run_test_budget_collection(
+            self.db, self.store, 1, connection_id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.db.close()
+
+        results = []
+        errors = []
+        barrier = threading.Barrier(2)
+
+        def _race():
+            session = sessionmaker(bind=self.engine)()
+            try:
+                barrier.wait(timeout=5)
+                results.append(_reserve_test_budget_call(session, 1, connection_id, "ACCEPT"))
+            except Exception as exc:  # noqa: BLE001 - 스레드 예외를 메인 스레드로 전달
+                errors.append(exc)
+            finally:
+                session.close()
+
+        threads = [threading.Thread(target=_race) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(results), [False, True])
+        self.db = sessionmaker(bind=self.engine)()  # tearDown 복구
+        self.assertEqual(
+            get_test_budget_usage(self.db, 1, connection_id, "ACCEPT"),
+            TEST_BUDGET_TOTAL_GET_LIMIT,
+        )
+
+    def test_window_override_from_the_past_does_not_regress_cursor(self):
+        """window_override로 과거 구간을 다시 조회해도, 갱신되는
+        커서는 항상 그 실행 시점의 "지금"까지 전진한다 — 조회 구간이
+        과거여도 커서를 그 과거 시점으로 되돌리지 않는다."""
+
+        conn = self._make_connection()
+        # 먼저 한 번 성공시켜 커서를 T0 부근까지 전진시켜 둔다.
+        run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        position_after_first = self.db.query(OrderCollectionCursor).one()
+        advanced_to = position_after_first.last_successful_to
+        self.assertIsNotNone(advanced_to)
+
+        # 예산을 초기화하지 않고는 두 번째 호출이 막히므로, 갱신되는
+        # 커서가 어느 것인지만 명시적으로 확인한다: company_id=1,
+        # store_connection_id=conn.id, channel_status="ACCEPT" 하나뿐이다.
+        cursors = self.db.query(OrderCollectionCursor).all()
+        self.assertEqual(len(cursors), 1)
+        self.assertEqual(cursors[0].company_id, 1)
+        self.assertEqual(cursors[0].store_connection_id, conn.id)
+        self.assertEqual(cursors[0].channel_status, "ACCEPT")
+
+        # 아주 오래된 과거를 window_override로 지정해도(성공한다면)
+        # last_successful_to는 그 과거 시점이 아니라 실행 시점
+        # "지금"까지 전진해야 한다 — succeed()가 항상 lease.
+        # created_at_to를 쓰고 window_override를 쓰지 않기 때문이다
+        # (app/domains/order/coupang_collection_service.py).
+        old_window = (
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            datetime(2020, 1, 1, 1, tzinfo=timezone.utc),
+        )
+        # 예산이 이미 소진됐을 수 있으니 직접 리셋 없이, 아직 남아
+        # 있으면 재사용한다(TEST_BUDGET_TOTAL_GET_LIMIT=2 기준 1회 남음).
+        if get_test_budget_usage(self.db, 1, conn.id, "ACCEPT") < TEST_BUDGET_TOTAL_GET_LIMIT:
+            run_test_budget_collection(
+                self.db, self.store, 1, conn.id, window_override=old_window,
+                provider_factory=self._page_aware_factory(_empty_success_result()),
+                is_restricted_mode_check=_NOT_RESTRICTED,
+            )
+            position_after_second = self.db.query(OrderCollectionCursor).one()
+            self.assertGreater(
+                position_after_second.last_successful_to, old_window[1].replace(tzinfo=None),
+            )
+            self.assertGreaterEqual(
+                position_after_second.last_successful_to, advanced_to,
+            )
+
+
+class _RecordingProvider:
+    def __init__(self, on_collect):
+        self._on_collect = on_collect
+
+    def collect(self, **kwargs):
+        return self._on_collect(**kwargs)
 
 
 if __name__ == "__main__":
