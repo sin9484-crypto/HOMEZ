@@ -577,9 +577,20 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
 
     실제 구현한 것: 상품 조회(GET seller/product{,/{code}})·주문
     조회(GET seller/order{,/{code}}) — 읽기 전용, `OnchannelApiClient`
-    (app/domains/purchase_task/onchannel_client.py)에 위임한다. 발주
-    (POST seller/order/regist)는 실제 금전·개인정보 결과를 만들므로
-    이 Adapter에도 아직 만들지 않았다 — 사용자 승인 이후 별도 라운드.
+    (app/domains/purchase_task/onchannel_client.py)에 위임한다.
+
+    2026-09-18 정정(D2 반자동 흐름 감사, 결함 아님 — 문서 드리프트) —
+    바로 위 문단이 "발주(POST seller/order/regist)는 이 Adapter에도
+    아직 만들지 않았다"고 남아 있었으나 이는 오래된 서술이다. 실제로는
+    `submit_order()`(아래, `OnchannelApiClient.register_order()`에
+    위임)가 이미 구현되어 있고, `PurchaseOrderSubmissionService.
+    submit_order()`(order_submission_service.py)를 통해 실제 발주
+    경로가 이 Adapter에 도달한다 — `confirm_real_submission=True`
+    (라우터가 재인증 토큰과 함께만 전달), EmergencyStop/PAUSED·ERROR
+    미해제, 판매신청 접수 확인, 포인트·배송비 재확인, 유효한
+    사용자 최종 승인(10분 이내, 미소비) 네 가지가 전부 통과해야만
+    실제로 호출된다 — "코드가 존재한다"와 "승인됐다"는 여전히
+    구분된다.
 
     **이 세션은 실제 저장된 JWT로 이 메서드들을 단 한 번도 호출하지
     않았다** — 코드는 준비됐지만 실행은 사용자의 명시적 승인(정확한

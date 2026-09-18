@@ -19,6 +19,7 @@ import unittest
 import unittest.mock as mock
 
 from sqlalchemy import create_engine
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.exceptions import BadRequestException
@@ -36,10 +37,12 @@ from app.domains.purchase_task.model import PurchaseChannelConnectionEvent
 from app.domains.automation_safety.model import EmergencyStop
 from app.domains.automation_safety.model import FunctionAutomationState
 from app.domains.purchase_task.model import PurchaseOrderApproval
+from app.domains.purchase_task.model import PurchaseTask
 from app.domains.purchase_task.model import PurchaseTaskPolicySetting
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
 from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
 from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
+from app.domains.purchase_task.constants import PurchaseTaskStatus
 from app.domains.purchase_task.order_submission_service import (
     PurchaseOrderSubmissionService,
 )
@@ -57,6 +60,17 @@ VALID_KWARGS = dict(
     options=[{"id": 1, "qty": 1}],
     recv_name="홍길동", recv_tell="02-000-0000", recv_mobile="010-0000-0000",
     zipcode="00000", address="서울시 어딘가",
+)
+
+
+_AUDIT_LOGS_DDL = (
+    "CREATE TABLE audit_logs ("
+    "id INTEGER NOT NULL PRIMARY KEY, "
+    "company_id INTEGER, user_id INTEGER, "
+    "action VARCHAR(100) NOT NULL, entity VARCHAR(100) NOT NULL, "
+    "entity_id VARCHAR(100) NOT NULL, description VARCHAR(500), "
+    "ip_address VARCHAR(50)"
+    ")"
 )
 
 
@@ -92,6 +106,7 @@ class OrderSubmissionServiceTestCaseBase(unittest.TestCase):
                 PurchaseOrderSubmissionAttempt.__table__,
                 PurchaseSalesApplicationAttempt.__table__,
                 PurchaseOrderApproval.__table__,
+                PurchaseTask.__table__,
                 PurchaseTaskPolicySetting.__table__,
                 EmergencyStop.__table__, FunctionAutomationState.__table__,
                 VirtualStockZeroProposal.__table__,
@@ -100,6 +115,9 @@ class OrderSubmissionServiceTestCaseBase(unittest.TestCase):
                 RecallProductBlock.__table__,
             ],
         )
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql(_AUDIT_LOGS_DDL)
+            conn.commit()
         self.SessionLocal = sessionmaker(
             autocommit=False, autoflush=False, bind=self.engine,
         )
@@ -1644,6 +1662,81 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
                 purchase_task_id=45, confirm_real_submission=True, **VALID_KWARGS,
             )
         self.assertIn("배송비 포함 최종 필요 포인트", str(ctx.exception))
+
+    # ---- 2026-09-18 D2 반자동 필수 흐름 보완 ----------------------------
+    # 온채널 API 발주 성공 후 PurchaseTask.status가 TRACKING_REQUIRED로
+    # 전환되지 않으면 송장 등록 화면에 도달할 방법이 없어 흐름이
+    # 끊긴다(record_purchase()는 이 트랙에서 전혀 호출되지 않는다).
+
+    def _create_task(self, *, task_id, status=PurchaseTaskStatus.SEARCH_REQUIRED):
+        task = PurchaseTask(
+            id=task_id, company_id=self.company_a.id, source_order_id=1,
+            product_title="테스트 상품", idempotency_key=f"task-{task_id}",
+            status=status,
+        )
+        self.db.add(task)
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
+    def test_successful_order_advances_linked_purchase_task_to_tracking_required(self):
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        self._create_task(task_id=46, status=PurchaseTaskStatus.PURCHASE_READY)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=46,
+        )
+
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-advance-task",
+            purchase_task_id=46, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        task = self.db.query(PurchaseTask).filter(PurchaseTask.id == 46).one()
+        self.assertEqual(task.status, PurchaseTaskStatus.TRACKING_REQUIRED)
+
+        audit_row = self.db.execute(
+            text(
+                "SELECT action FROM audit_logs WHERE entity_id = '46' "
+                "AND action = 'PURCHASE_TASK_ADVANCED_AFTER_ONCHANNEL_ORDER'",
+            ),
+        ).fetchone()
+        self.assertIsNotNone(audit_row)
+
+    def test_terminal_purchase_task_status_is_not_overwritten(self):
+        """이미 종결/차단된 작업(예: BLOCKED)은 발주가 성공해도 그대로
+        둔다 — 임의로 되돌리거나 앞으로 넘기지 않는다."""
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        self._create_task(task_id=47, status=PurchaseTaskStatus.BLOCKED)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=47,
+        )
+
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-terminal-task",
+            purchase_task_id=47, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        task = self.db.query(PurchaseTask).filter(PurchaseTask.id == 47).one()
+        self.assertEqual(task.status, PurchaseTaskStatus.BLOCKED)
+
+    def test_advance_helper_is_a_no_op_when_task_row_does_not_exist(self):
+        """`purchase_task_id`가 주어졌지만 실제 행이 없으면(예: 이미
+        삭제됐거나 다른 회사 소속) 조용히 아무 것도 하지 않는다 —
+        발주 자체는 이미 성공했으므로 예외를 던지지 않는다."""
+
+        self.service._advance_task_after_successful_order(
+            999999, self.company_a.id, order_code="ORDER-X", triggered_by=1,
+        )  # 예외 없이 조용히 반환되어야 한다.
+        self.assertEqual(
+            self.db.query(PurchaseTask).filter(PurchaseTask.id == 999999).count(), 0,
+        )
 
 
 class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):

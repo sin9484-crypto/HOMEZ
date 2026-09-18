@@ -39,6 +39,7 @@ from app.domains.purchase_task.channel_connection_service import (
 )
 from app.domains.purchase_task.constants import OrderSubmissionStatus
 from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
+from app.domains.purchase_task.constants import PurchaseTaskStatus
 from app.domains.purchase_task.constants import TrackingRefreshResult
 from app.domains.purchase_task.constants import UnknownResolutionStatus
 from app.domains.purchase_task.model import PurchaseChannelConnection
@@ -61,6 +62,17 @@ VALID_KWARGS = dict(
     options=[{"id": 1, "qty": 1}],
     recv_name="홍길동", recv_tell="02-000-0000", recv_mobile="010-0000-0000",
     zipcode="00000", address="서울시 어딘가",
+)
+
+
+_AUDIT_LOGS_DDL = (
+    "CREATE TABLE audit_logs ("
+    "id INTEGER NOT NULL PRIMARY KEY, "
+    "company_id INTEGER, user_id INTEGER, "
+    "action VARCHAR(100) NOT NULL, entity VARCHAR(100) NOT NULL, "
+    "entity_id VARCHAR(100) NOT NULL, description VARCHAR(500), "
+    "ip_address VARCHAR(50)"
+    ")"
 )
 
 
@@ -90,10 +102,13 @@ class OrderResolutionTestCaseBase(unittest.TestCase):
                 PurchaseOrderSubmissionAttempt.__table__,
                 PurchaseOrderUnknownResolutionEvent.__table__,
                 PurchaseSalesApplicationAttempt.__table__,
-                PurchaseOrderApproval.__table__,
+                PurchaseOrderApproval.__table__, PurchaseTask.__table__,
                 EmergencyStop.__table__, FunctionAutomationState.__table__,
             ],
         )
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql(_AUDIT_LOGS_DDL)
+            conn.commit()
         self.SessionLocal = sessionmaker(
             autocommit=False, autoflush=False, bind=self.engine,
         )
@@ -444,6 +459,55 @@ class ResolveUnknownAttemptTestCase(OrderResolutionTestCaseBase):
 
         self.db.refresh(approval)
         self.assertEqual(approval.status, PurchaseOrderApprovalStatus.CONSUMED)
+
+    def test_order_confirmed_advances_linked_purchase_task_to_tracking_required(self):
+        """2026-09-18 D2 필수흐름 보완 — RESULT_UNKNOWN이었어도 사람이
+        온채널 관리자 화면에서 실제 주문 생성을 확인했다면(order_code
+        확보) submit_order()의 SUCCEEDED 경로와 동일하게 task.status를
+        TRACKING_REQUIRED로 전환해야 송장 등록 화면에 도달할 수 있다."""
+
+        connection = self._make_ready_connection()
+        task = PurchaseTask(
+            id=307, company_id=self.company_a.id, source_order_id=1,
+            product_title="테스트 상품", idempotency_key="task-307",
+            status=PurchaseTaskStatus.PURCHASE_READY,
+        )
+        self.db.add(task)
+        self.db.commit()
+        attempt = self._make_unknown_attempt(connection=connection, task_id=307)
+
+        self.service.resolve_unknown_attempt(
+            attempt.id, self.company_a.id,
+            resolution=UnknownResolutionStatus.ORDER_CONFIRMED,
+            order_code="OC-CONFIRMED-3", resolved_by=7,
+        )
+
+        self.db.refresh(task)
+        self.assertEqual(task.status, PurchaseTaskStatus.TRACKING_REQUIRED)
+
+    def test_order_not_confirmed_does_not_advance_purchase_task(self):
+        """반대로 "주문 미생성 확인"은 어떤 성공도 의미하지 않으므로
+        task.status를 건드리지 않는다."""
+
+        connection = self._make_ready_connection()
+        task = PurchaseTask(
+            id=308, company_id=self.company_a.id, source_order_id=1,
+            product_title="테스트 상품", idempotency_key="task-308",
+            status=PurchaseTaskStatus.PURCHASE_READY,
+        )
+        self.db.add(task)
+        self.db.commit()
+        attempt = self._make_unknown_attempt(connection=connection, task_id=308)
+
+        self.service.resolve_unknown_attempt(
+            attempt.id, self.company_a.id,
+            resolution=UnknownResolutionStatus.ORDER_NOT_CONFIRMED,
+            basis="온채널 관리자 화면에서 주문 생성 이력 없음을 확인함",
+            resolved_by=7,
+        )
+
+        self.db.refresh(task)
+        self.assertEqual(task.status, PurchaseTaskStatus.PURCHASE_READY)
 
 
 class AttemptHistoryTestCase(OrderResolutionTestCaseBase):

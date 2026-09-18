@@ -69,6 +69,7 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.audit_db import write_audit_log
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
@@ -81,14 +82,29 @@ from app.domains.purchase_task.channel_connection_service import (
 )
 from app.domains.purchase_task.constants import OrderSubmissionStatus
 from app.domains.purchase_task.constants import PurchaseOrderApprovalStatus
+from app.domains.purchase_task.constants import PurchaseTaskStatus
 from app.domains.purchase_task.constants import SalesApplicationStatus
 from app.domains.purchase_task.constants import UnknownResolutionStatus
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
 from app.domains.purchase_task.model import PurchaseOrderApproval
 from app.domains.purchase_task.model import PurchaseOrderUnknownResolutionEvent
+from app.domains.purchase_task.model import PurchaseTask
 from app.domains.purchase_task.sales_application_service import (
     PurchaseSalesApplicationService,
 )
+
+# 2026-09-18 D2 반자동 필수 흐름 보완(결함) — 온채널 API 발주 트랙은
+# 기존 수동(브라우저 구매) 트랙의 record_purchase()/PURCHASE_READY→
+# USER_PAYMENT_PENDING 절차를 타지 않는다. 실제 발주가 성공해도
+# PurchaseTask.status가 그대로면 송장 등록 화면(TRACKING_REQUIRED
+# 전용, app/domains/purchase_task/service.py::record_tracking())에
+# 도달할 방법이 없어 반자동 흐름이 여기서 끊긴다. 이미 종결·차단된
+# 상태(BLOCKED/FAILED/CANCEL_REQUIRED/TRACKING_REQUIRED 이후 등)는
+# 건드리지 않고, "아직 매입 진행 중"이던 상태에서만 전환한다.
+_ADVANCEABLE_BEFORE_ONCHANNEL_ORDER = frozenset({
+    PurchaseTaskStatus.SEARCH_REQUIRED, PurchaseTaskStatus.CANDIDATES_READY,
+    PurchaseTaskStatus.REVIEW_REQUIRED, PurchaseTaskStatus.PURCHASE_READY,
+})
 
 
 class PurchaseOrderSubmissionService:
@@ -300,6 +316,22 @@ class PurchaseOrderSubmissionService:
 
         self.db.commit()
         self.db.refresh(attempt)
+
+        # 2026-09-18 D2 필수흐름 보완(결함, submit_order()의 SUCCEEDED
+        # 경로와 동일한 사각지대) — RESULT_UNKNOWN이었더라도 사람이
+        # 온채널 관리자 화면에서 실제 주문 생성을 확인했다면(order_code
+        # 확보) 발주가 성공한 것과 같은 사실이다. 여기서도 task.status를
+        # 전환하지 않으면 송장 등록 화면에 영영 도달할 수 없다.
+        if (
+            resolution == UnknownResolutionStatus.ORDER_CONFIRMED
+            and attempt.purchase_task_id is not None
+        ):
+            self._advance_task_after_successful_order(
+                attempt.purchase_task_id, company_id,
+                order_code=attempt.unknown_resolved_order_code or "",
+                triggered_by=resolved_by,
+            )
+
         return attempt
 
     # ---------------- 실제 발주 실행 ----------------
@@ -501,6 +533,12 @@ class PurchaseOrderSubmissionService:
             attempt, status=OrderSubmissionStatus.SUCCEEDED,
             external_order_code=order_code,
         )
+
+        if purchase_task_id is not None:
+            self._advance_task_after_successful_order(
+                purchase_task_id, company_id, order_code=order_code,
+                triggered_by=triggered_by,
+            )
 
         # 2026-09-15 Phase 9C(7-16) — 이 연결로 발주가 실제로
         # 성공했으므로 휴면 판정 기준 시각을 지금으로 갱신한다. 조회
@@ -801,6 +839,39 @@ class PurchaseOrderSubmissionService:
         attempt.finished_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(attempt)
+
+    def _advance_task_after_successful_order(
+        self, purchase_task_id: int, company_id: int, *,
+        order_code: str, triggered_by: int | None,
+    ) -> None:
+        """실제 발주 성공 직후에만 호출한다(호출자가 이미
+        OrderSubmissionStatus.SUCCEEDED를 커밋한 뒤). 이 작업에 배정된
+        `PurchaseTask`가 없으면(`purchase_task_id=None`으로 단건 발주를
+        호출한 경우) 아무 것도 하지 않는다 — 실패로 취급하지 않는다
+        (발주 자체는 이미 완전히 성공했으므로)."""
+
+        task = (
+            self.db.query(PurchaseTask)
+            .filter(PurchaseTask.id == purchase_task_id)
+            .filter(PurchaseTask.company_id == company_id)
+            .first()
+        )
+        if task is None or task.status not in _ADVANCEABLE_BEFORE_ONCHANNEL_ORDER:
+            return
+
+        previous_status = task.status
+        task.status = PurchaseTaskStatus.TRACKING_REQUIRED
+        self.db.commit()
+
+        write_audit_log(
+            self.db, user_id=triggered_by, company_id=company_id,
+            action="PURCHASE_TASK_ADVANCED_AFTER_ONCHANNEL_ORDER",
+            entity="purchase_task", entity_id=str(purchase_task_id),
+            description=(
+                f"온채널 발주 성공으로 상태 전환: {previous_status} -> "
+                f"TRACKING_REQUIRED (order_code={order_code})"
+            ),
+        )
 
 
 __all__ = ["PurchaseOrderSubmissionService"]
