@@ -507,3 +507,27 @@ D3 자체에서는 이 한계를 이용하지 않는다는 뜻이다).
 - 이 조사 결과가 판매신청 POST 실행을 정당화하지 않는다 — 목록
   조회 범위가 좁았다는 사실 자체가 판매신청을 임의로 밀어붙일 근거는
   아니다.
+
+## 28. Migration 적용 준비 (항목 6, 계획만 — 원본 미적용)
+
+**실제 pending 목록과의 대조(읽기 전용 확인, 값 변경 없음)**: 실제
+`homez.db`의 `schema_migrations` 테이블을 조회한 결과 적용된 행이
+정확히 73개이고, 가장 최근 적용분은 `20260916_02_add_order_auto_
+collection_state_last_run_counts.sql`이다. 저장소의 `migrations/`
+디렉터리에는 74개 파일이 있다 — **차이는 정확히 1개**,
+`20260918_00_create_order_collection_test_budget_usage_schema.sql`
+뿐이다(다른 미승인 Migration이 함께 섞여 있지 않음을 확인했다).
+
+| 항목 | 값 |
+|---|---|
+| 적용 대상 DB 경로 | `C:\Users\Daum pc\Homez-OS\homez.db`(현재 크기 3,702,784바이트) |
+| 적용할 파일(정확히 1개) | `migrations/20260918_00_create_order_collection_test_budget_usage_schema.sql` |
+| 파일 SHA-256 | `93ca072401873e920365f1974fd70116626544c81cfd9ff0fc880597a481b4b1` |
+| 파일 크기 | 1,762바이트 |
+| 변경 범위 | `CREATE TABLE order_collection_test_budget_usages`(신규 테이블 1개) + 인덱스 3개, 기존 테이블 ALTER 없음 |
+| 백업 절차 | 기존 `BackupService.create_backup()` 경로 재사용(Online Backup API로 파일 복사 → `integrity_check` → SHA-256 → 암호화 → 북키핑) — 이번 라운드에서 새로 만들지 않는다 |
+| 복구 절차 | 적용 실패 시 직전 백업 파일로 복원(기존 `BackupService`/`RestoreService` 경로 재사용) — Migration 자체의 롤백은 `DROP TABLE IF EXISTS order_collection_test_budget_usages`(migration 파일 하단 주석으로 이미 기록됨) |
+| 승인하지 않은 다른 Migration 동반 적용 가능성 | 없음(위 대조로 확인 — 정확히 1개만 pending) |
+
+**이번 라운드에서 원본 적용은 실행하지 않는다** — 위 표는 계획 근거일
+뿐이며, 실행은 별도의 명시적 승인 이후에만 한다.
