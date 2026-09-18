@@ -945,6 +945,46 @@ class TestBudgetRunTestCase(unittest.TestCase):
                 position_after_second.last_successful_to, advanced_to,
             )
 
+    def test_concurrent_reservation_across_real_processes_only_one_wins(self):
+        """2026-09-18 D2 항목 5 — 스레드가 아니라 별도 OS 프로세스
+        두 개가 정확히 같은 순간에 예산이 1회 남은 상태에서 예약을
+        시도해도 하나만 성공해야 한다. 조건부 UPDATE(WHERE
+        get_calls_used < 한도)는 Python 프로세스 내부 락이 아니라
+        SQLite 자체의 트랜잭션 원자성에 의존하므로, 프로세스 경계와
+        무관하게 보장되어야 한다는 것을 실제로 증명한다(스레드
+        테스트만으로는 "같은 프로세스 안에서만 안전하다"는 반례를
+        배제할 수 없다)."""
+
+        import multiprocessing
+
+        from tests.support.test_budget_reservation_worker import reserve_once
+
+        conn = self._make_connection()
+        connection_id = conn.id
+        # 예산을 1회만 남긴다.
+        run_test_budget_collection(
+            self.db, self.store, 1, connection_id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.db.commit()
+        self.db.close()
+
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(processes=2) as pool:
+            results = pool.starmap(
+                reserve_once,
+                [(self.path, 1, connection_id, "ACCEPT")] * 2,
+            )
+
+        self.assertEqual(sorted(results), [False, True])
+
+        self.db = sessionmaker(bind=self.engine)()  # tearDown 복구
+        self.assertEqual(
+            get_test_budget_usage(self.db, 1, connection_id, "ACCEPT"),
+            TEST_BUDGET_TOTAL_GET_LIMIT,
+        )
+
 
 class _RecordingProvider:
     def __init__(self, on_collect):
