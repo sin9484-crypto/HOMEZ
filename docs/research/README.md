@@ -5,6 +5,7 @@
 
 | 보고서 | 자료 | 상태 |
 | --- | --- | --- |
+| [기존 구현 응용 연구 42개](20260918_HOMEZ_CAPABILITY_APPLICATION_RESEARCH.md) | 실제 코드 표본·NAVER API HUB·커머스·쿠팡·MFDS 공식 문서 | 우선순위·데이터 의존성 정리, 구현 승인 아님 |
 | [영상 누적 분석](20260914_VIDEO_CTO_REVIEW.md) | Aside 브라우저, Amazon 소싱 실행 영상 | 개선 후보 정리, 구현 승인 아님 |
 
 기존 V8 상세 설계: [이미지 리딩 설계](../HOMEZ_V8_VISUAL_COMMERCE_INTELLIGENCE_DESIGN_20260912.md).
