@@ -378,6 +378,12 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 미연결/실패 주문수) 추가(ALTER TABLE ADD COLUMN). 동일한
             # 이유로 추가. 실제 운영 DB에는 아직 미적용이다.
             "20260916_02_add_order_auto_collection_state_last_run_counts.sql",
+            # 2026-09-18 Phase 7B 실제 테스트 주문 검증(D1 추가확인) —
+            # 시험 전용 호출 예산 총량을 프로세스 재시작에도 살아남게
+            # 영구 기록하기 위한 신규 테이블 1개
+            # (order_collection_test_budget_usages). 동일한 이유로
+            # 추가. 실제 운영 DB에는 아직 미적용이다.
+            "20260918_00_create_order_collection_test_budget_usage_schema.sql",
         ]
 
         all_files = sorted(
