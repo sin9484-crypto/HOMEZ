@@ -589,6 +589,74 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
         # 네트워크 호출보다 먼저 막는다.
         self.assertEqual(len(call_log), 1)
 
+    def test_internal_finalize_failure_after_external_success_leaves_attempt_in_flight_and_blocks_retry(self):
+        """2026-09-19 후속(항목 4 — 과거 안전성 보고 근거 보완) —
+        "mtime 불변"이나 "성공 후 반복 클릭 차단" 테스트만으로는
+        "외부 발주는 성공했지만 그 직후 내부 확정 커밋이 실패"하는
+        정확한 시나리오를 직접 다루지 않는다는 지적에 대한 격리
+        테스트다. 실제 발주는 하지 않는다 — 여전히 Fake Adapter.
+
+        attempt.status=IN_FLIGHT는 adapter.submit_order() 호출
+        *이전*에 이미 커밋된다(order_submission_service.py:462-471).
+        그 직후 _finalize_attempt(SUCCEEDED)의 커밋이 예외로
+        실패하면, DB에는 IN_FLIGHT 그대로 남아야 한다 — 그리고 그
+        상태 확인은 매번 새로 DB를 읽는 _has_blocking_task_attempt/
+        UNIQUE 제약 기반이므로, "재시작"(새 서비스 인스턴스)
+        이후에도 재시도가 실 API를 다시 호출하지 않아야 한다."""
+
+        connection = self._make_ready_connection()
+        call_log = []
+        self._install_fake_adapter(result="ORDER-CRASH-1", call_log=call_log)
+
+        real_finalize = PurchaseOrderSubmissionService._finalize_attempt
+
+        def _boom(self_svc, attempt, *, status, external_order_code=None, failure_detail=None):
+            if status == OrderSubmissionStatus.SUCCEEDED:
+                raise RuntimeError("시뮬레이션: 내부 확정 커밋 중 DB 오류")
+            return real_finalize(
+                self_svc, attempt, status=status,
+                external_order_code=external_order_code, failure_detail=failure_detail,
+            )
+
+        with mock.patch.object(PurchaseOrderSubmissionService, "_finalize_attempt", _boom):
+            with self.assertRaises(RuntimeError):
+                self.service.submit_order(
+                    connection.id, self.company_a.id, idempotency_key="k-crash",
+                    confirm_real_submission=True, **VALID_KWARGS,
+                )
+
+        self.assertEqual(len(call_log), 1, "외부 호출 자체는 실제로 1회 나갔다(성공 응답까지 받음).")
+
+        attempt = (
+            self.db.query(PurchaseOrderSubmissionAttempt)
+            .filter(PurchaseOrderSubmissionAttempt.idempotency_key == "k-crash")
+            .one()
+        )
+        self.assertEqual(
+            attempt.status, OrderSubmissionStatus.IN_FLIGHT,
+            "확정 커밋이 실패하면 그 이전에 이미 커밋된 IN_FLIGHT 상태로 남아야 한다.",
+        )
+        self.assertIsNone(
+            attempt.external_order_code,
+            "확정 실패 시 order_code도 함께 커밋되지 않아야 한다(반쪽 기록 금지).",
+        )
+
+        # "재시작" 흉내 — 같은 DB에 대해 완전히 새 서비스 인스턴스로
+        # 같은 idempotency_key를 재시도한다.
+        restarted_service = PurchaseOrderSubmissionService(self.db)
+        call_log_after_restart = []
+        self._install_fake_adapter(result="ORDER-CRASH-2", call_log=call_log_after_restart)
+
+        with self.assertRaises(ConflictException):
+            restarted_service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-crash",
+                confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertEqual(
+            call_log_after_restart, [],
+            "재시작 후 재시도도 실 API를 다시 호출하지 않는다 — DB 잠금이 먼저 막는다.",
+        )
+
     def test_concurrent_attempt_with_same_pending_key_blocked_at_db_level(self):
         """동시 실행 — 이미 PENDING/IN_FLIGHT인 시도가 있으면(아직
         결과가 나기 전이라도) 두 번째 시도는 UNIQUE 제약으로 거부된다."""

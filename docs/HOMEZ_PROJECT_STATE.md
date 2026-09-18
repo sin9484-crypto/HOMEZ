@@ -1,5 +1,69 @@
 # Current Version
 
+**HOMEZ V7 — D1·D2 최종 정정 + 매입 실비용 연결(예산 예약 확정) + D3 준비
+(2026-09-19).**
+
+**항목 2 정정 — 온채널 조회 기록.** 이전 라운드가 "정상판매 1건(CH1147184)
+응답은 `page_size=1` 때문"이라고 적은 것은 실제 호출 로그가 아니라 코드
+기본값(`page_size=1`)을 그대로 실제 호출값으로 추측한 오류였다. 실행 주체
+(Codex)가 실제로 보낸 파라미터는 `page=1, page_size=100, status=1`이었고,
+스펙상 `total_cnt`/`last_page`는 `page_size`와 무관하게 서버가 계산하는
+값이므로(`page_size=100 ≫ total_cnt=1`), 1건이라는 결과는 페이지 크기의
+한계가 아니라 **"이 연결 계정의 status=1(정상판매) 상품이 정확히 1개"**
+라는 서버 자신의 보고다. 다만 `status`는 1~5 중 하나만 거르는 필터라서
+단종·판매중단·일시품절·품절 상태 상품 유무는 여전히 알 수 없다 — 결론
+(성급한 일반화 금지)은 유지되고 근거만 바뀌었다. 상세: 감사 문서 30절.
+
+**항목 3 — 매입 실비용을 기존 예산 예약(FundingAccount·
+PurchaseTaskBudgetReservation)에 연결.** 온채널 실 발주 트랙은
+`record_purchase()`(수동 트랙 전용, USER_PAYMENT_PENDING 상태에서만 허용)를
+타지 않아, 정책평가 단계에서 이미 잡힌 예산 예약(양쪽 트랙 공통)이 RESERVED
+상태로 영원히 남아 커밋도 해제도 되지 않는 결함이 있었다. `refresh_tracking_
+live()`가 실 API(`GET seller/order/{code}`)로 받는 `sum_product_price`/
+`sum_delivery_price`/`sum_add_price`(스펙에 있었지만 이전까지 파싱하지 않던
+필드)로 그 예약만 확정·조정하도록 연결했다(`PurchaseTaskService.
+_reconcile_onchannel_order_reservation()`). 확인되지 않은 금액은 0으로
+채우지 않고, 자금 부족 시 예외 없이 안전하게 재시도 가능한 상태로 남긴다.
+정상 SUCCEEDED·사람이 확정한 UNKNOWN→ORDER_CONFIRMED 양쪽 경로, 반복
+조회(재시작 포함) 멱등성, 환불(`record_refund()`) 연계까지 격리 테스트로
+검증했다(`tests/test_purchase_task_service.py::OnchannelCostReconciliation*`,
+`OnchannelRefundAfterReconciliationTestCase`).
+
+**항목 3에서 별도 승인 대상으로 남긴 것(Model 변경 필요, 미구현)**:
+`PurchaseRecord`(지출한도 집계 `sum_recorded_amount_since()`의 유일한
+소스)는 모델 자체가 "Provider가 자동으로 채우지 않는다"는 것을 전제로
+설계돼 있어(사람이 직접 입력), 이번처럼 API 응답으로 자동 채우면 그
+전제와 충돌한다. 그래서 이번 라운드는 예산 예약(내부 회계) 확정까지만
+연결했고, "온채널 실 주문도 지출한도 집계에 잡히게" 하려면 (a) `PurchaseRecord`
+에 출처 구분 필드를 추가하는 Model+Migration 변경, 또는 (b)
+`record_purchase()`의 상태 전제(USER_PAYMENT_PENDING만 허용)를 온채널
+트랙까지 넓히는 코드 변경 — 둘 중 하나가 필요하다. 둘 다 이번 라운드에는
+포함하지 않았다(별도 승인 대상).
+
+**항목 4 — 과거 안전성 보고 근거 보완.** "mtime 불변"은 그 실행 시점에
+DB 파일을 수정하지 않았다는 관측 사실일 뿐, 그 자체로 "DB 무접촉"이나
+장애복구 전체가 증명됐다는 뜻으로 확대하지 않는다. "외부 발주 성공 직후
+내부 확정 커밋이 실패"하는 정확한 시나리오를 직접 재현하는 기존 테스트가
+없었음을 확인하고, 격리 테스트 1건을 추가했다(`_finalize_attempt`의 SUCCEEDED
+커밋만 예외를 강제해 실 DB 오류를 흉내내고, 재시작을 흉내낸 새 서비스
+인스턴스로 재시도까지 확인 — 실제 발주는 하지 않음). 결과: IN_FLIGHT는
+외부 호출 이전에 이미 커밋되므로 확정 실패 후에도 IN_FLIGHT로 남고,
+`_has_blocking_task_attempt`/idempotency UNIQUE 제약이 매번 DB를 새로
+조회하는 구조라 재시작 후에도 재시도가 실 API를 다시 호출하지 않는다.
+
+**Migration**: 재확인 결과 여전히 미적용 1개(`20260918_00_...`)뿐, 이번
+라운드에서 새 Migration을 추가하지 않았다(항목 3은 Model 변경 없이 코드로만
+구현). 원본 적용은 이번에도 실행하지 않았다.
+
+**상품등록·매핑 상태**: 변화 없음 — 여전히 "D3 준비 작업 가능" 단계이며
+"실제 주문 실행 준비 완료"가 아니다. 상세 근거·후보별 정리표는
+`docs/HOMEZ_D3_REAL_TRANSACTION_PREPARATION_20260918.md` 1·1-1·2절 참고.
+
+이번 라운드에서도 실제 업무 DB 변경·자격증명 사용·업무 API 호출·주문·발주·
+결제는 실행하지 않았다.
+
+---
+
 **HOMEZ V7 — D1·D2 반자동 필수흐름 결함 수정 + D3 실제 거래 준비 (2026-09-18,
 5영업일 일정 D1·D2).**
 

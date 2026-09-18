@@ -297,6 +297,13 @@ class TrackingLookupResult:
     delivery_status: str | None
     detail: str
     multiple_deliveries_detected: bool = False
+    # 2026-09-19 후속(항목 3 매입 실비용 연결) — 배송 조회와 같은
+    # 실 API 응답(GET seller/order/{code})에 포함된 실제 청구
+    # 내역이다. 배송정보와 무관하게 항상 채울 수 있으면 채운다 —
+    # 없으면(스펙상 required 아님) None으로 두고 0으로 채우지 않는다.
+    sum_product_price: int | None = None
+    sum_delivery_price: int | None = None
+    sum_add_price: int | None = None
 
 
 @dataclass(frozen=True)
@@ -893,6 +900,9 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
                 support=CapabilitySupport.SUPPORTED, courier=None,
                 tracking_number=None, delivery_status=order.detail_status,
                 detail="아직 등록된 송장이 없습니다(온채널 실 API 조회 결과).",
+                sum_product_price=order.sum_product_price,
+                sum_delivery_price=order.sum_delivery_price,
+                sum_add_price=order.sum_add_price,
             )
 
         if len(order.deliverys) > 1:
@@ -911,6 +921,9 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
                     "않습니다 — 온채널 원본 화면에서 직접 확인하세요."
                 ),
                 multiple_deliveries_detected=True,
+                sum_product_price=order.sum_product_price,
+                sum_delivery_price=order.sum_delivery_price,
+                sum_add_price=order.sum_add_price,
             )
 
         latest = order.deliverys[-1]
@@ -919,6 +932,9 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
             tracking_number=latest.tracking_number,
             delivery_status=order.detail_status,
             detail="온채널 실 API 조회 결과(주문 상세의 배송 정보).",
+            sum_product_price=order.sum_product_price,
+            sum_delivery_price=order.sum_delivery_price,
+            sum_add_price=order.sum_add_price,
         )
 
     def capability_matrix(self) -> dict[str, str]:

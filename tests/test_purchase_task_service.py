@@ -14,6 +14,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock as mock
 from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
@@ -32,8 +33,14 @@ from app.domains.automation_safety.service import SafetyService
 from app.domains.company.model import Company
 from app.domains.funding.model import FundingAccount
 from app.domains.funding.model import FundingLedger
+from app.domains.funding.service import FundingService
+from app.domains.purchase_task.constants import BudgetReservationStatus
+from app.domains.purchase_task.constants import OrderSubmissionStatus
 from app.domains.purchase_task.constants import PurchaseTaskStatus
 from app.domains.purchase_task.model import (
+    PurchaseChannelConnection,
+    PurchaseChannelConnectionEvent,
+    PurchaseOrderSubmissionAttempt,
     PurchaseRecord,
     PurchaseTask,
     PurchaseTaskBudgetReservation,
@@ -748,6 +755,346 @@ class NotificationWiringTestCase(PurchaseTaskServiceTestCaseBase):
             if m.event_type == "DEADLINE_APPROACHING"
         ]
         self.assertEqual(len(events), 1)
+
+
+class OnchannelCostReconciliationTestCaseBase(PurchaseTaskServiceTestCaseBase):
+    """2026-09-19 항목 3(매입 실비용 연결) — 온채널 실 발주 트랙은
+    record_purchase()(USER_PAYMENT_PENDING 전용)를 타지 않아, 정책
+    평가 단계에서 이미 잡힌 예산 예약(_reserve_budget, 양쪽 트랙
+    공통)이 확정도 해제도 되지 않은 채 RESERVED로 영원히 남는 결함이
+    있었다. 이 테스트들은 `refresh_tracking_live()`가 실 API
+    (GET seller/order/{code})의 sum_product_price/sum_delivery_price/
+    sum_add_price로 그 예약만 확정·조정하는 새 연결
+    (`_reconcile_onchannel_order_reservation`)을 검증한다.
+    PurchaseRecord는 만들지 않는다(모델 자체의 "사람이 직접 입력"
+    전제와 충돌 — 별도 승인 대상으로 남겨둠, 보고서 참고)."""
+
+    def setUp(self):
+
+        super().setUp()
+        Base.metadata.create_all(
+            bind=self.engine,
+            tables=[
+                PurchaseChannelConnection.__table__,
+                PurchaseChannelConnectionEvent.__table__,
+                PurchaseOrderSubmissionAttempt.__table__,
+            ],
+        )
+
+        self.connection = PurchaseChannelConnection(
+            company_id=self.company.id, mall_code="ONCHANNEL",
+            account_label="테스트 계정", status="CONNECTED",
+            connection_method="CREDENTIAL", idempotency_key="conn:oc-cost:1",
+        )
+        self.db.add(self.connection)
+        self.db.commit()
+
+    def _ready_onchannel_task(self, key):
+        """PURCHASE_READY까지(양쪽 트랙 공통 예산 예약 포함) 실제
+        파이프라인으로 진행한 뒤, 온채널 실 발주 성공을 흉내 낸다
+        (record_purchase()는 호출하지 않음 — 그게 이 결함의 정의다)."""
+
+        task, candidate, result = self._to_ready(key=key)
+        self.assertEqual(result.decision, "ALLOW")
+        self.db.refresh(self.account)
+        reservation = self.repository_reservation(task)
+        self.assertEqual(reservation.status, BudgetReservationStatus.RESERVED)
+
+        attempt = PurchaseOrderSubmissionAttempt(
+            company_id=self.company.id, connection_id=self.connection.id,
+            purchase_task_id=task.id, idempotency_key=f"{key}-attempt",
+            mall_code="ONCHANNEL", product_code="CH1",
+            options_json="[]", status=OrderSubmissionStatus.SUCCEEDED,
+            external_order_code=f"OC-{key}",
+        )
+        self.db.add(attempt)
+        task.status = PurchaseTaskStatus.TRACKING_REQUIRED
+        self.db.add(PurchaseTaskTrackingInfo(
+            company_id=self.company.id, purchase_task_id=task.id,
+        ))
+        self.db.commit()
+        return task, reservation, attempt
+
+    def repository_reservation(self, task):
+
+        return self.service.repository.get_reservation(
+            task.budget_reservation_id, self.company.id,
+        )
+
+    def _patch_lookup_tracking(self, *, result=None, error=None):
+
+        from app.domains.purchase_task.channel_connection_service import (
+            PurchaseChannelConnectionService,
+        )
+
+        patcher = mock.patch.object(
+            PurchaseChannelConnectionService, "lookup_tracking",
+            side_effect=error, return_value=result,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _tracking_result(
+        self, *, sum_product_price=None, sum_delivery_price=None,
+        sum_add_price=None, tracking_number="111222333", courier="CJ대한통운",
+    ):
+
+        from app.domains.purchase_task.channel_adapter import TrackingLookupResult
+
+        return TrackingLookupResult(
+            support="SUPPORTED", courier=courier, tracking_number=tracking_number,
+            delivery_status="IN_TRANSIT", detail="ok",
+            sum_product_price=sum_product_price,
+            sum_delivery_price=sum_delivery_price,
+            sum_add_price=sum_add_price,
+        )
+
+
+class OnchannelCostReconciliationTestCase(OnchannelCostReconciliationTestCaseBase):
+
+    def test_exact_match_confirms_reservation_and_appends_ledger_once(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-exact")
+        reserved_amount = reservation.amount
+        held_before = self.account.held_amount
+
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=int(reserved_amount) - 3000, sum_delivery_price=3000,
+            sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(reservation)
+        self.db.refresh(self.account)
+        self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
+        self.assertEqual(self.account.held_amount, held_before, "정확히 일치하면 조정이 없다.")
+
+        commit_ledgers = (
+            self.db.query(FundingLedger)
+            .filter(
+                FundingLedger.reference_id == task.id,
+                FundingLedger.type == FundingService.TYPE_HOLD_COMMIT,
+            )
+            .all()
+        )
+        self.assertEqual(len(commit_ledgers), 1, "확정 원장은 정확히 1건만 생겨야 한다.")
+        self.assertEqual(commit_ledgers[0].amount, reserved_amount)
+
+    def test_actual_higher_than_reserved_reserves_the_difference(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-higher")
+        reserved_amount = reservation.amount
+        held_before = self.account.held_amount
+
+        higher_product_price = int(reserved_amount) - 3000 + 500
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=higher_product_price, sum_delivery_price=3000,
+            sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(reservation)
+        self.db.refresh(self.account)
+        self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
+        self.assertEqual(self.account.held_amount, held_before + 500)
+
+    def test_actual_lower_than_reserved_releases_the_difference(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-lower")
+        reserved_amount = reservation.amount
+        held_before = self.account.held_amount
+
+        lower_product_price = int(reserved_amount) - 3000 - 1000
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=lower_product_price, sum_delivery_price=3000,
+            sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(reservation)
+        self.db.refresh(self.account)
+        self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
+        self.assertEqual(self.account.held_amount, held_before - 1000)
+
+    def test_insufficient_funds_blocks_without_corrupting_state_or_raising(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-insufficient")
+        reserved_amount = reservation.amount
+        held_before = self.account.held_amount
+
+        # 실제 결제금액이 예약보다 훨씬 크고, 남은 운영가능금액을
+        # 초과하도록 만든다.
+        huge_product_price = int(self.account.total_funding) + 999999
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=huge_product_price, sum_delivery_price=0, sum_add_price=0,
+        ))
+
+        tracking = self.service.refresh_tracking_live(task.id, self.company.id)
+        self.assertIsNotNone(tracking, "배송조회 자체는 실패하지 않아야 한다.")
+
+        self.db.refresh(reservation)
+        self.db.refresh(self.account)
+        self.assertEqual(
+            reservation.status, BudgetReservationStatus.RESERVED,
+            "자금 부족이면 확정하지 않고 그대로 재시도 가능한 상태로 남긴다.",
+        )
+        self.assertEqual(self.account.held_amount, held_before, "부분 조정 없이 완전히 원상태.")
+
+        commit_ledgers = (
+            self.db.query(FundingLedger)
+            .filter(
+                FundingLedger.reference_id == task.id,
+                FundingLedger.type == FundingService.TYPE_HOLD_COMMIT,
+            )
+            .all()
+        )
+        self.assertEqual(len(commit_ledgers), 0, "실패한 조정은 절대 원장에 기록하지 않는다.")
+
+    def test_repeated_refresh_does_not_double_commit(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-repeat")
+        reserved_amount = reservation.amount
+
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=int(reserved_amount) - 3000, sum_delivery_price=3000,
+            sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        # 반복 클릭 방지 간격을 우회해 "재시작 후 다시 조회" 상황을
+        # 재현한다 — 예약이 이미 CONFIRMED이므로 두 번째 호출은
+        # 아무 것도 추가하지 않아야 한다.
+        tracking = self.service.repository.get_tracking(task.id, self.company.id)
+        tracking.last_live_refresh_at = None
+        self.db.commit()
+
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        commit_ledgers = (
+            self.db.query(FundingLedger)
+            .filter(
+                FundingLedger.reference_id == task.id,
+                FundingLedger.type == FundingService.TYPE_HOLD_COMMIT,
+            )
+            .all()
+        )
+        self.assertEqual(len(commit_ledgers), 1, "이미 CONFIRMED면 재조회해도 중복 커밋하지 않는다.")
+
+    def test_missing_price_fields_leaves_reservation_untouched(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-missing-price")
+
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=None, sum_delivery_price=None, sum_add_price=None,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(reservation)
+        self.assertEqual(
+            reservation.status, BudgetReservationStatus.RESERVED,
+            "확인되지 않은 금액을 0으로 채우거나 추정하지 않는다 — 그대로 둔다.",
+        )
+
+    def test_partial_price_fields_do_not_get_zero_filled(self):
+        """상품가는 왔지만 배송비 합계가 응답에 없는(스펙상 필수가
+        아님) 경우 — 배송비를 0으로 간주해 조기 확정하지 않는다."""
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-partial-price")
+
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=int(reservation.amount) - 3000,
+            sum_delivery_price=None, sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(reservation)
+        self.assertEqual(
+            reservation.status, BudgetReservationStatus.RESERVED,
+            "일부 금액 필드가 없으면 나머지를 0으로 채워 조정하지 않는다.",
+        )
+
+    def test_unknown_order_confirmed_path_also_reconciles(self):
+        """정상 SUCCEEDED 경로가 아니라 사람이 RESULT_UNKNOWN을
+        ORDER_CONFIRMED로 직접 확정한 경로에서도 동일하게 동작해야
+        한다(지시문 명시 검증 대상)."""
+
+        task, candidate, result = self._to_ready(key="oc-unknown-confirmed")
+        reservation = self.repository_reservation(task)
+        reserved_amount = reservation.amount
+
+        attempt = PurchaseOrderSubmissionAttempt(
+            company_id=self.company.id, connection_id=self.connection.id,
+            purchase_task_id=task.id, idempotency_key="oc-unknown-confirmed-attempt",
+            mall_code="ONCHANNEL", product_code="CH1", options_json="[]",
+            status=OrderSubmissionStatus.RESULT_UNKNOWN,
+            unknown_resolution_status="ORDER_CONFIRMED",
+            unknown_resolved_order_code="OC-UNKNOWN-CONFIRMED",
+        )
+        self.db.add(attempt)
+        task.status = PurchaseTaskStatus.TRACKING_REQUIRED
+        self.db.add(PurchaseTaskTrackingInfo(
+            company_id=self.company.id, purchase_task_id=task.id,
+        ))
+        self.db.commit()
+
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=int(reserved_amount) - 3000, sum_delivery_price=3000,
+            sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(reservation)
+        self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
+
+
+class OnchannelRefundAfterReconciliationTestCase(OnchannelCostReconciliationTestCaseBase):
+    """환불 조정(지시문 3번) — 온채널 실비용 확정 이후 request_cancel/
+    record_refund가 (수동 트랙과 동일하게) 안전하게 동작하는지 —
+    이번 라운드에서 새로 만든 예약-확정 연결이 기존 환불 경로와
+    충돌하지 않는지 확인한다(신규 환불 코드는 추가하지 않음)."""
+
+    def test_refund_after_reconciliation_releases_correct_amount_only(self):
+
+        task, reservation, attempt = self._ready_onchannel_task("oc-refund")
+        reserved_amount = reservation.amount
+
+        self._patch_lookup_tracking(result=self._tracking_result(
+            sum_product_price=int(reserved_amount) - 3000, sum_delivery_price=3000,
+            sum_add_price=0,
+        ))
+        self.service.refresh_tracking_live(task.id, self.company.id)
+
+        self.db.refresh(self.account)
+        held_after_confirm = self.account.held_amount
+
+        task.status = PurchaseTaskStatus.CANCEL_REQUIRED
+        self.db.commit()
+
+        self.service.record_refund(
+            task.id, self.company.id, refund_amount=reserved_amount, recorded_by=1,
+        )
+
+        self.db.refresh(self.account)
+        self.assertEqual(
+            self.account.held_amount, held_after_confirm - reserved_amount,
+            "확정된 예약 금액만큼만 정확히 해제돼야 한다(과다·과소 해제 금지).",
+        )
+
+        ledgers = (
+            self.db.query(FundingLedger)
+            .filter(FundingLedger.reference_id == task.id)
+            .order_by(FundingLedger.id)
+            .all()
+        )
+        types = [ledger.type for ledger in ledgers]
+        self.assertEqual(
+            types,
+            [
+                FundingService.TYPE_HOLD_CREATE, FundingService.TYPE_HOLD_COMMIT,
+                FundingService.TYPE_HOLD_RELEASE,
+            ],
+            "예약 생성(정책평가) + 확정(온채널 실비용) + 해제(환불), 그 외 자동 생성 없음.",
+        )
 
 
 class CompanyIsolationTestCase(PurchaseTaskServiceTestCaseBase):

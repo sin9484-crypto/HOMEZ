@@ -1196,6 +1196,128 @@ class PurchaseTaskService:
             return confirmed.unknown_resolved_order_code, confirmed.connection_id
         return None
 
+    def _reconcile_onchannel_order_reservation(
+        self, task: PurchaseTask, company_id: int, *,
+        order_code: str, sum_product_price: int | None,
+        sum_delivery_price: int | None, sum_add_price: int | None,
+        triggered_by: int | None,
+    ) -> None:
+        """2026-09-19 항목 3(매입 실비용 연결) — 온채널 실 발주 트랙은
+        `record_purchase()`(수동 트랙 전용, USER_PAYMENT_PENDING만
+        허용)를 타지 않아 `_reserve_budget()`으로 잡힌 예산 예약이
+        RESERVED 상태로 영원히 남는다(커밋도 해제도 되지 않음).
+        `refresh_tracking_live()`가 실 API(GET seller/order/{code})로
+        받은 `sum_product_price`/`sum_delivery_price`/`sum_add_price`
+        (스펙에 정의돼 있었지만 이전까지 파싱하지 않던 필드)로 그
+        예약만 확정/조정한다.
+
+        **`PurchaseRecord`는 이 메서드에서 만들지 않는다** —
+        `PurchaseRecord`는 "Provider가 자동으로 채우지 않는다"는
+        것을 스스로 전제로 문서화한 모델이다(model.py의
+        `PurchaseRecord` 클래스 docstring). 이 메서드는 API 응답을
+        받아 자동으로 실행되므로 그 전제와 맞지 않아, 사람이 직접
+        입력하는 "사용자가 확인한 금액" 기록(PurchaseRecord →
+        `sum_recorded_amount_since()` 지출한도 집계)에는 아직
+        연결하지 않는다 — 이 연결에는 별도의 Model 변경(또는
+        `record_purchase()`의 상태 전제 확장) 승인이 필요하며, 이번
+        라운드 보고서에 별도 항목으로 남긴다.
+
+        예약이 없거나(budget_reservation_id is None) 이미 CONFIRMED
+        상태면 조용히 아무것도 하지 않는다(재시도 안전 — 반복
+        호출·재시작 모두 이 두 조건 중 하나로 자연히 멱등적이다).
+        자금이 부족해 조정이 안 되면 예외를 던져 이 메서드를 호출한
+        `refresh_tracking_live()`(배송조회가 원래 목적)까지 실패시키지
+        않는다 — 감사로그만 남기고 예약은 그대로 두어(RESERVED),
+        다음 조회 때 다시 시도할 수 있게 한다.
+
+        예약 자체가 애초에 "상품가+배송비" 합계로 잡힌다
+        (`_reserve_budget()`가 정책평가 시점에 계산하는
+        `required_budget`, `record_purchase()`가 이미 같은
+        합계 기준으로 예약과 비교하는 것과 동일한 관례 — 배송비를
+        뺀 상품가만으로 비교하면 예약보다 항상 작게 계산돼 매번
+        "차액 반환"이 벌어진다). 세 필드 중 하나라도 없으면(스펙상
+        전부 required는 아님) 0으로 채워 넣지 않고 조정 자체를
+        보류한다."""
+
+        if sum_product_price is None or sum_delivery_price is None or sum_add_price is None:
+            return
+
+        if task.budget_reservation_id is None:
+            return
+
+        reservation = self.repository.get_reservation(
+            task.budget_reservation_id, company_id,
+        )
+        if reservation is None or reservation.status == BudgetReservationStatus.CONFIRMED:
+            return
+
+        account = self.funding.repository.get_account_by_company(company_id)
+        if account is None:
+            return
+
+        actual_amount = float(sum_product_price + sum_delivery_price + sum_add_price)
+
+        if reservation.status in (
+            BudgetReservationStatus.RESERVED, BudgetReservationStatus.EXTENDED,
+        ):
+            diff = actual_amount - reservation.amount
+            if diff != 0:
+                if diff > 0 and not self._reserve_budget_conditional(account.id, diff):
+                    _audit(
+                        self.db, company_id=company_id, user_id=triggered_by,
+                        action="PURCHASE_TASK_ONCHANNEL_COST_RECONCILE_BLOCKED",
+                        entity_id=task.id,
+                        description=(
+                            f"온채널 실제 매입비 확정 실패(운영 가능 금액 부족): "
+                            f"order_code={order_code} actual_amount={actual_amount} "
+                            f"reserved={reservation.amount}"
+                        ),
+                    )
+                    self.db.commit()
+                    return
+                if diff < 0:
+                    self._release_budget(account.id, -diff)
+            reservation.status = BudgetReservationStatus.CONFIRMED
+            reservation.confirmed_at = datetime.utcnow()
+        else:
+            if not self._reserve_budget_conditional(account.id, actual_amount):
+                _audit(
+                    self.db, company_id=company_id, user_id=triggered_by,
+                    action="PURCHASE_TASK_ONCHANNEL_COST_RECONCILE_BLOCKED",
+                    entity_id=task.id,
+                    description=(
+                        f"온채널 실제 매입비 확정 실패(예약 만료 후 재예약 불가, "
+                        f"운영 가능 금액 부족): order_code={order_code} "
+                        f"actual_amount={actual_amount}"
+                    ),
+                )
+                self.db.commit()
+                return
+            reservation.status = BudgetReservationStatus.CONFIRMED
+            reservation.confirmed_at = datetime.utcnow()
+
+        self._append_ledger(
+            account.id, company_id, actual_amount,
+            FundingService.TYPE_HOLD_COMMIT, task.id,
+            (
+                f"온채널 실 API 주문상세 조회로 확인된 실제 매입비 확정 "
+                f"— order_code={order_code}"
+                + (
+                    f", 배송비(API 확인)={sum_delivery_price}"
+                    if sum_delivery_price is not None else ""
+                )
+            ),
+        )
+        _audit(
+            self.db, company_id=company_id, user_id=triggered_by,
+            action="PURCHASE_TASK_ONCHANNEL_COST_RECONCILED", entity_id=task.id,
+            description=(
+                f"온채널 실제 매입비 확정: order_code={order_code} "
+                f"amount={actual_amount} shipping={sum_delivery_price}"
+            ),
+        )
+        self.db.commit()
+
     def refresh_tracking_live(
         self, task_id: int, company_id: int, *, triggered_by: int | None = None,
     ) -> PurchaseTaskTrackingInfo:
@@ -1253,6 +1375,20 @@ class PurchaseTaskService:
             self.db.commit()
             self.db.refresh(tracking)
             return tracking
+
+        # 2026-09-19 항목 3(매입 실비용 연결) — 배송조회 성공 여부와
+        # 무관하게(복수송장·송장미등록이어도 주문 금액 필드는 이미
+        # 응답에 있을 수 있다), 실 API가 확인해준 실제 금액이 있으면
+        # 예산 예약을 확정/조정한다. 이 호출 자체의 원래 목적(배송조회
+        # 결과 반환)은 절대 건드리지 않는다 — 아래 메서드는 실패해도
+        # 예외를 던지지 않고 조용히 재시도 가능한 상태로 남긴다.
+        self._reconcile_onchannel_order_reservation(
+            task, company_id, order_code=order_code,
+            sum_product_price=getattr(result, "sum_product_price", None),
+            sum_delivery_price=getattr(result, "sum_delivery_price", None),
+            sum_add_price=getattr(result, "sum_add_price", None),
+            triggered_by=triggered_by,
+        )
 
         if result.multiple_deliveries_detected:
             # 조회 실패는 배송조회 실패로만 기록한다 — 기존에 저장된

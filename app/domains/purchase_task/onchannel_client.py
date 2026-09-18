@@ -252,6 +252,15 @@ class OnchannelOrder:
     status: str | None
     detail_status: str | None
     deliverys: tuple[OnchannelOrderDelivery, ...]
+    # 2026-09-19 후속(항목 3 매입 실비용 연결) — 스펙에 정의돼 있지만
+    # 이전까지 파싱하지 않던 필드. `order_price`(총액)와 달리 이 세
+    # 필드는 실제 청구 내역의 항목별 분해값이라, 발주 성공 후의
+    # 실제 매입비/배송비를 구분해 기록하는 데 필요하다. 스펙에
+    # `required`로 명시돼 있지 않으므로 응답에 없을 수 있다 —
+    # 항상 `.get()`으로 읽고 없으면 None으로 둔다(0으로 채우지 않음).
+    sum_product_price: int | None = None
+    sum_delivery_price: int | None = None
+    sum_add_price: int | None = None
 
 
 def _classify_and_raise(status_code: int, body: Any) -> None:
@@ -473,6 +482,9 @@ class OnchannelApiClient:
                 order_price=result.get("order_price", 0),
                 status=result.get("status"), detail_status=result.get("detail_status"),
                 deliverys=deliverys,
+                sum_product_price=result.get("sum_product_price"),
+                sum_delivery_price=result.get("sum_delivery_price"),
+                sum_add_price=result.get("sum_add_price"),
             )
         except KeyError as exc:
             raise OnchannelResponseFormatError(
