@@ -14,6 +14,7 @@ from app.core.windows_credential_store import CredentialNotFoundError
 from app.core.windows_credential_store import CredentialStore
 from app.core.windows_credential_store import CredentialStoreError
 from app.domains.order.adapters.coupang_collection import ALLOWED_STATUSES
+from app.domains.order.adapters.coupang_collection import MAX_WINDOW
 from app.domains.order.adapters.coupang_collection import (
     CoupangOrderCollectionProvider,
 )
@@ -95,9 +96,29 @@ class CoupangOrderCollectionService:
     def run(
         self, company_id: int, connection_id: int, channel_status: str,
         *, actor_user_id: int = 0,
+        window_override: tuple[datetime, datetime] | None = None,
     ) -> CoupangCollectionRunResult:
+        """2026-09-18 Phase 7B 호출예산 보완(항목 3) — `window_override`가
+        주어지면 커서가 자동 계산한 조회 구간 대신 이 구간으로 쿠팡을
+        조회한다(동일 주문 중복 재조회 시험 전용 — 두 번째 실행이
+        커서 전진 때문에 다른 구간을 보게 되는 문제를 막는다). 커서
+        잠금·전진(성공 시 `lease.created_at_to`까지 전진)은 평소와
+        동일하게 그대로 수행한다 — 운영 커서를 되돌리거나 DB를 직접
+        수정하지 않는다. 서버가 이 구간의 폭을 검증해(`MAX_WINDOW`
+        이하, 미래 아님) 호출자가 임의로 범위를 넓히지 못하게 한다."""
+
         if channel_status not in ALLOWED_STATUSES:
             raise BadRequestException("지원하지 않는 쿠팡 주문 상태입니다.")
+        if window_override is not None:
+            override_from, override_to = window_override
+            if override_from.tzinfo is None or override_to.tzinfo is None:
+                raise BadRequestException("조회 구간은 타임존 정보가 있어야 합니다.")
+            if override_to <= override_from:
+                raise BadRequestException("조회 구간이 올바르지 않습니다.")
+            if override_to - override_from >= MAX_WINDOW:
+                raise BadRequestException("조회 구간이 허용 범위를 초과했습니다.")
+            if override_to > datetime.now(timezone.utc):
+                raise BadRequestException("조회 구간이 미래 시각을 포함할 수 없습니다.")
         connection = self.validate_connection(self.db, company_id, connection_id)
         try:
             credential = self.credential_store.read(
@@ -124,11 +145,15 @@ class CoupangOrderCollectionService:
         lease = position_service.acquire(
             company_id, connection_id, channel_status,
         )
+        query_from, query_to = (
+            window_override if window_override is not None
+            else (lease.created_at_from, lease.created_at_to)
+        )
         try:
             provider = self.provider_factory(credential)
             result = provider.collect(
-                created_at_from=lease.created_at_from,
-                created_at_to=lease.created_at_to,
+                created_at_from=query_from,
+                created_at_to=query_to,
                 status=channel_status,
             )
         except Exception:

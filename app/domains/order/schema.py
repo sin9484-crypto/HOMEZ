@@ -188,6 +188,51 @@ class OrderCollectionOpsPlanResponse(BaseModel):
     note: str
 
 
+# 2026-09-18 Phase 7B 실제 테스트 주문 검증 — 시험 전용 호출 예산(연결
+# 1개·ACCEPT 고정·페이지 1장 상한). 위의 일반 실행계획과는 별개의,
+# 더 좁은 범위 전용 스키마다.
+
+class OrderCollectionTestBudgetPlanResponse(BaseModel):
+    company_id: int
+    store_connection_id: int
+    channel_status: str
+    window_from: datetime
+    window_to: datetime
+    max_pages: int
+    max_external_get_calls: int
+    retry_count: int
+    will_write_order_or_purchase_task: bool
+    will_submit_purchase_order_or_payment: bool
+    note: str
+
+
+class OrderCollectionTestBudgetTriggerRequest(BaseModel):
+    store_connection_id: int
+    # 지정하면(동일 주문 중복 재조회 시험) 이 구간을 그대로 다시
+    # 쓴다 — 생략하면(최초 수집) 서버가 커서 기준으로 새로 계산한다.
+    # 둘 다 주거나 둘 다 생략해야 한다(서버가 검증).
+    window_from: datetime | None = None
+    window_to: datetime | None = None
+
+
+class OrderCollectionTestBudgetTriggerResponse(BaseModel):
+    outcome: str
+    store_connection_id: int
+    channel_status: str
+    max_pages: int
+    window_from: datetime | None = None
+    window_to: datetime | None = None
+    run_status: str | None = None
+    received_order_count: int = 0
+    new_fulfillment_count: int = 0
+    duplicate_fulfillment_count: int = 0
+    new_unresolved_item_count: int = 0
+    recovery_review_count: int = 0
+    failed_order_count: int = 0
+    error_codes: list[str] = []
+    skip_reason: str = ""
+
+
 class UnresolvedOrderItemResponse(BaseModel):
     id: int
     fulfillment_id: int

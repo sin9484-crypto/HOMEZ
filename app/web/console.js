@@ -6321,6 +6321,18 @@
             ? `<button id="odo-resume-btn" class="btn btn-secondary">${escapeHtml(HomezI18n.t("odo.resume_btn"))}</button>`
             : `<button id="odo-pause-btn" class="btn btn-ghost">${escapeHtml(HomezI18n.t("odo.pause_btn"))}</button>`}
         </div>
+
+        <h3>${escapeHtml(HomezI18n.t("odo.test_budget_heading"))}</h3>
+        <p class="hint-text">${escapeHtml(HomezI18n.t("odo.test_budget_hint"))}</p>
+        <div class="field-row">
+          <label class="field"><span class="field-label">${escapeHtml(HomezI18n.t("odo.test_budget_connection_label"))}</span>
+            <input id="odo-test-budget-connection-input" type="number" min="1"></label>
+        </div>
+        <div class="dialog-actions" style="justify-content:flex-start;">
+          <button id="odo-test-budget-first-btn" class="btn btn-secondary btn-sm">${escapeHtml(HomezI18n.t("odo.test_budget_first_btn"))}</button>
+          <button id="odo-test-budget-requery-btn" class="btn btn-secondary btn-sm" disabled>${escapeHtml(HomezI18n.t("odo.test_budget_requery_btn"))}</button>
+        </div>
+        <div id="odo-test-budget-result"></div>
       </div>
     `;
 
@@ -6362,6 +6374,113 @@
         const result = await apiFetch("/orders/collection-ops/trigger", { method: "POST" });
         toast(HomezI18n.t("odo.trigger_success", { outcome: result.outcome }), "success");
         loadOrderCollectionOps();
+      } catch (err) {
+        toast((err && err.message) || HomezI18n.t("odo.trigger_error"), "error");
+      }
+    }));
+
+    // 2026-09-18 Phase 7B 실제 테스트 주문 검증 — 연결 1개·ACCEPT
+    // 고정·페이지 1장 상한(외부 GET 최대 1회) 시험 전용. 최초 수집의
+    // 응답 시간범위를 여기(클로저 변수)에 기억해 뒀다가, "동일 범위
+    // 재조회" 버튼이 그 값을 그대로 되돌려 보낸다 — 커서가 전진해도
+    // 같은 구간을 다시 조회하는 시험이 가능해진다. 화면을 새로
+    // 불러오면(loadOrderCollectionOps 재호출) 이 값은 사라진다 —
+    // 의도된 동작이다(한 번의 시험 세션 동안만 유효).
+    let testBudgetLastWindow = null;
+
+    function renderTestBudgetResult(result) {
+      const box = el("odo-test-budget-result");
+      const lines = [
+        HomezI18n.t("odo.test_budget_result_outcome", { outcome: result.outcome }),
+        HomezI18n.t("odo.test_budget_result_counts", {
+          new: result.new_fulfillment_count, duplicate: result.duplicate_fulfillment_count,
+          recovery: result.recovery_review_count, failed: result.failed_order_count,
+        }),
+      ];
+      if (result.error_codes && result.error_codes.length > 0) {
+        lines.push(HomezI18n.t("odo.test_budget_result_errors", { codes: result.error_codes.join(", ") }));
+      }
+      box.innerHTML = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+    }
+
+    el("odo-test-budget-first-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const connectionId = Number(el("odo-test-budget-connection-input").value);
+      if (!Number.isInteger(connectionId) || connectionId <= 0) {
+        toast(HomezI18n.t("odo.test_budget_connection_required"), "error");
+        return;
+      }
+
+      let plan;
+      try {
+        plan = await apiFetch(`/orders/collection-ops/test-budget-plan?store_connection_id=${connectionId}`);
+      } catch (err) {
+        toast((err && err.message) || HomezI18n.t("odo.plan_error"), "error");
+        return;
+      }
+
+      const body = [
+        HomezI18n.t("odo.test_budget_confirm_connection", { id: plan.store_connection_id }),
+        HomezI18n.t("odo.test_budget_confirm_status_calls", {
+          status: plan.channel_status, max: plan.max_external_get_calls,
+        }),
+        HomezI18n.t("odo.trigger_confirm_window", {
+          window: `${fmtDate(plan.window_from)} ~ ${fmtDate(plan.window_to)}`,
+        }),
+        HomezI18n.t("odo.trigger_confirm_writes"),
+        plan.note,
+      ].join("\n");
+      const { confirmed } = await confirmDialog({
+        title: HomezI18n.t("odo.test_budget_confirm_title"),
+        body,
+      });
+      if (!confirmed) return;
+
+      try {
+        const result = await apiFetch("/orders/collection-ops/test-budget-trigger", {
+          method: "POST",
+          body: JSON.stringify({ store_connection_id: connectionId }),
+        });
+        testBudgetLastWindow = (result.window_from && result.window_to)
+          ? { from: result.window_from, to: result.window_to }
+          : { from: plan.window_from, to: plan.window_to };
+        el("odo-test-budget-requery-btn").disabled = false;
+        renderTestBudgetResult(result);
+      } catch (err) {
+        toast((err && err.message) || HomezI18n.t("odo.trigger_error"), "error");
+      }
+    }));
+
+    el("odo-test-budget-requery-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const connectionId = Number(el("odo-test-budget-connection-input").value);
+      if (!testBudgetLastWindow || !Number.isInteger(connectionId) || connectionId <= 0) {
+        toast(HomezI18n.t("odo.test_budget_connection_required"), "error");
+        return;
+      }
+
+      const body = [
+        HomezI18n.t("odo.test_budget_confirm_connection", { id: connectionId }),
+        HomezI18n.t("odo.test_budget_confirm_status_calls", { status: "ACCEPT", max: 1 }),
+        HomezI18n.t("odo.trigger_confirm_window", {
+          window: `${fmtDate(testBudgetLastWindow.from)} ~ ${fmtDate(testBudgetLastWindow.to)}`,
+        }),
+        HomezI18n.t("odo.test_budget_requery_note"),
+      ].join("\n");
+      const { confirmed } = await confirmDialog({
+        title: HomezI18n.t("odo.test_budget_confirm_title"),
+        body,
+      });
+      if (!confirmed) return;
+
+      try {
+        const result = await apiFetch("/orders/collection-ops/test-budget-trigger", {
+          method: "POST",
+          body: JSON.stringify({
+            store_connection_id: connectionId,
+            window_from: testBudgetLastWindow.from,
+            window_to: testBudgetLastWindow.to,
+          }),
+        });
+        renderTestBudgetResult(result);
       } catch (err) {
         toast((err && err.message) || HomezI18n.t("odo.trigger_error"), "error");
       }

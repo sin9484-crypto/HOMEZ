@@ -591,6 +591,174 @@ def plan_manual_trigger(
     )
 
 
+# =========================================================
+# 2026-09-18 Phase 7B 실제 테스트 주문 검증 — 시험 전용 호출 예산.
+#
+# 위의 일반 "지금 확인"(NEW_ORDER_DETECTION_STATUSES, 회사의 모든
+# 연결을 순회, 연결당 페이지 상한 DEFAULT_MAX_PAGES=100)과는 별도의,
+# 더 좁은 경로다:
+#   - 연결을 명시적으로 하나만 지정한다(company의 전체 연결을
+#     순회하지 않는다 — OrderMultiChannelCollectionService를 거치지
+#     않고 CoupangOrderCollectionService.run()을 직접 호출한다).
+#   - 상태는 ACCEPT로 고정한다(파라미터 자체가 없다).
+#   - 페이지 상한을 이 경로에서만 1로 강제한다(TEST_BUDGET_MAX_PAGES).
+#     제품의 기본값(DEFAULT_MAX_PAGES=100)은 건드리지 않는다 — 이
+#     함수를 거치지 않는 다른 모든 호출부는 영향받지 않는다.
+#   - nextToken이 남아 있으면(1페이지로 다 못 받으면) 그 자리에서
+#     PAGE_LIMIT_EXCEEDED로 실패 처리되고(기존 계약 재사용, 새로
+#     만들지 않음) 아무 것도 저장하지 않는다 — "수집 미완료"를
+#     완전 성공으로 표시하지 않는다.
+#   - EmergencyStop·Migration 제한 모드는 여전히 막는다(수동 확인과
+#     동일한 안전장치 — 시험이라고 예외를 두지 않는다).
+#   - 동일 주문 중복 재조회 시험을 위해 `window_override`를 그대로
+#     전달할 수 있다 — 커서 자체는 평소처럼 "지금"까지 전진한다
+#     (운영 커서를 되돌리지 않는다). 자세한 이유는
+#     `CoupangOrderCollectionService.run()`의 docstring 참고.
+# =========================================================
+
+TEST_BUDGET_MAX_PAGES = 1
+
+
+class TestBudgetRunOutcome:
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    SKIPPED_EMERGENCY_STOP = "SKIPPED_EMERGENCY_STOP"
+    SKIPPED_MIGRATION_RESTRICTED = "SKIPPED_MIGRATION_RESTRICTED"
+
+
+@dataclass(frozen=True)
+class TestBudgetPlan:
+    company_id: int
+    store_connection_id: int
+    channel_status: str
+    window_from: datetime
+    window_to: datetime
+    max_pages: int
+    max_external_get_calls: int
+    retry_count: int
+    will_write_order_or_purchase_task: bool
+    will_submit_purchase_order_or_payment: bool
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class TestBudgetRunResult:
+    outcome: str
+    store_connection_id: int
+    channel_status: str
+    max_pages: int
+    window_from: datetime | None = None
+    window_to: datetime | None = None
+    run_status: str | None = None
+    received_order_count: int = 0
+    new_fulfillment_count: int = 0
+    duplicate_fulfillment_count: int = 0
+    new_unresolved_item_count: int = 0
+    recovery_review_count: int = 0
+    failed_order_count: int = 0
+    error_codes: tuple[str, ...] = ()
+    skip_reason: str = ""
+
+
+def plan_test_budget_run(
+    db: Session, company_id: int, store_connection_id: int, *,
+    now: datetime | None = None,
+) -> TestBudgetPlan:
+    """외부 호출·DB 쓰기 없음. 확인창(또는 승인 요청 문서)이 이 결과를
+    그대로 보여줘야 한다 — `run_test_budget_collection()`과 반드시
+    같은 상수(`TEST_BUDGET_MAX_PAGES`, 상태 ACCEPT)를 쓴다."""
+
+    from app.domains.order.collection_service import OrderCollectionCursorService
+    from app.domains.order.coupang_collection_service import (
+        CoupangOrderCollectionService,
+    )
+
+    CoupangOrderCollectionService.validate_connection(db, company_id, store_connection_id)
+    window_from, window_to = OrderCollectionCursorService(db).preview_window(
+        company_id, store_connection_id, "ACCEPT", now=now,
+    )
+    return TestBudgetPlan(
+        company_id=company_id,
+        store_connection_id=store_connection_id,
+        channel_status="ACCEPT",
+        window_from=window_from,
+        window_to=window_to,
+        max_pages=TEST_BUDGET_MAX_PAGES,
+        max_external_get_calls=TEST_BUDGET_MAX_PAGES,
+        retry_count=0,
+        will_write_order_or_purchase_task=True,
+        will_submit_purchase_order_or_payment=False,
+        note=(
+            "연결 1개·ACCEPT 상태·페이지 1장(외부 GET 최대 1회)으로 "
+            "제한됩니다. 발주·결제·상품등록은 호출되지 않습니다."
+        ),
+    )
+
+
+def run_test_budget_collection(
+    db: Session, credential_store: CredentialStore, company_id: int,
+    store_connection_id: int, *, actor_user_id: int = 0,
+    provider_factory=None,
+    window_override: "tuple[datetime, datetime] | None" = None,
+    is_restricted_mode_check=is_restricted_mode,
+) -> TestBudgetRunResult:
+    from app.domains.order.adapters.coupang_collection import (
+        CoupangOrderCollectionProvider,
+    )
+    from app.domains.order.coupang_collection_service import (
+        CoupangOrderCollectionService,
+    )
+
+    safety = SafetyService(db)
+    if safety.is_emergency_stop_active():
+        return TestBudgetRunResult(
+            TestBudgetRunOutcome.SKIPPED_EMERGENCY_STOP, store_connection_id,
+            "ACCEPT", TEST_BUDGET_MAX_PAGES,
+            skip_reason="emergency_stop_active",
+        )
+    if is_restricted_mode_check():
+        return TestBudgetRunResult(
+            TestBudgetRunOutcome.SKIPPED_MIGRATION_RESTRICTED, store_connection_id,
+            "ACCEPT", TEST_BUDGET_MAX_PAGES,
+            skip_reason="migration_restricted",
+        )
+
+    base_factory = provider_factory or CoupangOrderCollectionProvider
+
+    def _page_capped_factory(credential):
+        return base_factory(credential, max_pages=TEST_BUDGET_MAX_PAGES)
+
+    service = CoupangOrderCollectionService(
+        db, credential_store, provider_factory=_page_capped_factory,
+    )
+    run_result = service.run(
+        company_id, store_connection_id, "ACCEPT",
+        actor_user_id=actor_user_id, window_override=window_override,
+    )
+    outcome = {
+        "SUCCEEDED": TestBudgetRunOutcome.SUCCEEDED,
+        "PARTIAL": TestBudgetRunOutcome.PARTIAL,
+        "FAILED": TestBudgetRunOutcome.FAILED,
+    }[run_result.status]
+    return TestBudgetRunResult(
+        outcome=outcome,
+        store_connection_id=store_connection_id,
+        channel_status="ACCEPT",
+        max_pages=TEST_BUDGET_MAX_PAGES,
+        window_from=window_override[0] if window_override else None,
+        window_to=window_override[1] if window_override else None,
+        run_status=run_result.status,
+        received_order_count=run_result.received_order_count,
+        new_fulfillment_count=run_result.new_fulfillment_count,
+        duplicate_fulfillment_count=run_result.duplicate_fulfillment_count,
+        new_unresolved_item_count=run_result.new_unresolved_item_count,
+        recovery_review_count=run_result.recovery_review_count,
+        failed_order_count=run_result.failed_order_count,
+        error_codes=run_result.error_codes,
+    )
+
+
 __all__ = [
     "OrderCollectionTickOutcome",
     "OrderCollectionTickCompanyEntry",
@@ -605,4 +773,10 @@ __all__ = [
     "run_order_collection_tick",
     "trigger_company_now",
     "plan_manual_trigger",
+    "TEST_BUDGET_MAX_PAGES",
+    "TestBudgetRunOutcome",
+    "TestBudgetPlan",
+    "TestBudgetRunResult",
+    "plan_test_budget_run",
+    "run_test_budget_collection",
 ]

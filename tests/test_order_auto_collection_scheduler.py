@@ -43,6 +43,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -59,8 +60,12 @@ from app.domains.order.adapters.coupang_collection import CoupangOrderPage
 from app.domains.order.auto_collection_scheduler import CONSECUTIVE_FAILURE_DEMOTE_THRESHOLD
 from app.domains.order.auto_collection_scheduler import OrderCollectionTickOutcome
 from app.domains.order.auto_collection_scheduler import get_or_create_auto_collection_state
+from app.domains.order.auto_collection_scheduler import TEST_BUDGET_MAX_PAGES
+from app.domains.order.auto_collection_scheduler import TestBudgetRunOutcome
 from app.domains.order.auto_collection_scheduler import plan_manual_trigger
+from app.domains.order.auto_collection_scheduler import plan_test_budget_run
 from app.domains.order.auto_collection_scheduler import run_order_collection_tick
+from app.domains.order.auto_collection_scheduler import run_test_budget_collection
 from app.domains.order.auto_collection_scheduler import set_interval_minutes
 from app.domains.order.auto_collection_scheduler import trigger_company_now
 from app.domains.order.collection_model import OrderAutoCollectionState
@@ -562,6 +567,192 @@ class OrderAutoCollectionSchedulerTestCase(unittest.TestCase):
             provider_factory=self._factory(_empty_success_result()),
         )
         self.assertEqual(blocked.outcome, OrderCollectionTickOutcome.SKIPPED_EMERGENCY_STOP)
+
+
+class TestBudgetRunTestCase(unittest.TestCase):
+    """2026-09-18 Phase 7B 호출예산 보완 — `plan_test_budget_run()`/
+    `run_test_budget_collection()` 전용. 연결 1개·ACCEPT 고정·페이지
+    1장 상한·동일 창 재조회를 검증한다. 실제 네트워크는 전혀 쓰지
+    않는다(Fake Provider만)."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine = create_engine(f"sqlite:///{self.path}")
+        Base.metadata.create_all(
+            self.engine,
+            tables=[
+                StoreConnection.__table__, OrderChannelFulfillment.__table__,
+                UnresolvedOrderItem.__table__, OrderCollectionCursor.__table__,
+                OrderSkuResolution.__table__, Order.__table__,
+                FunctionAutomationState.__table__, EmergencyStop.__table__,
+            ],
+        )
+        self.db = sessionmaker(bind=self.engine)()
+        self.store = InMemoryCredentialStore()
+        self.safety = SafetyService(self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.engine.dispose()
+        os.remove(self.path)
+
+    def _make_connection(self, *, company_id=1, cred_name="cred-1", idem="create-1"):
+        self.store.save(cred_name, {
+            "vendor_id": cred_name, "access_key": "access", "secret_key": "secret",
+        })
+        connection = StoreConnection(
+            company_id=company_id, marketplace_code="COUPANG",
+            display_name="쿠팡", seller_identifier=cred_name,
+            credential_reference=cred_name, masked_credential_hint="***",
+            connection_status="CONNECTED", credential_version=1, created_by=1,
+            creation_idempotency_key=idem, creation_request_fingerprint="b" * 64,
+        )
+        self.db.add(connection)
+        self.db.commit()
+        self.db.refresh(connection)
+        return connection
+
+    def _page_aware_factory(self, result, *, on_collect=None, captured_max_pages=None):
+        def factory(_credentials, *, max_pages=None):
+            if captured_max_pages is not None:
+                captured_max_pages.append(max_pages)
+            return _Provider(result, on_collect)
+        return factory
+
+    def test_plan_targets_single_connection_and_accept_only(self):
+        conn = self._make_connection()
+        plan = plan_test_budget_run(self.db, 1, conn.id, now=T0)
+        self.assertEqual(plan.store_connection_id, conn.id)
+        self.assertEqual(plan.channel_status, "ACCEPT")
+        self.assertEqual(plan.max_pages, TEST_BUDGET_MAX_PAGES)
+        self.assertEqual(plan.max_external_get_calls, 1)
+        self.assertEqual(plan.retry_count, 0)
+        self.assertFalse(plan.will_submit_purchase_order_or_payment)
+
+    def test_plan_rejects_connection_from_other_company(self):
+        conn = self._make_connection(company_id=2)
+        with self.assertRaises(Exception):
+            plan_test_budget_run(self.db, 1, conn.id, now=T0)
+
+    def test_run_caps_provider_to_one_page(self):
+        conn = self._make_connection()
+        captured = []
+        result = run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(
+                _empty_success_result(), captured_max_pages=captured,
+            ),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(captured, [TEST_BUDGET_MAX_PAGES])
+        self.assertEqual(result.outcome, TestBudgetRunOutcome.SUCCEEDED)
+        self.assertEqual(result.max_pages, TEST_BUDGET_MAX_PAGES)
+
+    def test_run_only_queries_the_specified_connection_and_accept(self):
+        conn = self._make_connection()
+        calls = []
+        run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(
+                _empty_success_result(), on_collect=lambda kw: calls.append(kw),
+            ),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["status"], "ACCEPT")
+
+    def test_run_blocked_by_emergency_stop(self):
+        conn = self._make_connection()
+        self.safety.activate_emergency_stop("테스트", set_by=1, is_admin=True)
+        result = run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(result.outcome, TestBudgetRunOutcome.SKIPPED_EMERGENCY_STOP)
+
+    def test_run_blocked_by_migration_restricted_mode(self):
+        conn = self._make_connection()
+        result = run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(_empty_success_result()),
+            is_restricted_mode_check=lambda: True,
+        )
+        self.assertEqual(result.outcome, TestBudgetRunOutcome.SKIPPED_MIGRATION_RESTRICTED)
+
+    def test_window_override_produces_identical_query_across_two_runs(self):
+        """동일 주문 중복 재조회 시험 — 두 번째 실행이 커서 전진 때문에
+        다른 구간을 보지 않고, 명시적으로 고정한 구간을 그대로 다시
+        쓴다는 것을 검증한다."""
+
+        conn = self._make_connection()
+        plan = plan_test_budget_run(self.db, 1, conn.id, now=T0)
+        fixed_window = (plan.window_from, plan.window_to)
+
+        calls = []
+        run_test_budget_collection(
+            self.db, self.store, 1, conn.id, window_override=fixed_window,
+            provider_factory=self._page_aware_factory(
+                _one_order_success_result(), on_collect=lambda kw: calls.append(kw),
+            ),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        run_test_budget_collection(
+            self.db, self.store, 1, conn.id, window_override=fixed_window,
+            provider_factory=self._page_aware_factory(
+                _one_order_success_result(), on_collect=lambda kw: calls.append(kw),
+            ),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["created_at_from"], calls[1]["created_at_from"])
+        self.assertEqual(calls[0]["created_at_to"], calls[1]["created_at_to"])
+        self.assertEqual(calls[0]["created_at_from"], fixed_window[0])
+        self.assertEqual(calls[0]["created_at_to"], fixed_window[1])
+
+        # 커서 자체는 되돌리지 않고 평소처럼(각 실행 시점 "지금"까지) 전진한다.
+        position = self.db.query(OrderCollectionCursor).one()
+        self.assertIsNotNone(position.last_successful_to)
+
+    def test_window_override_rejects_oversized_range(self):
+        conn = self._make_connection()
+        oversized = (
+            T0.replace(tzinfo=timezone.utc) - timedelta(hours=30),
+            T0.replace(tzinfo=timezone.utc),
+        )
+        with self.assertRaises(Exception):
+            run_test_budget_collection(
+                self.db, self.store, 1, conn.id, window_override=oversized,
+                provider_factory=self._page_aware_factory(_empty_success_result()),
+                is_restricted_mode_check=_NOT_RESTRICTED,
+            )
+
+    def test_incomplete_result_when_page_limit_reached_does_not_persist_or_advance(self):
+        """1페이지로 다 못 받는 상황(nextToken 잔존)을 시뮬레이션 —
+        page_count=1인 응답 뒤에도 다음 토큰이 있으면 실제 Provider는
+        PAGE_LIMIT_EXCEEDED로 실패 처리한다(app/domains/order/adapters/
+        coupang_collection.py, 이번에 새로 만들지 않음). 여기서는 그
+        결과를 그대로 Fake Provider가 반환하게 해 run_test_budget_
+        collection이 이를 완전 성공으로 둔갑시키지 않는지만 검증한다."""
+
+        conn = self._make_connection()
+        page_limited_result = CoupangOrderCollectionResult(
+            False, pages=(CoupangOrderPage((order(),), "next-token-would-continue"),),
+            error_code="PAGE_LIMIT_EXCEEDED",
+            error_summary="쿠팡 주문 조회의 안전 페이지 한도를 초과했습니다.",
+            http_status=200,
+        )
+        result = run_test_budget_collection(
+            self.db, self.store, 1, conn.id,
+            provider_factory=self._page_aware_factory(page_limited_result),
+            is_restricted_mode_check=_NOT_RESTRICTED,
+        )
+        self.assertEqual(result.outcome, TestBudgetRunOutcome.FAILED)
+        self.assertIn("PAGE_LIMIT_EXCEEDED", result.error_codes)
+        self.assertEqual(self.db.query(Order).count(), 0)
+        position = self.db.query(OrderCollectionCursor).one()
+        self.assertIsNone(position.last_successful_to)
 
 
 if __name__ == "__main__":

@@ -177,6 +177,30 @@ class CoupangOrderCollectionServiceTest(unittest.TestCase):
         position = self.db.query(OrderCollectionCursor).one()
         self.assertIsNone(position.last_successful_to)
 
+    def test_window_override_requires_timezone_aware_datetimes(self):
+        from datetime import datetime as _dt
+
+        service, _ = self.service(CoupangOrderCollectionResult(True, pages=(), http_status=200))
+        with self.assertRaises(BadRequestException):
+            service.run(
+                1, self.connection.id, "ACCEPT",
+                window_override=(_dt(2026, 9, 17), _dt(2026, 9, 17, 1)),
+            )
+
+    def test_window_override_rejects_reversed_range(self):
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        service, _ = self.service(CoupangOrderCollectionResult(True, pages=(), http_status=200))
+        with self.assertRaises(BadRequestException):
+            service.run(
+                1, self.connection.id, "ACCEPT",
+                window_override=(
+                    _dt(2026, 9, 17, 1, tzinfo=_tz.utc),
+                    _dt(2026, 9, 17, tzinfo=_tz.utc),
+                ),
+            )
+
     def test_request_accept_but_response_status_differs_blocks_new_order(self):
         """요청 파라미터는 ACCEPT였지만 응답 레코드 자체의 raw_status가
         DELIVERING(알려진 값이지만 신규생성 비대상)이면, 처음 보는

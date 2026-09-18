@@ -52,6 +52,9 @@ from app.domains.order.schema import OrderCollectionOpsIntervalUpdateRequest
 from app.domains.order.schema import OrderCollectionOpsResumeResponse
 from app.domains.order.schema import OrderCollectionOpsPlanResponse
 from app.domains.order.schema import OrderCollectionPlanConnectionResponse
+from app.domains.order.schema import OrderCollectionTestBudgetPlanResponse
+from app.domains.order.schema import OrderCollectionTestBudgetTriggerRequest
+from app.domains.order.schema import OrderCollectionTestBudgetTriggerResponse
 from app.domains.order.schema import OrderItemResponse
 from app.domains.order.schema import OrderResponse
 from app.domains.order.schema import OrderSensitiveDetailResponse
@@ -214,6 +217,103 @@ def trigger_collection_ops_now(
 
     return OrderCollectionOpsTriggerResponse(
         company_id=entry.company_id, outcome=entry.outcome, detail=entry.detail,
+    )
+
+
+@router.get(
+    "/collection-ops/test-budget-plan",
+    response_model=OrderCollectionTestBudgetPlanResponse,
+)
+def get_collection_ops_test_budget_plan(
+    store_connection_id: int,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-18 Phase 7B 실제 테스트 주문 검증 — 연결 1개·ACCEPT
+    고정·페이지 1장 상한(외부 GET 최대 1회) 시험 전용 실행계획.
+    외부 호출·DB 쓰기 없음."""
+
+    from app.domains.order.auto_collection_scheduler import plan_test_budget_run
+
+    plan = plan_test_budget_run(db, current_user.company_id, store_connection_id)
+    return OrderCollectionTestBudgetPlanResponse(
+        company_id=plan.company_id,
+        store_connection_id=plan.store_connection_id,
+        channel_status=plan.channel_status,
+        window_from=plan.window_from, window_to=plan.window_to,
+        max_pages=plan.max_pages,
+        max_external_get_calls=plan.max_external_get_calls,
+        retry_count=plan.retry_count,
+        will_write_order_or_purchase_task=plan.will_write_order_or_purchase_task,
+        will_submit_purchase_order_or_payment=plan.will_submit_purchase_order_or_payment,
+        note=plan.note,
+    )
+
+
+@router.post(
+    "/collection-ops/test-budget-trigger",
+    response_model=OrderCollectionTestBudgetTriggerResponse,
+)
+def trigger_collection_ops_test_budget(
+    data: OrderCollectionTestBudgetTriggerRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_order_credential_store),
+    provider_factory=Depends(get_coupang_order_provider_factory),
+):
+    """2026-09-18 Phase 7B 실제 테스트 주문 검증 — 연결 1개·ACCEPT
+    고정·페이지 1장 상한을 서버에서 강제한다(요청 바디에 상태나
+    페이지 수를 넓힐 수 있는 필드 자체가 없다 — 스키마가 이미
+    거부한다). `window_from`/`window_to`를 둘 다 주면(같은 값을
+    두 번째 호출에 그대로 되돌려주는 방식) 동일 주문 중복 재조회
+    시험이 되고, 둘 다 생략하면 최초 수집이 된다."""
+
+    from app.domains.order.auto_collection_scheduler import run_test_budget_collection
+
+    if (data.window_from is None) != (data.window_to is None):
+        raise BadRequestException("window_from/window_to는 둘 다 지정하거나 둘 다 생략해야 합니다.")
+    window_override = (
+        (data.window_from, data.window_to)
+        if data.window_from is not None and data.window_to is not None
+        else None
+    )
+
+    result = run_test_budget_collection(
+        db, credential_store, current_user.company_id, data.store_connection_id,
+        actor_user_id=current_user.id, provider_factory=provider_factory,
+        window_override=window_override,
+    )
+
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id,
+        action="ORDER_COLLECTION_TEST_BUDGET_RUN", entity="store_connection",
+        entity_id=str(data.store_connection_id),
+        description=(
+            f"주문수집 시험 실행(최대 GET 1회): outcome={result.outcome}, "
+            f"received={result.received_order_count}, "
+            f"new={result.new_fulfillment_count}, "
+            f"duplicate={result.duplicate_fulfillment_count}, "
+            f"recovery_review={result.recovery_review_count}, "
+            f"failed={result.failed_order_count}"
+        ),
+    )
+    db.commit()
+
+    return OrderCollectionTestBudgetTriggerResponse(
+        outcome=result.outcome,
+        store_connection_id=result.store_connection_id,
+        channel_status=result.channel_status,
+        max_pages=result.max_pages,
+        window_from=result.window_from, window_to=result.window_to,
+        run_status=result.run_status,
+        received_order_count=result.received_order_count,
+        new_fulfillment_count=result.new_fulfillment_count,
+        duplicate_fulfillment_count=result.duplicate_fulfillment_count,
+        new_unresolved_item_count=result.new_unresolved_item_count,
+        recovery_review_count=result.recovery_review_count,
+        failed_order_count=result.failed_order_count,
+        error_codes=list(result.error_codes),
+        skip_reason=result.skip_reason,
     )
 
 
