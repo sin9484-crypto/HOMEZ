@@ -531,3 +531,40 @@ collection_state_last_run_counts.sql`이다. 저장소의 `migrations/`
 
 **이번 라운드에서 원본 적용은 실행하지 않는다** — 위 표는 계획 근거일
 뿐이며, 실행은 별도의 명시적 승인 이후에만 한다.
+
+## 29. 외부 성공 + 내부 저장 실패/재시작 시 자동 재주문 방지 확인 (항목 3, 코드·기존 테스트 확인만 — 신규 코드 없음)
+
+`PurchaseOrderSubmissionService.submit_order()`의 실제 순서
+(`app/domains/purchase_task/order_submission_service.py:462-535`)를
+다시 읽어 확인했다: `attempt` 행은 `IN_FLIGHT` 상태로 **온채널 실제
+발주 호출(`adapter.submit_order()`, 495행) 이전에 이미 커밋된다**
+(462-471행). 따라서 "외부 발주는 성공했지만 그 직후 내부 저장
+(`_finalize_attempt`)이 실패"하는 최악의 경우에도, DB에는 이미
+`IN_FLIGHT` 행이 남아 있다.
+
+재시도 차단은 인메모리 상태가 아니라 매번 새로 DB를 조회하는
+`_has_blocking_task_attempt()`(203-234행)가 담당한다 — 같은
+`purchase_task_id`에 `PENDING`/`IN_FLIGHT`/`SUCCEEDED` 행이 하나라도
+있으면(또는 사람이 아직 "주문 없음"으로 확정하지 않은
+`RESULT_UNKNOWN` 행이 있으면) 새 시도 생성 자체를 막는다. 이 조회가
+매번 DB를 다시 읽는 구조이므로 **재시작 여부와 무관하게 동일하게
+작동한다** — 별도의 재시작 전용 복구 로직이 필요 없는 이유다.
+
+기존 테스트로 이미 증명되어 있다(신규 테스트 불필요, 확인만):
+- `tests/test_purchase_order_submission_service.py::DuplicateLockAndRestartRecoveryTestCase::test_repeated_click_with_same_idempotency_key_blocked_after_first_success`
+  — 실제 첫 발주가 성공(`call_log` 1건)한 뒤 같은
+  `idempotency_key`로 재시도하면 `ConflictException`이 나고
+  `call_log`는 여전히 1건 — **두 번째 시도는 Adapter(실제 외부 호출)
+  까지 도달하지 않는다.**
+- `test_task_lock_blocks_pending_inflight_and_succeeded_attempts` —
+  `PENDING`/`IN_FLIGHT`/`SUCCEEDED` 행이 하나만 남아 있어도
+  `_has_blocking_task_attempt()`가 True를 반환함을 직접 검증한다.
+  `IN_FLIGHT`는 정확히 "외부 호출 성공 여부가 아직 내부에 확정되지
+  않은" 상태를 대표하므로, 이 테스트가 곧 "외부 성공 + 내부 저장
+  실패" 시나리오의 차단을 증명한다.
+
+**결론**: 이 보호는 D2 이전부터 이미 존재하던 구조이며, 이번 라운드
+필수 결함 수정 대상이 아니었다(별도 구멍이 발견되지 않았다). 유일한
+탈출구는 사람이 온채널 관리자 화면을 직접 확인해
+`resolve_unknown_attempt(resolution=ORDER_NOT_CONFIRMED)`으로 명시
+확정하는 경로뿐이며, 이는 자동 재주문이 아니라 사람의 개입이다.
