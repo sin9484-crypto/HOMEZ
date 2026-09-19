@@ -133,15 +133,34 @@ class PurchaseTaskCandidateMatchTier:
 
 
 class BudgetReservationStatus:
+    """`PurchaseTaskBudgetReservation.status`는 `String(20)`이다 —
+    새 값을 추가할 때 20자를 넘기지 않는다(Migration 없이 값만
+    늘리는 게 이 클래스의 의도이므로, 넘기면 SQLite에서는 조용히
+    저장되지만 컬럼 선언과 어긋난다)."""
 
     RESERVED = "RESERVED"
     EXTENDED = "EXTENDED"
     RELEASED = "RELEASED"
     CONFIRMED = "CONFIRMED"
     EXPIRED = "EXPIRED"
+    # 2026-09-19 항목 3/4(지출한도 누락 해소) — 온채널 실 발주가
+    # 성공한 그 순간(송장조회 이전) 승인 스냅샷 금액으로 잠정
+    # 확정하는 상태. API가 확인한 최종 금액이 아니므로 CONFIRMED와
+    # 구분한다 — 지출한도 집계(CONFIRMED_LIKE)에는 포함하되, 나중에
+    # 실 API 조회가 성공하면 CONFIRMED(최종)로 승격된다. 만료 스윕
+    # 대상(ACTIVE)에는 포함하지 않는다 — 이미 외부로 나간 돈이므로
+    # 임의로 반환하지 않는다.
+    PENDING_VERIFICATION = "PENDING_VERIFICATION"
 
-    ALL = (RESERVED, EXTENDED, RELEASED, CONFIRMED, EXPIRED)
+    ALL = (
+        RESERVED, EXTENDED, RELEASED, CONFIRMED, EXPIRED,
+        PENDING_VERIFICATION,
+    )
     ACTIVE = (RESERVED, EXTENDED)
+    # 지출한도 집계(PurchaseTaskRepository.sum_recorded_amount_since)
+    # 에서 "이미 확정된 지출"로 취급하는 상태 — 최종/잠정 구분 없이
+    # 둘 다 돈이 실제로 나갔다는 사실은 같다.
+    CONFIRMED_LIKE = (CONFIRMED, PENDING_VERIFICATION)
 
 
 class PurchaseTaskFailureCode:

@@ -150,8 +150,38 @@ class PurchaseTaskRepository:
     def sum_recorded_amount_since(
         self, company_id: int, since: datetime,
     ) -> float:
+        """일간/월간 지출한도(`PurchaseTaskPolicyService`) 집계 — 두
+        발주 트랙을 모두 포함한다.
 
-        rows = (
+        - 수동(브라우저 구매) 트랙: `PurchaseRecord.actual_amount`
+          (사람이 `record_purchase()`로 직접 입력한 확정 금액,
+          created_at 기준 — 기존 동작 그대로 보존).
+        - 온채널 API 발주 트랙: `record_purchase()`를 타지 않아
+          `PurchaseRecord`가 생기지 않는다(그 모델 자체가 "사람이
+          직접 입력"을 전제하므로 자동 생성하지 않기로 함, 2026-09-19
+          항목 3). 대신 `PurchaseTaskBudgetReservation`의
+          `CONFIRMED_LIKE`(=CONFIRMED 또는 CONFIRMED_PENDING_
+          VERIFICATION) 상태를 `confirmed_at` 기준으로 더한다.
+          PENDING_VERIFICATION은 발주 성공 직후(송장조회
+          이전) 승인 스냅샷 금액으로 잠정 확정한 상태다
+          (`confirm_onchannel_reservation_provisionally()`, Stage 1) —
+          송장조회 실행 여부와 무관하게 발주 성공 즉시 한도를
+          보호하기 위함이다. 실 API 조회가 성공하면 CONFIRMED(최종)
+          로 승격된다(`_reconcile_onchannel_order_reservation()`,
+          Stage 2). 둘 다 "돈이 이미 나갔다"는 사실은 같으므로 둘
+          다 지출한도에 포함한다.
+
+        이중계산 방지 — `record_purchase()`(수동 트랙)만 CONFIRMED를
+        만들고, 온채널 트랙의 두 확정 메서드만 CONFIRMED_LIKE의 나머지
+        값들을 만든다(코드 전수 확인, 그 외 없음). 전자는 항상 같은
+        트랜잭션에서 `PurchaseRecord`도 함께 만든다. 따라서 "이미
+        `PurchaseRecord`가 있는 purchase_task_id"의 CONFIRMED_LIKE
+        예약은 수동 트랙 몫이므로 예약 합계에서 제외한다 — 같은
+        지출을 두 번 세지 않는다."""
+
+        from app.domains.purchase_task.constants import BudgetReservationStatus
+
+        record_rows = (
             self.db.query(PurchaseRecord.actual_amount)
             .filter(
                 PurchaseRecord.company_id == company_id,
@@ -159,7 +189,26 @@ class PurchaseTaskRepository:
             )
             .all()
         )
-        return sum(float(r[0]) for r in rows)
+        record_total = sum(float(r[0]) for r in record_rows)
+
+        recorded_task_ids = self.db.query(PurchaseRecord.purchase_task_id).filter(
+            PurchaseRecord.company_id == company_id,
+        )
+        reservation_rows = (
+            self.db.query(PurchaseTaskBudgetReservation.amount)
+            .filter(
+                PurchaseTaskBudgetReservation.company_id == company_id,
+                PurchaseTaskBudgetReservation.status.in_(
+                    BudgetReservationStatus.CONFIRMED_LIKE,
+                ),
+                PurchaseTaskBudgetReservation.confirmed_at >= since,
+                PurchaseTaskBudgetReservation.purchase_task_id.notin_(recorded_task_ids),
+            )
+            .all()
+        )
+        reservation_total = sum(float(r[0]) for r in reservation_rows)
+
+        return record_total + reservation_total
 
     def sum_quantity_for_product_since(
         self, company_id: int, gtin: str | None, model_name: str | None,

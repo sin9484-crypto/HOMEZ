@@ -330,6 +330,12 @@ class PurchaseOrderSubmissionService:
                 attempt.purchase_task_id, company_id,
                 order_code=attempt.unknown_resolved_order_code or "",
                 triggered_by=resolved_by,
+                item_amount_snapshot=(
+                    approval.item_amount_snapshot if approval is not None else None
+                ),
+                shipping_cost_amount=(
+                    approval.shipping_cost_amount if approval is not None else None
+                ),
             )
 
         return attempt
@@ -538,6 +544,8 @@ class PurchaseOrderSubmissionService:
             self._advance_task_after_successful_order(
                 purchase_task_id, company_id, order_code=order_code,
                 triggered_by=triggered_by,
+                item_amount_snapshot=approval.item_amount_snapshot,
+                shipping_cost_amount=approval.shipping_cost_amount,
             )
 
         # 2026-09-15 Phase 9C(7-16) — 이 연결로 발주가 실제로
@@ -843,12 +851,20 @@ class PurchaseOrderSubmissionService:
     def _advance_task_after_successful_order(
         self, purchase_task_id: int, company_id: int, *,
         order_code: str, triggered_by: int | None,
+        item_amount_snapshot: int | None = None,
+        shipping_cost_amount: int | None = None,
     ) -> None:
         """실제 발주 성공 직후에만 호출한다(호출자가 이미
         OrderSubmissionStatus.SUCCEEDED를 커밋한 뒤). 이 작업에 배정된
         `PurchaseTask`가 없으면(`purchase_task_id=None`으로 단건 발주를
         호출한 경우) 아무 것도 하지 않는다 — 실패로 취급하지 않는다
-        (발주 자체는 이미 완전히 성공했으므로)."""
+        (발주 자체는 이미 완전히 성공했으므로).
+
+        2026-09-19 항목 4(지출한도 누락 해소) — 상태 전환과 같은
+        순간에 예산 예약도 승인 스냅샷 금액으로 잠정 확정한다
+        (`PurchaseTaskService.confirm_onchannel_reservation_
+        provisionally()`, Stage 1). 송장조회(Stage 2)가 실행되기
+        전이라도 지출한도가 이 시점부터 보호돼야 하기 때문이다."""
 
         task = (
             self.db.query(PurchaseTask)
@@ -862,6 +878,15 @@ class PurchaseOrderSubmissionService:
         previous_status = task.status
         task.status = PurchaseTaskStatus.TRACKING_REQUIRED
         self.db.commit()
+
+        from app.domains.purchase_task.service import PurchaseTaskService
+
+        PurchaseTaskService(self.db).confirm_onchannel_reservation_provisionally(
+            task, company_id, order_code=order_code,
+            item_amount_snapshot=item_amount_snapshot,
+            shipping_cost_amount=shipping_cost_amount,
+            triggered_by=triggered_by,
+        )
 
         write_audit_log(
             self.db, user_id=triggered_by, company_id=company_id,

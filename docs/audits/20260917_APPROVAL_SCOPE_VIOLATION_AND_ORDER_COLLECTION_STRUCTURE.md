@@ -615,3 +615,77 @@ collection_state_last_run_counts.sql`이다. 저장소의 `migrations/`
 탈출구는 사람이 온채널 관리자 화면을 직접 확인해
 `resolve_unknown_attempt(resolution=ORDER_NOT_CONFIRMED)`으로 명시
 확정하는 경로뿐이며, 이는 자동 재주문이 아니라 사람의 개입이다.
+
+## 31. 지출한도 누락 재현 및 수정 (2026-09-19, 항목 2/3/4/5)
+
+**재현한 결함**: `PurchaseTaskPolicyService.evaluate()`의 일간/월간
+지출한도(`daily_purchase_limit_amount`/`monthly_purchase_budget_amount`)
+는 `PurchaseTaskRepository.sum_recorded_amount_since()`가 유일한
+근거였고, 그 메서드는 `PurchaseRecord.actual_amount`만 더했다.
+온채널 API 발주 트랙은 `record_purchase()`를 절대 타지 않으므로
+`PurchaseRecord`가 전혀 생기지 않는다 — 즉 **온채널 실 발주가 아무리
+쌓여도 일간/월간 지출한도는 0원으로 보이고, 다음 발주 승인이 실제
+지출과 무관하게 계속 통과했다.** `tests/test_purchase_order_submission_
+service.py::OnchannelSpendLimitProtectionTestCase::
+test_next_purchase_evaluation_actually_blocks_on_reduced_headroom`이
+수정 후 이 판정 결과 자체(`PurchaseTaskPolicyReason.DAILY_LIMIT_
+EXCEEDED`)로 재현·검증한다.
+
+**이중계산·누락 전수 점검(항목 2 — "테이블이 다르다"로 단정하지
+않음)**: 이 지출한도와 완전히 별개로, 온채널 발주 자체를 막는
+**연결별 하루/월 발주 한도**(`PurchaseOrderApprovalService.
+_sum_consumed_amount_today/_sum_consumed_amount_this_month`,
+`PurchaseOrderApproval` 테이블 기반)가 이미 존재한다. 이 게이트는
+`submit_order()`/`resolve_unknown_attempt()` 양쪽 성공 경로 모두에서
+이미 `mark_consumed()`/직접 상태 갱신으로 정상 작동 중임을 코드로
+확인했다(별도 결함 없음, 수정하지 않음) — `PurchaseTaskPolicyService`
+쪽 한도와는 검사 시점·범위가 다른, 의도된 이중 방어(defense in
+depth)이지 중복이 아니다.
+
+**최소 수정안(Model·Migration 변경 없이 기존 구조 재사용)**:
+
+| 단계 | 시점 | 기준 금액 | 예약 상태 | 지출한도 포함 여부 |
+|---|---|---|---|---|
+| 예약(양쪽 트랙 공통) | 정책평가(`evaluate_and_reserve`) | 예상 필요예산 | `RESERVED`/`EXTENDED` | 미포함(아직 확정 아님) |
+| **Stage 1(신규)** | `submit_order()` 성공 또는 `resolve_unknown_attempt(ORDER_CONFIRMED)` — **송장조회 이전** | 승인 스냅샷(`item_amount_snapshot`+`shipping_cost_amount`) | `PENDING_VERIFICATION`(신규) | **포함** |
+| **Stage 2(기존 확장)** | `refresh_tracking_live()` 성공(실 API `sum_product_price`+`sum_delivery_price`+`sum_add_price`) | API 확인된 실제 금액 | `CONFIRMED`(최종) | 포함(금액 갱신) |
+| 내부 저장 실패/재시작 | 언제든 | — | 마지막으로 커밋된 상태 유지(IN_FLIGHT/RESERVED 등) | 그 상태 그대로(29절 근거 재사용) |
+| 취소·반품 요청 이후 | `record_refund()` 등 | 환불액 | 예약 상태는 건드리지 않음(그대로 CONFIRMED류 유지) | `held_amount`만 환불액만큼 감소, 예약 자체는 불변 |
+| 늦게 도착한 재조회 | 취소·반품 요청 이후 | — | **무시**(task.status 가드) | 변화 없음 — 환불이 되돌려지지 않음 |
+| 수동 트랙(`record_purchase()`) | 사람이 실제 구매 결과 입력 | 실제 결제금액 | (동일 `CONFIRMED`, 다만 `PurchaseRecord`도 동시 생성) | `PurchaseRecord.actual_amount`로 포함(기존 그대로) |
+
+이중계산 방지: `sum_recorded_amount_since()`는 `PurchaseRecord`가
+이미 있는 `purchase_task_id`의 예약은 (수동 트랙 몫이므로) 예약
+합계에서 제외한다 — `record_purchase()`와 온채널 두 확정 메서드만
+`CONFIRMED_LIKE` 상태를 만든다는 사실을 코드 전수 확인(grep)으로
+근거를 남겼다.
+
+**PurchaseRecord를 억지로 만들지 않은 이유(항목 3 명시)**:
+`PurchaseRecord`는 "Provider가 자동으로 채우지 않는다"는 것 자체가
+모델 docstring의 전제다. 자동 실행되는 Stage 1/2가 이 모델에 행을
+쓰면 그 전제와 충돌하므로, 대신 이미 존재하고 이미 정책평가 때부터
+자동으로 조작되던 `PurchaseTaskBudgetReservation`(양쪽 트랙 공통,
+`_reserve_budget()`가 이미 자동 생성)을 재사용했다. `reservation.amount`
+는 `record_purchase()`(수동 트랙, `PurchaseRecord`가 정확한 출처라
+갱신 불필요)와 달리 온채널 트랙에서는 지출한도 집계의 직접 출처이므로
+Stage 1/2에서 최신 확정 금액으로 함께 갱신하도록 했다(D2 라운드
+코드에는 없던 부분 — 이번에 추가).
+
+**Model·Migration 변경 없음**: 새 예약 상태값(`PENDING_VERIFICATION`)
+은 기존 `status String(20)` 컬럼에 들어가는 문자열 값 하나를
+늘린 것뿐이다(20자 이내로 맞춤 — 첫 시도였던
+`CONFIRMED_PENDING_VERIFICATION`은 30자라 컬럼 선언을 넘겨 즉시
+`PENDING_VERIFICATION`으로 정정했다). 실제 DB pending Migration은
+여전히 1개(`20260918_00_...`)뿐이며 이번 라운드에서 추가하지 않았다.
+
+**격리 테스트(항목 5, 실제 발주·결제·환불 API 미사용)**:
+`tests/test_purchase_order_submission_service.py::
+OnchannelSpendLimitProtectionTestCase`(11건, 신규) — 발주 성공 직후
+송장조회 전 한도 반영, 다음 승인 실제 차단, UNKNOWN 수동 확정도
+동일 보호, 승인액-실제액 불일치 조정, 환불 후 지연 재조회가 환불을
+되돌리지 않음(전액/부분 각각), 수동 트랙 기존 동작 불변, 수동+온채널
+혼합 집계 이중계산 없음, 회사 간 격리, 일간 경계 누락·이중차감 없음.
+기존 `DuplicateLockAndRestartRecoveryTestCase::
+test_internal_finalize_failure_after_external_success_leaves_
+attempt_in_flight_and_blocks_retry`(29절)를 "외부 성공 직후 내부
+저장 실패·재시작" 항목으로 그대로 재사용했다(중복 작성하지 않음).

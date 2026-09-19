@@ -17,6 +17,7 @@ import os
 import tempfile
 import unittest
 import unittest.mock as mock
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy import text
@@ -27,6 +28,13 @@ from app.core.exceptions import ConflictException
 from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.domains.company.model import Company
+from app.domains.funding.model import FundingAccount
+from app.domains.funding.model import FundingLedger
+from app.domains.purchase_task.constants import BudgetReservationStatus
+from app.domains.purchase_task.model import PurchaseRecord
+from app.domains.purchase_task.model import PurchaseTaskBudgetReservation
+from app.domains.purchase_task.model import PurchaseTaskTrackingInfo
+from app.domains.purchase_task.repository import PurchaseTaskRepository
 from app.domains.purchase_task.channel_connection_service import (
     PurchaseChannelConnectionService,
 )
@@ -37,6 +45,7 @@ from app.domains.purchase_task.model import PurchaseChannelConnectionEvent
 from app.domains.automation_safety.model import EmergencyStop
 from app.domains.automation_safety.model import FunctionAutomationState
 from app.domains.purchase_task.model import PurchaseOrderApproval
+from app.domains.purchase_task.model import PurchaseOrderUnknownResolutionEvent
 from app.domains.purchase_task.model import PurchaseTask
 from app.domains.purchase_task.model import PurchaseTaskPolicySetting
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
@@ -1909,6 +1918,409 @@ class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):
             confirm_real_submission=True, **VALID_KWARGS,
         )
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
+
+
+class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase):
+    """2026-09-19 항목 2/4/5(지출한도 누락 해소) — 실제 submit_order()
+    성공이 송장조회 실행 여부와 무관하게 즉시 지출한도(daily/monthly
+    purchase limit, `sum_recorded_amount_since`)에 반영되는지, 그리고
+    이후 실 API 확정·환불이 그 한도 판정과 일관되는지 실제 판정
+    결과와 장부 금액으로 검증한다. 실제 발주·결제·환불 API는 쓰지
+    않는다(Fake Adapter만 사용)."""
+
+    def setUp(self):
+
+        super().setUp()
+        Base.metadata.create_all(
+            bind=self.engine,
+            tables=[
+                FundingAccount.__table__, FundingLedger.__table__,
+                PurchaseTaskBudgetReservation.__table__,
+                PurchaseRecord.__table__,
+                PurchaseOrderUnknownResolutionEvent.__table__,
+                PurchaseTaskTrackingInfo.__table__,
+            ],
+        )
+        self.account = FundingAccount(
+            company_id=self.company_a.id, total_funding=1_000_000.0,
+        )
+        self.db.add(self.account)
+        self.db.commit()
+        self.repository = PurchaseTaskRepository(self.db)
+
+    def _create_reserved_task(
+        self, *, task_id, amount, company=None,
+        status=PurchaseTaskStatus.PURCHASE_READY,
+    ):
+
+        company = company or self.company_a
+        account = (
+            self.account if company is self.company_a
+            else self.db.query(FundingAccount)
+            .filter(FundingAccount.company_id == company.id).first()
+        )
+        task = PurchaseTask(
+            id=task_id, company_id=company.id, source_order_id=task_id,
+            product_title="테스트 상품", idempotency_key=f"task-{task_id}",
+            status=status,
+        )
+        self.db.add(task)
+        self.db.commit()
+
+        reservation = PurchaseTaskBudgetReservation(
+            company_id=company.id, purchase_task_id=task.id,
+            account_id=account.id, amount=amount,
+            status=BudgetReservationStatus.RESERVED,
+            expires_at=datetime.utcnow() + timedelta(hours=24),
+        )
+        self.db.add(reservation)
+        account.held_amount = (account.held_amount or 0.0) + amount
+        self.db.commit()
+        self.db.refresh(reservation)
+
+        task.budget_reservation_id = reservation.id
+        self.db.commit()
+        self.db.refresh(task)
+        return task, reservation
+
+    def _spent(self, company=None, days=1):
+
+        company = company or self.company_a
+        return self.repository.sum_recorded_amount_since(
+            company.id, datetime.utcnow() - timedelta(days=days),
+        )
+
+    def test_successful_order_immediately_reduces_remaining_limit_before_any_tracking_lookup(self):
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        task, reservation = self._create_reserved_task(task_id=201, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=201,
+        )
+
+        self.assertEqual(self._spent(), 0.0, "발주 전에는 아직 지출이 없다.")
+
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-limit-1",
+            purchase_task_id=201, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        # 송장조회(refresh_tracking_live)는 한 번도 실행하지 않았다.
+        self.assertEqual(
+            self._spent(), 13000.0,
+            "송장조회를 실행하지 않았어도 발주 성공 직후부터 지출한도에 반영돼야 한다.",
+        )
+        self.db.refresh(reservation)
+        self.assertEqual(
+            reservation.status, BudgetReservationStatus.PENDING_VERIFICATION,
+        )
+
+    def test_next_purchase_evaluation_actually_blocks_on_reduced_headroom(self):
+        """지시문 2번 — "테이블이 다르다"가 아니라 실제 다음
+        승인·발주 가능 금액(PurchaseTaskPolicyService.evaluate())으로
+        재현한다."""
+
+        from decimal import Decimal
+        from app.domains.purchase_task.policy_service import (
+            PurchaseTaskPolicyCheckInput,
+            PurchaseTaskPolicyReason,
+            PurchaseTaskPolicyService,
+        )
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        self._create_reserved_task(task_id=202, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=202,
+        )
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-limit-2",
+            purchase_task_id=202, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        policy = PurchaseTaskPolicyService(self.db)
+        setting = policy.get_or_create_default_settings(self.company_a.id)
+        setting.daily_purchase_limit_amount = 13000.0
+        self.db.commit()
+
+        result = policy.evaluate(
+            self.company_a.id,
+            PurchaseTaskPolicyCheckInput(
+                match_confidence=1.0, match_tier="EXACT", quantity=1,
+                gtin="1111111111111", model_name="M1",
+                expected_net_profit=Decimal("1000"),
+                expected_margin_rate=Decimal("10"),
+                required_budget_amount=Decimal("5000"),
+                estimated_delivery_days=2, return_allowed=True,
+            ),
+        )
+        self.assertIn(
+            PurchaseTaskPolicyReason.DAILY_LIMIT_EXCEEDED, result.reasons,
+            "송장조회를 실행하지 않았어도 방금 확정된 온채널 실비용만으로 "
+            "다음 발주 승인이 실제로 막혀야 한다.",
+        )
+
+    def test_unknown_confirmed_by_human_also_reduces_limit_immediately(self):
+        """UNKNOWN 유지 및 수동 성공 확정 — resolve_unknown_attempt()
+        경로도 동일하게 즉시 한도를 보호해야 한다."""
+
+        connection = self._make_ready_connection()
+        self._create_reserved_task(task_id=203, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=203,
+        )
+        attempt = self.service._create_locked_attempt(
+            connection_id=connection.id, company_id=self.company_a.id,
+            purchase_task_id=203, idempotency_key="k-unknown-limit",
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            options=[{"id": 1, "qty": 1}], triggered_by=1,
+        )
+        attempt.status = OrderSubmissionStatus.RESULT_UNKNOWN
+        self.db.commit()
+
+        self.assertEqual(self._spent(), 0.0)
+
+        self.service.resolve_unknown_attempt(
+            attempt.id, self.company_a.id,
+            resolution="ORDER_CONFIRMED", order_code="OC-HUMAN-CONFIRMED",
+            resolved_by=1,
+        )
+
+        self.assertEqual(
+            self._spent(), 13000.0,
+            "사람이 UNKNOWN을 ORDER_CONFIRMED로 확정해도 송장조회 없이 즉시 반영돼야 한다.",
+        )
+
+    def test_final_api_amount_differs_from_approved_amount_adjusts_and_stays_counted(self):
+        """승인금액과 실제금액 불일치 — Stage 1(승인액) 이후 Stage 2
+        (실 API 확인)가 다른 금액을 확정하면 차액이 반영되고, 지출
+        한도 집계는 최종 금액으로 유지돼야 한다."""
+
+        from app.domains.purchase_task.service import PurchaseTaskService
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        task, reservation = self._create_reserved_task(task_id=204, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=204,
+        )
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-limit-diff",
+            purchase_task_id=204, confirm_real_submission=True, **VALID_KWARGS,
+        )
+        self.assertEqual(self._spent(), 13000.0, "Stage 1 직후 승인액 기준.")
+
+        task_service = PurchaseTaskService(self.db)
+        self.db.refresh(task)
+        task_service._reconcile_onchannel_order_reservation(
+            task, self.company_a.id, order_code="ORDER-VIA-APPROVAL",
+            sum_product_price=10800, sum_delivery_price=3500, sum_add_price=0,
+            triggered_by=1,
+        )
+
+        self.db.refresh(reservation)
+        self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
+        self.assertEqual(
+            self._spent(), 14300.0,
+            "실 API가 확인한 최종 금액(14,300원)으로 한도 집계가 갱신돼야 한다.",
+        )
+
+    def test_refund_after_confirmation_is_not_undone_by_a_later_stale_tracking_refresh(self):
+        """전액·부분 환불 후 재조회 시 환불이 되돌려지지 않음 —
+        취소·반품이 시작된 뒤 지연 도착한 송장조회가 이미 처리된
+        환불을 되돌리면 안 된다."""
+
+        from app.domains.purchase_task.service import PurchaseTaskService
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        task, reservation = self._create_reserved_task(task_id=205, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=205,
+        )
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-refund-1",
+            purchase_task_id=205, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        task_service = PurchaseTaskService(self.db)
+        self.db.refresh(task)
+        task_service._reconcile_onchannel_order_reservation(
+            task, self.company_a.id, order_code="ORDER-VIA-APPROVAL",
+            sum_product_price=10000, sum_delivery_price=3000, sum_add_price=0,
+            triggered_by=1,
+        )
+        self.db.refresh(self.account)
+        held_after_confirm = self.account.held_amount
+
+        task.status = PurchaseTaskStatus.CANCEL_REQUIRED
+        self.db.commit()
+        task_service.record_refund(
+            task.id, self.company_a.id, refund_amount=13000.0, recorded_by=1,
+        )
+        self.db.refresh(self.account)
+        held_after_refund = self.account.held_amount
+        self.assertEqual(held_after_refund, held_after_confirm - 13000.0)
+
+        # 지연 도착한(또는 실수로 다시 실행된) 송장조회 — 환불 후.
+        task_service._reconcile_onchannel_order_reservation(
+            task, self.company_a.id, order_code="ORDER-VIA-APPROVAL",
+            sum_product_price=10500, sum_delivery_price=3200, sum_add_price=0,
+            triggered_by=1,
+        )
+        self.db.refresh(self.account)
+        self.assertEqual(
+            self.account.held_amount, held_after_refund,
+            "취소·반품이 시작된 뒤에는 늦게 도착한 조회가 절대 예산을 다시 건드리지 않는다.",
+        )
+
+    def test_partial_refund_then_late_refresh_does_not_revert_partial_refund(self):
+        """부분 환불도 동일하게 보호돼야 한다."""
+
+        from app.domains.purchase_task.service import PurchaseTaskService
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        task, reservation = self._create_reserved_task(task_id=206, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=206,
+        )
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-refund-2",
+            purchase_task_id=206, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        task_service = PurchaseTaskService(self.db)
+        self.db.refresh(task)
+        task_service._reconcile_onchannel_order_reservation(
+            task, self.company_a.id, order_code="ORDER-VIA-APPROVAL",
+            sum_product_price=10000, sum_delivery_price=3000, sum_add_price=0,
+            triggered_by=1,
+        )
+
+        task.status = PurchaseTaskStatus.RETURN_REQUIRED
+        self.db.commit()
+        task_service.record_refund(
+            task.id, self.company_a.id, refund_amount=3000.0, recorded_by=1,
+        )
+        self.db.refresh(self.account)
+        held_after_partial_refund = self.account.held_amount
+
+        task_service._reconcile_onchannel_order_reservation(
+            task, self.company_a.id, order_code="ORDER-VIA-APPROVAL",
+            sum_product_price=11000, sum_delivery_price=3000, sum_add_price=0,
+            triggered_by=1,
+        )
+        self.db.refresh(self.account)
+        self.assertEqual(self.account.held_amount, held_after_partial_refund)
+
+    def test_manual_track_purchase_record_behavior_is_unchanged(self):
+        """수동 구매 경로의 기존 동작 유지 — PurchaseRecord 기반
+        집계는 이번 변경 전과 동일해야 한다."""
+
+        record = PurchaseRecord(
+            company_id=self.company_a.id, purchase_task_id=901,
+            shopping_mall_code="NAVER_SHOPPING", external_order_number="N-1",
+            actual_amount=5000.0, actual_shipping_fee=2500.0,
+            purchased_at=datetime.utcnow(), recorded_by=1,
+            idempotency_key="manual-rec-1",
+        )
+        self.db.add(record)
+        self.db.commit()
+
+        self.assertEqual(
+            self._spent(), 5000.0,
+            "actual_shipping_fee는 여전히 한도 집계에 포함하지 않는다(기존 동작).",
+        )
+
+    def test_manual_and_onchannel_spend_in_same_window_are_both_counted_without_double_counting(self):
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        self._create_reserved_task(task_id=207, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=207,
+        )
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-mixed-1",
+            purchase_task_id=207, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        record = PurchaseRecord(
+            company_id=self.company_a.id, purchase_task_id=902,
+            shopping_mall_code="NAVER_SHOPPING", external_order_number="N-2",
+            actual_amount=7000.0, actual_shipping_fee=1000.0,
+            purchased_at=datetime.utcnow(), recorded_by=1,
+            idempotency_key="manual-rec-2",
+        )
+        self.db.add(record)
+        self.db.commit()
+
+        self.assertEqual(self._spent(), 20000.0, "13,000(온채널) + 7,000(수동), 이중계산 없음.")
+
+    def test_company_isolation_between_connections_and_tasks(self):
+        """회사·연결 간 데이터 격리."""
+
+        account_b = FundingAccount(company_id=self.company_b.id, total_funding=500_000.0)
+        self.db.add(account_b)
+        self.db.commit()
+
+        connection_a = self._make_ready_connection(company=self.company_a)
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        self._create_reserved_task(task_id=208, amount=13000.0, company=self.company_a)
+        self._insert_active_approval(
+            connection_id=connection_a.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=208,
+        )
+        self.service.submit_order(
+            connection_a.id, self.company_a.id,
+            idempotency_key="k-isolation-a", purchase_task_id=208,
+            confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        self.assertEqual(self._spent(company=self.company_a), 13000.0)
+        self.assertEqual(
+            self._spent(company=self.company_b), 0.0,
+            "B사는 A사의 온채널 실비용 확정과 완전히 무관해야 한다.",
+        )
+
+    def test_daily_window_boundary_excludes_older_and_includes_newer_confirmations(self):
+        """일간 경계에서 누락 또는 이중 차감 없음."""
+
+        task_old, reservation_old = self._create_reserved_task(task_id=209, amount=9000.0)
+        reservation_old.status = BudgetReservationStatus.CONFIRMED
+        reservation_old.confirmed_at = datetime.utcnow() - timedelta(days=2)
+        self.db.commit()
+
+        task_new, reservation_new = self._create_reserved_task(task_id=210, amount=11000.0)
+        reservation_new.status = BudgetReservationStatus.PENDING_VERIFICATION
+        reservation_new.confirmed_at = datetime.utcnow() - timedelta(hours=1)
+        self.db.commit()
+
+        self.assertEqual(
+            self._spent(days=1), 11000.0,
+            "24시간이 지난 확정 건은 일간 집계에서 빠지고, 최근 건만 잡혀야 한다.",
+        )
+        self.assertEqual(
+            self._spent(days=30), 20000.0,
+            "30일 창에는 두 건 모두 잡혀야 한다.",
+        )
 
 
 if __name__ == "__main__":

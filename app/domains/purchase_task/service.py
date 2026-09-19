@@ -1196,39 +1196,145 @@ class PurchaseTaskService:
             return confirmed.unknown_resolved_order_code, confirmed.connection_id
         return None
 
+    # 예약이 이 두 상태일 때만 온채널 예약-확정 로직(Stage 1/2)이
+    # 손댈 수 있다 — 취소·반품·환불이 이미 시작된 뒤에는 절대
+    # 건드리지 않는다(환불 기록이 나중 조회로 되돌려지지 않게).
+    _ONCHANNEL_RECONCILABLE_TASK_STATUSES = frozenset({
+        PurchaseTaskStatus.TRACKING_REQUIRED, PurchaseTaskStatus.SHIPPED,
+        PurchaseTaskStatus.DELIVERED,
+    })
+
+    def confirm_onchannel_reservation_provisionally(
+        self, task: PurchaseTask, company_id: int, *,
+        order_code: str, item_amount_snapshot: int | None,
+        shipping_cost_amount: int | None, triggered_by: int | None,
+    ) -> None:
+        """2026-09-19 항목 4(지출한도 누락 해소, Stage 1) — 온채널
+        실 발주가 성공(또는 사람이 RESULT_UNKNOWN을 ORDER_CONFIRMED로
+        확정)한 그 순간, **송장조회 실행 여부와 무관하게** 즉시
+        예산 예약을 확정해 지출한도·가용예산 보호를 시작한다.
+
+        여기서 쓰는 금액은 발주 직전 승인된 스냅샷
+        (`PurchaseOrderApproval.item_amount_snapshot`/
+        `shipping_cost_amount` — `_verify_point_balance_and_shipping_
+        or_block()`가 이미 검증한 값)이지, 아직 실 API가 확인해준
+        최종 금액이 아니다. 그래서 CONFIRMED가 아니라
+        PENDING_VERIFICATION으로만 표시한다 — 나중에 송장
+        조회가 성공하면 `_reconcile_onchannel_order_reservation()`이
+        실 API 금액으로 최종 CONFIRMED로 승격·조정한다. 조회가
+        영영 실행되지 않거나 실패해도 이 잠정 확정은 절대 취소되지
+        않는다(지출한도는 계속 보호된 채로 남는다).
+
+        승인 스냅샷 자체가 없으면(이례적 — 정상 흐름에서는 항상
+        존재) 0으로 채우지 않고 조용히 아무것도 하지 않는다 —
+        이 경우 지출한도 보호는 나중 송장조회(Stage 2)에 맡긴다.
+
+        `record_purchase()`(수동 트랙)와 달리 여기서는
+        `reservation.amount` 자체도 최신 확정 금액으로 갱신한다 —
+        수동 트랙은 `PurchaseRecord.actual_amount`가 지출한도 집계의
+        정확한 출처라 `reservation.amount`가 오래돼도 상관없지만,
+        온채널 트랙은 `sum_recorded_amount_since()`가
+        `reservation.amount`를 직접 읽으므로 이 값이 항상 최신이어야
+        한도 집계가 정확하다."""
+
+        if item_amount_snapshot is None:
+            return
+
+        if task.status not in self._ONCHANNEL_RECONCILABLE_TASK_STATUSES:
+            return
+
+        if task.budget_reservation_id is None:
+            return
+
+        reservation = self.repository.get_reservation(
+            task.budget_reservation_id, company_id,
+        )
+        if reservation is None or reservation.status not in (
+            BudgetReservationStatus.RESERVED, BudgetReservationStatus.EXTENDED,
+        ):
+            return
+
+        account = self.funding.repository.get_account_by_company(company_id)
+        if account is None:
+            return
+
+        approved_amount = float(item_amount_snapshot + (shipping_cost_amount or 0))
+        diff = approved_amount - reservation.amount
+        if diff != 0:
+            if diff > 0 and not self._reserve_budget_conditional(account.id, diff):
+                _audit(
+                    self.db, company_id=company_id, user_id=triggered_by,
+                    action="PURCHASE_TASK_ONCHANNEL_RESERVATION_PROVISIONAL_CONFIRM_BLOCKED",
+                    entity_id=task.id,
+                    description=(
+                        f"온채널 발주 성공 직후 승인액 기준 잠정 확정 실패(운영 "
+                        f"가능 금액 부족): order_code={order_code} "
+                        f"approved_amount={approved_amount} reserved={reservation.amount}"
+                    ),
+                )
+                self.db.commit()
+                return
+            if diff < 0:
+                self._release_budget(account.id, -diff)
+
+        reservation.amount = approved_amount
+        reservation.status = BudgetReservationStatus.PENDING_VERIFICATION
+        reservation.confirmed_at = datetime.utcnow()
+
+        self._append_ledger(
+            account.id, company_id, approved_amount,
+            FundingService.TYPE_HOLD_COMMIT, task.id,
+            (
+                f"온채널 실 발주 성공 — 승인액 기준 잠정 확정(송장조회 전, "
+                f"API 최종 확인 대기): order_code={order_code}"
+            ),
+        )
+        _audit(
+            self.db, company_id=company_id, user_id=triggered_by,
+            action="PURCHASE_TASK_ONCHANNEL_RESERVATION_PROVISIONALLY_CONFIRMED",
+            entity_id=task.id,
+            description=(
+                f"온채널 발주 성공 직후 승인액 기준 잠정 확정: "
+                f"order_code={order_code} amount={approved_amount}"
+            ),
+        )
+        self.db.commit()
+
     def _reconcile_onchannel_order_reservation(
         self, task: PurchaseTask, company_id: int, *,
         order_code: str, sum_product_price: int | None,
         sum_delivery_price: int | None, sum_add_price: int | None,
         triggered_by: int | None,
     ) -> None:
-        """2026-09-19 항목 3(매입 실비용 연결) — 온채널 실 발주 트랙은
-        `record_purchase()`(수동 트랙 전용, USER_PAYMENT_PENDING만
-        허용)를 타지 않아 `_reserve_budget()`으로 잡힌 예산 예약이
-        RESERVED 상태로 영원히 남는다(커밋도 해제도 되지 않음).
-        `refresh_tracking_live()`가 실 API(GET seller/order/{code})로
+        """2026-09-19 항목 3/4(매입 실비용 연결, Stage 2 — 최종 확정)
+        — `refresh_tracking_live()`가 실 API(GET seller/order/{code})로
         받은 `sum_product_price`/`sum_delivery_price`/`sum_add_price`
-        (스펙에 정의돼 있었지만 이전까지 파싱하지 않던 필드)로 그
-        예약만 확정/조정한다.
+        (스펙에 정의돼 있었지만 이전까지 파싱하지 않던 필드)로 예산
+        예약을 최종 확정/조정한다. 대부분의 경우 이 예약은 이미
+        Stage 1(`confirm_onchannel_reservation_provisionally()`)이
+        승인 스냅샷 금액으로 PENDING_VERIFICATION까지
+        올려둔 상태이고, 여기서는 그 잠정값을 실 API 확정값으로
+        조정하며 CONFIRMED(최종)로 승격한다. Stage 1이 어떤 이유로건
+        (승인 스냅샷 부재 등) 실행되지 못했다면 RESERVED/EXTENDED에서
+        바로 이 메서드가 확정한다 — 결과는 같다.
 
         **`PurchaseRecord`는 이 메서드에서 만들지 않는다** —
         `PurchaseRecord`는 "Provider가 자동으로 채우지 않는다"는
         것을 스스로 전제로 문서화한 모델이다(model.py의
-        `PurchaseRecord` 클래스 docstring). 이 메서드는 API 응답을
-        받아 자동으로 실행되므로 그 전제와 맞지 않아, 사람이 직접
-        입력하는 "사용자가 확인한 금액" 기록(PurchaseRecord →
-        `sum_recorded_amount_since()` 지출한도 집계)에는 아직
-        연결하지 않는다 — 이 연결에는 별도의 Model 변경(또는
-        `record_purchase()`의 상태 전제 확장) 승인이 필요하며, 이번
-        라운드 보고서에 별도 항목으로 남긴다.
+        `PurchaseRecord` 클래스 docstring). 지출한도 집계
+        (`sum_recorded_amount_since()`)는 대신 `CONFIRMED_LIKE`
+        예약 상태를 직접 읽어 온채널 트랙을 포함하므로, 이 메서드가
+        `PurchaseRecord`를 만들지 않아도 한도는 이미 보호된다.
 
-        예약이 없거나(budget_reservation_id is None) 이미 CONFIRMED
-        상태면 조용히 아무것도 하지 않는다(재시도 안전 — 반복
-        호출·재시작 모두 이 두 조건 중 하나로 자연히 멱등적이다).
+        이미 최종 CONFIRMED 상태면 조용히 아무것도 하지 않는다(재시도
+        안전 — 반복 호출·재시작 모두 자연히 멱등적이다). 취소·반품·
+        환불이 이미 시작된 작업(task.status가 TRACKING_REQUIRED/
+        SHIPPED/DELIVERED를 벗어남)도 손대지 않는다 — 늦게 도착한
+        송장조회가 이미 처리된 환불을 되돌리지 않게 하기 위함이다.
         자금이 부족해 조정이 안 되면 예외를 던져 이 메서드를 호출한
         `refresh_tracking_live()`(배송조회가 원래 목적)까지 실패시키지
-        않는다 — 감사로그만 남기고 예약은 그대로 두어(RESERVED),
-        다음 조회 때 다시 시도할 수 있게 한다.
+        않는다 — 감사로그만 남기고 예약은 그대로 두어, 다음 조회 때
+        다시 시도할 수 있게 한다.
 
         예약 자체가 애초에 "상품가+배송비" 합계로 잡힌다
         (`_reserve_budget()`가 정책평가 시점에 계산하는
@@ -1240,6 +1346,9 @@ class PurchaseTaskService:
         보류한다."""
 
         if sum_product_price is None or sum_delivery_price is None or sum_add_price is None:
+            return
+
+        if task.status not in self._ONCHANNEL_RECONCILABLE_TASK_STATUSES:
             return
 
         if task.budget_reservation_id is None:
@@ -1259,6 +1368,7 @@ class PurchaseTaskService:
 
         if reservation.status in (
             BudgetReservationStatus.RESERVED, BudgetReservationStatus.EXTENDED,
+            BudgetReservationStatus.PENDING_VERIFICATION,
         ):
             diff = actual_amount - reservation.amount
             if diff != 0:
@@ -1277,8 +1387,9 @@ class PurchaseTaskService:
                     return
                 if diff < 0:
                     self._release_budget(account.id, -diff)
+            reservation.amount = actual_amount
             reservation.status = BudgetReservationStatus.CONFIRMED
-            reservation.confirmed_at = datetime.utcnow()
+            reservation.confirmed_at = reservation.confirmed_at or datetime.utcnow()
         else:
             if not self._reserve_budget_conditional(account.id, actual_amount):
                 _audit(
@@ -1293,6 +1404,7 @@ class PurchaseTaskService:
                 )
                 self.db.commit()
                 return
+            reservation.amount = actual_amount
             reservation.status = BudgetReservationStatus.CONFIRMED
             reservation.confirmed_at = datetime.utcnow()
 
