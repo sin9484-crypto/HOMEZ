@@ -1260,21 +1260,11 @@ class PurchaseTaskService:
 
         approved_amount = float(item_amount_snapshot + (shipping_cost_amount or 0))
         diff = approved_amount - reservation.amount
+        overdrawn = False
         if diff != 0:
-            if diff > 0 and not self._reserve_budget_conditional(account.id, diff):
-                _audit(
-                    self.db, company_id=company_id, user_id=triggered_by,
-                    action="PURCHASE_TASK_ONCHANNEL_RESERVATION_PROVISIONAL_CONFIRM_BLOCKED",
-                    entity_id=task.id,
-                    description=(
-                        f"온채널 발주 성공 직후 승인액 기준 잠정 확정 실패(운영 "
-                        f"가능 금액 부족): order_code={order_code} "
-                        f"approved_amount={approved_amount} reserved={reservation.amount}"
-                    ),
-                )
-                self.db.commit()
-                return
-            if diff < 0:
+            if diff > 0:
+                overdrawn = not self._reserve_external_spend(account.id, diff)
+            else:
                 self._release_budget(account.id, -diff)
 
         reservation.amount = approved_amount
@@ -1296,9 +1286,52 @@ class PurchaseTaskService:
             description=(
                 f"온채널 발주 성공 직후 승인액 기준 잠정 확정: "
                 f"order_code={order_code} amount={approved_amount}"
+                + (" (운영 가능 금액 초과 기록)" if overdrawn else "")
             ),
         )
         self.db.commit()
+        if overdrawn:
+            self._notify_external_spend_overdrawn(task, order_code, approved_amount)
+
+    def _reserve_external_spend(self, account_id: int, amount: float) -> bool:
+        """이미 외부로 나간 지출의 추가분을 예산에 반영한다. 운영 가능
+        금액이 충분하면 기존 조건부 UPDATE와 동일하게 예약하고 True를
+        반환한다. 모자라도 **기록을 거부하지 않는다** — 돈은 이미
+        나갔으므로 초과해서라도 held_amount에 올리고(가용금액이 음수가
+        되어 다음 승인·발주가 BUDGET_INSUFFICIENT로 막힌다) False를
+        반환해 호출자가 경고를 남기게 한다. 발주 전 예약(_reserve_
+        budget)에는 쓰지 않는다 — 그쪽은 여전히 부족하면 차단한다."""
+
+        if self._reserve_budget_conditional(account_id, amount):
+            return True
+        self.db.execute(
+            update(FundingAccount)
+            .where(FundingAccount.id == account_id)
+            .values(held_amount=FundingAccount.held_amount + amount),
+        )
+        return False
+
+    def _notify_external_spend_overdrawn(
+        self, task: PurchaseTask, order_code: str, amount: float,
+    ) -> None:
+        """이미 커밋된 외부 지출 기록 뒤에 호출된다 — 알림 실패가 성공한
+        발주 흐름(승인 소비 등 이후 단계)을 깨뜨리면 안 되므로 어떤
+        예외도 삼키고 경고만 남긴다."""
+
+        try:
+            self._notify(
+                task, EmailNotificationEventType.BUDGET_INSUFFICIENT,
+                f"온채널 실 발주({order_code}, {amount:,.0f}원)가 이미 나갔지만 "
+                "운영 가능 금액을 초과해 기록됐습니다 — 자금을 확인하기 전에는 "
+                "다음 발주가 차단됩니다.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.db.rollback()
+            import logging
+
+            logging.getLogger("homez").warning(
+                "온채널 초과 지출 알림 실패(기록은 이미 커밋됨): %s", type(exc).__name__,
+            )
 
     def _reconcile_onchannel_order_reservation(
         self, task: PurchaseTask, company_id: int, *,
@@ -1331,10 +1364,14 @@ class PurchaseTaskService:
         환불이 이미 시작된 작업(task.status가 TRACKING_REQUIRED/
         SHIPPED/DELIVERED를 벗어남)도 손대지 않는다 — 늦게 도착한
         송장조회가 이미 처리된 환불을 되돌리지 않게 하기 위함이다.
-        자금이 부족해 조정이 안 되면 예외를 던져 이 메서드를 호출한
-        `refresh_tracking_live()`(배송조회가 원래 목적)까지 실패시키지
-        않는다 — 감사로그만 남기고 예약은 그대로 두어, 다음 조회 때
-        다시 시도할 수 있게 한다.
+        운영 가능 금액이 모자라도 이미 나간 외부 지출의 기록을 거부하지
+        않는다(2026-09-20 정정 — 이전에는 자금 부족 시 아무것도
+        기록하지 않고 예약을 RESERVED로 남겼으나, 그러면 실제로 나간
+        돈이 지출한도 집계에서 영영 빠진다). `_reserve_external_spend()`가
+        초과해서라도 기록하고 감사로그·알림을 남기며, 가용금액이 음수가
+        되어 다음 승인·발주는 BUDGET_INSUFFICIENT로 막힌다. 이 메서드는
+        예외를 던져 호출자(`refresh_tracking_live()`, 배송조회가 원래
+        목적)를 실패시키지 않는다.
 
         예약 자체가 애초에 "상품가+배송비" 합계로 잡힌다
         (`_reserve_budget()`가 정책평가 시점에 계산하는
@@ -1365,6 +1402,7 @@ class PurchaseTaskService:
             return
 
         actual_amount = float(sum_product_price + sum_delivery_price + sum_add_price)
+        overdrawn = False
 
         if reservation.status in (
             BudgetReservationStatus.RESERVED, BudgetReservationStatus.EXTENDED,
@@ -1372,38 +1410,15 @@ class PurchaseTaskService:
         ):
             diff = actual_amount - reservation.amount
             if diff != 0:
-                if diff > 0 and not self._reserve_budget_conditional(account.id, diff):
-                    _audit(
-                        self.db, company_id=company_id, user_id=triggered_by,
-                        action="PURCHASE_TASK_ONCHANNEL_COST_RECONCILE_BLOCKED",
-                        entity_id=task.id,
-                        description=(
-                            f"온채널 실제 매입비 확정 실패(운영 가능 금액 부족): "
-                            f"order_code={order_code} actual_amount={actual_amount} "
-                            f"reserved={reservation.amount}"
-                        ),
-                    )
-                    self.db.commit()
-                    return
-                if diff < 0:
+                if diff > 0:
+                    overdrawn = not self._reserve_external_spend(account.id, diff)
+                else:
                     self._release_budget(account.id, -diff)
             reservation.amount = actual_amount
             reservation.status = BudgetReservationStatus.CONFIRMED
             reservation.confirmed_at = reservation.confirmed_at or datetime.utcnow()
         else:
-            if not self._reserve_budget_conditional(account.id, actual_amount):
-                _audit(
-                    self.db, company_id=company_id, user_id=triggered_by,
-                    action="PURCHASE_TASK_ONCHANNEL_COST_RECONCILE_BLOCKED",
-                    entity_id=task.id,
-                    description=(
-                        f"온채널 실제 매입비 확정 실패(예약 만료 후 재예약 불가, "
-                        f"운영 가능 금액 부족): order_code={order_code} "
-                        f"actual_amount={actual_amount}"
-                    ),
-                )
-                self.db.commit()
-                return
+            overdrawn = not self._reserve_external_spend(account.id, actual_amount)
             reservation.amount = actual_amount
             reservation.status = BudgetReservationStatus.CONFIRMED
             reservation.confirmed_at = datetime.utcnow()
@@ -1426,9 +1441,12 @@ class PurchaseTaskService:
             description=(
                 f"온채널 실제 매입비 확정: order_code={order_code} "
                 f"amount={actual_amount} shipping={sum_delivery_price}"
+                + (" (운영 가능 금액 초과 기록)" if overdrawn else "")
             ),
         )
         self.db.commit()
+        if overdrawn:
+            self._notify_external_spend_overdrawn(task, order_code, actual_amount)
 
     def refresh_tracking_live(
         self, task_id: int, company_id: int, *, triggered_by: int | None = None,

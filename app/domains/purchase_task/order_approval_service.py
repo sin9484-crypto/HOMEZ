@@ -45,8 +45,12 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
+from sqlalchemy import exists
+
 from app.domains.purchase_task.constants import (
+    OrderSubmissionStatus,
     PurchaseOrderApprovalStatus,
+    UnknownResolutionStatus,
     RECOMMENDED_APPROVAL_VALIDITY_MINUTES,
     RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT,
     RECOMMENDED_MIN_MARGIN_RATE,
@@ -57,6 +61,7 @@ from app.domains.purchase_task.constants import (
     ShippingCostConfirmationSource,
 )
 from app.domains.purchase_task.model import PurchaseOrderApproval
+from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
 
 # 2026-09-12 후속(V7 기준선 정리, Phase 4 잔여 격차 해소) — HOMEZ는
 # 단일 프로세스 Modular Monolith다(여러 워커 프로세스로 분리되지
@@ -470,6 +475,35 @@ class PurchaseOrderApprovalService:
         3건이 전부 ACTIVE로 통과, 합계 24만원). `CONSUMED` +
         "아직 만료되지 않은 ACTIVE"를 함께 합산해 이 결함을 닫는다."""
 
+        # 2026-09-20 — 결과가 아직 확정되지 않은 발주(PENDING/IN_FLIGHT,
+        # 또는 사람이 아직 확정하지 않은 RESULT_UNKNOWN)의 금액도 승인
+        # 유효시간(10분)이 지난 뒤에도 한도에서 빠지지 않아야 한다.
+        # 외부 성공 직후 내부 저장이 실패했거나 UNKNOWN이면 승인은
+        # CONSUMED로 넘어가지 못하고 만료되지만, 실제 주문은 이미
+        # 생겼을 수 있다. 같은 작업의 재발주는 _has_blocking_task_
+        # attempt가 막고, 다른 작업의 승인은 이 집계가 막는다. 사람이
+        # ORDER_NOT_CONFIRMED로 확정하면 빠지고, ORDER_CONFIRMED면
+        # 승인이 CONSUMED로 바뀌어 첫 번째 조건으로 계속 집계된다.
+        # 같은 행이 한 번만 집계되도록 하나의 OR 조건으로 묶는다.
+        unresolved_attempt = exists().where(
+            PurchaseOrderSubmissionAttempt.company_id == PurchaseOrderApproval.company_id,
+            PurchaseOrderSubmissionAttempt.connection_id == PurchaseOrderApproval.connection_id,
+            PurchaseOrderSubmissionAttempt.purchase_task_id == PurchaseOrderApproval.purchase_task_id,
+            (
+                PurchaseOrderSubmissionAttempt.status.in_(
+                    (OrderSubmissionStatus.PENDING, OrderSubmissionStatus.IN_FLIGHT),
+                )
+                | (
+                    (PurchaseOrderSubmissionAttempt.status == OrderSubmissionStatus.RESULT_UNKNOWN)
+                    & PurchaseOrderSubmissionAttempt.unknown_resolution_status.notin_(
+                        (
+                            UnknownResolutionStatus.ORDER_NOT_CONFIRMED,
+                            UnknownResolutionStatus.ORDER_CONFIRMED,
+                        ),
+                    )
+                )
+            ),
+        )
         query = self.db.query(PurchaseOrderApproval).filter(
                 PurchaseOrderApproval.company_id == company_id,
                 PurchaseOrderApproval.updated_at >= since,
@@ -480,6 +514,7 @@ class PurchaseOrderApprovalService:
                         & (PurchaseOrderApproval.expires_at.is_not(None))
                         & (PurchaseOrderApproval.expires_at > datetime.utcnow())
                     )
+                    | unresolved_attempt
                 )
             )
         if exclude_approval_id is not None:

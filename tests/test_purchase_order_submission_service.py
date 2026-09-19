@@ -2300,6 +2300,149 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
             "B사는 A사의 온채널 실비용 확정과 완전히 무관해야 한다.",
         )
 
+    def test_external_spend_is_recorded_even_when_funds_cannot_cover_the_difference(self):
+        """2026-09-20 — 이미 나간 외부 지출은 운영 가능 금액이 모자라도
+        숨기거나 기록을 거부하지 않는다. 기록하고(한도 집계 포함), 다음
+        위험 실행이 막히게 한다."""
+
+        from decimal import Decimal
+        from app.domains.purchase_task.policy_service import (
+            PurchaseTaskPolicyCheckInput,
+            PurchaseTaskPolicyReason,
+            PurchaseTaskPolicyService,
+        )
+
+        self.account.total_funding = 15000.0
+        self.db.commit()
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=13000)
+        task, reservation = self._create_reserved_task(task_id=211, amount=13000.0)
+        self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=13000, shipping_cost_amount=3000,
+            purchase_task_id=211,
+        )
+
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-overdrawn",
+            purchase_task_id=211, confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        self.db.refresh(reservation)
+        self.db.refresh(self.account)
+        self.assertEqual(reservation.status, BudgetReservationStatus.PENDING_VERIFICATION)
+        self.assertEqual(reservation.amount, 16000.0)
+        self.assertEqual(self._spent(), 16000.0, "자금이 모자라도 이미 나간 지출은 한도 집계에 남는다.")
+        self.assertEqual(self.account.held_amount, 16000.0)
+
+        policy = PurchaseTaskPolicyService(self.db)
+        result = policy.evaluate(
+            self.company_a.id,
+            PurchaseTaskPolicyCheckInput(
+                match_confidence=1.0, match_tier="EXACT", quantity=1,
+                gtin="1111111111111", model_name="M1",
+                expected_net_profit=Decimal("1000"),
+                expected_margin_rate=Decimal("10"),
+                required_budget_amount=Decimal("1000"),
+                estimated_delivery_days=2, return_allowed=True,
+            ),
+        )
+        self.assertIn(
+            PurchaseTaskPolicyReason.BUDGET_INSUFFICIENT, result.reasons,
+            "초과 기록 이후 다음 승인은 운영 가능 금액 부족으로 막혀야 한다.",
+        )
+
+    def test_unresolved_attempt_amount_stays_in_approval_layer_limit_after_approval_expiry(self):
+        """외부 성공 직후 내부 저장 실패(IN_FLIGHT 잔존) — 승인 유효시간이
+        지나도 그 금액이 발주 승인 단계의 일간/월간 한도 집계에서 빠지지
+        않아야 한다(같은 작업 재발주는 이미 _has_blocking_task_attempt가
+        막지만, 다른 작업의 승인은 한도가 막아야 한다)."""
+
+        from app.domains.purchase_task.order_approval_service import (
+            PurchaseOrderApprovalService,
+        )
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter_with_submit(point=1_000_000, price=10000)
+        self._create_reserved_task(task_id=212, amount=13000.0)
+        approval = self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=212,
+        )
+
+        real_finalize = PurchaseOrderSubmissionService._finalize_attempt
+
+        def _boom(self_svc, attempt, *, status, external_order_code=None, failure_detail=None):
+            if status == OrderSubmissionStatus.SUCCEEDED:
+                raise RuntimeError("시뮬레이션: 내부 확정 커밋 중 DB 오류")
+            return real_finalize(
+                self_svc, attempt, status=status,
+                external_order_code=external_order_code, failure_detail=failure_detail,
+            )
+
+        with mock.patch.object(PurchaseOrderSubmissionService, "_finalize_attempt", _boom):
+            with self.assertRaises(RuntimeError):
+                self.service.submit_order(
+                    connection.id, self.company_a.id, idempotency_key="k-save-fail",
+                    purchase_task_id=212, confirm_real_submission=True, **VALID_KWARGS,
+                )
+
+        approval_service = PurchaseOrderApprovalService(self.db)
+        since = datetime.utcnow() - timedelta(hours=24)
+        self.assertEqual(
+            approval_service._sum_reserved_amount(self.company_a.id, since), 13000,
+            "유효시간 안에는 ACTIVE 승인으로 집계된다.",
+        )
+
+        self.db.refresh(approval)
+        approval.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        self.db.commit()
+        self.assertEqual(
+            approval_service._sum_reserved_amount(self.company_a.id, since), 13000,
+            "승인이 만료돼도 결과 미확정(IN_FLIGHT) 발주 금액은 한도에서 빠지지 않는다.",
+        )
+
+    def test_unknown_attempt_amount_is_protected_until_human_resolves_it_as_not_created(self):
+
+        from app.domains.purchase_task.order_approval_service import (
+            PurchaseOrderApprovalService,
+        )
+
+        connection = self._make_ready_connection()
+        self._create_reserved_task(task_id=213, amount=13000.0)
+        approval = self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=213,
+        )
+        approval.status = PurchaseOrderApprovalStatus.EXPIRED
+        approval.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        attempt = self.service._create_locked_attempt(
+            connection_id=connection.id, company_id=self.company_a.id,
+            purchase_task_id=213, idempotency_key="k-unknown-approval-layer",
+            mall_code="ONCHANNEL", product_code="CH1234567",
+            options=[{"id": 1, "qty": 1}], triggered_by=1,
+        )
+        attempt.status = OrderSubmissionStatus.RESULT_UNKNOWN
+        self.db.commit()
+
+        approval_service = PurchaseOrderApprovalService(self.db)
+        since = datetime.utcnow() - timedelta(hours=24)
+        self.assertEqual(
+            approval_service._sum_reserved_amount(self.company_a.id, since), 13000,
+            "사람이 확정하기 전 UNKNOWN 금액은 만료된 승인이어도 한도에 남는다.",
+        )
+
+        self.service.resolve_unknown_attempt(
+            attempt.id, self.company_a.id, resolution="ORDER_NOT_CONFIRMED",
+            basis="온채널 관리자 화면에서 주문 없음을 직접 확인", resolved_by=1,
+        )
+        self.assertEqual(
+            approval_service._sum_reserved_amount(self.company_a.id, since), 0,
+            "주문 미생성이 확인되면 그 금액은 한도에서 빠진다.",
+        )
+
     def test_daily_window_boundary_excludes_older_and_includes_newer_confirmations(self):
         """일간 경계에서 누락 또는 이중 차감 없음."""
 

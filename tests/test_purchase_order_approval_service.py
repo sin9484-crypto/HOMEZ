@@ -29,6 +29,7 @@ from app.domains.purchase_task.constants import (
     ShippingCostConfirmationSource,
 )
 from app.domains.purchase_task.model import PurchaseOrderApproval
+from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
 from app.domains.purchase_task.model import PurchaseTask
 from app.domains.purchase_task.model import PurchaseTaskPolicySetting
 from app.domains.purchase_task.order_approval_service import (
@@ -53,6 +54,7 @@ class OrderApprovalServiceTestCaseBase(unittest.TestCase):
                 Company.__table__, PurchaseTask.__table__,
                 PurchaseTaskPolicySetting.__table__,
                 PurchaseOrderApproval.__table__,
+                PurchaseOrderSubmissionAttempt.__table__,
             ],
         )
         self.SessionLocal = sessionmaker(

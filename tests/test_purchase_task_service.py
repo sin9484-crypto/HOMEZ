@@ -916,14 +916,17 @@ class OnchannelCostReconciliationTestCase(OnchannelCostReconciliationTestCaseBas
         self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
         self.assertEqual(self.account.held_amount, held_before - 1000)
 
-    def test_insufficient_funds_blocks_without_corrupting_state_or_raising(self):
+    def test_insufficient_funds_still_records_already_spent_money_and_never_raises(self):
+        """2026-09-20 정정 — 이전에는 운영 가능 금액이 모자라면 확정하지
+        않고 RESERVED로 남겼지만, 그러면 이미 나간 실제 지출이 지출한도
+        집계에서 영영 빠진다. 이미 발생한 외부 지출은 초과해서라도
+        기록하고(가용금액이 음수 → 다음 발주 차단), 배송조회 자체는
+        실패시키지 않는다."""
 
         task, reservation, attempt = self._ready_onchannel_task("oc-insufficient")
         reserved_amount = reservation.amount
         held_before = self.account.held_amount
 
-        # 실제 결제금액이 예약보다 훨씬 크고, 남은 운영가능금액을
-        # 초과하도록 만든다.
         huge_product_price = int(self.account.total_funding) + 999999
         self._patch_lookup_tracking(result=self._tracking_result(
             sum_product_price=huge_product_price, sum_delivery_price=0, sum_add_price=0,
@@ -934,11 +937,16 @@ class OnchannelCostReconciliationTestCase(OnchannelCostReconciliationTestCaseBas
 
         self.db.refresh(reservation)
         self.db.refresh(self.account)
+        self.assertEqual(reservation.status, BudgetReservationStatus.CONFIRMED)
+        self.assertEqual(reservation.amount, float(huge_product_price))
         self.assertEqual(
-            reservation.status, BudgetReservationStatus.RESERVED,
-            "자금 부족이면 확정하지 않고 그대로 재시도 가능한 상태로 남긴다.",
+            self.account.held_amount, held_before + (huge_product_price - reserved_amount),
+            "예약 차액만큼 초과해서라도 held_amount에 반영한다.",
         )
-        self.assertEqual(self.account.held_amount, held_before, "부분 조정 없이 완전히 원상태.")
+        self.assertLess(
+            FundingService.available_amount(self.account), 0,
+            "가용금액이 음수가 되어 다음 승인·발주가 막힌다.",
+        )
 
         commit_ledgers = (
             self.db.query(FundingLedger)
@@ -948,7 +956,7 @@ class OnchannelCostReconciliationTestCase(OnchannelCostReconciliationTestCaseBas
             )
             .all()
         )
-        self.assertEqual(len(commit_ledgers), 0, "실패한 조정은 절대 원장에 기록하지 않는다.")
+        self.assertEqual(len(commit_ledgers), 1, "이미 나간 지출은 원장에도 남긴다.")
 
     def test_repeated_refresh_does_not_double_commit(self):
 

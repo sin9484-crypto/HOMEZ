@@ -689,3 +689,59 @@ OnchannelSpendLimitProtectionTestCase`(11건, 신규) — 발주 성공 직후
 test_internal_finalize_failure_after_external_success_leaves_
 attempt_in_flight_and_blocks_retry`(29절)를 "외부 성공 직후 내부
 저장 실패·재시작" 항목으로 그대로 재사용했다(중복 작성하지 않음).
+
+## 32. 한도 보호 마지막 연결 대조와 실제 공백 3건 (2026-09-20)
+
+**로그 끝 한글 3줄의 출처(보고 불확실성 정리)**: `app/desktop/main.py`의
+`print()`(368·401·473행)가 `tests/test_live_gate4_fix_defects.py`의 fail-closed
+테스트 3건(`test_run_aborts_when_bootstrap_and_engine_paths_differ` /
+`..._seeding_fails` / `..._channel_policy_seeding_fails`)이 `desktop_main.run()`을
+직접 호출할 때 찍는 **테스트 부수 출력**이다(별도 프로세스 오류 아님).
+해당 파일만 `> 파일 2>&1`로 단독 실행해 `OK` 뒤에 같은 3줄이 같은 순서로
+재현됨을 확인했다 — 표준출력은 파일로 리다이렉트되면 블록 버퍼링되어
+인터프리터 종료 시 flush되므로 표준오류로 나오는 unittest 요약 뒤에
+붙는다. "OK 뒤에 나왔다"는 이유가 아니라 이 재현으로 판단한다.
+과거 기록(`HOMEZ_PROJECT_STATE.md` 5614행 등)과도 일치한다. mtime 불변은
+관측 사실일 뿐 DB 무접촉의 증명으로 쓰지 않는다.
+
+**대조 결과 — RESERVED·IN_FLIGHT·UNKNOWN 금액의 보호 경로**:
+
+| 상태 | 정책 단계(`PurchaseTaskPolicyService`) | 발주 승인 단계(`_sum_reserved_amount`) | 같은 작업 재발주 |
+|---|---|---|---|
+| RESERVED(예약만) | `held_amount`로 가용금액에서 차감(`BUDGET_INSUFFICIENT`) — 지출 집계에는 미포함이 **의도** | 승인 유효시간(10분) 내 ACTIVE만 집계 | 해당 없음 |
+| IN_FLIGHT/PENDING | 예약은 RESERVED로 남아 위와 동일 | 유효시간 내 ACTIVE 집계, **만료 후에는 빠짐 → 공백 1(수정)** | `_has_blocking_task_attempt`가 차단(기존 테스트) |
+| RESULT_UNKNOWN(미확정) | 동일 | 만료 후 빠짐 → 공백 1(수정) | 차단(기존 테스트) |
+| SUCCEEDED | 예약 PENDING_VERIFICATION→CONFIRMED, 지출 집계 포함(31절) | 승인 CONSUMED로 집계 | 차단 |
+
+RESERVED가 지출 집계에 없다는 사실만으로 결함이라 단정하지 않았고, 가용금액
+차감·승인 집계·같은 작업 차단이 각각 보호함을 코드와 테스트로 확인했다.
+두 집계는 서로 다른 게이트(정책 단계 vs 발주 직전)가 각자 하나의 출처만
+읽으므로 게이트 간 이중계산은 없다. 신규 상태(`PENDING_VERIFICATION`)를 읽는
+기존 경로 — 만료 스윕(ACTIVE만), 원 주문 취소 예약 해제(ACTIVE만), 예약 연장
+(RESERVED/EXTENDED만), `record_refund`(예약 행을 건드리지 않음),
+`record_purchase`(USER_PAYMENT_PENDING만, 온채널 작업은 도달 불가) — 은 모두
+누락 없이 이 상태를 건드리지 않음을 확인했다. UI·스키마는 예약 상태를 읽지 않는다.
+(참고: `release_expired_reservations`는 저장소 안 어디에서도 호출되지 않아
+실제로는 예약이 자동 만료되지 않는다 — 나중에 배선한다면 결과 미확정 발주가
+있는 작업은 건너뛰어야 한다는 잠재 한계로만 기록, 이번에 수정하지 않음.)
+
+**재현 후 수정한 실제 공백 2건(재현 테스트 3건)**(모두 수정 전 상태에서 테스트가
+실패함을 먼저 확인):
+1. 발주 승인 단계 한도(`_sum_reserved_amount`): 외부 성공 직후 내부 저장
+   실패(IN_FLIGHT 잔존)나 미확정 UNKNOWN은 승인이 만료되면 일간/월간 한도
+   집계에서 사라졌다. → 결과 미확정(PENDING/IN_FLIGHT, 또는 사람이 아직 확정하지
+   않은 RESULT_UNKNOWN) 발주의 승인 금액을 만료 뒤에도 집계에 포함한다(하나의 OR
+   조건이라 이중계산 없음). 사람이 ORDER_NOT_CONFIRMED로 확정하면 빠지고
+   ORDER_CONFIRMED면 승인이 CONSUMED로 넘어가 계속 집계된다.
+2. Stage 1/2: 이미 나간 외부 지출을 운영 가능 금액이 모자라면 **기록하지
+   않았다**(예약을 RESERVED로 남김 — 지출 집계에서 영영 누락, 이전 라운드에서
+   "재시도 가능"이라 보고한 것은 잘못된 판단이었다). → `_reserve_external_spend`가
+   초과해서라도 `held_amount`에 올리고 원장·감사로그·알림을 남기며, 가용금액이
+   음수가 되어 다음 승인·발주가 `BUDGET_INSUFFICIENT`로 막힌다. 알림 실패가
+   성공한 발주 흐름을 깨지 않도록 예외는 삼킨다. 이전 라운드 테스트
+   `test_insufficient_funds_blocks_without_corrupting_state_or_raising`는 옛
+   동작을 단언하고 있어 `..._still_records_already_spent_money_and_never_raises`로
+   바꿨다(기대값 약화가 아니라 반대 방향의 더 엄격한 단언 — 확정 상태·금액·
+   held_amount 증가·음수 가용금액·원장 1건).
+(참고) 위 2번의 예약 사전 조건(`_reserve_budget`)은 그대로다 —
+   발주 **전** 예약은 여전히 부족하면 차단한다.
