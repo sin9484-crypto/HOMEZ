@@ -745,3 +745,50 @@ RESERVED가 지출 집계에 없다는 사실만으로 결함이라 단정하지
    held_amount 증가·음수 가용금액·원장 1건).
 (참고) 위 2번의 예약 사전 조건(`_reserve_budget`)은 그대로다 —
    발주 **전** 예약은 여전히 부족하면 차단한다.
+
+## 33. 한도 수정 최종 검증 — 고정 기준선 전체 회귀 결과와 미호출 만료 함수 조건 (2026-09-20)
+
+**고정 기준선**: HEAD `3703273`(원격과 일치, 미커밋 변경 없음), 명령
+`python -m unittest discover -s tests -p "test_*.py"`, 시작 2026-09-20 19:23:49,
+종료 21:17:39. 코드·테스트는 이 실행 동안 수정하지 않았다(문서 초안은 저장소 밖에서
+작성). 격리: 테스트는 임시 SQLite 파일만 쓰며, 이 실행에는 저장소 밖 가드
+(`sitecustomize`, 루프백 외 `connect` 차단)를 PYTHONPATH로 주입했다 — 가드가 켜진
+프로세스 7개, **회귀 중 차단된 외부 접속 시도 0건**(가드 자체 점검용 1건은 별도).
+`homez.db`는 실행 전후 SHA-256 `f3aafca1...762008`·크기 3,702,784바이트·수정시각이
+동일(관측 사실이며 그 자체가 무접촉의 증명은 아님). 가짜 자격증명은 테스트가 쓰는
+InMemory 저장소 기준이며 실제 Windows 자격 증명 저장소 접촉 여부는 이번에 별도로 관측하지
+않았다.
+
+**결과: 4,563건 실행, 실패 1, 오류 0, skip 7, exit code 1 — 전체 통과가 아니다.**
+- 실패 1건: `tests.test_product_candidate_analysis_workflow...test_concurrent_verify_info_only_one_succeeds`
+  (상품후보 도메인의 2스레드 동시성 테스트, `purchase_task` 참조 0건).
+- 원인: 두 스레드가 각자 `InterfaceError`/`ObjectDeletedError`로 끝나 `ok`가 0건(저장소
+  밖 사본에서 실패 실행의 결과를 출력해 확인).
+- 이번 변경과 무관한 기존 간헐 실패임을 반복 실행으로 확인: 같은 테스트 단독 재실행 —
+  3703273(가드 있음) 15회 중 1회·40회 중 2회 실패, 가드 없이 15회 통과; **이전 기준선
+  `dec78db`(이번·직전 라운드 변경 이전 코드)에서도 40회 중 3회(가드 있음)·2회(가드 없음)
+  실패.** 약 5% 확률의 레이스로 보이며, 이전 전체 회귀(dec78db 4,533건, 3c7716b 4,560건)가
+  통과한 것과 모순되지 않는다. 테스트는 수정·삭제·완화하지 않았고, 동일 코드의 전체 회귀는
+  반복하지 않았다(해당 테스트 단독 재실행만).
+- 따라서 정확한 표현은 "4,563건 중 4,562건 통과(skip 7 포함), 1건은 기존 간헐 실패 —
+  전체 회귀 통과라고 선언하지 않음"이다. 이전 집중 회귀(443건 통과 + 수정 후 approval 32건
+  통과)는 이 전체 회귀 결과와 합산하지 않는다(별도 근거).
+
+**한도 수정 검증 항목의 근거 테스트**(모두 위 실행에 포함되어 통과):
+승인 만료 후 UNKNOWN·IN_FLIGHT 금액 보존(`test_unresolved_attempt_amount_stays_in_approval_
+layer_limit_after_approval_expiry`, `test_unknown_attempt_amount_is_protected_until_human_
+resolves_it_as_not_created`), 초과 지출 기록 + 다음 실행 차단(`test_external_spend_is_
+recorded_even_when_funds_cannot_cover_the_difference` — `BUDGET_INSUFFICIENT` 판정 포함),
+환불 후 재조회 무영향(전액·부분 2건), 외부 성공 직후 내부 저장 실패·재시작(`test_internal_
+finalize_failure_after_external_success_...`), 수동 트랙 불변, 회사 격리, 일간 경계.
+
+**미호출 예약 만료 함수(`release_expired_reservations`) — 현재 실행 결함이 아니다**:
+앱 어디에서도 호출되지 않아(테스트만 호출) 운영에서는 예약이 자동 만료되지 않는다. 나중에
+읽기 시점·스케줄러 등으로 연결할 때 필요한 보호 조건: (1) `PENDING`/`IN_FLIGHT` 또는 사람이
+확정하지 않은 `RESULT_UNKNOWN` 발주 시도가 있는 작업의 예약은 만료·해제하지 않는다(실제
+주문이 있을 수 있음, 수동 트랙의 `UNCERTAIN` 처리와 같은 원칙), (2) 사람이
+`ORDER_NOT_CONFIRMED`로 확정한 뒤에만 해제 대상이 된다, (3) `PENDING_VERIFICATION`/
+`CONFIRMED`는 건드리지 않는다(현재 `ACTIVE` 조건이 이미 보장), (4) 만료된(`EXPIRED`) 예약에
+대해 나중에 발주 성공·수동 확정이 오면 Stage 1이 아직 `RESERVED`/`EXTENDED`만 처리하므로
+`EXPIRED`도 처리하도록 확장해야 지출 집계가 즉시 보호된다(Stage 2는 이미 처리), (5) 연결 시
+위 (1)~(4)를 검증하는 테스트를 함께 추가한다.
