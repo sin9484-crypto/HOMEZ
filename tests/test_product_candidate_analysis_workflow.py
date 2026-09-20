@@ -29,6 +29,7 @@ import os
 import tempfile
 import threading
 import unittest
+import unittest.mock as mock
 import ast
 import inspect
 from datetime import date
@@ -368,8 +369,18 @@ class ProductCandidateAnalysisWorkflowTestCase(unittest.TestCase):
     # --------------------------------------------------
 
     def test_concurrent_verify_info_only_one_succeeds(self):
+        """두 요청이 모두 status=DISCOVERED를 읽고 쓰기 단계에 들어선 뒤
+        조건부 UPDATE(DISCOVERED→ANALYZED)에서 충돌하는 지점을 barrier로
+        고정해 재현한다. 이전 버전은 메인 스레드 Session의 (커밋으로 만료된)
+        ORM 객체 `candidate.id`를 두 워커가 동시에 읽어, 서비스 코드에
+        닿기도 전에 InterfaceError/ObjectDeletedError로 끝나는 경우가 있었다
+        (테스트 하네스 결함 — 스레드마다 Session은 따로였지만 인자를 만드는
+        과정에서 메인 Session을 공유했다). 여기서는 id를 원시 값으로 먼저
+        고정하고, 실제 두 스레드·두 SQLite 커넥션 위에서 정확히 한 요청만
+        전이하고 다른 요청은 ConflictException을 받는지 확인한다."""
 
         candidate = self._create_private()
+        candidate_id = candidate.id
 
         engine2 = create_engine(
             f"sqlite:///{self.db_path}", connect_args={"timeout": 15},
@@ -385,22 +396,33 @@ class ProductCandidateAnalysisWorkflowTestCase(unittest.TestCase):
             autocommit=False, autoflush=False, bind=engine2,
         )
 
+        # 두 요청 모두 사전 상태 검사(DISCOVERED)를 통과한 뒤 쓰기 단계 직전에
+        # 만나게 한다 — 이 시점 이후에는 조건부 UPDATE만이 승자를 정한다.
         barrier = threading.Barrier(2)
         results = {}
+        winner_events = {}
+        dispatched = []
+
+        def recording_dispatch(db, event_type, **kwargs):
+            dispatched.append((event_type, kwargs.get("idempotency_key")))
 
         def worker(key, session_factory):
             thread_db = session_factory()
             service = ProductCandidateService(thread_db)
-            try:
+            real_add_evidence = service.repository.add_evidence_no_commit
+
+            def synced_add_evidence(evidence):
                 barrier.wait(timeout=10)
-            except threading.BrokenBarrierError:
-                pass
+                return real_add_evidence(evidence)
+
+            service.repository.add_evidence_no_commit = synced_add_evidence
             try:
-                service.verify_private_candidate_info(
-                    candidate.id, company_id=COMPANY_A,
+                _candidate, events = service.verify_private_candidate_info(
+                    candidate_id, company_id=COMPANY_A,
                     correlation_id=f"race-{key}",
                 )
                 results[key] = "ok"
+                winner_events[key] = list(events)
             except (ConflictException, BadRequestException) as e:
                 results[key] = type(e).__name__
             except Exception as e:  # noqa: BLE001
@@ -408,36 +430,64 @@ class ProductCandidateAnalysisWorkflowTestCase(unittest.TestCase):
             finally:
                 thread_db.close()
 
-        t1 = threading.Thread(
-            target=worker, args=("t1", self.SessionLocal),
-        )
-        t2 = threading.Thread(
-            target=worker, args=("t2", SessionLocal2),
-        )
-        t1.start()
-        t2.start()
-        t1.join(timeout=15)
-        t2.join(timeout=15)
+        with mock.patch(
+            "app.domains.product_candidate.service.dispatch_operational_event",
+            recording_dispatch,
+        ):
+            t1 = threading.Thread(
+                target=worker, args=("t1", self.SessionLocal),
+            )
+            t2 = threading.Thread(
+                target=worker, args=("t2", SessionLocal2),
+            )
+            t1.start()
+            t2.start()
+            t1.join(timeout=30)
+            t2.join(timeout=30)
+
+        self.assertFalse(t1.is_alive() or t2.is_alive(), "워커가 끝나지 않았다.")
 
         engine2.dispose()
 
+        self.assertEqual(sorted(results), ["t1", "t2"])
         outcomes = list(results.values())
-        self.assertEqual(outcomes.count("ok"), 1)
-        self.assertEqual(len(outcomes) - outcomes.count("ok"), 1)
-        self.assertTrue(
-            all(o in ("ok", "ConflictException", "BadRequestException")
-                for o in outcomes),
+        self.assertEqual(outcomes.count("ok"), 1, results)
+        self.assertEqual(
+            outcomes.count("ConflictException"), 1,
+            "패자는 정의된 충돌 결과(ConflictException)를 받아야 한다.",
         )
 
-        verify_db = SessionLocal2()
+        # 승자만 이벤트를 만들고, 알림 디스패치도 정확히 1번이다.
+        self.assertEqual(len(winner_events), 1)
+        self.assertEqual(len(next(iter(winner_events.values()))), 1)
+        self.assertEqual(
+            dispatched,
+            [("CANDIDATE_REVIEW_NEEDED", f"candidate-review:{candidate_id}:ANALYZED")],
+        )
+
+        verify_db = self.SessionLocal()
         try:
+            verify_db.expire_all()
             final = (
                 verify_db.query(ProductCandidate)
-                .filter(ProductCandidate.id == candidate.id)
+                .filter(ProductCandidate.id == candidate_id)
                 .first()
             )
             self.assertEqual(final.status, CandidateStatus.ANALYZED)
             self.assertIsNone(final.novelty_score)
+
+            # 등록 시 만들어진 RAW_SOURCE 1건 + 승자의 MANUAL_INFO_CHECK 1건만
+            # 있어야 한다 — 패자의 근거 행은 롤백되어 남지 않는다(중복 기록 없음).
+            evidence_types = sorted(
+                row.evidence_type
+                for row in verify_db.query(ProductCandidateEvidence)
+                .filter(ProductCandidateEvidence.candidate_id == candidate_id)
+                .all()
+            )
+            self.assertEqual(
+                evidence_types,
+                sorted([EvidenceType.RAW_SOURCE, EvidenceType.MANUAL_INFO_CHECK]),
+            )
         finally:
             verify_db.close()
 

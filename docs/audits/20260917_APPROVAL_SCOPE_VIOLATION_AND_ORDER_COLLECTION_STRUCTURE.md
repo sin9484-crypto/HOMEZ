@@ -764,14 +764,15 @@ InMemory 저장소 기준이며 실제 Windows 자격 증명 저장소 접촉 �
   (상품후보 도메인의 2스레드 동시성 테스트, `purchase_task` 참조 0건).
 - 원인: 두 스레드가 각자 `InterfaceError`/`ObjectDeletedError`로 끝나 `ok`가 0건(저장소
   밖 사본에서 실패 실행의 결과를 출력해 확인).
-- 이번 변경과 무관한 기존 간헐 실패임을 반복 실행으로 확인: 같은 테스트 단독 재실행 —
-  3703273(가드 있음) 15회 중 1회·40회 중 2회 실패, 가드 없이 15회 통과; **이전 기준선
-  `dec78db`(이번·직전 라운드 변경 이전 코드)에서도 40회 중 3회(가드 있음)·2회(가드 없음)
-  실패.** 약 5% 확률의 레이스로 보이며, 이전 전체 회귀(dec78db 4,533건, 3c7716b 4,560건)가
-  통과한 것과 모순되지 않는다. 테스트는 수정·삭제·완화하지 않았고, 동일 코드의 전체 회귀는
-  반복하지 않았다(해당 테스트 단독 재실행만).
-- 따라서 정확한 표현은 "4,563건 중 4,562건 통과(skip 7 포함), 1건은 기존 간헐 실패 —
-  전체 회귀 통과라고 선언하지 않음"이다. 이전 집중 회귀(443건 통과 + 수정 후 approval 32건
+- (2026-09-21 정정) 이 실패를 "이전 기준선에서도 났으니 안전하다"는 근거로 쓰지 않는다.
+  2026-09-20 당시 기록은 같은 테스트를 단독 재실행했을 때 3703273에서 15회 중 1회·
+  40회 중 2회, 이전 기준선 `dec78db`에서 40회 중 2~3회 실패했다는 **관측 횟수**였고,
+  이를 고정된 실패 확률로 단정하지 않는다. 원인은 34절에서 실제 traceback으로 구분했다
+  (테스트 하네스 결함, 제품 코드 결함 아님). 테스트는 이 실행에서는 수정·삭제·완화하지
+  않았고, 동일 코드의 전체 회귀는 반복하지 않았다.
+- **정정된 집계(unittest 기준)**: 실행 4,563건 = 성공 **4,555건** + 실패 1건 + 오류 0건 +
+  skip 7건. 앞서 적은 "4,562건 통과(skip 7 포함)"는 skip을 성공에 섞은 표현이라 철회한다.
+  전체 회귀 통과라고 선언하지 않는다. 이전 집중 회귀(443건 통과 + 수정 후 approval 32건
   통과)는 이 전체 회귀 결과와 합산하지 않는다(별도 근거).
 
 **한도 수정 검증 항목의 근거 테스트**(모두 위 실행에 포함되어 통과):
@@ -792,3 +793,44 @@ finalize_failure_after_external_success_...`), 수동 트랙 불변, 회사 격�
 대해 나중에 발주 성공·수동 확정이 오면 Stage 1이 아직 `RESERVED`/`EXTENDED`만 처리하므로
 `EXPIRED`도 처리하도록 확장해야 지출 집계가 즉시 보호된다(Stage 2는 이미 처리), (5) 연결 시
 위 (1)~(4)를 검증하는 테스트를 함께 추가한다.
+
+## 34. 동시성 실패 `test_concurrent_verify_info_only_one_succeeds` — 원인 구분과 수정 (2026-09-21)
+
+**원인: 테스트 하네스 결함(제품 코드 결함 아님).** 저장소 밖 사본(3703273)에 traceback 출력만 추가해
+실패 실행(58번째 반복)을 잡았다. 두 오류 모두 워커가 `service.verify_private_candidate_info(...)`
+**인자를 만드는 시점**(테스트 401행 `candidate.id`)에서 났고 서비스 코드에는 아직 닿지 않았다.
+- t1: `ObjectDeletedError` — `_load_expired` → `load_scalar_attributes`(만료된 객체 새로고침 중
+  행이 없다고 판정).
+- t2: `sqlite3.InterfaceError: bad parameter or other API misuse` —
+  `SELECT ... FROM product_candidates WHERE id=?` 새로고침 중.
+- 메커니즘: `_create_private()`가 커밋해 `candidate` 객체가 만료되고(기본 `expire_on_commit`),
+  두 워커가 각자 Session을 만들었지만 인자 `candidate.id`는 **메인 스레드 Session의 만료된
+  객체**를 읽어, 두 스레드가 같은 Session·같은 SQLite 커넥션으로 동시에 새로고침했다.
+- 서비스 없이 이 접근 패턴만 재현: 스레드 2개×200회(400회 접근) — 공유 객체 `ok` 344 /
+  `InterfaceError` 28 / `ObjectDeletedError` 27 / `IndexError` 1, 원시 id 사용 시 400회 전부 `ok`
+  (관측 횟수이며 고정 확률로 단정하지 않는다). 같은 파일 `tests/test_product_candidate.py`의 동시성
+  테스트는 이미 `candidate_id = candidate.id`를 스레드 시작 전에 원시 값으로 고정한다.
+
+**제품 코드 점검**: `verify_private_candidate_info`는 사전 상태 검사(DISCOVERED 아니면
+`BadRequestException`) 뒤 근거 행을 flush하고 **원자적 조건부 UPDATE**
+(`WHERE id=? AND status IN (DISCOVERED)` → `rowcount != 1`이면 `ConflictException` + 롤백)로 승자를
+정한다(service 599~643행). 운영 구성과의 차이: 운영은 요청마다 새 Session(`get_db()`가
+`SessionLocal()` 생성·`finally`에서 close)이고 엔진은 `pool_pre_ping=True`, SQLite 기본 대기(5초),
+이 모듈에서 WAL/busy_timeout을 따로 지정하지 않는다. 테스트는 엔진 2개(두 번째는 busy_timeout 15초)를
+쓴다. 운영 요청 경로는 Session을 스레드 간에 공유하지 않아 이 패턴이 생기지 않는다 — 다만 백그라운드
+스레드(스케줄러 등)의 Session 사용은 이번 범위에서 감사하지 않았다.
+
+**수정(테스트만, 제품 코드 무변경)**: ① 메인 스레드에서 `candidate_id`를 원시 값으로 고정, ② 두 요청이
+모두 사전 상태 검사(DISCOVERED)를 통과한 뒤 쓰기 단계 직전(`add_evidence_no_commit`을 워커별 인스턴스에서
+감싸 barrier)에서 만나게 해 충돌 시점을 결정적으로 고정(실제 두 스레드·두 SQLite 커넥션 유지,
+BrokenBarrierError를 삼키지 않음), ③ 단언 강화: 정확히 1건 `ok` + 1건 `ConflictException`(패자는
+사전 검사를 이미 통과했으므로 항상 Conflict), 승자 이벤트 1건, 알림 디스패치 정확히 1회(멱등 키
+`candidate-review:{id}:ANALYZED`), 근거 행은 등록 시 `RAW_SOURCE` 1 + 승자 `MANUAL_INFO_CHECK` 1만
+(패자 롤백 확인), 최종 상태 ANALYZED, 워커 스레드 종료 확인. sleep·예외 무시·skip·단언 약화 없음.
+(첫 시도에서 근거 행 총수를 1로 단언했다가 등록 시 `RAW_SOURCE`가 이미 있어 실패했다 — 제 단언의
+오류였고 종류별 단언으로 고쳤다.)
+
+**검증**: (1) 수정 전 재현 — 위 traceback. (2) mutation — 사본에서 조건부 UPDATE의 상태 조건을 제거하면
+새 테스트가 3회 모두 `2 != 1 : {'t1': 'ok', 't2': 'ok'}`로 결정적으로 실패(원본 사본은 통과).
+(3) 수정 후 — 단독 300회 연속 반복 300 통과 / 0 실패(관측), 상품후보 인접 테스트 5개 파일 58건 통과.
+(4) 고정 기준선 전체 회귀 결과는 이 절 아래 35절에 별도 기록한다.
