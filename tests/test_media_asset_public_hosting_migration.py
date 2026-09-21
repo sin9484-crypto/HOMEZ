@@ -24,6 +24,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.database.migration_runner import MigrationRunner
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -201,10 +202,8 @@ class PublicHostingMigrationFreshApplyTestCase(unittest.TestCase):
         self.assertIn(_TARGET_FILENAME, diagnosis["already_applied"])
 
 
-@unittest.skipUnless(
-    _OPERATING_DB_PATH.exists(),
-    "이 환경에 실제 운영 homez.db가 없어 건너뜀",
-)
+# 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+@requires_real_install_diagnostics
 class OperatingDbAlreadyAppliedInvariantTestCase(unittest.TestCase):
     """실제 운영 DB는 이 파일 어디에서도 복사·쓰기 대상이 아니다 —
     오직 읽기 전용 연결로 "이 Migration이 이미 정상 적용되어 있고
@@ -212,6 +211,9 @@ class OperatingDbAlreadyAppliedInvariantTestCase(unittest.TestCase):
     재확인한다."""
 
     def test_operating_db_has_migration_38_applied_and_hash_unchanged(self):
+
+        if not _OPERATING_DB_PATH.exists():
+            self.skipTest("이 환경에 실제 운영 homez.db가 없습니다.")
 
         hash_before = _sha256(_OPERATING_DB_PATH)
 

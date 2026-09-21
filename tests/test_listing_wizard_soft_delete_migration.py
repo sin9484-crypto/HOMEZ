@@ -21,6 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.database.migration_runner import MigrationRunner
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -207,6 +208,8 @@ class RealDbMigrationApprovalDriftTestCase(unittest.TestCase):
     로그가 없는 경우만 실패로 잡는다. 이 테스트 자신은 어떤 DB에도
     쓰기를 하지 않는다(호출 전후 해시 불변 확인)."""
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_new_columns_present_only_with_approved_audit_log(self):
 
         for path in (_OPERATING_DB_PATH, _DEV_DB_PATH):

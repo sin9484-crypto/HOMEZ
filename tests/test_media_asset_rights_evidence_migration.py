@@ -21,6 +21,7 @@ from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.domains.media_asset.model import ImageRightsAcknowledgement
 from app.domains.media_asset.model import ImageRightsEvidence
 
@@ -279,6 +280,8 @@ class RealHomezDbApprovalDriftTestCase(unittest.TestCase):
     하는 불변식은 "새 테이블이 있다면 반드시 승인 감사로그가 함께
     있어야 한다"이다."""
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_new_tables_present_only_with_approved_audit_log(self):
 
         target_filename = os.path.basename(MIGRATION_PATH)

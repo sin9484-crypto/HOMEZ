@@ -22,6 +22,10 @@ from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
 
+from tests.support.real_install_gate import (
+    real_install_diagnostics_enabled,
+    requires_real_install_diagnostics,
+)
 from app.domains.notification_center.model import NotificationEmailLog
 from app.domains.notification_center.model import NotificationEventPreference
 from app.domains.notification_center.model import NotificationPreference
@@ -96,7 +100,11 @@ def _capture_real_db_hashes() -> dict[str, str]:
     }
 
 
-REAL_DB_BASELINE_HASHES_AT_MODULE_IMPORT = _capture_real_db_hashes()
+# import(=unittest 수집) 시점에 실제 DB 파일을 읽지 않는다 — 실제 설치환경 진단을 명시적으로
+# 켠 실행(HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)에서만 기준 해시를 계산한다.
+REAL_DB_BASELINE_HASHES_AT_MODULE_IMPORT = (
+    _capture_real_db_hashes() if real_install_diagnostics_enabled() else {}
+)
 
 
 class SchemaMigrationStaticTestCase(unittest.TestCase):
@@ -328,6 +336,8 @@ class SchemaMigrationApplyTestCase(unittest.TestCase):
             conn.close()
 
 
+# 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+@requires_real_install_diagnostics
 class RealHomezDbUntouchedTestCase(unittest.TestCase):
     """이 Migration은 실제 DB 어디에도 적용하지 않는다 — 이 회귀
     실행이 시작된 시점(이 모듈이 import된 시점)의 실제 homez.db

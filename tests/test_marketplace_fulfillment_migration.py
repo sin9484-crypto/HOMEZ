@@ -27,6 +27,7 @@ from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.domains.marketplace_listing.model import MarketplaceAccount
 from app.domains.marketplace_listing.model import MarketplaceChannel
 from app.domains.marketplace_listing.model import (
@@ -509,6 +510,8 @@ class RealDatabaseAppliedTestCase(unittest.TestCase):
     # 확립된 관례 그대로 exclusion을 제거한다.
     _PENDING_COLUMNS_BY_TABLE: dict[str, set[str]] = {}
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_real_homez_db_has_marketplace_listing_tables_applied(self):
 
         if not os.path.exists(REAL_DB_PATH):

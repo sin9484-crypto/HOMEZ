@@ -21,6 +21,7 @@ from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.domains.store_connection.model import StoreConnection
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -240,6 +241,8 @@ class StoreConnectionMigrationApplyTestCase(unittest.TestCase):
         finally:
             conn.close()
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_real_homez_db_has_store_connections_table_applied(self):
         """
         2026-08-01 Gate 2에서 이 Migration을 실제 homez.db에 적용했다

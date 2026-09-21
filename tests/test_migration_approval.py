@@ -26,6 +26,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.core import migration_approval
 from app.core.desktop_setup import require_desktop_mode_and_token
 from app.core.desktop_setup import require_loopback
@@ -243,6 +244,8 @@ class RealHomezDbUntouchedTestCase(unittest.TestCase):
     REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     REAL_DB_PATH = os.path.join(REPO_ROOT, "homez.db")
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_real_db_hash_unchanged_after_module_tests(self):
 
         if not os.path.exists(self.REAL_DB_PATH):

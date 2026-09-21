@@ -33,6 +33,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.database.audit_logs_schema_check import AuditLogsSchemaMismatchError
 from app.database.audit_logs_schema_check import _extract_create_table_sql
 from app.database.audit_logs_schema_check import _normalize_ddl
@@ -209,9 +210,8 @@ class AuditLogsMigrationCleanDbTestCase(unittest.TestCase):
             conn.close()
 
 
-@unittest.skipUnless(
-    _REAL_DB_PATH.exists(), "실제 homez.db가 없는 환경에서는 건너뜀",
-)
+# 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+@requires_real_install_diagnostics
 class AuditLogsMigrationRealDbCopyTestCase(unittest.TestCase):
     """
     실제 homez.db는 읽기 전용으로만 접근해 복사본을 만든다 — 이 클래스
@@ -221,6 +221,9 @@ class AuditLogsMigrationRealDbCopyTestCase(unittest.TestCase):
     """
 
     def setUp(self):
+
+        if not _REAL_DB_PATH.exists():
+            self.skipTest("실제 homez.db가 이 환경에 없습니다.")
 
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)

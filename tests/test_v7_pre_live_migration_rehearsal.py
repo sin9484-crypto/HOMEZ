@@ -36,6 +36,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.database.bootstrap import bootstrap_environment
 from app.database.migration_runner import DuplicateApplicationError
 from app.database.migration_runner import MigrationExecutionError
@@ -86,10 +87,8 @@ def _row_count(conn: sqlite3.Connection, table: str) -> int:
     return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
-@unittest.skipUnless(
-    _OPERATING_DB_PATH.exists(),
-    "이 환경에 실제 운영 homez.db가 없어 건너뜀",
-)
+# 이 클래스는 운영 DB를 열지도 복사하지도 않는다(저장소 Migration 파일과 임시 DB만 사용) — 이전에는
+# 운영 DB 파일이 있는 PC에서만 실행되도록 잘못 게이트돼 있었다. 일반 회귀 테스트이므로 게이트를 제거한다.
 class OperatingDbMigrationRehearsalTestCase(unittest.TestCase):
     """실제 운영 DB를 복사하지 않는다. 저장소의 Migration 파일 자체로
     "이 5개 pending 파일이 적용되기 직전" 상태를 빈 임시 DB에
@@ -696,10 +695,8 @@ class MigrationFailureAtomicRollbackTestCase(unittest.TestCase):
             fresh.close()
 
 
-@unittest.skipUnless(
-    _OPERATING_DB_PATH.exists(),
-    "이 환경에 실제 운영 homez.db가 없어 건너뜀",
-)
+# 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+@requires_real_install_diagnostics
 class OperatingDbReadOnlyInvariantTestCase(unittest.TestCase):
     """실제 운영 DB는 이 파일 어디에서도 복사·쓰기 대상이 아니다 —
     오직 읽기 전용 연결로 "정상적으로 열리고 무결하며 이 Gate가
@@ -707,6 +704,9 @@ class OperatingDbReadOnlyInvariantTestCase(unittest.TestCase):
     전후로 파일 해시가 그대로인지 재확인한다."""
 
     def test_operating_db_readonly_open_and_hash_unchanged(self):
+
+        if not _OPERATING_DB_PATH.exists():
+            self.skipTest("이 환경에 실제 운영 homez.db가 없습니다.")
 
         def _sha256(path: Path) -> str:
             h = hashlib.sha256()

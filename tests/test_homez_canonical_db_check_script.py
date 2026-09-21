@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from tests.support.real_install_gate import requires_real_install_diagnostics
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT_PATH = os.path.join(REPO_ROOT, "tools", "HOMEZ_Canonical_DB_Check.ps1")
@@ -226,6 +227,8 @@ class ScriptFunctionalDetectionTestCase(unittest.TestCase):
         self.assertFalse(os.path.exists(self.missing_path))
         self.assertIn("False", output)
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_script_does_not_modify_the_two_real_candidate_files(self):
         """이 테스트만 예외적으로 실제 두 후보 경로를 인자로 준다 —
         단, 실행 전후 SHA-256/mtime/크기가 완전히 같은지만

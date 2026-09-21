@@ -29,6 +29,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.core import migration_approval
 from app.core import migration_restricted_mode
 from app.core.config import settings
@@ -176,6 +177,8 @@ class RealHomezDbNeverOpenedTestCase(unittest.TestCase):
 
     REAL_DB_PATH = os.path.join(REPO_ROOT, "homez.db")
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_real_db_untouched(self):
 
         if not os.path.exists(self.REAL_DB_PATH):

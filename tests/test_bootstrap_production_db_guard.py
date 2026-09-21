@@ -22,6 +22,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.database.bootstrap import bootstrap_environment
 from app.database.migration_runner import MigrationRunner
 from app.desktop import paths
@@ -210,6 +211,39 @@ class MigrationRunnerRealPathRejectionTestCase(unittest.TestCase):
             shutil.rmtree(tmp_root, ignore_errors=True)
 
 
+class UnauthorizedReconcileDoesNotTouchSyntheticDbTestCase(unittest.TestCase):
+    """
+    위 실제 DB 진단의 일반(격리) 버전 — 같은 계약("승인되지 않은 bootstrap/경로 요청은 DB
+    파일을 건드리지 않는다")을 실제 homez.db가 아니라 **테스트가 소유한 임시 데이터
+    디렉터리의 합성 homez.db**로 검증한다. `paths.get_data_dir`를 임시 디렉터리로
+    교체해, 코드가 잘못 진행하더라도 실제 저장소·설치본 DB가 아니라 이 임시 파일만
+    영향을 받는다.
+    """
+
+    def test_rejected_attempts_leave_synthetic_db_and_directory_untouched(self):
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            synthetic = data_dir / "homez.db"
+            synthetic.write_bytes(b"SYNTHETIC-NOT-A-REAL-DB")
+            before_bytes = synthetic.read_bytes()
+            before_stat = synthetic.stat()
+            before_listing = sorted(p.name for p in data_dir.iterdir())
+
+            with mock.patch.object(paths, "get_data_dir", return_value=data_dir):
+                for _ in range(5):
+                    with self.assertRaises(ProductionDbAccessNotConfirmedError):
+                        bootstrap_environment()
+                    with self.assertRaises(ProductionDbAccessNotConfirmedError):
+                        paths.get_homez_db_path()
+
+            after_stat = synthetic.stat()
+            self.assertEqual(synthetic.read_bytes(), before_bytes)
+            self.assertEqual(before_stat.st_mtime_ns, after_stat.st_mtime_ns)
+            self.assertEqual(before_stat.st_size, after_stat.st_size)
+            self.assertEqual(sorted(p.name for p in data_dir.iterdir()), before_listing)
+
+
 class UnauthorizedReconcileDoesNotTouchRealDbTestCase(unittest.TestCase):
     """
     '승인되지 않은 reconcile이 실제 DB를 변경하지 않음' — 실제 DB의
@@ -221,6 +255,8 @@ class UnauthorizedReconcileDoesNotTouchRealDbTestCase(unittest.TestCase):
         Path(__file__).resolve().parent.parent / "homez.db"
     )
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_real_db_untouched_after_rejected_bootstrap_attempts(self):
 
         if not self._REAL_DB_PATH.exists():

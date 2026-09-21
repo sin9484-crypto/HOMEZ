@@ -22,6 +22,7 @@ from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
 
+from tests.support.real_install_gate import requires_real_install_diagnostics
 from app.database.migration_runner import MigrationRunner
 from app.domains.listing_package.model import ListingPackage
 from app.domains.listing_package.model import ListingPackageApproval
@@ -407,6 +408,8 @@ class RealDatabaseAppliedTestCase(unittest.TestCase):
     DB에 어떤 쓰기도 하지 않는다(PRAGMA query_only=ON).
     """
 
+    # 실제 설치환경 진단 — 기본 전체 회귀에서 제외(opt-in: HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1)
+    @requires_real_install_diagnostics
     def test_real_homez_db_has_media_listing_package_tables_applied(self):
 
         if not os.path.exists(REAL_DB_PATH):
