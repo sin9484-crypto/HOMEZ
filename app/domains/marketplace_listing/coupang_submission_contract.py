@@ -268,10 +268,19 @@ def validate_coupang_submission_contract(
         duplicate_item_names: set[str] = set()
         seen_combinations: set[str] = set()
         duplicate_combination = False
+        sku_required = False
         for entry in items:
             if not isinstance(entry, dict):
                 continue
             sku = entry.get("externalVendorSku")
+            # 2026-09-21 옵션 연결 완성 — 스키마를 거치지 않은 옛 초안도
+            # 여기서 막는다(SKU는 주문 수집의 channel_sku와 만나는 조인
+            # 키라 비어 있거나 공백이 붙으면 안 된다).
+            if (
+                not isinstance(sku, str) or not sku.strip()
+                or sku != sku.strip() or len(sku) > 150
+            ):
+                sku_required = True
             if sku:
                 if sku in seen_skus:
                     duplicate_skus.add(sku)
@@ -305,6 +314,15 @@ def validate_coupang_submission_contract(
                             "FULFILLMENT", "required_fields.items[].optionAttributes",
                             "lw-item-combo-builder",
                         ))
+        if sku_required:
+            issues.append(_issue(
+                "SKU_REQUIRED",
+                "옵션마다 SKU(externalVendorSku)를 입력해 주세요 — 비어 있거나 "
+                "앞뒤에 공백이 있거나 150자를 넘으면 안 됩니다. 이 값이 주문 "
+                "수집 뒤 공급처 옵션 연결의 기준이 됩니다.",
+                "FULFILLMENT", "required_fields.items[].externalVendorSku",
+                "lw-item-combo-builder",
+            ))
         if duplicate_skus:
             issues.append(_issue(
                 "DUPLICATE_SKU",

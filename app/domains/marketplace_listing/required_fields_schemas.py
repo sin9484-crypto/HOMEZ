@@ -53,7 +53,24 @@ class CoupangSellerFulfilledItem(_StrictModel):
     # 허용되지 않는다(min_length=1) — 공식 계약으로 확정된 범위만
     # 반영했다.
     itemName: str = Field(min_length=1, max_length=150)
-    externalVendorSku: str
+    # 2026-09-21 옵션 연결 완성 — 위 주석이 "min_length=1, 최대 150자"라고
+    # 적고 있었지만 실제 필드에는 제약이 없었다(빈 값·공백 값이 통과).
+    # 이 값은 주문 수집에서 channel_sku(주문 품목의 externalVendorSkuCode를
+    # strip한 값)로 돌아와 HOMEZ SKU·공급처 옵션 연결의 조인 키가 되므로,
+    # 공백이 붙은 값은 주문 측 값과 영원히 일치하지 않는다 — 앞뒤 공백도
+    # 저장 시점에 막는다.
+    externalVendorSku: str = Field(min_length=1, max_length=150)
+
+    @field_validator("externalVendorSku")
+    @classmethod
+    def sku_must_be_a_clean_join_key(cls, value: str) -> str:
+        if not value.strip() or value != value.strip():
+            raise ValueError(
+                "SKU는 비어 있거나 앞뒤에 공백이 있으면 안 됩니다 — 주문 수집이 "
+                "이 값을 공백 없이 읽어 오므로 공백이 붙으면 옵션 연결이 "
+                "영원히 맞지 않습니다.",
+            )
+        return value
     # 2026-08-29 쿠팡 상품등록 핵심 차단 해결 — 공식 문서(Product
     # Creation) 확인 결과 originalPrice/salePrice/maximumBuyCount/
     # unitCount는 상품 전체가 아니라 items[] 각 항목(옵션 조합) 레벨
