@@ -25,6 +25,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import tempfile
 import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -226,8 +227,26 @@ class LauncherPortConflictIntegrationTestCase(unittest.TestCase):
 
         server_sock.listen(1)
 
+        # 런처는 자신의 위치로 프로젝트 루트를 정한다(scripts\ 의 부모). 이 시나리오는
+        # "포트가 열려 있고 HOMEZ가 아님"이라 venv의 Python은 실행되기 전에 종료하므로,
+        # 스크립트를 임시 프로젝트 루트로 복사하고 venv\Scripts\python.exe 자리표시 파일만
+        # 둔다. 실제 저장소·venv가 없는 체크아웃에서도 같은 조건이 되고, 런처 로그
+        # (storage\logs)도 실제 프로젝트 루트가 아니라 임시 루트에 남는다.
+        temp_root = tempfile.mkdtemp(prefix="homez_launcher_test_")
+
         try:
-            ps1_path = os.path.join(SCRIPTS_DIR, "start_homez.ps1")
+            temp_scripts = os.path.join(temp_root, "scripts")
+            os.makedirs(temp_scripts)
+            shutil.copyfile(
+                os.path.join(SCRIPTS_DIR, "start_homez.ps1"),
+                os.path.join(temp_scripts, "start_homez.ps1"),
+            )
+            temp_venv_scripts = os.path.join(temp_root, "venv", "Scripts")
+            os.makedirs(temp_venv_scripts)
+            with open(os.path.join(temp_venv_scripts, "python.exe"), "wb"):
+                pass
+
+            ps1_path = os.path.join(temp_scripts, "start_homez.ps1")
             result = subprocess.run(
                 [
                     "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -251,6 +270,7 @@ class LauncherPortConflictIntegrationTestCase(unittest.TestCase):
 
         finally:
             server_sock.close()
+            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

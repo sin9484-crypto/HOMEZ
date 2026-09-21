@@ -122,7 +122,7 @@ DB 보장: `UNIQUE(company_id, store_connection_id, channel_sku)`와 `UNIQUE(com
   완료/미완료 + 사유", "쿠팡 옵션번호 확인"(확인창에 "읽기 전용 1회, 등록은 다시 하지 않음" 명시), 충돌 옵션의 "쿠팡 번호 초기화".
 - 모바일: 표는 카드형으로 바뀌고 입력 폼은 화면 안에 들어온다(E2E에서 두 결함을 찾아 수정 — §7).
 
-## 7. 검증 (격리 — 실제 쿠팡·온채널·Credential Manager·`homez.db` 미접촉)
+## 7. 검증 (격리 — E2E·리허설·옵션 연결 테스트는 실제 쿠팡·온채널·Credential Manager·`homez.db` 미접촉. 전체 회귀는 아래 §10 정정 참고)
 
 **테스트**(채택 후보 `dc97d1f`): 신규/재작성 모듈 6개 105건 —
 `test_supplier_option_link_service`(46: 저장·재사용·격리·잘못된 연결 방지·부착·준비·동시성·재시작·미적용 폴백·Migration),
@@ -153,7 +153,7 @@ DB 보장: `UNIQUE(company_id, store_connection_id, channel_sku)`와 `UNIQUE(com
 
 ## 8. Migration
 
-신규 1개: `migrations/20260921_00_create_supplier_option_link_schema.sql`(SHA-256 `aebbd3fd…9884`) — 테이블 1개 추가, 기존 데이터 무변경. 이전(v1) 대비
+신규 1개: `migrations/20260921_00_create_supplier_option_link_schema.sql`(**정정 2026-09-21 5차**: 저장소에 채택되는 LF 바이트의 SHA-256은 `1a8c65c95d24ca36cfd4f59b5553fbd42bd33ce7491a09c1c3a5a4df72b5821a` — 이전에 적은 `aebbd3fd…9884`는 검증 복제본에서 CRLF였던 파일의 값이다. 상세: `docs/HOMEZ_V7_OPTION_LINK_APPLY_PLAN_20260921.md` §4) — 테이블 1개 추가, 기존 데이터 무변경. 이전(v1) 대비
 `UNIQUE(company_id, store_connection_id, coupang_vendor_item_id)` 1개 추가(미적용·미승인 파일이라 수정 가능했음 — 적용된 Migration 바이트는 건드리지 않았다).
 
 | 리허설 | 결과 (임시 DB, 실제 `homez.db` 미접촉) |
@@ -167,7 +167,7 @@ DB 보장: `UNIQUE(company_id, store_connection_id, channel_sku)`와 `UNIQUE(com
 **주의(설계 영향)**: 신규 Migration 파일이 저장소 `migrations/`에 들어가면 앱은 적용 승인 전까지 제한 모드(쓰기 차단·위저드 사전검사
 `SYSTEM_MIGRATION_RESTRICTED_MODE`)로 동작한다 — 기존 설계이며, 그래서 채택(파일 추가)과 실제 적용을 같은 승인 창구에서 다룬다.
 
-**기존 체크섬 실패의 정확한 원인**: `test_gate9_migration_file_unchanged`·`test_newest_migration_files_checksum_locked`는 옛 Migration의 바이트 checksum을 고정한다.
+**기존 체크섬 실패의 정확한 원인**: `test_gate9_migration_file_unchanged`·`test_newest_migration_files_checksum_locked`(그리고 별도 세션이 추가로 찾은 `test_v7_followup_migrations…test_checksums_are_pinned_and_unchanged`)는 옛 Migration의 바이트 checksum을 고정한다.
 실제 작업 트리의 해당 파일은 LF(CRLF 0)인데 `core.autocrlf=true`로 새로 체크아웃하면 CRLF로 바뀌어 checksum이 달라진다 — 패치 유무와 무관하고,
 바이트가 같은 적용 환경(실제 작업 트리 복사본 + 패치)에서는 13건 전부 통과한다. 테스트·기대 checksum은 바꾸지 않았다. 근본 해결은 `.gitattributes`로
 `migrations/*.sql`의 줄바꿈을 고정하는 것(별도 작업으로 분리).
@@ -180,7 +180,7 @@ DB 보장: `UNIQUE(company_id, store_connection_id, channel_sku)`와 `UNIQUE(com
 | # | 승인 요청 | 범위·횟수 | 이 승인으로 되지 않는 것 |
 |---|---|---|---|
 | 1 | **코드 채택** — `docs/proposals/20260921_supplier_option_link.patch`(25개 파일: Model 1·Migration 1·서비스/라우터/화면/문구/테스트)를 저장소에 적용 | 저장소 파일 변경과 커밋만 | 실제 DB 적용. 채택 즉시 앱은 미적용 Migration 때문에 제한 모드(쓰기 차단)가 된다 |
-| 2 | **실제 `homez.db` Migration 적용** — 신규 1개(`20260921_00_…`, SHA-256 `aebbd3fd…9884`) + 기존 미적용 1개(`20260918_00_…`) 순서 확인 | 사전 백업 + SHA-256 + `integrity_check` → 사본 리허설 재실행 → 적용 → 사후 검증. 롤백은 신규 테이블 DROP + 이력 1행 삭제 | 실제 등록·주문 |
+| 2 | **실제 `homez.db` Migration 적용** — 신규 1개(`20260921_00_…`, LF 바이트 SHA-256 `1a8c65c9…821a` — 이전 표기 `aebbd3fd…9884`는 CRLF 값이라 정정) + 기존 미적용 1개(`20260918_00_…`) 순서 확인 | 사전 백업 + SHA-256 + `integrity_check` → 사본 리허설 재실행 → 적용 → 사후 검증. 롤백은 신규 테이블 DROP + 이력 1행 삭제 | 실제 등록·주문 |
 | 3 | **쿠팡 상품 상세 조회(읽기 전용)** — 등록된 상품의 옵션번호 확인 | `GET https://api-gateway.coupang.com/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{sellerProductId}`, 사용자가 화면에서 "쿠팡 옵션번호 확인"을 누를 때마다 1회, 자동 재시도 없음, 상품당 약 2회(승인 전·후). **실제 등록이 존재한 뒤에만** 의미가 있다 | 상품 등록·수정·판매신청 |
 | 4 | **실제 DB 사본 접근** — 실제 데이터로 업그레이드 리허설 | 이번에는 승인 범위가 확인되지 않아 **접근하지 않았다**(합성 데이터 리허설만 수행) | — |
 | 5 | 시험상품 선정·실제 등록·판매신청·시험 주문·결제 / 온채널 상품 조회(`GET /openapi/seller/product/{code}`, 연결 id=4, 3회 이하) / 쿠팡 시험 주문 정책 문의 발송 | 이전 라운드부터 계속 미승인 | — |
@@ -207,3 +207,8 @@ DB 보장: `UNIQUE(company_id, store_connection_id, channel_sku)`와 `UNIQUE(com
 **한계(실제로 검증하지 못한 것)**: 실제 `homez.db`를 읽는 것으로 추정되는 테스트 약 9건(위 skip)과 위 실패 2건은 **패치가 적용된 상태에서 실제 DB·실제 venv가 있는 환경으로는 실행하지 못했다.**
 그 테스트들은 각각 기존 Migration 하나가 실제 DB에 적용됐는지를 읽기 전용으로 확인하는 것이라 신규 Migration 파일과 직접 관계는 없어 보이나,
 이는 정적 판단이다. 채택 승인 후 실제 저장소(venv·실제 DB 있음)에서 이 테스트들을 읽기 전용으로 다시 돌려 확인해야 한다(승인 항목 1의 사후 검증).
+
+**정정(2026-09-21 5차 — 이 절의 "외부 접속 0건·실제 DB 전후 동일" 서술 보완)**: 위 전체 회귀는 외부 네트워크만 차단했고 **실제 DB 파일 접근은 차단하지 않았다.** 후속 확인 결과 일부 기존 테스트는 실제 DB 경로가
+코드에 고정돼 있어 복제본에서 돌려도 **실제 DB를 읽기 전용으로 연다**(`mode=ro`·`query_only`, 파일 전체 해시 계산 포함) — 저장소 `homez.db`와 `%LOCALAPPDATA%\HOMEZ\data\homez.db` 두 곳.
+쓰기는 없었고 두 파일의 크기·수정시각은 그대로다(2,953,216B/2026-08-29, 3,702,784B/2026-09-17). 이 사실과 최종 고정 상태 재검증 결과·집계는 `docs/HOMEZ_V7_OPTION_LINK_APPLY_PLAN_20260921.md` §5를 따른다.
+이 절의 skip 16건 분류(의도 7 + 실제 DB 없음 9)와 실패 2건의 원인은 5차에서 이름·사유로 확정됐고(같은 문서 §2), 실패 2건은 테스트 2개 수정으로 해소했다.

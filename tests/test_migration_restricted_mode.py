@@ -107,9 +107,18 @@ class RestrictedModeMiddlewareTestCase(unittest.TestCase):
 
         self._patcher = patch.object(app_main, "is_restricted_mode", return_value=True)
         self._patcher.start()
+        # 쓰기 차단 시 미들웨어가 호출하는 관리자 알림은 process 기본 DB(SessionLocal →
+        # homez.db)로 연결한다. 이 테스트는 미들웨어의 423 판정만 검증하므로 알림 경로를
+        # 격리한다 — 격리하지 않으면 homez.db가 없는 환경에서 0바이트 homez.db를 만들고,
+        # 실제 설치 환경에서는 실제 업무 DB에 접속한다.
+        self._notify_patcher = patch.object(
+            app_main, "_notify_server_admin_restricted_mode_blocked_write",
+        )
+        self._notify = self._notify_patcher.start()
 
     def tearDown(self):
 
+        self._notify_patcher.stop()
         self._patcher.stop()
 
     def _call_next_marker(self):
@@ -134,6 +143,8 @@ class RestrictedModeMiddlewareTestCase(unittest.TestCase):
             resp.headers.get("X-Migration-Restricted-Code"),
             "MIGRATION_RESTRICTED_MODE",
         )
+        # 실제로 쓰기 하나를 막은 순간에만 관리자 알림을 시도한다.
+        self._notify.assert_called_once_with()
 
     def test_read_requests_always_allowed(self):
         """시나리오 2 — GET/HEAD/OPTIONS는 제한 모드에서도 항상 통과한다."""
@@ -144,6 +155,7 @@ class RestrictedModeMiddlewareTestCase(unittest.TestCase):
                 app_main._enforce_migration_restricted_mode(req, self._call_next_marker()),
             )
             self.assertEqual(resp, "PASSED_TO_ROUTE", method)
+        self._notify.assert_not_called()
 
     def test_non_whitelisted_write_methods_all_blocked(self):
         """시나리오 3 — 화이트리스트 밖 POST/PUT/PATCH/DELETE 전부 차단."""
