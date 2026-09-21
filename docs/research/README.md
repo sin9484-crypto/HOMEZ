@@ -5,6 +5,7 @@
 
 | 보고서 | 자료 | 상태 |
 | --- | --- | --- |
+| [식품 위탁판매·테무 CTO 분석](20260921_TEMU_FOOD_VIDEO_CTO_REVIEW.md) | 사용자 제공 영상 자막 전체·공식 판매자/세무 안내 | 최초 매칭·묶음 처리·실이익 검토, V7 확대 없음 |
 | [기존 구현 응용 연구 42개](20260918_HOMEZ_CAPABILITY_APPLICATION_RESEARCH.md) | 실제 코드 표본·NAVER API HUB·커머스·쿠팡·MFDS 공식 문서 | 우선순위·데이터 의존성 정리, 구현 승인 아님 |
 | [영상 누적 분석](20260914_VIDEO_CTO_REVIEW.md) | Aside 브라우저, Amazon 소싱 실행 영상 | 개선 후보 정리, 구현 승인 아님 |
 
