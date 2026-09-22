@@ -651,8 +651,13 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
         )
 
         # "재시작" 흉내 — 같은 DB에 대해 완전히 새 서비스 인스턴스로
-        # 같은 idempotency_key를 재시도한다.
-        restarted_service = PurchaseOrderSubmissionService(self.db)
+        # 같은 idempotency_key를 재시도한다. credential_store를 명시하지 않으면
+        # 생성자가 실제 WindowsCredentialStore로 기본 동작해(운영 코드의 의도된
+        # 기본값) 이 격리 테스트가 실제 Credential Manager를 건드린다 — 다른
+        # 헬퍼(_new_service_same_db)처럼 같은 Fake 저장소를 명시로 넘긴다.
+        restarted_service = PurchaseOrderSubmissionService(
+            self.db, credential_store=self.credential_store,
+        )
         call_log_after_restart = []
         self._install_fake_adapter(result="ORDER-CRASH-2", call_log=call_log_after_restart)
 
