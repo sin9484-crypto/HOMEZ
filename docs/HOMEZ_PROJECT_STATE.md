@@ -1,5 +1,21 @@
 # Current Version
 
+**HOMEZ V7 — 테스트 격리 마무리 + 회귀 가드 도입 + 실제 Credential Manager 접근 결함 2건 발견·수정 (2026-09-21~23, 6차). 옵션 연결 제품 코드 채택은 여전히 승인 대기.**
+
+**결과(상세: `docs/HOMEZ_V7_TEST_ISOLATION_20260921.md`)**: 5차가 남긴 "실제 DB 의존 29건" 집계가 진단 18건 + 일반 테스트 12건을 섞은 오집계였음을 바로잡고, 실제 설치환경 진단 18건을 옵트인 게이트
+(`HOMEZ_RUN_REAL_INSTALL_DIAGNOSTICS=1`)로 분리했다. 새 회귀 가드(`tests/support/regression_guard/sitecustomize.py`)가 실제 DB·백업·Credential Manager·외부 네트워크·자식 프로세스를 감사 훅으로 차단·기록한다.
+
+**가드 자체의 교착 결함**(SQL ATTACH를 막으려던 sqlite authorizer 방식이 멀티스레드 테스트와 얽혀 전체 회귀를 11시간 무응답 상태로 멈추게 함)을 원인 규명 후 제거했다(정적 검사로 대체). 이어서 고정 기준선
+전체 회귀 3회(1차: 오류 1건 발견·수정, 2차: 실패·오류 0이었지만 가드 차단 1건 발견 — **통과가 실제 무접촉을 뜻하지 않는다** — 수정, 3차 최종: 실패 0·오류 0·가드 차단 0·종료 코드 0)를 거쳐, 새로 발견한
+**일반 테스트 2건이 실제 Windows Credential Manager로 폴백하던 결함**(둘 다 `WindowsCredentialStore`를 명시로 격리하지 않아 생긴 동일 패턴 — `test_purchase_order_submission_service.py`, `test_live_gate4_fix_defects.py`)을
+찾아 각각 수정했다. 실제 저장소 `homez.db`는 이번 라운드 전체에서 전후 바이트·수정시각 완전히 동일했다.
+
+**커밋(전부 push 완료)**: `9656b9d`(격리 게이트+가드 도입) → `6203b2d`(가드 교착 제거+데스크톱 자격증명 격리) → `317bc39`(발주 재시작 자격증명 격리) → `5ee8127`(데스크톱 run() 자격증명 격리) → 이 문서 커밋.
+옵션 연결 패치(v2, `docs/proposals/20260921_supplier_option_link.patch`)는 여전히 **저장소 코드·Migration·실제 DB에 미반영**이며 승인 대기다. 실제 DB 적용, 쿠팡·온채널 조회, 시험상품·실거래는 여전히 미승인.
+V7 완료·실운영 준비 완료가 아니다.
+
+---
+
 **HOMEZ V7 — 옵션 연결 v2 검증 정리·코드/DB 통합 적용 계획 (2026-09-21, 5차). 코드·DB 채택 승인 대기, 실제 적용 없음.**
 
 **결과(상세: `docs/HOMEZ_V7_OPTION_LINK_APPLY_PLAN_20260921.md`)**: 패치 v2(`docs/proposals/20260921_supplier_option_link.patch`, SHA-256 `57eeead2…8eff`, 25개 파일, LF)는 HEAD에 **적용 가능**하고 검증 복제본과
