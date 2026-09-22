@@ -217,8 +217,24 @@ class DesktopMainDbPathFailFastTestCase(unittest.TestCase):
         )
         self._env_patcher.start()
 
+        # 2026-09-23 격리 — 성공 경로까지 진행하는 test_run_proceeds_to_
+        # start_server_when_paths_match_and_seed_succeeds는 run() 시작 시
+        # 이전 콘솔 로그인 세션을 지우는 코드(DesktopConsoleSessionStore.
+        # clear → 저장소 read·delete)를 실제로 실행한다 — 격리 회귀 가드가
+        # 실제 Windows Credential Manager 심볼 조회 시도를 잡아 드러났다
+        # (tests/test_homez_desktop.py의 같은 결함과 동일 패턴). 인메모리
+        # 저장소로 교체한다.
+        import app.desktop.main as desktop_main
+        from app.core.windows_credential_store import InMemoryCredentialStore
+
+        self._credential_store_patcher = mock.patch.object(
+            desktop_main, "WindowsCredentialStore", InMemoryCredentialStore,
+        )
+        self._credential_store_patcher.start()
+
     def tearDown(self):
 
+        self._credential_store_patcher.stop()
         self._env_patcher.stop()
         shutil.rmtree(self._tmp_local_appdata, ignore_errors=True)
 
