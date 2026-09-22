@@ -19,8 +19,7 @@ File : tests/support/regression_guard/sitecustomize.py
   1. 실제 업무 자원의 파일 접근 — 저장소 `homez.db`(+ `-wal`·`-shm`·`-journal`),
      `storage\\backups`, 설치본 `%LOCALAPPDATA%\\HOMEZ`(MSIX 별칭 `Packages\\*\\LocalCache\\Local\\HOMEZ`
      포함), `%USERPROFILE%\\Homez-Backups`. open/sqlite3.connect/이름변경/삭제/복사/링크 생성/
-     SQL `ATTACH DATABASE`(각 sqlite 연결에 authorizer를 걸어 SQLite가 넘겨주는 파일명으로 판정, 바인딩 등으로
-     대상을 알 수 없는 ATTACH는 fail-closed로 차단 — 이 저장소는 ATTACH를 쓰지 않는다).
+     (SQL `ATTACH DATABASE`는 차단하지 **않는다** — 아래 한계 참조.)
   2. 실제 Windows Credential Manager — `advapi32`의 Cred* 심볼 조회(호출 이전), `cmdkey` 등 자식 실행.
   3. 승인되지 않은 외부 네트워크 — 루프백이 아닌 connect/sendto, 루프백이 아닌 이름 조회(DNS).
   4. 자식 프로세스 — 보호 경로를 인자에 담은 실행, 가드를 잃는 파이썬 자식(-I/-S/-E 또는
@@ -44,7 +43,9 @@ File : tests/support/regression_guard/sitecustomize.py
   - `-I`/`-S`/`-E` 없이 sitecustomize 자체를 우회하는 방법(예: 다른 PYTHONPATH를 쓰는 자식은 위에서
     차단하지만, 이미 시작된 별도 프로세스에는 적용되지 않는다).
   - 하드링크 별칭 검사는 가드 시작 시점에 존재하던 보호 파일 기준이다(이후 만들어진 파일 제외).
-  - `VACUUM INTO '<보호 경로>'`는 authorizer가 보지 못하고, `sqlite3.Connection`을 connect() 없이 직접 만들거나 C에서 여는 경우는 authorizer가 걸리지 않는다.
+  - **SQL `ATTACH DATABASE`·`VACUUM INTO '<보호 경로>'`는 차단하지 못한다.** 연결마다 sqlite authorizer(Python 콜백)를 거는
+    방식을 시도했으나 멀티스레드 SQLite 사용에서 GIL/뮤텍스 교착으로 회귀가 멈췄다(test_account_registration 동시성 테스트) —
+    제거했다. 이 저장소는 ATTACH를 쓰지 않으며, tests/test_regression_guard_selftest.py가 정적 검색으로 그 사실을 지킨다.
   - 보호 경로 목록은 시작 시점 환경변수로 계산한다.
   - 시작 시 보호 대상의 **메타데이터(stat)** 를 읽는다(내용은 읽지 않는다).
 =========================================================
@@ -104,7 +105,8 @@ def _via() -> str:
         if "site-packages" not in fr.filename and "unittest" not in fr.filename
         and "sitecustomize" not in fr.filename and "<frozen" not in fr.filename
     ]
-    return " > ".join(frames[-3:])
+    depth = int(os.environ.get("HOMEZ_GUARD_VIA_DEPTH", "3"))
+    return " > ".join(frames[-depth:])
 
 
 # ---------------------------------------------------------------------------
@@ -406,42 +408,6 @@ def _check_child(event: str, exe, args, env, *, classify: bool = True) -> None:
         _log("CHILD_UNGUARDED", f"{event} exe={base}")
 
 
-_SQLITE_OK = 0
-_SQLITE_DENY = 1
-_SQLITE_ATTACH = 24
-
-
-def _authorizer(action, arg1, arg2, dbname, source):
-    if action != _SQLITE_ATTACH:
-        return _SQLITE_OK
-    # 리터럴 경로면 SQLite가 파일명을 넘겨준다. `ATTACH ... ?`(바인딩)처럼 대상을 알 수 없으면 arg1이 None이다 —
-    # 이 저장소는 ATTACH를 전혀 쓰지 않으므로 대상 불명은 fail-closed로 막는다.
-    if isinstance(arg1, str):
-        target = _canon(arg1)
-        if not target or arg1 == ":memory:" or arg1 == "":
-            return _SQLITE_OK
-        reason = _is_protected_canon(target)
-        if not reason:
-            return _SQLITE_OK
-        detail = f"{target} ({reason})"
-    else:
-        detail = "target not determinable (bound parameter)"
-    if _MODE == "report":
-        _log("ACCESS_ALLOWED", f"sqlite3.attach access=unknown {detail} via={_via()}")
-        return _SQLITE_OK
-    _log("ATTEMPT_BLOCKED", f"sqlite3.attach access=unknown {detail} via={_via()}")
-    return _SQLITE_DENY
-
-
-def _install_authorizer(conn) -> None:
-    """모든 새 sqlite 연결에 ATTACH 검사 authorizer를 건다(SQL 문자열이 아니라 SQLite가 넘겨주는 실제 파일명 기준)."""
-
-    try:
-        conn.set_authorizer(_authorizer)
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _audit(event: str, args) -> None:
     if getattr(_tl, "busy", False):
         return
@@ -495,31 +461,9 @@ def _audit(event: str, args) -> None:
         _tl.busy = False
 
 
-def _wrap_sqlite_connect() -> None:
-    """sqlite3.connect 결과 연결에 ATTACH authorizer를 건다(감사 이벤트는 연결 객체가 아니라 정수 핸들을 준다)."""
-
-    try:
-        import sqlite3
-    except ImportError:
-        return
-    original = sqlite3.connect
-
-    def guarded_connect(*a, **k):
-        conn = original(*a, **k)
-        _install_authorizer(conn)
-        return conn
-
-    sqlite3.connect = guarded_connect
-    try:
-        sqlite3.dbapi2.connect = guarded_connect
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _install() -> None:
     _build_protected()
     sys.addaudithook(_audit)
-    _wrap_sqlite_connect()
     _log("GUARD_ACTIVE", f"mode={_MODE} protected_files={len(_P_FILES)} protected_dirs={len(_P_DIRS)} identities={len(_P_IDS)}")
 
 

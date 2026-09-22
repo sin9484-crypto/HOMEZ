@@ -22,6 +22,7 @@ HOMEZ_GUARD_NO_DEFAULTS=1, 이 시험이 만든 임시 디렉터리만 보호 �
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -196,7 +197,7 @@ t("exists_metadata_only", lambda: os.path.exists(P))
         self.assertNotIn("ACCESS_ALLOWED", log)
         self.assertProtectedStateUnchanged()
 
-    def test_file_operations_and_sql_attach_are_blocked(self):
+    def test_file_operations_are_blocked(self):
 
         body = f'''
 t("rename_from", lambda: os.rename(P, OTHER + "\\\\moved.db"))
@@ -207,24 +208,11 @@ t("copy_from", lambda: shutil.copyfile(P, OTHER + "\\\\copy.db"))
 t("copy_into", lambda: shutil.copyfile(CTL, PD + "\\\\injected.db"))
 t("move_from", lambda: shutil.move(BK, OTHER + "\\\\bk.db"))
 t("link_to_protected", lambda: os.link(P, OTHER + "\\\\new_alias.db"))
-def attach():
-    c = sqlite3.connect(":memory:")
-    c.execute("ATTACH DATABASE ? AS x", (P,))
-t("sql_attach", attach)
-def attach_literal():
-    c = sqlite3.connect(":memory:")
-    c.execute("ATTACH DATABASE '" + P.replace("'", "''") + "' AS y")
-t("sql_attach_literal", attach_literal)
-def attach_ok():
-    c = sqlite3.connect(":memory:")
-    c.execute("ATTACH DATABASE ':memory:' AS z")
-t("sql_attach_memory_is_fine", attach_ok)
 '''
         result, log = self.run_child(body)
         for name in ("rename_from", "remove", "mkdir_inside", "rmtree_sub", "copy_from", "copy_into", "move_from",
-                     "link_to_protected", "sql_attach", "sql_attach_literal"):
+                     "link_to_protected"):
             self.assertEqual(result[name], "BLOCKED", f"{name}: {result[name]}")
-        self.assertEqual(result["sql_attach_memory_is_fine"], "ALLOWED")
         self.assertProtectedStateUnchanged()
         self.assertFalse((self.other / "moved.db").exists())
         self.assertFalse((self.other / "copy.db").exists())
@@ -352,6 +340,23 @@ t("rewrite_same_bytes", rewrite_same_bytes)
         finally:
             self.db.write_bytes(original)
             os.utime(self.db, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    def test_repository_does_not_use_sql_attach_or_vacuum_into(self):
+        """가드는 SQL ATTACH·VACUUM INTO를 차단하지 못한다(연결마다 authorizer를 거는 방식은 멀티스레드 SQLite에서
+        교착이 나 제거했다). 그래서 저장소가 그 기능을 쓰지 않는다는 사실을 정적으로 지킨다 — 생기면 이 시험이 실패한다."""
+
+        pattern = re.compile(r"\battach\s+database\b|\bvacuum\s+into\b", re.IGNORECASE)
+        skip = {"test_regression_guard_selftest.py", "sitecustomize.py"}
+        offenders = []
+        for base, suffixes in ((REPO_ROOT / "app", (".py", ".sql")), (REPO_ROOT / "tests", (".py",)),
+                               (REPO_ROOT / "migrations", (".sql",)), (REPO_ROOT / "scripts", (".py", ".ps1", ".sql"))):
+            if not base.exists():
+                continue
+            for path in base.rglob("*"):
+                if path.is_file() and path.suffix in suffixes and path.name not in skip:
+                    if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
+                        offenders.append(str(path.relative_to(REPO_ROOT)))
+        self.assertEqual(offenders, [], "ATTACH/VACUUM INTO 사용이 생겼다 — 가드가 막지 못하는 경로이므로 가드 또는 이 시험을 재검토")
 
     def test_default_protected_paths_are_derived_from_environment_without_touching_real_files(self):
 

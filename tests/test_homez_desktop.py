@@ -39,6 +39,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.bootstrap import BootstrapResult
 from app.database.migration_runner import ChecksumMismatchError
 from app.desktop.paths import get_assets_dir
@@ -598,6 +599,12 @@ class RunOrchestrationTestCase(unittest.TestCase):
             mock.patch.object(
                 desktop_main, "seed_channel_policy_catalog_at_boot",
                 return_value={"rules_seeded": 0},
+            ),
+            # 2026-09-22 격리 — run()은 시작할 때 이전 콘솔 로그인 세션을 지운다
+            # (DesktopConsoleSessionStore.clear → 저장소 read·delete). 교체하지 않으면 이 테스트들이
+            # 실제 Windows Credential Manager를 읽고 삭제한다. 인메모리 저장소로 교체한다.
+            mock.patch.object(
+                desktop_main, "WindowsCredentialStore", InMemoryCredentialStore,
             ),
         ]
 
