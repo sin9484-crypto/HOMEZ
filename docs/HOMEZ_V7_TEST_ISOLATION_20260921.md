@@ -147,7 +147,9 @@ credential-manager … symbol CredReadW`). 이 테스트는 **이번에 처음 �
 72건 전부 통과·차단 시도 0건을 확인했다(단독 재실행, §전체 아님).
 **같은 패턴을 저장소 전체에서 검색**했다: `PurchaseChannelConnectionService(self.db)`/`PurchaseOrderSubmissionService(self.db)`처럼 `credential_store` 없이 생성하는 지점이 테스트 파일 3곳에 더 있었으나
 (`test_full_migration_bootstrap_orm_smoke.py` 2곳, `test_purchase_task_channel_connection_assignment.py` 1곳), 그 파일들이 실제로 호출하는 메서드(`list_connections`·`create_connection`·`mark_verified`·
-`rename_connection`)는 어느 것도 자격증명을 읽지 않는다(정적 확인 + 이번 회귀에서 실제 차단 0건) — **지금은 실제 접근이 없다.** 다만 잠재 위험이므로 이번에는 고치지 않고 §9에 기록만 남긴다(범위 밖 변경 최소화).
+`rename_connection`)는 어느 것도 자격증명을 읽지 않는다(정적 확인 + 이번 회귀에서 실제 차단 0건) — **지금은 실제 접근이 없다.**
+**후속 조치(2026-09-23, 커밋 `e874c5f`)**: "재개" 지시에 따라 이 잠재 위험 2개 파일도 다른 파일들과 같은 방식(`InMemoryCredentialStore` 명시 주입)으로 방어적으로 마저 격리했다 — 실제 접근이 없음을 이미
+확인했으므로 결함 수정이 아니라 향후 이 파일에 자격증명을 읽는 호출이 추가돼도 새지 않게 하는 예방 조치다. 두 파일 11건 전부 통과·가드 차단 0건.
 
 **실제 자원 접근 요약(1차)**: `ATTEMPT_BLOCKED` 2건(위 오류 1건이 만든 것, 전부 credential-manager). `CHILD_UNGUARDED`(비파이썬 자식) 30건 — `powershell` 10·`node.exe` 16·`node` 1·`cmd.exe` 3(정적 검사
 대상 스크립트류의 정상적 자식 실행). 가드는 파이썬·비파이썬 자식 **모두**의 명령줄 인자에서 보호 경로 문자열을 먼저 검사하므로(§4), 이 30건 중 보호 경로를 인자로 받은 것은 **0건**이었다(있었다면 `ATTEMPT_BLOCKED
