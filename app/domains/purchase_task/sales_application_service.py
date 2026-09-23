@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException
+from app.core.exceptions import ConflictException
 from app.domains.purchase_task.channel_adapter import get_purchase_channel_adapter
 from app.domains.purchase_task.channel_connection_service import (
     PurchaseChannelConnectionService,
@@ -87,12 +88,21 @@ class PurchaseSalesApplicationService:
     def ensure_sales_application_submitted(
         self, connection_id: int, company_id: int, product_code: str, *,
         triggered_by: int | None = None, confirm_real_submission: bool = False,
-        adapter=None,
+        override_unresolved_status: bool = False, adapter=None,
     ) -> PurchaseSalesApplicationAttempt:
         """이미 SUBMITTED로 접수 확인된 행이 있으면 재호출 없이 그대로
-        반환한다. 없거나 REJECTED/RESULT_UNKNOWN이면 `confirm_real_
-        submission=True`가 명시적으로 있을 때만 실제 온채널 판매신청을
-        1회 시도한다.
+        반환한다. 없거나 REJECTED면 `confirm_real_submission=True`가
+        명시적으로 있을 때만 실제 온채널 판매신청을 1회 시도한다.
+
+        2026-09-23 후속(자동 재신청 방지 라운드) — 기존 행이
+        `SalesApplicationStatus.BLOCKS_AUTO_RETRY`(`RESULT_UNKNOWN`/
+        `NEEDS_REVIEW`)에 해당하면 `confirm_real_submission=True`만으로는
+        더 이상 자동 재시도하지 않는다(결과를 아직 모르는 상태에서
+        말없이 다시 쏘지 않는다는 원칙) — `order_submission_service.py`의
+        자동 호출 경로는 이 새 플래그를 절대 넘기지 않으므로, 발주
+        시도도 이 상태에서는 함께 막힌다. 사람이 직접 현재 상태를
+        확인한 뒤 재시도하려면 `override_unresolved_status=True`를
+        별도로, 명시적으로 넘겨야 한다.
 
         `adapter`는 선택 인자다 — order_submission_service.py처럼
         이미 같은 연결의 Adapter를 만들어 둔 호출자는 그 인스턴스를
@@ -103,6 +113,21 @@ class PurchaseSalesApplicationService:
         existing = self.get_attempt(connection_id, company_id, product_code)
         if existing is not None and existing.status in SalesApplicationStatus.SATISFIES_ORDER_GATE:
             return existing
+
+        if (
+            existing is not None
+            and existing.status in SalesApplicationStatus.BLOCKS_AUTO_RETRY
+            and not override_unresolved_status
+        ):
+            detail = f" 참고: {existing.failure_detail}" if existing.failure_detail else ""
+            raise ConflictException(
+                f"이 상품·연결의 판매신청 결과를 아직 확신할 수 없습니다"
+                f"(현재 상태: {existing.status}) — 자동으로 다시 신청하지 "
+                "않습니다. 온채널 공식 화면이나 공급처 문의로 현재 판매신청 "
+                "상태를 사람이 먼저 확인하세요. 확인 후 재신청이 필요하면 "
+                "그 결과를 근거로 명시적으로 다시 진행해야 합니다."
+                + detail,
+            )
 
         if not confirm_real_submission:
             raise BadRequestException(
@@ -185,6 +210,60 @@ class PurchaseSalesApplicationService:
             attempt, status=SalesApplicationStatus.SUBMITTED,
             applied_product_code=result.applied_product_code,
         )
+        return attempt
+
+    # ---------------- 외부 증거 수동 반영(실행 아님) ----------------
+
+    def record_unconfirmed_prior_evidence(
+        self, connection_id: int, company_id: int, product_code: str, *,
+        mall_code: str, evidence_summary: str, recorded_by: int,
+        event_occurred_at: datetime | None = None,
+    ) -> PurchaseSalesApplicationAttempt:
+        """2026-09-23 후속(자동 재신청 방지 라운드) — 이 서비스가 실제로
+        실행한 적 없는, 이 서비스 밖의 정황 증거(예: 과거 감사 문서
+        기록)를 사람이 검토해 `NEEDS_REVIEW`로 표시할 때만 쓴다.
+        `apply_for_sale()`을 절대 호출하지 않는다 — "신청을 새로
+        실행했다"가 아니라 "확인이 필요한 상태로 표시해 자동 재신청을
+        막는다"는 뜻뿐이다. 이미 SUBMITTED로 확인된 행은 덮어쓰지
+        않는다(그럴 필요가 없다 — 이미 더 강한 증거가 있다).
+
+        `event_occurred_at`(실제 사건이 있었다고 추정되는 시각)과 이
+        메서드가 실행되는 시각(기록/확인 시각)을 섞지 않는다 — 전자를
+        모르면 `None`으로 그대로 남긴다(추정 금지)."""
+
+        existing = self.get_attempt(connection_id, company_id, product_code)
+        if existing is not None and existing.status in SalesApplicationStatus.SATISFIES_ORDER_GATE:
+            raise BadRequestException(
+                "이미 SUBMITTED로 접수 확인된 행이 있어 정황 증거로 덮어쓸 "
+                "필요가 없습니다 — 기존 확인 결과를 그대로 유지합니다.",
+            )
+
+        recorded_at = datetime.utcnow()
+        note = (
+            "[정황 증거 반영 — 실제 판매신청 실행 아님] "
+            f"사건 발생 추정 시각={event_occurred_at.isoformat() if event_occurred_at else '미상'}; "
+            f"기록(확인) 시각={recorded_at.isoformat()}; "
+            f"기록자=user#{recorded_by}; 근거={evidence_summary}"
+        )
+
+        if existing is None:
+            attempt = PurchaseSalesApplicationAttempt(
+                company_id=company_id, connection_id=connection_id,
+                mall_code=mall_code, product_code=product_code,
+                status=SalesApplicationStatus.NEEDS_REVIEW,
+                failure_detail=note, triggered_by=recorded_by,
+                started_at=recorded_at, finished_at=recorded_at,
+            )
+            self.db.add(attempt)
+        else:
+            attempt = existing
+            attempt.status = SalesApplicationStatus.NEEDS_REVIEW
+            attempt.failure_detail = note
+            attempt.triggered_by = recorded_by
+            attempt.finished_at = recorded_at
+
+        self.db.commit()
+        self.db.refresh(attempt)
         return attempt
 
     # ---------------- 내부 ----------------

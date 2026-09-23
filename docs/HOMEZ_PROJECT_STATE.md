@@ -1,5 +1,18 @@
 # Current Version
 
+**HOMEZ V7 — 자동 재신청 방지와 기존 상품등록 재개 안전성 확인 (2026-09-23, 12차). 결과불명/외부정황 상태에서 판매신청·발주 자동 재시도를 코드로 차단(격리 테스트 12건 신규 통과). 원본 DB·실 API는 여전히 미실행.**
+
+**결과(상세: `docs/HOMEZ_V7_AUTO_REAPPLICATION_SAFETY_20260923.md`)**: 11차까지는 제안만 했던 것을 실제 코드로 구현했다. `SalesApplicationStatus`에 `NEEDS_REVIEW`(외부 정황 증거는 있으나 내부 추적 기록 없음)를 추가하고 `RESULT_UNKNOWN`/`NEEDS_REVIEW`를 `BLOCKS_AUTO_RETRY`로 묶어, `ensure_sales_application_submitted()`가 이 상태에서는 `confirm_real_submission=True`만으로 자동 재시도하지 않게 했다(신규 `override_unresolved_status` 플래그가 명시적으로 있을 때만 재시도). `order_submission_service.py`의 유일한 호출부가 이 플래그를 넘기지 않으므로 발주도 같은 지점에서 함께 막힌다 — 두 곳을 따로 고칠 필요가 없었다. `REJECTED`(결과가 확실히 거부됨)는 기존처럼 자동 재시도를 유지했다(대조군 테스트로 확인).
+신규 메서드 `record_unconfirmed_prior_evidence()` — 외부 증거(예: 2026-09-14 감사 기록)를 사람이 검토해 `NEEDS_REVIEW`로 표시할 때만 쓰며 `apply_for_sale()`을 절대 호출하지 않는다. 사건 발생 시각과 기록(확인) 시각을 텍스트로 구분해 저장. 기존 `purchase_sales_application_attempts` 테이블을 그대로 재사용해 **새 스키마·Migration 없이** 구현했다.
+`is_sales_application_confirmed()`가 상품 판매 상태(status enum)를 입력으로 받지 않는다는 사실을 시그니처 검사로 구조적으로 고정(상품 상태와 계정별 판매신청 승인의 혼동 방지).
+Wizard 중복등록 위험: CH1147184는 `materialized_listing_ids_json=[]`이라 `_context()`의 기존 가드가 이미 Submission 접근 자체를 구조적으로 차단하고 있음을 코드로 확인(수정 불필요, 이미 안전). 다만 **별도 위험을 새로 발견**: `MarketplaceSubmission`이 append-only라 결과불명(UNKNOWN) 이후 새 idempotency_key로 새 Submission 행을 만드는 경로에 "같은 listing+account의 미해결 이전 시도" 확인 로직을 찾지 못했다 — 결함으로 기록만 하고 이번 라운드에서 수정하지 않았다(수정 범위는 별도 라운드).
+집중 테스트: 신규 12건 전부 통과(기존 테스트 기대값·가드·skip 전부 무변경 통과), 가드 로그 `ATTEMPT_BLOCKED` 0건.
+
+**남은 승인·외부 확인(전부 독립, 미실행, 중복 없음)**: ①원본 DB Migration 적용(9차 §6) ②CH1147184 상품 상태 조회 1회(연결 id=4, `GET seller/product/{code}` 1회) ③CH1147184에 대한 `record_unconfirmed_prior_evidence()` 실제 원본 DB 반영 여부 결정(코드는 준비됐으나 실행은 별도 승인) ④시험상품 최종 확정(사용자) ⑤쿠팡 판매자센터 시험 주문 정책 문의 발송 ⑥Wizard#1 재개(옵션 입력→채널 확정→이후 단계) ⑦새 idempotency_key 우회 위험의 수정 범위 확정(별도 조사 필요) ⑧새 승인 발급 및 이후 실제 발주·주문·반품.
+**"해당 실행 위험의 격리검증 완료"(①②는 완료, ③은 CH1147184 한정 부분 완료)까지이며 "V7 실사용 완료"로 확대하지 않는다.**
+
+---
+
 **HOMEZ V7 — 판매신청 상태 정정 및 실제 등록 준비 (2026-09-23, 11차). 10차의 "판매신청 미충족" 서술을 "내부 기록 누락, 외부 상태는 미확인"으로 정정. Wizard#1 정지 단계·옵션 상태 필드 수준 확인. 원본 Migration 여전히 미승인.**
 
 **결과(상세: `docs/HOMEZ_V7_SALES_APPLICATION_STATUS_CORRECTION_20260923.md`)**: 10차의 "판매신청 게이트... 미충족(코드 기준)"은 HOMEZ 내부 게이트 판정과 온채널 쪽 실제 상태를 구분하지 않아 오독 소지가 있었다 — **정정**: "과거 접수 응답(2026-09-14 HTTP 200)은 있으나 내부 추적 기록 누락, 현재 공급처 상태는 미확인. 자동 재신청 금지."
@@ -10,6 +23,10 @@ Wizard#1을 필드 수준까지 재확인: `product_candidate_id=3`(→`candidat
 **남은 승인·외부 확인(전부 독립, 미실행, 중복 없음)**: ①원본 DB Migration 적용(9차 §6 명시적 승인) ②CH1147184 상품 상태 조회 1회(연결 id=4) ③판매신청 정황 확인을 발주 게이트에 반영할지 정책 결정 ④시험상품 최종 확정(사용자) ⑤쿠팡 판매자센터 시험 주문 정책 문의 발송 ⑥Wizard#1 재개(옵션 입력→채널 확정→이후 단계) ⑦새 승인 발급 및 이후 실제 발주·주문·반품.
 **"조사·정정·설계 계속"이며 "V7 실사용 완료"·"실제 주문 실행 준비 완료"는 아니다.**
 
+---
+
+**HOMEZ V7 — 기존 상품 후보 이어받아 DB 적용·실거래 준비 (2026-09-23, 10차). [11차에서 정정: "판매신청 미충족" 서술을 "내부 기록 누락, 외부 상태는 미확인"으로 바로잡았다. 상세: 위 11차 항목.]**
+
 **결과(상세: `docs/HOMEZ_D3_REAL_TRANSACTION_PREPARATION_20260918.md` 2026-09-23 갱신 메모(10차))**: 기존 상품 후보 3종(① CH1147184 num=102398, ② CH5250918 num=12494419, ③ CH4922462 num=12209231)을 공개 화면 자체의 "상품코드" 필드로 재확인(URL `num` 추측 아님), 2026-09-20 조사 이후 material한 변경 없음.
 시험상품 최종 확정 기록은 여전히 없어(전 문서 검색 확인) 기존 추천(① CH1147184)을 그대로 유지, 새 후보를 찾지 않았다.
 저장소 루트 실 `homez.db`를 읽기 전용으로 재조회한 결과 2026-09-14 감사가 기록한 CH1147184 관련 진행(`purchase_tasks`#1, `purchase_order_approvals`#1(DB상 ACTIVE이나 실제 만료), `listing_wizards`#1(4단계 CHANNELS에서 정지), `store_connections`#1, `purchase_channel_connections`#4(ONCHANNEL, CONNECTED))이 9일째 그대로 남아 있음을 확인 — 롤백 기록 없음.
@@ -18,6 +35,10 @@ Wizard#1을 필드 수준까지 재확인: `product_candidate_id=3`(→`candidat
 
 **남은 승인·외부 확인(전부 독립, 미실행)**: ①시험상품 최종 선택(사용자) ②CH1147184 판매신청 재확인/재신청 여부 결정 ③원본 Migration 실제 적용(§6 승인안에 대한 명시적 승인) ④쿠팡 상세조회·온채널 조회(대상 확정 후 각 한도 내) ⑤쿠팡 등록(Wizard 4단계 재개)·SKU 매핑 확정 ⑥쿠팡 판매자센터 시험 주문 정책 문의 발송 ⑦실제 시험 주문·발주·반품(각 별도 승인).
 **"조사·준비 계속"이며 "V7 실사용 완료"·"실제 주문 실행 준비 완료"는 아니다.**
+
+---
+
+**HOMEZ V7 — DB 결정 재확인·보고 정정·원본 적용 준비 마무리 (2026-09-23, 9차). 업무 DB = 저장소 루트로 확인(재질문 아님, 기존 6차 결정 재적용). 원본 적용 승인안 확정 제출, 원본 미적용.**
 
 **결과(상세: `docs/HOMEZ_V7_DB_DECISION_REVIEW_20260923.md`)**: 8차가 "DB 정체성 미확정"이라며 다시 연 질문은 오류였다 — `docs/HOMEZ_V7_TEST_ISOLATION_20260921.md` §7(2026-09-21, 6차)이 이미 "업무 DB = 저장소 루트 `homez.db`, 설치본은 별도 대상·별도 승인"으로 명시적으로 확정했고, 같은 날 7차 문서도 이를 재확인했다.
 2026-08-31 Preflight 8-A의 "설치본(LOCALAPPDATA)을 공식 운영 DB로 확정"은 **다른 질문**(패키징 배포본 실행 시 파일 선택)에 대한 결정이라 충돌하지 않는다 — `app/desktop/paths.py::get_data_dir()`가 `is_frozen()`에 따라 자동으로 갈리도록 설계돼 있음을 코드로 재확인했다.

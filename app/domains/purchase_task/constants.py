@@ -647,25 +647,52 @@ class SalesApplicationStatus:
     UNKNOWN). 다만 발주와 달리 판매신청은 "같은 상품을 다시 신청해도
     금전적 중복 위험이 없다"(스펙상 요청 바디에 결제·금액 필드가
     아예 없다) — 그래서 이 상태는 OrderSubmissionStatus.LOCKED처럼
-    "같은 키로 재시도 금지"를 강제하지 않는다. REJECTED/RESULT_
-    UNKNOWN이었던 행은 (company_id, connection_id, product_code)
-    UNIQUE 제약 위에서 같은 행을 갱신하며 재시도할 수 있다(append-only
-    잠금이 아니라 PurchaseChannelConnection과 같은 현재상태 갱신형
-    행이다)."""
+    "같은 키로 재시도 금지"를 강제하지 않는다. REJECTED였던 행은
+    (company_id, connection_id, product_code) UNIQUE 제약 위에서
+    같은 행을 갱신하며 자동으로 재시도할 수 있다(append-only 잠금이
+    아니라 PurchaseChannelConnection과 같은 현재상태 갱신형 행이다).
+
+    2026-09-23 후속(자동 재신청 방지 라운드) — 위 "금전적 중복
+    위험이 없다"는 이유는 **온채널 서버 쪽 부작용**에 대한 근거일
+    뿐, "우리 쪽이 이 상품·연결의 신청 여부를 확신하지 못하는 상태에서
+    아무 확인 없이 다시 POST를 쏴도 되는가"라는 별개 질문에는 답하지
+    않는다 — `apply_for_sale()`의 재신청 시 실제 온채널 응답(409
+    등)은 공식 답변으로 확정된 바 없다(추정일 뿐). 그래서 **결과를
+    확신할 수 없는 두 상태(`RESULT_UNKNOWN`, `NEEDS_REVIEW`)는
+    `confirm_real_submission=True`만으로 자동 재시도되지 않는다**
+    (`BLOCKS_AUTO_RETRY` 참고, `sales_application_service.py`).
+    REJECTED(온채널이 명시적으로 거부한 것 — 결과가 확실함)는 기존
+    동작을 유지한다."""
 
     PENDING = "PENDING"
     IN_FLIGHT = "IN_FLIGHT"
     SUBMITTED = "SUBMITTED"
     REJECTED = "REJECTED"
     RESULT_UNKNOWN = "RESULT_UNKNOWN"
+    # 2026-09-23 — 이 서비스가 스스로 만든 시도 기록이 아니라, 외부
+    # 증거(과거 감사 기록 등)로 사람이 "확인 필요"로 명시한 상태.
+    # sales_application_service.py::record_unconfirmed_prior_evidence()
+    # 로만 만들어지며, apply_for_sale()을 호출하지 않는다.
+    NEEDS_REVIEW = "NEEDS_REVIEW"
 
-    ALL = (PENDING, IN_FLIGHT, SUBMITTED, REJECTED, RESULT_UNKNOWN)
+    ALL = (PENDING, IN_FLIGHT, SUBMITTED, REJECTED, RESULT_UNKNOWN, NEEDS_REVIEW)
 
     # 발주 전 게이트를 통과시켜도 되는 유일한 상태 — SUBMITTED만
     # "접수 확인됨"이다. PENDING/IN_FLIGHT(아직 끝나지 않음)는 물론
-    # REJECTED/RESULT_UNKNOWN도 통과시키지 않는다(둘 다 "접수됐다"는
-    # 사실을 확인하지 못한 상태이기 때문 — 추측으로 통과시키지 않는다).
+    # REJECTED/RESULT_UNKNOWN/NEEDS_REVIEW도 통과시키지 않는다(전부
+    # "접수됐다"는 사실을 확인하지 못한 상태이기 때문 — 추측으로
+    # 통과시키지 않는다). 상품 자체의 판매 상태(status enum)는 이
+    # 게이트와 완전히 별개다 — 상품이 "판매중"이라는 사실만으로 이
+    # 게이트를 통과시키는 코드 경로는 이 저장소 어디에도 없다(계정별
+    # 판매신청 승인 여부를 조회하는 공식 API 자체가 없다고 확정됨).
     SATISFIES_ORDER_GATE = (SUBMITTED,)
+
+    # 2026-09-23 후속 — 이 상태의 기존 행이 있으면 confirm_real_
+    # submission=True만으로는 자동 재시도하지 않는다(아래
+    # ensure_sales_application_submitted()의 override_unresolved_status
+    # 참고). "결과를 아직 모른다"는 사실 자체가 자동 재실행을 막는
+    # 이유다 — REJECTED(결과가 확실히 거부됨)는 포함하지 않는다.
+    BLOCKS_AUTO_RETRY = (RESULT_UNKNOWN, NEEDS_REVIEW)
 
 
 class ShippingCostConfirmationSource:

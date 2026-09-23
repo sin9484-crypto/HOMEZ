@@ -349,6 +349,66 @@ class ConnectionReadinessTestCase(OrderSubmissionServiceTestCaseBase):
             )
 
 
+class SalesApplicationUnresolvedStatusBlocksOrderTestCase(OrderSubmissionServiceTestCaseBase):
+    """2026-09-23 후속(자동 재신청 방지 라운드) — 판매신청 상태가
+    결과를 확신할 수 없는 상태(NEEDS_REVIEW — 외부 정황 증거는 있으나
+    내부 추적 기록이 없던 CH1147184류 상황을 재현)면 submit_order()가
+    그 지점에서 즉시 막혀야 한다. order_submission_service.py의
+    내부 호출은 override_unresolved_status를 넘기지 않으므로, 판매
+    신청 자동 재시도(POST)도 실제 발주(Adapter.submit_order)도 둘 다
+    이 상태에서는 실행되지 않아야 한다."""
+
+    def test_needs_review_blocks_both_reapplication_and_order(self):
+
+        from datetime import datetime
+
+        from app.domains.purchase_task.constants import SalesApplicationStatus
+        from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
+
+        connection = self._make_ready_connection()
+        seeded_at = datetime.utcnow()
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code=VALID_KWARGS["product_code"],
+            status=SalesApplicationStatus.NEEDS_REVIEW,
+            failure_detail="[정황 증거 반영 — 실제 판매신청 실행 아님] 테스트 시드",
+            started_at=seeded_at, finished_at=seeded_at,
+        ))
+        self.db.commit()
+
+        call_log = []
+        self._install_fake_adapter(result="ORDER123", call_log=call_log)
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-needs-review",
+                confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("확신할 수 없습니다", str(ctx.exception))
+        self.assertEqual(
+            call_log, [], "판매신청 상태가 불확실하면 실제 발주 함수는 절대 호출되면 안 된다.",
+        )
+        self.assertEqual(
+            self.db.query(PurchaseOrderSubmissionAttempt).count(), 0,
+            "판매신청 게이트에서 막혔으면 발주 시도 행 자체가 생기면 안 된다.",
+        )
+        unchanged = (
+            self.db.query(PurchaseSalesApplicationAttempt)
+            .filter(
+                PurchaseSalesApplicationAttempt.company_id == self.company_a.id,
+                PurchaseSalesApplicationAttempt.connection_id == connection.id,
+                PurchaseSalesApplicationAttempt.product_code == VALID_KWARGS["product_code"],
+            ).one()
+        )
+        self.assertEqual(
+            unchanged.status, SalesApplicationStatus.NEEDS_REVIEW,
+            "차단됐다면 판매신청 시도 자체(IN_FLIGHT 등)가 시작되지 않아 "
+            "기존 NEEDS_REVIEW 상태와 근거 문구가 그대로 남아 있어야 한다"
+            "(자동 재신청 POST가 실제로 실행되지 않았다는 구조적 증거).",
+        )
+        self.assertEqual(unchanged.failure_detail, "[정황 증거 반영 — 실제 판매신청 실행 아님] 테스트 시드")
+
+
 class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase):
     """정상 응답 / 명시적 거절 / 응답 형식 오류 / 전송 결과 불명.
 
