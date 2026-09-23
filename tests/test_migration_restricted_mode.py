@@ -528,6 +528,18 @@ class ConcurrentApprovalTestCase(_TempMigrationEnvMixin, unittest.TestCase):
             return_value=(self.db_path, self.migrations_dir, self.backups_dir),
         )
         self._paths_patcher.start()
+        # 2026-09-23 격리 — approve_migration()은 실제 적용(result.applied)
+        # 직후 migration_restricted_mode.refresh_restricted_mode_state()도
+        # 부른다. 그 함수는 migration_approval._real_paths()가 아니라 자기
+        # 자신의 _real_migration_paths()(DATABASE_URL 기반, 격리 안 됨)로
+        # 경로를 다시 계산한다 — 위 patch만으로는 이 두 번째 경로가
+        # 실제 homez.db를 읽기 전용으로 열어 버린다(가드가 실제로 잡음).
+        # 같은 임시 경로를 쓰도록 별도로 패치한다.
+        self._restricted_mode_paths_patcher = patch.object(
+            migration_restricted_mode, "_real_migration_paths",
+            return_value=(self.db_path, self.migrations_dir),
+        )
+        self._restricted_mode_paths_patcher.start()
         self._recent_auth_patcher = patch.object(
             migration_approval, "consume_recent_auth_token", return_value=True,
         )
@@ -542,6 +554,7 @@ class ConcurrentApprovalTestCase(_TempMigrationEnvMixin, unittest.TestCase):
 
         self._nonce_patcher.stop()
         self._recent_auth_patcher.stop()
+        self._restricted_mode_paths_patcher.stop()
         self._paths_patcher.stop()
         shutil.rmtree(self.tmp_root, ignore_errors=True)
 
