@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import Boolean
+from sqlalchemy import CheckConstraint
 from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import Index
@@ -34,6 +35,7 @@ from app.domains.purchase_task.constants import ChannelConnectionStatus
 from app.domains.purchase_task.constants import ConnectionMethod
 from app.domains.purchase_task.constants import PurchaseTaskCreationSource
 from app.domains.purchase_task.constants import PurchaseTaskStatus
+from app.domains.purchase_task.constants import SupplierOptionLinkStatus
 
 
 class PurchaseTask(Base):
@@ -1117,6 +1119,98 @@ class PurchaseOrderApproval(Base):
     )
 
 
+class SupplierOptionLink(Base):
+    """2026-09-21 옵션 연결 — 쿠팡에 등록한 판매 옵션과 실제로 매입할 공급처
+    (온채널) 상품코드·옵션ID의 영구 대응.
+
+    조인 키는 이름·배열 순서가 아니라 **쿠팡 externalVendorSku**다 — 등록
+    때 옵션마다 보낸 값이 주문 수집에서 `channel_sku`(주문 품목의
+    externalVendorSkuCode)로 그대로 돌아오고, 기존 `OrderSkuResolution`
+    (회사·스토어 연결·channel_sku → HOMEZ 재고 SKU)도 같은 키를 쓴다.
+    HOMEZ SKU와의 관계는 그 기존 테이블로 이어지므로 여기에 중복 저장하지
+    않는다.
+
+    범위 규칙:
+    - 회사(company_id) + 쿠팡 스토어 연결(store_connection_id) + channel_sku
+      가 유일하다(한 판매 옵션 = 하나의 공급 옵션 연결).
+    - 매입 계정(purchase_connection_id)이 다르면 같은 공급 상품이라도 다른
+      연결이다 — 공급처 옵션ID가 상품·계정 범위에 종속되는지 스펙만으로
+      확정할 수 없어(검증필요) (상품코드, 옵션ID)를 항상 함께 저장하고 발주
+      검토 때마다 그 계정으로 실조회해 옵션이 그 상품에 속하는지 확인한다.
+    - 구성 수량(units_per_sale)은 판매 1개가 공급 옵션 몇 개에 해당하는지다.
+      한 판매 옵션이 여러 공급 옵션·상품의 묶음인 경우는 지원하지 않는다.
+    - 비밀값·고객 개인정보는 저장하지 않는다. supplier_option_name_snapshot
+      은 화면 표시·변경 감지용일 뿐 매칭에 쓰지 않는다.
+
+    이미 승인·발주된 건은 PurchaseOrderApproval.options_snapshot_json과
+    PurchaseOrderSubmissionAttempt(product_code·options_json)에 동결돼 있어
+    이 연결을 나중에 수정해도 바뀌지 않는다."""
+
+    __tablename__ = "supplier_option_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "store_connection_id", "channel_sku",
+            name="uq_supplier_option_link_scope",
+        ),
+        # 같은 판매 계정 안에서 쿠팡 옵션번호(vendorItemId) 하나는 정확히 한
+        # 연결에만 붙는다 — SKU 없이 들어온 주문을 vendorItemId로 찾을 때
+        # 모호함이 없도록 DB가 보장한다(NULL은 여러 행 허용 — 아직 확인 전).
+        UniqueConstraint(
+            "company_id", "store_connection_id", "coupang_vendor_item_id",
+            name="uq_supplier_option_link_vendor_item",
+        ),
+        CheckConstraint(
+            "units_per_sale >= 1", name="ck_supplier_option_link_units",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # 논리 참조(store_connections.id) — 쿠팡 판매 계정.
+    store_connection_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, index=True,
+    )
+    # 쿠팡 externalVendorSku(= 주문 수집의 channel_sku).
+    channel_sku: Mapped[str] = mapped_column(String(150), nullable=False)
+    # 논리 참조(purchase_channel_connections.id) — 실제 매입 계정.
+    purchase_connection_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, index=True,
+    )
+    supplier_product_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    # 어댑터·화면 전체가 옵션ID를 문자열로 다룬다(ChannelProductOption.option_id: str)
+    # — 정확히 같은 문자열만 같은 옵션이다(숫자 변환·이름 매칭 없음).
+    supplier_option_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    supplier_option_name_snapshot: Mapped[str | None] = mapped_column(
+        String(200), nullable=True,
+    )
+    units_per_sale: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=SupplierOptionLinkStatus.ACTIVE,
+        index=True,
+    )
+    status_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 쿠팡이 부여한 식별자 — 등록 결과를 조회해 확인했을 때만 채운다(선택).
+    # 판매자 SKU(channel_sku)와 vendorItemId는 서로 다른 식별자다 — 같은 문자열
+    # 공간에서 섞어 비교하지 않는다(SKU 없이 들어온 주문은 vendorItemId 경로로만
+    # 찾고, 둘 다 있는데 서로 다른 연결을 가리키면 자동 선택하지 않고 차단).
+    coupang_seller_product_id: Mapped[str | None] = mapped_column(
+        String(50), nullable=True,
+    )
+    coupang_vendor_item_id: Mapped[str | None] = mapped_column(
+        String(50), nullable=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    confirmed_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
 __all__ = [
     "PurchaseTask",
     "PurchaseTaskCandidate",
@@ -1134,4 +1228,5 @@ __all__ = [
     "PurchaseOrderUnknownResolutionEvent",
     "PurchaseSalesApplicationAttempt",
     "PurchaseOrderApproval",
+    "SupplierOptionLink",
 ]

@@ -384,6 +384,10 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # (order_collection_test_budget_usages). 동일한 이유로
             # 추가. 실제 운영 DB에는 아직 미적용이다.
             "20260918_00_create_order_collection_test_budget_usage_schema.sql",
+            # 2026-09-21 옵션 연결 — 쿠팡 판매 옵션 ↔ 온채널 상품코드·옵션ID의
+            # 영구 대응 테이블 1개(supplier_option_links, 추가형). 동일한 이유로
+            # 추가. 실제 운영 DB에는 아직 미적용이다(별도 승인 대상).
+            "20260921_00_create_supplier_option_link_schema.sql",
         ]
 
         all_files = sorted(

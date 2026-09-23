@@ -26,7 +26,8 @@ from app.domains.marketplace_listing.category_metadata import (
     PurchaseOptionAttribute,
 )
 from app.domains.marketplace_listing.coupang_live_provider import (
-    LiveSubmissionResult, ProductStatusResult,
+    LiveSubmissionResult, ProductOptionIdentifier, ProductOptionIdentifiersResult,
+    ProductStatusResult,
 )
 from app.domains.marketplace_listing.coupang_logistics_provider import (
     LogisticsLocation,
@@ -42,8 +43,29 @@ class FakeCoupangLiveProductProvider:
     시나리오(FAKE_WARNING_TRIGGER)를 추가한다. 합성 sellerProductId·
     합성 경고 문구만 쓴다 — 실제 값이 아니다."""
 
+    # 2026-09-21 옵션 연결 — 등록 시 보낸 옵션(externalVendorSku)을 기억해 두었다가
+    # 상세조회에서 합성 vendorItemId와 함께 **역순으로** 돌려준다(응답 순서가
+    # 달라져도 SKU로만 매칭되는지 화면 E2E에서 확인하기 위함). 시나리오 마커:
+    # 상품명에 FAKE_OPTION_ID_PENDING → 모든 옵션번호 null(승인 전), 
+    # FAKE_OPTION_ID_PARTIAL → 첫 옵션만 번호 있음. 합성 값만 쓴다.
+    _registered: dict = {}
+
     def create_product(self, payload):
         name = str(payload.get("sellerProductName", ""))
+        reference = "FAKE-PACKAGED-SELLER-PRODUCT-001"
+        if "FAKE_WARNING_TRIGGER" in name:
+            reference = "90000000999"
+        self._registered[reference] = {
+            "skus": [
+                str(item.get("externalVendorSku"))
+                for item in (payload.get("items") or [])
+                if isinstance(item, dict) and item.get("externalVendorSku")
+            ],
+            "marker": (
+                "PENDING" if "FAKE_OPTION_ID_PENDING" in name
+                else "PARTIAL" if "FAKE_OPTION_ID_PARTIAL" in name else "ALL"
+            ),
+        }
         if "FAKE_FAIL_TRIGGER" in name:
             return LiveSubmissionResult(
                 outcome="FAILED", error_code="ERROR",
@@ -97,6 +119,30 @@ class FakeCoupangLiveProductProvider:
             seller_product_name="[FAKE PACKAGED TEST] 정합화 대상 상품",
             vendor_user_id="FAKE-VENDOR-USER-001",
             display_category_code="80754",
+        )
+
+
+    def get_product_option_identifiers(self, seller_product_id):
+        record = self._registered.get(str(seller_product_id))
+        if record is None:
+            return ProductOptionIdentifiersResult(
+                outcome="UNKNOWN", error_code="FAKE_NOT_REGISTERED",
+                error_summary="[FAKE PACKAGED TEST] 이 가짜 Provider가 등록한 상품이 아닙니다.",
+            )
+        skus = list(reversed(record["skus"]))
+        items = []
+        for index, sku in enumerate(skus):
+            has_id = record["marker"] == "ALL" or (
+                record["marker"] == "PARTIAL" and index == 0
+            )
+            items.append(ProductOptionIdentifier(
+                external_vendor_sku=sku,
+                vendor_item_id=str(70000000 + index + 1) if has_id else None,
+                seller_product_item_id=str(80000000 + index + 1),
+            ))
+        return ProductOptionIdentifiersResult(
+            outcome="FOUND", items=tuple(items), http_status=200,
+            raw_status_name="승인완료" if record["marker"] == "ALL" else "임시저장",
         )
 
 

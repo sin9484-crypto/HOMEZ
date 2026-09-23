@@ -695,6 +695,26 @@ class ShippingCostConfirmationSource:
     }
 
 
+class SupplierOptionLinkStatus:
+    """2026-09-21 옵션 연결 — SupplierOptionLink.status(String(20)).
+    쿠팡에 등록한 판매 옵션(store_connection_id + channel_sku)과 공급처
+    (온채널) 상품코드·옵션ID의 대응이 지금 발주 검토에 쓰일 수 있는지.
+
+    - ACTIVE: 사용자가 확인·저장했고 마지막 실조회에서도 유효했다.
+    - NEEDS_REVIEW: 실조회에서 공급처 옵션이 사라졌거나 옵션명이 바뀌는 등
+      저장 당시와 달라졌다. **조용히 다른 옵션으로 대체하지 않는다** —
+      사용자가 다시 확인·저장(replace)해야 ACTIVE로 돌아온다.
+    - DISABLED: 사용자가 연결을 해제했다.
+    이 클래스 값은 20자를 넘기지 않는다(String(20) — Migration 없이
+    값만 늘리는 것이 의도)."""
+
+    ACTIVE = "ACTIVE"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    DISABLED = "DISABLED"
+
+    ALL = (ACTIVE, NEEDS_REVIEW, DISABLED)
+
+
 class PurchaseOrderApprovalStatus:
     """2026-09-11 후속(Phase 5·7) — PurchaseOrderApproval.status.
     "발주 최종 승인" 1건의 현재 상태. ACTIVE만 실제 발주(Gate D/E)를

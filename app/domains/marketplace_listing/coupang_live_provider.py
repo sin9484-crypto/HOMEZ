@@ -105,9 +105,36 @@ class ProductStatusResult:
     display_category_code: str | None = None
 
 
+@dataclass(frozen=True)
+class ProductOptionIdentifier:
+    """상품 상세조회 `data.items[]` 한 줄. 공식 문서(상품 조회) 계약: vendorItemId는
+    임시저장 상태에서는 null이고 승인완료 시 채워진다 — 값이 없으면 None으로
+    남기며 추측해서 채우지 않는다. 옵션명(itemName)은 매칭에 쓰지 않으므로
+    담지 않는다."""
+
+    external_vendor_sku: str | None
+    vendor_item_id: str | None
+    seller_product_item_id: str | None
+
+
+@dataclass(frozen=True)
+class ProductOptionIdentifiersResult:
+    # "FOUND" | "NOT_FOUND" | "UNKNOWN" — UNKNOWN이면 어떤 식별자도 신뢰하지
+    # 않는다(호출자는 아무것도 저장하지 않고 재등록도 하지 않는다).
+    outcome: str
+    items: tuple[ProductOptionIdentifier, ...] = ()
+    raw_status_name: str | None = None
+    http_status: int | None = None
+    error_code: str | None = None
+    error_summary: str | None = None
+
+
 class CoupangProductProvider(Protocol):
     def create_product(self, payload: dict[str, Any]) -> LiveSubmissionResult: ...
     def get_product_status(self, seller_product_id: str) -> ProductStatusResult: ...
+    def get_product_option_identifiers(
+        self, seller_product_id: str,
+    ) -> ProductOptionIdentifiersResult: ...
 
 
 class CoupangLiveProductProvider:
@@ -616,6 +643,98 @@ class CoupangLiveProductProvider:
         )
 
     @staticmethod
+    def _option_number(value: Any) -> str | None:
+        """vendorItemId·sellerProductItemId 정규화. 공식 문서 표기가 number이지만
+        문자열로도 올 수 있어(문서 요약이 엇갈림) 둘 다 받아 문자열로 통일한다.
+        0·음수·빈 값·bool·소수는 "값 없음"으로 본다(임시저장 상태의 null 포함)."""
+
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, int):
+            return str(value) if value > 0 else None
+        if isinstance(value, str):
+            text = value.strip()
+            return text if text.isdigit() and int(text) > 0 and len(text) <= 50 else None
+        return None
+
+    def get_product_option_identifiers(
+        self, seller_product_id: str,
+    ) -> ProductOptionIdentifiersResult:
+        """상품 상세조회 GET 1회(상태 조회와 같은 경로, 읽기 전용)로 옵션별
+        `externalVendorSku`·`vendorItemId`·`sellerProductItemId`를 읽는다.
+        생성 응답에는 sellerProductId만 있으므로 옵션 번호는 여기서만 얻는다.
+        모든 옵션에 번호가 있다고 가정하지 않는다(승인 전에는 null). 응답이
+        계약과 다르거나 요청한 상품이 아닌 상품이면 UNKNOWN이다."""
+
+        path = STATUS_PATH_TEMPLATE.format(seller_product_id=seller_product_id)
+        try:
+            response = self._session.get(
+                BASE_URL + path,
+                headers=self._headers("GET", path),
+                timeout=self._timeout,
+            )
+        except requests.Timeout:
+            return ProductOptionIdentifiersResult(
+                outcome="UNKNOWN", error_code="TIMEOUT",
+                error_summary="응답 시간 초과로 옵션 번호를 확인할 수 없습니다.",
+            )
+        except requests.RequestException:
+            return ProductOptionIdentifiersResult(
+                outcome="UNKNOWN", error_code="NETWORK_ERROR",
+                error_summary="네트워크 오류로 옵션 번호를 확인할 수 없습니다.",
+            )
+
+        if response.status_code == 404:
+            return ProductOptionIdentifiersResult(outcome="NOT_FOUND", http_status=404)
+        if response.status_code >= 400:
+            code, summary = self._safe_error(response)
+            return ProductOptionIdentifiersResult(
+                outcome="UNKNOWN", error_code=code, error_summary=summary,
+                http_status=response.status_code,
+            )
+
+        def unknown(code: str, summary: str) -> ProductOptionIdentifiersResult:
+            return ProductOptionIdentifiersResult(
+                outcome="UNKNOWN", error_code=code, error_summary=summary,
+                http_status=response.status_code,
+            )
+
+        try:
+            body = response.json()
+        except ValueError:
+            return unknown("INVALID_RESPONSE", "쿠팡 응답을 해석할 수 없습니다.")
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict):
+            return unknown("INVALID_RESPONSE", "쿠팡 응답에 상품 정보(data)가 없습니다.")
+        echoed = data.get("sellerProductId")
+        if echoed is not None and self._option_number(echoed) != str(seller_product_id).strip():
+            return unknown(
+                "SELLER_PRODUCT_ID_MISMATCH",
+                "요청한 상품이 아닌 상품 정보가 돌아와 사용하지 않습니다.",
+            )
+        raw_items = data.get("items")
+        if not isinstance(raw_items, list):
+            return unknown("ITEMS_MISSING", "쿠팡 응답에 옵션 목록(items)이 없습니다.")
+
+        items: list[ProductOptionIdentifier] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                return unknown("INVALID_ITEM", "옵션 목록의 형식이 계약과 다릅니다.")
+            sku = raw.get("externalVendorSku")
+            sku = sku if isinstance(sku, str) and sku != "" else None
+            items.append(ProductOptionIdentifier(
+                external_vendor_sku=sku,
+                vendor_item_id=self._option_number(raw.get("vendorItemId")),
+                seller_product_item_id=self._option_number(raw.get("sellerProductItemId")),
+            ))
+        status_name = data.get("statusName")
+        return ProductOptionIdentifiersResult(
+            outcome="FOUND", items=tuple(items),
+            raw_status_name=status_name if isinstance(status_name, str) else None,
+            http_status=response.status_code,
+        )
+
+    @staticmethod
     def _safe_identifier_text(value: Any) -> str | None:
         # 2026-08-31 — 상품명 등은 자유 텍스트라 우연히 전화번호/JWT
         # 형태 패턴을 담고 있을 가능성을 배제할 수 없다(이 파일의 기존
@@ -636,5 +755,6 @@ __all__ = [
     "BASE_URL", "CREATE_PRODUCT_PATH", "STATUS_PATH_TEMPLATE", "STATUS_NAMES",
     "CANONICAL_STATUS_MAP",
     "LiveSubmissionResult", "ProductStatusResult",
+    "ProductOptionIdentifier", "ProductOptionIdentifiersResult",
     "CoupangProductProvider", "CoupangLiveProductProvider",
 ]

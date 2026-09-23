@@ -2668,3 +2668,13 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
   }
   .tour-select-list { grid-template-columns: 1fr; }
 }
+
+/* 2026-09-21 옵션 연결 — 공급처 옵션 선택 폼. 좁은 화면(모바일)에서 입력칸이 화면 밖으로
+   삐져나오지 않도록 한 줄에 하나씩 쌓고, 넓은 화면에서는 나란히 놓는다. */
+.ol-picker .field { flex: 1 1 100%; min-width: 0; }
+.ol-picker input,
+.ol-picker select { width: 100%; max-width: 100%; box-sizing: border-box; }
+.ol-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+@media (min-width: 720px) {
+  .ol-picker .field { flex: 1 1 200px; }
+}

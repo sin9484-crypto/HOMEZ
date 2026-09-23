@@ -105,6 +105,9 @@ from app.domains.retail_purchase.router import (
 from app.domains.purchase_task.router import (
     router as purchase_task_router,
 )
+from app.domains.purchase_task.supplier_option_link_router import (
+    router as supplier_option_link_router,
+)
 from app.domains.return_order.router import (
     router as return_order_router,
 )
@@ -579,6 +582,10 @@ app.include_router(
 
 app.include_router(
     purchase_task_router,
+)
+
+app.include_router(
+    supplier_option_link_router,
 )
 
 app.include_router(

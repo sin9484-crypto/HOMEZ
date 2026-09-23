@@ -4145,6 +4145,7 @@
           <h2>${escapeHtml(HomezI18n.t("purchase_task.review_title"))}</h2>
         </div>
         <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_intro"))}</p>
+        <div id="pt-link-panel"></div>
         <div class="pt-cc-add-form">
           <label class="field"><span class="field-label">${escapeHtml(HomezI18n.t("purchase_task.review_product_code_label"))}</span>
             <input type="text" id="pt-review-product-code" placeholder="${escapeHtml(HomezI18n.t("purchase_task.cc_lookup_product_field_label"))}"></label>
@@ -4319,6 +4320,7 @@
     wireIfExists("pt-request-return-btn", () => ptOpenCancelReturnDialog(task, "return"));
 
     wireIfExists("pt-review-run-btn", () => ptRunOrderSubmissionReview(task));
+    if (el("pt-link-panel")) olLoadTaskPanel(task);
     wireIfExists("pt-tracking-refresh-btn", () => ptRefreshTracking(task));
 
     const historyToggleBtn = el("pt-attempt-history-toggle-btn");
@@ -4557,6 +4559,9 @@
         <dd>${escapeHtml(review.source_product_title)} × ${escapeHtml(String(review.source_order_quantity ?? "—"))}</dd>
         <dt>${escapeHtml(HomezI18n.t("purchase_task.review_connection_label"))}</dt>
         <dd>${escapeHtml(review.connection_mall_code)} — ${escapeHtml(review.connection_account_label)}</dd>
+        ${review.supplier_link ? `<dt>${escapeHtml(olT("title"))}</dt>
+        <dd>${olStatePill(review.supplier_link.state)}${review.supplier_link.state === "ACTIVE"
+          ? ` ${escapeHtml(review.supplier_link.expected_product_code || "")} × ${escapeHtml(String(review.supplier_link.units_per_sale ?? ""))}` : ""}</dd>` : ""}
         <dt>${escapeHtml(HomezI18n.t("purchase_task.review_product_title_label"))}</dt>
         <dd>${escapeHtml(p.title || "—")}</dd>
         <dt>${escapeHtml(HomezI18n.t("purchase_task.review_estimated_amount_label"))}</dt>
@@ -12642,6 +12647,428 @@
     return parts.join(" · ");
   }
 
+  // ==================================================
+  // 옵션 연결 (2026-09-21) — 판매 옵션 ↔ 공급처(온채널) 상품·옵션
+  //
+  // 처음 한 번 확인해 저장한 연결을 다음 주문부터 미리 채워 준다. 연결은 발주·결제
+  // 승인이 아니다 — 가격·재고·배송비·한도·최종 승인은 기존 화면 그대로 매번 확인한다.
+  // 공급 옵션은 조회 결과에서 고르게 하고(이름으로 추측하지 않는다), 판매 계정·판매자
+  // SKU·옵션 범위는 서버가 정한다(이 화면이 보내는 값은 사용자가 고른 공급 상품·옵션·
+  // 구성 수량뿐이다). 이 블록의 외부 호출: 공급 상품 조회(사용자가 "옵션 조회"를 누를 때
+  // 1회), 쿠팡 옵션번호 확인(사용자가 확인창에서 동의한 뒤 상품 상세조회 GET 1회).
+  // ==================================================
+
+  function olT(key, params) {
+    return HomezI18n.t(`ol.${key}`, params);
+  }
+
+  function olStatePill(state) {
+    const map = {
+      ACTIVE: ["ok", "state.active"],
+      NEEDS_REVIEW: ["warn", "state.needs_review"],
+      DISABLED: ["neutral", "state.disabled"],
+      MISSING: ["neutral", "state.missing"],
+      NO_LINK: ["neutral", "state.no_link"],
+      IDENTIFIER_CONFLICT: ["danger", "state.identifier_conflict"],
+      UNAVAILABLE: ["neutral", "state.unavailable"],
+      STORE_UNRESOLVED: ["warn", "state.store_unresolved"],
+      NO_ORDER_ITEM: ["neutral", "state.no_order_item"],
+    };
+    const [cls, key] = map[state] || ["neutral", "state.no_link"];
+    return `<span class="pill ${cls}">${escapeHtml(olT(key))}</span>`;
+  }
+
+  function olIdsPill(state) {
+    if (state === "CONFIRMED") return `<span class="pill ok">${escapeHtml(olT("ids.confirmed"))}</span>`;
+    if (state === "UNCONFIRMED") return `<span class="pill warn">${escapeHtml(olT("ids.unconfirmed"))}</span>`;
+    return `<span class="pill neutral">—</span>`;
+  }
+
+  async function olLoadConnections(fixedConnectionId) {
+    // 화면에는 매입 계정 이름만 필요하다 — 조회 실패해도 저장 흐름 자체는 계속된다.
+    let list = [];
+    try {
+      list = await apiFetch("/purchase-tasks/channel-connections");
+    } catch (_err) {
+      list = [];
+    }
+    let usable = list.filter((c) => c.is_active && c.mall_code === "ONCHANNEL");
+    if (fixedConnectionId) {
+      usable = usable.filter((c) => c.id === fixedConnectionId);
+      if (!usable.length) {
+        usable = [{ id: fixedConnectionId, account_label: `#${fixedConnectionId}`, mall_code: "ONCHANNEL" }];
+      }
+    }
+    return usable;
+  }
+
+  function olPickerHtml(prefix, { connections, defaultUnits, saveLabelKey }) {
+    const connOptions = connections.map((c, i) => `
+      <option value="${c.id}" ${i === 0 ? "selected" : ""}>${escapeHtml(c.account_label)} (${escapeHtml(c.mall_code)})</option>`).join("");
+    return `
+      <div class="pt-cc-add-form ol-picker">
+        <label class="field"><span class="field-label">${escapeHtml(olT("form_conn_label"))}</span>
+          <select id="${prefix}-conn">${connOptions}</select></label>
+        <label class="field"><span class="field-label">${escapeHtml(olT("form_product_code"))}</span>
+          <input type="text" id="${prefix}-code" autocomplete="off"></label>
+        <button type="button" class="btn btn-ghost btn-sm" id="${prefix}-lookup-btn">${escapeHtml(olT("form_lookup_btn"))}</button>
+        <label class="field"><span class="field-label">${escapeHtml(olT("form_option_label"))}</span>
+          <select id="${prefix}-option" disabled><option value="">${escapeHtml(olT("form_option_placeholder"))}</option></select></label>
+        <label class="field"><span class="field-label">${escapeHtml(olT("form_units_label"))}</span>
+          <input type="number" min="1" step="1" value="${escapeHtml(String(defaultUnits || 1))}" id="${prefix}-units"></label>
+        <button type="button" class="btn btn-primary btn-sm" id="${prefix}-save-btn" disabled>${escapeHtml(olT(saveLabelKey))}</button>
+      </div>
+      <p class="field-hint" id="${prefix}-msg"></p>`;
+  }
+
+  // 조회 결과에서만 공급 옵션을 고르게 한다. 상품코드나 매입 계정이 바뀌면 이전 조회 결과는
+  // 즉시 무효화해 "다른 상품의 옵션을 고른 채 저장"하는 일을 막는다.
+  function olWirePicker(prefix, onSave) {
+    const connEl = el(`${prefix}-conn`);
+    const codeEl = el(`${prefix}-code`);
+    const optionEl = el(`${prefix}-option`);
+    const unitsEl = el(`${prefix}-units`);
+    const lookupBtn = el(`${prefix}-lookup-btn`);
+    const saveBtn = el(`${prefix}-save-btn`);
+    const msgEl = el(`${prefix}-msg`);
+    let looked = null;
+
+    const say = (text, isError) => {
+      msgEl.textContent = text || "";
+      msgEl.classList.toggle("field-error", Boolean(isError));
+    };
+    const invalidate = () => {
+      looked = null;
+      optionEl.innerHTML = `<option value="">${escapeHtml(olT("form_option_placeholder"))}</option>`;
+      optionEl.disabled = true;
+      saveBtn.disabled = true;
+    };
+    codeEl.addEventListener("input", invalidate);
+    connEl.addEventListener("change", invalidate);
+    optionEl.addEventListener("change", () => { saveBtn.disabled = !optionEl.value; });
+
+    lookupBtn.addEventListener("click", () => withButtonGuard(lookupBtn, async () => {
+      const code = codeEl.value.trim();
+      if (!code) { say(olT("lookup_needs_code"), true); return; }
+      invalidate();
+      say(HomezI18n.t("common.loading"), false);
+      try {
+        const product = await apiFetch(
+          `/purchase-tasks/channel-connections/${connEl.value}/products/${encodeURIComponent(code)}`,
+        );
+        if (!product.options.length) { say(olT("lookup_no_options"), true); return; }
+        looked = { code, options: product.options };
+        optionEl.innerHTML = `<option value="">${escapeHtml(olT("form_option_placeholder"))}</option>`
+          + product.options.map((o) => {
+            const price = o.price === null || o.price === undefined
+              ? HomezI18n.t("purchase_task.review_price_unknown") : fmtMoney(o.price);
+            const stock = o.in_stock === false
+              ? HomezI18n.t("purchase_task.review_out_of_stock")
+              : (o.in_stock === true ? HomezI18n.t("purchase_task.review_in_stock") : "—");
+            return `<option value="${escapeHtml(o.option_id)}">${escapeHtml(o.label)} (${escapeHtml(o.option_id)}) · ${escapeHtml(price)} · ${escapeHtml(stock)}</option>`;
+          }).join("");
+        optionEl.disabled = false;
+        say(product.title || "", false);
+      } catch (err) {
+        say(err.message || HomezI18n.t("common.error_network_failed"), true);
+      }
+    }));
+
+    saveBtn.addEventListener("click", () => withButtonGuard(saveBtn, async () => {
+      if (!looked || !optionEl.value) return;
+      const units = Number(unitsEl.value);
+      if (!Number.isInteger(units) || units < 1) { say(olT("units_invalid"), true); return; }
+      say("", false);
+      try {
+        await onSave({
+          connectionId: Number(connEl.value), code: looked.code,
+          optionId: optionEl.value, units,
+        });
+      } catch (err) {
+        say(err.message || HomezI18n.t("common.error_network_failed"), true);
+      }
+    }));
+    return { say };
+  }
+
+  // ---------------- 매입 검토 화면(주문 단위) ----------------
+
+  async function olLoadTaskPanel(task) {
+    const panel = el("pt-link-panel");
+    if (!panel) return;
+    panel.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+    let info;
+    try {
+      info = await apiFetch(`/purchase-tasks/${task.id}/supplier-option-link`);
+    } catch (err) {
+      panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || "")}</p>`;
+      return;
+    }
+    await olRenderTaskPanel(panel, task, info);
+  }
+
+  async function olRenderTaskPanel(panel, task, info) {
+    const state = info.state;
+    const foundBy = { SKU: "found_by_sku", VENDOR_ITEM_ID: "found_by_vendor", BOTH: "found_by_both" }[info.linked_by];
+    const skuLess = info.seller_sku_state === "ABSENT_OR_SAME";
+    const canSave = ["NO_LINK", "NEEDS_REVIEW", "DISABLED", "ACTIVE"].includes(state)
+      && !(state === "NO_LINK" && skuLess);
+    const hasLink = Boolean(info.link_id);
+    const detailIsError = ["IDENTIFIER_CONFLICT", "NEEDS_REVIEW"].includes(state);
+
+    panel.innerHTML = `
+      <div class="detail-panel">
+        <h3>${escapeHtml(olT("title"))}</h3>
+        <p class="field-hint">${escapeHtml(olT("intro_task"))}</p>
+        <dl class="detail-grid">
+          <dt>${escapeHtml(olT("col_sales_option"))}</dt>
+          <dd>${skuLess
+            ? escapeHtml(olT("no_seller_sku"))
+            : escapeHtml(info.channel_sku || "—")}${info.order_vendor_item_id
+            ? ` <span class="field-hint">(${escapeHtml(olT("order_option_number"))} ${escapeHtml(info.order_vendor_item_id)})</span>` : ""}</dd>
+          <dt>${escapeHtml(olT("col_state"))}</dt>
+          <dd>${olStatePill(state)}${foundBy ? ` <span class="field-hint">${escapeHtml(olT(foundBy))}</span>` : ""}</dd>
+          ${hasLink ? `
+            <dt>${escapeHtml(olT("col_supplier"))}</dt>
+            <dd>${escapeHtml(info.expected_product_code || "—")} / ${escapeHtml(
+              (info.expected_options[0] && info.expected_options[0].id) || "—")}${info.supplier_option_name
+              ? ` — ${escapeHtml(info.supplier_option_name)}` : ""}</dd>
+            <dt>${escapeHtml(olT("col_units"))}</dt>
+            <dd>${escapeHtml(String(info.units_per_sale ?? "—"))}</dd>
+            <dt>${escapeHtml(olT("col_ids"))}</dt>
+            <dd>${olIdsPill(info.coupang_ids_confirmed ? "CONFIRMED" : "UNCONFIRMED")}</dd>` : ""}
+        </dl>
+        ${info.detail ? `<p class="${detailIsError ? "field-error" : "field-hint"}">${escapeHtml(info.detail)}</p>` : ""}
+        ${state === "ACTIVE" ? `<p class="field-hint">${escapeHtml(olT("prefilled_note"))}</p>` : ""}
+        <div class="ol-actions">
+          ${canSave ? `<button type="button" class="btn btn-secondary btn-sm" id="ol-task-form-toggle">${escapeHtml(olT(hasLink ? "form_change_btn" : "form_create_btn"))}</button>` : ""}
+          ${hasLink && state !== "DISABLED" ? `<button type="button" class="btn btn-ghost btn-sm" id="ol-task-disable-btn">${escapeHtml(olT("disable_btn"))}</button>` : ""}
+        </div>
+        <div id="ol-task-form" style="display:${canSave && !hasLink ? "block" : "none"}"></div>
+      </div>`;
+
+    // 저장된 연결이 있으면 아래 검토 입력칸을 미리 채운다(비어 있을 때만 — 사용자가 직접 입력한 값은 덮어쓰지 않는다).
+    if (state === "ACTIVE" && info.expected_options.length) {
+      const codeEl = el("pt-review-product-code");
+      const optionEl = el("pt-review-option-id");
+      const qtyEl = el("pt-review-qty");
+      if (codeEl && !codeEl.value) codeEl.value = info.expected_product_code || "";
+      if (optionEl && !optionEl.value) optionEl.value = info.expected_options[0].id;
+      if (qtyEl) qtyEl.value = String(info.expected_options[0].qty);
+    }
+
+    const formEl = el("ol-task-form");
+    let formReady = false;
+    const openForm = async () => {
+      formEl.style.display = "block";
+      if (formReady) return;
+      formReady = true;
+      const connections = await olLoadConnections(task.channel_connection_id);
+      formEl.innerHTML = olPickerHtml("ol-task", {
+        connections, defaultUnits: info.units_per_sale || 1,
+        saveLabelKey: "form_save_btn",
+      });
+      olWirePicker("ol-task", async (v) => {
+        let replace = false;
+        if (state === "ACTIVE") {
+          if (!window.confirm(olT("replace_confirm"))) return;
+          replace = true;
+        }
+        await apiFetch(`/purchase-tasks/${task.id}/supplier-option-link`, {
+          method: "PUT",
+          body: JSON.stringify({
+            supplier_product_code: v.code, supplier_option_id: v.optionId,
+            units_per_sale: v.units, replace,
+          }),
+        });
+        toast(olT("saved_toast"), "success");
+        await olLoadTaskPanel(task);
+      });
+    };
+    if (formEl.style.display === "block") await openForm();
+    const toggle = el("ol-task-form-toggle");
+    if (toggle) toggle.addEventListener("click", () => openForm());
+
+    const disableBtn = el("ol-task-disable-btn");
+    if (disableBtn) {
+      disableBtn.addEventListener("click", () => withButtonGuard(disableBtn, async () => {
+        if (!window.confirm(olT("disable_confirm"))) return;
+        try {
+          await apiFetch(`/supplier-option-links/${info.link_id}/disable`, {
+            method: "POST", body: JSON.stringify({ reason: olT("disable_reason") }),
+          });
+          toast(olT("disabled_toast"), "success");
+          await olLoadTaskPanel(task);
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    }
+  }
+
+  // ---------------- 상품 준비 화면(등록 제출 단위) ----------------
+
+  function olSyncOutcomeText(outcome) {
+    return olT(`sync_outcome.${String(outcome).toLowerCase()}`);
+  }
+
+  async function olLoadWizardPanel(panel, submissionId, knownView) {
+    let view = knownView;
+    if (!view) {
+      panel.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        view = await apiFetch(`/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/option-links`);
+      } catch (err) {
+        panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || "")}</p>`;
+        return;
+      }
+    }
+    olRenderWizardPanel(panel, submissionId, view);
+  }
+
+  function olRenderWizardPanel(panel, submissionId, view, syncMessage) {
+    const r = view.readiness;
+    const reasonKey = r.reason ? `wiz_reason.${r.reason.toLowerCase()}` : null;
+    const rows = view.options.map((o, i) => {
+      const conflicted = o.link_state === "NEEDS_REVIEW" && (o.status_reason || "").includes("식별자");
+      return `
+        <tr>
+          <td data-label="${escapeHtml(olT("col_sales_option"))}">${escapeHtml(o.sku)}<div class="field-hint">${escapeHtml(o.item_name || "")}${
+            o.sale_price === null || o.sale_price === undefined ? "" : ` · ${escapeHtml(fmtMoney(o.sale_price))}`}</div></td>
+          <td data-label="${escapeHtml(olT("col_supplier"))}">${o.link_id
+            ? `${escapeHtml(o.supplier_product_code)} / ${escapeHtml(o.supplier_option_id)}${o.supplier_option_name ? `<div class="field-hint">${escapeHtml(o.supplier_option_name)}</div>` : ""}`
+            : "—"}</td>
+          <td data-label="${escapeHtml(olT("col_units"))}">${o.units_per_sale ?? "—"}</td>
+          <td data-label="${escapeHtml(olT("col_state"))}">${olStatePill(o.link_state)}${o.status_reason
+            ? `<div class="field-hint">${escapeHtml(o.status_reason)}</div>` : ""}</td>
+          <td data-label="${escapeHtml(olT("col_ids"))}">${olIdsPill(o.ids_state)}</td>
+          <td data-label="${escapeHtml(olT("col_action"))}">
+            <button type="button" class="btn btn-secondary btn-sm ol-w-connect-btn" data-index="${i}">${escapeHtml(olT(o.link_id ? "form_change_btn" : "form_create_btn"))}</button>
+            ${o.link_id && o.link_state !== "DISABLED" ? `<button type="button" class="btn btn-ghost btn-sm ol-w-disable-btn" data-index="${i}">${escapeHtml(olT("disable_btn"))}</button>` : ""}
+            ${conflicted ? `<button type="button" class="btn btn-ghost btn-sm ol-w-clear-btn" data-index="${i}">${escapeHtml(olT("clear_ids_btn"))}</button>` : ""}
+          </td>
+        </tr>`;
+    }).join("");
+
+    panel.innerHTML = `
+      <div class="detail-panel">
+        <h3>${escapeHtml(olT("title"))}</h3>
+        <p>${r.all_ready
+          ? `<span class="pill ok">${escapeHtml(olT("wiz_ready"))}</span>`
+          : `<span class="pill warn">${escapeHtml(olT("wiz_not_ready"))}</span> <span class="field-hint">${escapeHtml(reasonKey ? olT(reasonKey) : "")}</span>`}</p>
+        ${view.scope.confirmed ? `<p class="field-hint">${escapeHtml(olT("wiz_selected_summary", { count: view.options.length }))}${
+          view.seller_product_id ? ` · ${escapeHtml(olT("wiz_seller_product"))} ${escapeHtml(view.seller_product_id)}` : ""}</p>`
+          : `<p class="field-error">${escapeHtml(olT("wiz_scope_unconfirmed"))} (${escapeHtml(view.scope.reason || "")})</p>`}
+        <div class="table-wrap"><table class="responsive-cards">
+          <thead><tr>
+            <th>${escapeHtml(olT("col_sales_option"))}</th><th>${escapeHtml(olT("col_supplier"))}</th>
+            <th>${escapeHtml(olT("col_units"))}</th><th>${escapeHtml(olT("col_state"))}</th>
+            <th>${escapeHtml(olT("col_ids"))}</th><th>${escapeHtml(olT("col_action"))}</th>
+          </tr></thead>
+          <tbody>${rows || `<tr><td colspan="6">—</td></tr>`}</tbody>
+        </table></div>
+        <div class="ol-actions">
+          ${view.registered ? `<button type="button" class="btn btn-primary btn-sm" id="ol-w-sync-btn-${submissionId}">${escapeHtml(olT("wiz_sync_btn"))}</button>` : ""}
+        </div>
+        <p class="field-hint ol-w-sync-message" id="ol-w-sync-msg-${submissionId}">${escapeHtml(syncMessage || "")}</p>
+        <div id="ol-w-form-${submissionId}"></div>
+      </div>`;
+
+    const reload = async (nextView, message) => {
+      const fresh = nextView || await apiFetch(
+        `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/option-links`,
+      );
+      olRenderWizardPanel(panel, submissionId, fresh, message);
+    };
+
+    const syncBtn = el(`ol-w-sync-btn-${submissionId}`);
+    if (syncBtn) {
+      syncBtn.addEventListener("click", () => withButtonGuard(syncBtn, async () => {
+        if (!window.confirm(olT("wiz_sync_confirm"))) return;
+        try {
+          const result = await apiFetch(
+            `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/option-links/sync-identifiers`,
+            { method: "POST" },
+          );
+          let message;
+          if (result.state === "UNVERIFIED") {
+            message = `${olT("wiz_sync_unverified")} ${result.detail || ""}`;
+          } else if (result.state === "AMBIGUOUS_RESPONSE") {
+            message = `${olT("wiz_sync_ambiguous")} ${result.detail || ""}`;
+          } else {
+            message = Object.entries(result.attach.outcomes)
+              .map(([sku, outcome]) => `${sku}: ${olSyncOutcomeText(outcome)}`).join(" · ");
+          }
+          await reload(result.view, message);
+        } catch (err) {
+          el(`ol-w-sync-msg-${submissionId}`).textContent = err.message || "";
+          el(`ol-w-sync-msg-${submissionId}`).classList.add("field-error");
+        }
+      }));
+    }
+
+    panel.querySelectorAll(".ol-w-connect-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const option = view.options[Number(btn.dataset.index)];
+        const formEl = el(`ol-w-form-${submissionId}`);
+        const connections = await olLoadConnections(null);
+        formEl.innerHTML = `<h4>${escapeHtml(option.sku)}${option.item_name ? ` — ${escapeHtml(option.item_name)}` : ""}</h4>`
+          + olPickerHtml(`ol-w-${submissionId}`, {
+            connections, defaultUnits: option.units_per_sale || 1, saveLabelKey: "form_save_btn",
+          });
+        olWirePicker(`ol-w-${submissionId}`, async (v) => {
+          const changing = Boolean(option.link_id) && option.link_state === "ACTIVE";
+          if (changing && !window.confirm(olT("replace_confirm"))) return;
+          const fresh = await apiFetch(
+            `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/option-links`,
+            {
+              method: "PUT",
+              body: JSON.stringify({
+                channel_sku: option.sku, purchase_connection_id: v.connectionId,
+                supplier_product_code: v.code, supplier_option_id: v.optionId,
+                units_per_sale: v.units, replace: changing,
+              }),
+            },
+          );
+          toast(olT("saved_toast"), "success");
+          await reload(fresh);
+        });
+      });
+    });
+
+    panel.querySelectorAll(".ol-w-disable-btn").forEach((btn) => {
+      btn.addEventListener("click", () => withButtonGuard(btn, async () => {
+        const option = view.options[Number(btn.dataset.index)];
+        if (!window.confirm(olT("disable_confirm"))) return;
+        try {
+          await apiFetch(`/supplier-option-links/${option.link_id}/disable`, {
+            method: "POST", body: JSON.stringify({ reason: olT("disable_reason") }),
+          });
+          toast(olT("disabled_toast"), "success");
+          await reload();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    });
+
+    panel.querySelectorAll(".ol-w-clear-btn").forEach((btn) => {
+      btn.addEventListener("click", () => withButtonGuard(btn, async () => {
+        const option = view.options[Number(btn.dataset.index)];
+        if (!window.confirm(olT("clear_confirm"))) return;
+        try {
+          await apiFetch(`/supplier-option-links/${option.link_id}/clear-coupang-identifiers`, {
+            method: "POST", body: JSON.stringify({ reason: olT("clear_reason") }),
+          });
+          toast(olT("cleared_toast"), "success");
+          await reload();
+        } catch (err) {
+          toast(err.message || "", "error");
+        }
+      }));
+    });
+  }
+
   async function lwRenderResultsStep(content) {
     content.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
     lwSaveCurrentStep = null;
@@ -12679,6 +13106,8 @@
                 : ""}${c.status === "SUBMITTED" && c.submission_id
                 ? `<button class="btn btn-secondary btn-sm lw-live-status-btn"
                      data-submission-id="${c.submission_id}">${HomezI18n.t("lw.live_status_check_btn")}</button>
+                   <button class="btn btn-secondary btn-sm lw-optlink-toggle-btn"
+                     data-submission-id="${c.submission_id}">${escapeHtml(olT("wiz_toggle_btn"))}</button>
                    <div class="field-hint lw-live-status-message" data-submission-id="${c.submission_id}"></div>`
                 : ""}${
                 (c.status === "PENDING" || c.status === "SUBMITTING" || c.status === "UNKNOWN") && c.submission_id
@@ -12688,6 +13117,10 @@
             </tr>`).join("")}</tbody>
           </table>
         </div>
+        <div class="lw-optlink-panels">${results.channels
+          .filter((c) => c.status === "SUBMITTED" && c.submission_id)
+          .map((c) => `<div class="lw-optlink-panel" data-submission-id="${c.submission_id}" style="display:none"></div>`)
+          .join("")}</div>
         ${results.status === "PARTIALLY_SUCCEEDED" || results.status === "FAILED"
           ? `<button class="btn btn-primary" id="lw-retry-failed-btn">${HomezI18n.t("lw.results_retry_btn")}</button>`
           : ""}
@@ -12797,6 +13230,23 @@
             message.classList.add("field-error");
           }
         }));
+      });
+
+      // 2026-09-21 옵션 연결 — 등록된 제출 한 건의 옵션별 공급처 연결·쿠팡 옵션번호 보기.
+      // 처음 펼칠 때만 서버에서 읽는다(읽기 전용, 외부 호출 없음).
+      content.querySelectorAll(".lw-optlink-toggle-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          const submissionId = button.dataset.submissionId;
+          const panel = content.querySelector(
+            `.lw-optlink-panel[data-submission-id="${submissionId}"]`,
+          );
+          const open = panel.style.display === "none";
+          panel.style.display = open ? "block" : "none";
+          if (open && !panel.dataset.loaded) {
+            panel.dataset.loaded = "1";
+            olLoadWizardPanel(panel, submissionId);
+          }
+        });
       });
 
       // 2026-08-31 V7 필수 작업 2번(제출 장부 정합화) — 아래 세 버튼은

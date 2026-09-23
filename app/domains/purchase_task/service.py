@@ -1915,6 +1915,21 @@ class PurchaseTaskService:
             product_detail = str(exc)
             blocked_reasons.append(f"온채널 상품 조회 실패: {exc}")
 
+        # 2026-09-21 옵션 연결 — 저장된 판매 옵션↔공급 옵션 연결이 있으면 그
+        # 연결로 이 요청을 검증한다(없으면 기존 수동 입력 경로 그대로). 연결은
+        # 발주 승인이 아니다 — 가격·재고·배송비·한도·최종 승인은 아래에서
+        # 기존대로 확인한다.
+        from app.domains.purchase_task.supplier_option_link_service import (
+            SupplierOptionLinkService,
+        )
+
+        link_evaluation = SupplierOptionLinkService(self.db).evaluate_review(
+            task, requested_product_code=external_product_id,
+            requested_options=options, product_options=product_options,
+            product_lookup_ok=(product_support == "SUPPORTED"),
+        )
+        blocked_reasons.extend(link_evaluation.blocked_reasons)
+
         selected_by_id = {opt["id"]: opt["qty"] for opt in options}
         selected_option_details = [
             opt for opt in product_options if opt.option_id in selected_by_id
@@ -1939,8 +1954,16 @@ class PurchaseTaskService:
 
         source_quantity = order_item.quantity if order_item is not None else task.quantity
         selected_quantity_total = sum(selected_by_id.values()) if selected_by_id else 0
+        # 연결이 ACTIVE면 기대 공급 수량은 판매 수량 × 구성 수량이다(판매 1세트 =
+        # 공급 낱개 N개). 연결이 없으면 기존처럼 판매 수량과 직접 비교한다.
+        expected_supplier_quantity = source_quantity
+        if link_evaluation.state == "ACTIVE" and link_evaluation.expected_options:
+            expected_supplier_quantity = sum(
+                o["qty"] for o in link_evaluation.expected_options
+            )
         quantity_mismatch = (
-            source_quantity is not None and selected_quantity_total != source_quantity
+            expected_supplier_quantity is not None
+            and selected_quantity_total != expected_supplier_quantity
         )
         title_mismatch = bool(
             product_title and task.product_title
@@ -1948,7 +1971,8 @@ class PurchaseTaskService:
         )
         if quantity_mismatch:
             blocked_reasons.append(
-                f"원본 주문 수량({source_quantity})과 선택한 옵션 합계 수량"
+                f"원본 주문 수량({source_quantity})에 대응하는 기대 공급 수량"
+                f"({expected_supplier_quantity})과 선택한 옵션 합계 수량"
                 f"({selected_quantity_total})이 다릅니다 — 확인이 필요합니다.",
             )
 
@@ -2089,6 +2113,14 @@ class PurchaseTaskService:
 
         return {
             "task_id": task.id,
+            "supplier_link": {
+                "state": link_evaluation.state,
+                "detail": link_evaluation.detail,
+                "link_id": link_evaluation.link_id,
+                "expected_product_code": link_evaluation.expected_product_code,
+                "expected_options": link_evaluation.expected_options,
+                "units_per_sale": link_evaluation.units_per_sale,
+            },
             "source_order_id": order.id,
             "source_product_title": task.product_title,
             "source_order_quantity": source_quantity,

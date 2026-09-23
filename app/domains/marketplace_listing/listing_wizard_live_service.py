@@ -83,6 +83,11 @@ class ListingWizardLiveService:
             raise BadRequestException("제출 판매방식 정보가 일치하지 않습니다.")
         return wizard, submission, listing, selection
 
+    def submission_context(self, wizard_id: int, submission_id: int, company_id: int):
+        """옵션 연결처럼 다른 서비스가 같은 소유권 검증을 재사용하도록 여는 진입점."""
+
+        return self._context(wizard_id, submission_id, company_id)
+
     def _build(self, wizard, submission, selection) -> tuple[dict | None, list[str]]:
         entries = json.loads(wizard.channel_selections_json or "[]")
         entry = next((x for x in entries if x.get("marketplace_account_id") == submission.marketplace_account_id), None)

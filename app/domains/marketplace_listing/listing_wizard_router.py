@@ -38,6 +38,8 @@ from fastapi import Depends
 from fastapi import Header
 from fastapi import Query
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
@@ -1345,6 +1347,95 @@ def live_submission_status(
     provider = _coupang_live_product_provider(db, current_user.company_id)
     return service.check_status(
         wizard_id, submission_id, current_user.company_id, provider,
+    )
+
+
+# --------------------------------------------------
+# 옵션 연결 — 2026-09-21. 등록 제출 한 건의 "판매하기로 선택한 전체 옵션"을 서버가
+# 확정해 옵션별 공급처 연결·쿠팡 옵션번호 상태를 보여 주고, 연결을 저장하고, 등록
+# 결과 상세조회로 쿠팡 옵션번호를 부착한다. 외부 호출은 sync-identifiers의 상품
+# 상세조회 GET 1회뿐이다(등록 API는 절대 호출하지 않는다).
+# --------------------------------------------------
+
+
+class WizardOptionLinkSaveRequest(BaseModel):
+    channel_sku: str = Field(min_length=1, max_length=150)
+    purchase_connection_id: int
+    supplier_product_code: str = Field(min_length=1, max_length=50)
+    supplier_option_id: str = Field(min_length=1, max_length=50)
+    units_per_sale: int = Field(default=1, ge=1)
+    replace: bool = False
+
+
+@router.get("/{wizard_id}/submissions/{submission_id}/option-links")
+def get_submission_option_links(
+    wizard_id: int,
+    submission_id: int,
+    current_user: User = Depends(
+        ListingWizardPermissionGuard(LISTING_WIZARD_VIEW),
+    ),
+    db: Session = Depends(get_db),
+):
+    """읽기 전용(외부 호출 없음) — 이 등록에서 선택한 옵션별 연결·쿠팡 옵션번호 상태와
+    서버가 확정한 범위 기준의 준비 판정."""
+
+    from app.domains.marketplace_listing.listing_wizard_option_link_service import (
+        ListingWizardOptionLinkService,
+    )
+
+    return ListingWizardOptionLinkService(db).view(
+        wizard_id, submission_id, current_user.company_id,
+    )
+
+
+@router.put("/{wizard_id}/submissions/{submission_id}/option-links")
+def save_submission_option_link(
+    wizard_id: int,
+    submission_id: int,
+    data: WizardOptionLinkSaveRequest,
+    current_user: User = Depends(
+        ListingWizardPermissionGuard(LISTING_WIZARD_SUBMIT),
+    ),
+    db: Session = Depends(get_db),
+):
+    """판매 옵션 하나에 공급 상품·옵션을 연결해 저장한다(판매 계정·옵션 범위는 서버가
+    정한다). 저장 전에 그 매입 계정으로 공급 상품을 실조회해 옵션ID 소속을 확인한다."""
+
+    from app.domains.marketplace_listing.listing_wizard_option_link_service import (
+        ListingWizardOptionLinkService,
+    )
+
+    return ListingWizardOptionLinkService(db).save_option_link(
+        wizard_id, submission_id, current_user.company_id,
+        channel_sku=data.channel_sku,
+        purchase_connection_id=data.purchase_connection_id,
+        supplier_product_code=data.supplier_product_code,
+        supplier_option_id=data.supplier_option_id, units=data.units_per_sale,
+        replace=data.replace, actor_user_id=current_user.id,
+    )
+
+
+@router.post("/{wizard_id}/submissions/{submission_id}/option-links/sync-identifiers")
+def sync_submission_option_identifiers(
+    wizard_id: int,
+    submission_id: int,
+    current_user: User = Depends(
+        ListingWizardPermissionGuard(LISTING_WIZARD_SUBMIT),
+    ),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 상품 상세조회 GET 1회(읽기 전용)로 등록된 옵션별 쿠팡 옵션번호를 확인해
+    판매 옵션 연결에 부착한다. 등록 API는 호출하지 않으며 결과를 확인하지 못하면
+    아무것도 저장하지 않는다."""
+
+    from app.domains.marketplace_listing.listing_wizard_option_link_service import (
+        ListingWizardOptionLinkService,
+    )
+
+    provider = _coupang_live_product_provider(db, current_user.company_id)
+    return ListingWizardOptionLinkService(db).sync_identifiers(
+        wizard_id, submission_id, current_user.company_id, provider,
+        actor_user_id=current_user.id,
     )
 
 

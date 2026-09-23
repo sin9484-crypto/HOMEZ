@@ -298,6 +298,21 @@ class PurchaseOrderApprovalService:
 
         blocked_reasons: list[str] = []
 
+        # 2026-09-21 옵션 연결 — 저장된 판매 옵션↔공급 옵션 연결이 있으면 화면이
+        # 보낸 상품·옵션·수량을 서버에서 다시 대조한다(연결이 없거나 저장소가
+        # 없으면 기존 수동 경로 그대로). 승인 뒤에는 이 스냅샷이 동결되므로 연결을
+        # 나중에 고쳐도 이미 승인·발주된 건은 바뀌지 않는다.
+        from app.domains.purchase_task.supplier_option_link_service import (
+            SupplierOptionLinkService,
+        )
+
+        link_reason = SupplierOptionLinkService(self.db).approval_block_reason(
+            task, connection_id=connection_id, product_code=approval.product_code,
+            options=options,
+        )
+        if link_reason:
+            blocked_reasons.append(link_reason)
+
         policy = PurchaseTaskPolicyService(self.db)
         setting = policy.get_or_create_default_settings(company_id)
 

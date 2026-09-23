@@ -577,6 +577,37 @@ class OrderSubmissionReviewApprovalResponse(BaseModel):
     matches_current_price: bool
 
 
+class SupplierLinkReviewResponse(BaseModel):
+    """2026-09-21 옵션 연결 — 이 작업의 판매 옵션에 저장된 공급처 옵션 연결
+    상태. state: ACTIVE / NEEDS_REVIEW / DISABLED / NO_LINK / UNAVAILABLE /
+    STORE_UNRESOLVED / NO_ORDER_ITEM. 연결은 발주·결제 승인이 아니다."""
+
+    state: str
+    detail: str
+    link_id: Optional[int] = None
+    expected_product_code: Optional[str] = None
+    expected_options: list[OrderSubmissionReviewOptionInput] = []
+    units_per_sale: Optional[int] = None
+    # 식별자 경로(판매자 SKU / 쿠팡 옵션번호) — 화면이 어느 근거로 찾았는지 보여 준다.
+    channel_sku: Optional[str] = None
+    order_vendor_item_id: Optional[str] = None
+    seller_sku_state: Optional[str] = None
+    linked_by: Optional[str] = None
+    supplier_option_name: Optional[str] = None
+    status_reason: Optional[str] = None
+    coupang_ids_confirmed: Optional[bool] = None
+
+
+class SaveTaskSupplierLinkRequest(BaseModel):
+    """이 작업의 판매 옵션에 공급처 옵션을 연결한다. 판매 계정·판매자 SKU·매입 계정은
+    서버가 작업에서 정하므로 받지 않는다."""
+
+    supplier_product_code: str = Field(min_length=1, max_length=50)
+    supplier_option_id: str = Field(min_length=1, max_length=50)
+    units_per_sale: int = Field(default=1, ge=1)
+    replace: bool = False
+
+
 class OrderSubmissionReviewResponse(BaseModel):
     """읽기 전용 검토 결과 — 이 응답을 만드는 과정에서 실제 발주
     API는 절대 호출되지 않는다(온채널 상품 조회만 실제 호출). 실제
@@ -585,6 +616,7 @@ class OrderSubmissionReviewResponse(BaseModel):
     submission=True를 명시적으로 받아야만 동작한다."""
 
     task_id: int
+    supplier_link: Optional[SupplierLinkReviewResponse] = None
     source_order_id: int
     source_product_title: str
     source_order_quantity: Optional[int]

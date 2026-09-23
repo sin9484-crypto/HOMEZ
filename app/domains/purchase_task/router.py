@@ -60,6 +60,8 @@ from app.domains.purchase_task.schema import SupplierIncidentAutoPauseSettingRes
 from app.domains.purchase_task.schema import SupplierIncidentRecordRequest
 from app.domains.purchase_task.schema import SupplierIncidentResponse
 from app.domains.purchase_task.schema import MemberPointCheckResponse
+from app.domains.purchase_task.schema import SaveTaskSupplierLinkRequest
+from app.domains.purchase_task.schema import SupplierLinkReviewResponse
 from app.domains.purchase_task.schema import OrderLookupResponse
 from app.domains.purchase_task.schema import TrackingLookupResponse
 from app.domains.purchase_task.schema import OrderSubmissionReviewRequest
@@ -1015,6 +1017,55 @@ def assign_channel_connection(
         task_id, current_user.company_id, data.connection_id,
         triggered_by=current_user.id,
     )
+
+
+@router.get(
+    "/{task_id}/supplier-option-link", response_model=SupplierLinkReviewResponse,
+)
+def get_task_supplier_option_link(
+    task_id: int,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-21 옵션 연결 — 이 작업의 쿠팡 판매 옵션에 저장된 공급처 옵션
+    연결과 그에 따른 기대 발주 구성(판매 수량 × 구성 수량)을 읽기 전용으로
+    보여준다. 화면이 검토 입력값을 미리 채우는 데 쓴다 — 발주·승인이 아니다."""
+
+    from app.domains.purchase_task.supplier_option_link_service import (
+        SupplierOptionLinkService,
+        resolution_to_dict,
+    )
+
+    task = PurchaseTaskService(db).get_task(task_id, current_user.company_id)
+    return resolution_to_dict(SupplierOptionLinkService(db).resolve_for_task(task))
+
+
+@router.put(
+    "/{task_id}/supplier-option-link", response_model=SupplierLinkReviewResponse,
+)
+def save_task_supplier_option_link(
+    task_id: int,
+    data: SaveTaskSupplierLinkRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-21 옵션 연결 — 사용자가 이 작업의 판매 옵션에 대응하는 공급 상품·옵션을
+    확인해 저장한다. 판매 계정·판매자 SKU는 서버가 이 작업의 주문 품목에서 정하고
+    매입 계정은 작업에 배정된 계정만 쓴다. 저장 전에 그 계정으로 공급 상품을 실조회해
+    옵션ID가 그 상품에 속하는지 확인한다. 이것은 발주·결제 승인이 아니다."""
+
+    from app.domains.purchase_task.supplier_option_link_service import (
+        SupplierOptionLinkService,
+        resolution_to_dict,
+    )
+
+    task = PurchaseTaskService(db).get_task(task_id, current_user.company_id)
+    _link, resolution = SupplierOptionLinkService(db).save_link_for_task(
+        task, supplier_product_code=data.supplier_product_code,
+        supplier_option_id=data.supplier_option_id, units=data.units_per_sale,
+        confirmed_by=current_user.id, replace=data.replace,
+    )
+    return resolution_to_dict(resolution)
 
 
 @router.post(
