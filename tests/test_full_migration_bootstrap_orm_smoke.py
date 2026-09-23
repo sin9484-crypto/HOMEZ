@@ -33,6 +33,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.bootstrap import bootstrap_environment
 from app.domains.company.model import Company
 from app.domains.purchase_task.channel_connection_service import (
@@ -98,13 +99,21 @@ class FullMigrationBootstrapOrmSmokeTestCase(unittest.TestCase):
     def test_list_channel_connections_does_not_raise_operational_error(self):
         """오늘 실제로 "no such table"을 냈던 정확한 그 호출 경로."""
 
-        service = PurchaseChannelConnectionService(self.db)
+        # 2026-09-23 격리 — credential_store를 안 넘기면 생성자가 실제
+        # WindowsCredentialStore로 기본 동작한다(운영 코드의 의도된 기본값).
+        # 이 테스트는 자격증명을 전혀 안 쓰지만, 잠재적 실제 자원 접근을
+        # 미연에 막기 위해 다른 테스트 파일들과 같은 방식으로 격리한다.
+        service = PurchaseChannelConnectionService(
+            self.db, credential_store=InMemoryCredentialStore(),
+        )
         result = service.list_connections(self.company_id)
         self.assertEqual(result, [])
 
     def test_channel_connection_full_lifecycle_on_freshly_migrated_db(self):
 
-        service = PurchaseChannelConnectionService(self.db)
+        service = PurchaseChannelConnectionService(
+            self.db, credential_store=InMemoryCredentialStore(),
+        )
         connection = service.create_connection(
             self.company_id, mall_code="NAVER_SHOPPING", account_label="스모크 계정",
         )

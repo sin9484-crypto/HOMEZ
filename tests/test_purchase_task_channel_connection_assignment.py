@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
+from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.domains.automation_safety.model import AutomationModeState
 from app.domains.automation_safety.model import EmergencyStop
@@ -140,7 +141,13 @@ class ChannelConnectionAssignmentTestCase(unittest.TestCase):
         self.db.commit()
 
         self.service = PurchaseTaskService(self.db)
-        self.connection_service = PurchaseChannelConnectionService(self.db)
+        # 2026-09-23 격리 — credential_store를 안 넘기면 생성자가 실제
+        # WindowsCredentialStore로 기본 동작한다(운영 코드의 의도된 기본값).
+        # 이 파일의 테스트는 자격증명을 전혀 안 쓰지만, 잠재적 실제 자원
+        # 접근을 미연에 막기 위해 다른 테스트 파일들과 같은 방식으로 격리한다.
+        self.connection_service = PurchaseChannelConnectionService(
+            self.db, credential_store=InMemoryCredentialStore(),
+        )
 
     def tearDown(self):
 
