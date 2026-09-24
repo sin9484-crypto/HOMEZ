@@ -372,7 +372,7 @@ D3 실거래 준비 완료 판정에는 이 연결이 실제 저장소에 채택
 | `store_connections` | id=1, `COUPANG`, `CONNECTED` |
 | `marketplace_channels` | 3행(2026-09-14 seed 그대로) |
 | `marketplace_submissions` | 0행 — Listing Wizard가 실제 등록 제출까지 간 적이 없다는 뜻과 일치 |
-| `purchase_channel_connections` | id=4, `ONCHANNEL`, 계정 `sin945`, `CONNECTED`, 마지막 확인 2026-09-08 |
+| `purchase_channel_connections` | id=4, `ONCHANNEL`, 계정 `sin9**`, `CONNECTED`, 마지막 확인 2026-09-08 |
 
 ### 10-5. 판매신청(발주 전제조건) 게이트 — 정밀 확인 결과 "미충족"(코드 기준)
 

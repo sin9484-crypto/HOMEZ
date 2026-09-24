@@ -29,7 +29,7 @@
   `1a8c65c95d24ca36cfd4f59b5553fbd42bd33ce7491a09c1c3a5a4df72b5821a` /
   `3e114a08feb2c715958ed6e429771ca8b0b7305a84193202b95c8287d5a2d081`) —
   차이 없으므로 적용을 진행하지 않았다(승인 없음).
-- **B 재확인**: `company_id=1`, `connection_id=4`(ONCHANNEL, `sin945`,
+- **B 재확인**: `company_id=1`, `connection_id=4`(ONCHANNEL, `sin9**`,
   `status=CONNECTED`), `product_code=CH1147184` — 전부 재확인, 변경
   없음. `purchase_sales_application_attempts`에 CH1147184 행 **0건**(재확인)
   — 기록하지 않았다(승인 없음).

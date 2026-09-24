@@ -62,7 +62,7 @@ run_comparison()`도 실행해 `product_attribute_comparison_runs`에 비교
 
 | 항목 | 값 |
 |---|---|
-| 대상 | `company_id=1`, `connection_id=4`(ONCHANNEL, `sin945`, 재확인) |
+| 대상 | `company_id=1`, `connection_id=4`(ONCHANNEL, `sin9**`, 재확인) |
 | 방법 | `PurchaseSalesApplicationService.record_unconfirmed_prior_evidence()`(검증된 서비스 경로, 실 DB에 대해 실행) |
 | 결과 | 신규 행 id=1, `status=NEEDS_REVIEW` |
 | 사건 발생 추정 시각 | 2026-09-14(과거 접수 근거 시각, 기존 감사 문서 근거) |

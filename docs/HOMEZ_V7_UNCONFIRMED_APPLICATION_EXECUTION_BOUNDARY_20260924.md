@@ -158,7 +158,7 @@ prior_evidence()`로 NEEDS_REVIEW 기록)은 사람이 해야 한다. 이 둘을
 
 | 항목 | 값 |
 |---|---|
-| 대상 | `connection_id=4`(ONCHANNEL, `sin945`), `company_id=1`, `product_code=CH1147184` |
+| 대상 | `connection_id=4`(ONCHANNEL, `sin9**`), `company_id=1`, `product_code=CH1147184` |
 | 근거 | `docs/HOMEZ_V7_AUTO_REAPPLICATION_SAFETY_20260923.md` §4-1(2026-09-14 `POST /openapi/seller/product/apply` HTTP 200, 감사 기록) |
 | 사건 발생 추정 시각 | 2026-09-14 |
 | 기록(확인) 시각 | 스크립트 실행 시각(자동, 사건 시각과 분리 저장) |
@@ -230,7 +230,7 @@ order_service.submit_order(
 
 | 항목 | 값 |
 |---|---|
-| 대상 | `connection_id=4`(ONCHANNEL, `sin945`), `company_id=1`, `product_code=CH1147184` |
+| 대상 | `connection_id=4`(ONCHANNEL, `sin9**`), `company_id=1`, `product_code=CH1147184` |
 | 방법 | 기존 검증된 서비스 경로 `PurchaseSalesApplicationService.record_unconfirmed_prior_evidence()` 그대로 사용(원시 SQL 삽입 없음, §③에서 사본으로 이미 검증) |
 | 근거 구분 | 과거 접수 근거(2026-09-14 HTTP 200 감사 기록) / 사건 발생 추정 시각(2026-09-14) / 기록(확인) 시각(실제 호출 시각, 자동) — 셋을 코드가 구조적으로 분리 저장 |
 | 결과 상태의 의미 | `NEEDS_REVIEW`는 **성공·승인 상태가 아니다** — "확인 전 실행 차단" 상태다. 이 값을 기록해도 판매신청이 접수되거나 승인된 것으로 처리되지 않는다(`SATISFIES_ORDER_GATE`에 포함되지 않음, 발주로 이어지지 않음). |

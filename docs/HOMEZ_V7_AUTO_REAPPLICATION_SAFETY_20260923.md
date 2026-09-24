@@ -145,7 +145,7 @@ tests/test_purchase_sales_application_service.py
 
 11차 §3-1 표를 그대로 재사용한다(이번 라운드에서 다시 조사하지
 않음 — 이미 확인된 것을 반복 조사하지 않는다는 원칙): 연결
-id=4(`ONCHANNEL`, `sin945`) · 상품 `CH1147184` · 엔드포인트 `POST
+id=4(`ONCHANNEL`, `sin9**`) · 상품 `CH1147184` · 엔드포인트 `POST
 /openapi/seller/product/apply` · HTTP 200 · 응답 스키마는
 `result.prd_code`뿐(접수번호·신청ID 없음, 만들지 않음).
 
@@ -345,7 +345,7 @@ skip은 하나도 약화하지 않았다(전부 원문 그대로 통과).
 
 | 항목 | 내용 |
 |---|---|
-| 대상 | 연결 id=4(`ONCHANNEL`, `sin945`), 상품 `CH1147184` |
+| 대상 | 연결 id=4(`ONCHANNEL`, `sin9**`), 상품 `CH1147184` |
 | 목적 | 현재 상품 상태값(정황 증거) 확인(§3-4-1) |
 | 방법 | `GET /openapi/seller/product/{코드}`(기존 `lookup_product()`) |
 | 최대 횟수 | 1회 |

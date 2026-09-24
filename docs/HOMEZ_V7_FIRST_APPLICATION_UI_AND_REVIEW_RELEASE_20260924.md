@@ -224,7 +224,7 @@ test_resolved_review_does_not_bypass_expired_approval_gate`(신규) — 검토
 
 | 항목 | 값 |
 |---|---|
-| 대상 재확인 | `connection_id=4`(ONCHANNEL, `sin945`, `CONNECTED`), `product_code=CH1147184` — 원본 DB에서 방금 재조회, 변경 없음 |
+| 대상 재확인 | `connection_id=4`(ONCHANNEL, `sin9**`, `CONNECTED`), `product_code=CH1147184` — 원본 DB에서 방금 재조회, 변경 없음 |
 | 방법 | `PurchaseChannelConnectionService.lookup_product()`(기존 메서드, 신규 아님) |
 | 최대 호출 | 1회, 자동 재시도 없음 |
 | 성공 시 로컬 DB 변경(코드 기준) | `connection.verified_at`/`status`/`last_checked_at` 갱신뿐(코드

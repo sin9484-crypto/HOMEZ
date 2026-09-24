@@ -200,7 +200,7 @@ Windows 코드페이지로 한글을 깨뜨리는 문제가 있어, 매번 UTF-8
 
 ## 실제 호출(2026-09-08, 사용자 승인) — GET common/member/point
 
-id=4 "sin945" 연결로 `GET /openapi/common/member/point` **1회**
+id=4 "sin9**" 연결로 `GET /openapi/common/member/point` **1회**
 실행(재시도 없음). 응답 구조를 이제 실제로 확인했다:
 
 ```

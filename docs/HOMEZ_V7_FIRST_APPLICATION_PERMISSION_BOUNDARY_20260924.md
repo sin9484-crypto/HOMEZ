@@ -167,7 +167,7 @@ tests/test_purchase_task_router.py
 
 | 항목 | 값 |
 |---|---|
-| 정확한 대상 | `company_id=1`, `connection_id=4`(ONCHANNEL, `sin945`), `product_code=CH1147184` |
+| 정확한 대상 | `company_id=1`, `connection_id=4`(ONCHANNEL, `sin9**`), `product_code=CH1147184` |
 | 과거 접수 근거 | `docs/HOMEZ_V7_AUTO_REAPPLICATION_SAFETY_20260923.md` §4-1 — 2026-09-14 `POST /openapi/seller/product/apply` HTTP 200(감사 기록) |
 | 방법 | `PurchaseSalesApplicationService.record_unconfirmed_prior_evidence()`(검증된 서비스 경로, 원시 SQL 삽입 없음) — 15차 사본 검증에서 이미 실행·확인 완료 |
 | 시각 구분 | `event_occurred_at=2026-09-14`(사건 발생 추정) / 기록(확인) 시각은 호출 시점 자동 기록 — 코드가 구조적으로 분리 저장 |

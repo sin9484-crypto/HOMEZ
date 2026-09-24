@@ -142,7 +142,7 @@ grep 증거로 볼 때 재실행이 필요하다고 판단하지 않는다. **�
 | 항목 | 내용 |
 |---|---|
 | 목적 | 21차가 코드로 매핑을 보강한 7개 필드(`disc_price`/`recom_cus_price`/`return_comment`/`img_url`/`sec_tax`/`prd_char1`/`gosi_info`)의 실제 값 확보 — 기존 09-24 07:43 응답 원문이 어디에도 재사용 가능하게 보존돼 있지 않아 기존 자료로 해결 불가 |
-| 대상 계정 | `purchase_channel_connections#4`(ONCHANNEL, 계정 라벨 `sin945`) |
+| 대상 계정 | `purchase_channel_connections#4`(ONCHANNEL, 계정 라벨 `sin9**`) |
 | 대상 상품 | `CH1147184` 단일 상품코드(`GET seller/product/CH1147184`) |
 | 호출 횟수 | 최대 1회, 자동 재시도 없음 |
 | DB 부수효과(사전 고지) | `PurchaseChannelConnectionService.lookup_product()` 경로를 쓰면 19차와 동일하게 `ProductAttributeMatchService.run_comparison()`이 부수효과로 재실행될 수 있다 — 새 비교 run이 생기거나 `connection.verified_at`이 갱신될 수 있음 |
@@ -166,7 +166,7 @@ grep 증거로 볼 때 재실행이 필요하다고 판단하지 않는다. **�
 
 발송처: 온채널(공급처) — **쿠팡 계정 자체의 신규등록 제한 여부는
 이 문의에 포함하지 않는다**(§②에서 확인했듯 수신처가 다르다, 온채널
-문의로는 해소되지 않음). 포함할 최소 계정정보: 계정 라벨 `sin945`,
+문의로는 해소되지 않음). 포함할 최소 계정정보: 계정 라벨 `sin9**`,
 상품코드 `CH1147184`. 실제 발송은 이번에도 하지 않는다.
 
 (참고, 승인 요청 아님) 쿠팡 연결의 **현재 시점 실제 유효성**을 알고

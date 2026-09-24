@@ -60,7 +60,7 @@ Phase 1.2-A(2026-09-14 감사가 재검증 전 상태로 그대로 옮겨 적은
 
 | 항목 | 확인된 값 | 확인되지 않은 값(추정 금지) |
 |---|---|---|
-| 대상 계정(연결) | 이 라운드에서 `purchase_channel_connections`를 읽기 전용으로 재조회한 결과 **id=4, `ONCHANNEL`, 계정 `sin945`, 현재도 `CONNECTED`**(감사 문서가 명시하지 않았던 연결 id를 이번에 실 DB 대조로 특정) | 호출 당시 이 연결이 실제로 쓰였다는 것은 감사 문서의 서술을 신뢰한 것이지, 이 라운드가 원문 요청 로그로 직접 재대조한 것은 아니다(원문 로그 자체가 이 저장소에 없음) |
+| 대상 계정(연결) | 이 라운드에서 `purchase_channel_connections`를 읽기 전용으로 재조회한 결과 **id=4, `ONCHANNEL`, 계정 `sin9**`, 현재도 `CONNECTED`**(감사 문서가 명시하지 않았던 연결 id를 이번에 실 DB 대조로 특정) | 호출 당시 이 연결이 실제로 쓰였다는 것은 감사 문서의 서술을 신뢰한 것이지, 이 라운드가 원문 요청 로그로 직접 재대조한 것은 아니다(원문 로그 자체가 이 저장소에 없음) |
 | 대상 상품 | `CH1147184`(감사 문서 원문) | — |
 | 엔드포인트 | `POST /openapi/seller/product/apply`(감사 문서 원문) | — |
 | HTTP 결과 | 200(감사 문서 원문) | 응답 바디 원문 — 이 저장소에 보존돼 있지 않음 |
@@ -133,7 +133,7 @@ Phase 1.2-A(2026-09-14 감사가 재검증 전 상태로 그대로 옮겨 적은
 
 | 항목 | 내용 |
 |---|---|
-| 대상 | 연결 id=4(`ONCHANNEL`, `sin945`), 상품 `CH1147184` |
+| 대상 | 연결 id=4(`ONCHANNEL`, `sin9**`), 상품 `CH1147184` |
 | 목적 | 상품 상태값(`status`)과 응답 가능 여부로 판매신청의 현재 정황을 재확인(직접 증거 아님, 정황 증거로만 취급) |
 | 방법 | `GET /openapi/seller/product/{코드}`(기존 `lookup_product()` 경로) — 새 엔드포인트 아님 |
 | 최대 호출 수 | 1회(D3 §2-3의 기존 "상품당 1회, 최대 3회" 예산 안에 포함 — 별도 추가 예산 아님) |
@@ -199,7 +199,7 @@ CH1147184를 추천 후보로 유지한다. **추천 근거는 확보된 옵션�
 | `product_candidate_decisions` | id=3, `candidate_id=3`, `action=APPROVE`, `operator_id=1`, `decided_at=2026-09-14 10:34:20` — 운영자 승인 사실 확인 |
 | `ListingWizard#1` | `product_candidate_id=3`(위 후보와 연결 확인), `current_step=CHANNELS`, `status=DRAFT`, `version=6`, `updated_at=2026-09-14 10:56:06` — **9일간 진행 없음** |
 | `store_connections#1` | `COUPANG`, `CONNECTED` — 동일 |
-| `purchase_channel_connections#4` | `ONCHANNEL`, 계정 `sin945`, `CONNECTED` — 동일(이번에 §3-1에서 연결 id를 명시적으로 재확인) |
+| `purchase_channel_connections#4` | `ONCHANNEL`, 계정 `sin9**`, `CONNECTED` — 동일(이번에 §3-1에서 연결 id를 명시적으로 재확인) |
 
 ### 5-3. Wizard 정지 단계의 정확한 내용(`draft_json` 등 필드 수준 확인)
 
