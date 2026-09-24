@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from dataclasses import replace
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException, ConflictException
@@ -152,6 +153,38 @@ class ListingWizardLiveService:
             blockers.append("ALREADY_SUBMITTED")
         if submission.request_fingerprint or submission.correlation_id:
             blockers.append("SUBMISSION_ALREADY_CLAIMED")
+        # 2026-09-24 후속(자동 재신청 방지 라운드 3 — 중복 상품등록
+        # 차단) — 위 세 검사는 전부 "이 submission 행 자신"만 본다.
+        # 같은 (company_id, listing_id)에 대해 **다른** submission 행이
+        # 이미 실제 전송을 시도했다면(correlation_id가 있다는 것 자체가
+        # send()를 실제로 탔다는 뜻 — 구조적 검증만 하는 submission_
+        # service.submit()은 correlation_id를 절대 설정하지 않는다)
+        # 그 사실을 이 submission 행만 봐서는 알 수 없다 — 예를 들어
+        # 같은 상품 후보·같은 판매계정으로 새 위저드를 다시 만들면
+        # 새 idempotency_key로 새 submission 행이 생기고, 그 행은
+        # 자기 자신의 필드만 보면 "아직 전송 안 함"처럼 보인다. 그래서
+        # 같은 listing_id를 참조하는 다른 모든 행을 함께 조회해
+        # 확인한다. 성공(SUBMITTED, external_submission_ref 있음)은
+        # 재등록을 절대 허용하지 않는다. 결과불명(UNKNOWN)·아직 응답
+        # 대기 중(SUBMITTING)도 "외부에 이미 생겼을 수 있다"는 사실이
+        # 해소되지 않았으므로 막는다. 실제로 명시적 거절이 확인된
+        # FAILED는 막지 않는다 — 정상적인 수정 후 재등록 경로까지
+        # 막지 않기 위함이다(사용자 지시 원문). 이 SELECT 자체는
+        # TOCTOU 경쟁을 완전히 막지 못한다 — 최종 방어선은 §claim
+        # 지점의 부분 UNIQUE INDEX다(모델 참고).
+        for other in self.marketplace.list_submissions_for_listing(
+            listing.id, company_id,
+        ):
+            if other.id == submission.id:
+                continue
+            if other.correlation_id and (
+                other.external_submission_ref
+                or other.status in (
+                    SubmissionStatus.SUBMITTING, SubmissionStatus.UNKNOWN,
+                )
+            ):
+                blockers.append("DUPLICATE_LIVE_ATTEMPT_ON_SAME_LISTING")
+                break
         if self.safety.is_emergency_stop_active():
             blockers.append("ESTOP_ACTIVE")
         if self.safety.get_current_mode() != AutomationMode.OPERATOR_APPROVAL:
@@ -229,12 +262,34 @@ class ListingWizardLiveService:
         # 외부 호출 전에 단 한 요청만 PENDING을 선점한다. 여기서 commit
         # 한 뒤 호출하므로 프로세스가 중단돼도 SUBMITTING으로 남고,
         # 자동 재시도나 두 번째 외부 호출로 이어지지 않는다.
-        claimed = self.marketplace.update_submission_status_conditional(
-            submission.id, company_id, (SubmissionStatus.PENDING,),
-            SubmissionStatus.SUBMITTING,
-            request_fingerprint=request_fingerprint,
-            correlation_id=correlation_id,
-        )
+        #
+        # 2026-09-24 후속 — 위 preflight()의 DUPLICATE_LIVE_ATTEMPT_
+        # ON_SAME_LISTING 검사는 이 지점보다 먼저 실행되는 SELECT라
+        # TOCTOU 경쟁을 완전히 막지 못한다(두 프로세스가 서로 다른
+        # submission 행으로 거의 동시에 이 지점까지 왔다면 둘 다 그
+        # SELECT를 통과했을 수 있다). 최종 방어선은 marketplace_
+        # submissions의 부분 UNIQUE INDEX(uq_marketplace_submissions_
+        # live_claim_per_listing, model.py 참고)다 — 같은 (company_id,
+        # listing_id)에 대해 correlation_id가 있고 아직 해소되지 않은
+        # (또는 이미 성공한) 행은 DB 자체가 동시에 하나만 존재하도록
+        # 강제한다. 이 UPDATE 자체가 그 인덱스 대상이므로, 인덱스가
+        # 실제 원본 DB에 적용된 뒤에는 두 번째 커밋이 IntegrityError로
+        # 거부된다 — 그 경우도 똑같이 외부 호출(provider.create_
+        # product) 이전에 막는다.
+        try:
+            claimed = self.marketplace.update_submission_status_conditional(
+                submission.id, company_id, (SubmissionStatus.PENDING,),
+                SubmissionStatus.SUBMITTING,
+                request_fingerprint=request_fingerprint,
+                correlation_id=correlation_id,
+            )
+        except IntegrityError:
+            self.db.rollback()
+            raise ConflictException(
+                "같은 상품(listing)에 대해 다른 제출이 이미 쿠팡 전송을 "
+                "시작했거나 성공했습니다 — 중복 등록을 방지하기 위해 "
+                "이 전송을 진행하지 않습니다.",
+            )
         if claimed != 1:
             self.db.rollback()
             raise ConflictException("다른 요청이 이미 쿠팡 전송을 시작했습니다.")

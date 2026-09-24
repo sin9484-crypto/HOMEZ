@@ -32,6 +32,7 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.audit_db import write_audit_log
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.domains.purchase_task.channel_adapter import get_purchase_channel_adapter
@@ -264,6 +265,29 @@ class PurchaseSalesApplicationService:
 
         self.db.commit()
         self.db.refresh(attempt)
+
+        # 근거 확인·권한(호출 자체가 이미 관리자 권한을 전제) 다음으로
+        # 감사기록을 남긴다 — 이 정황 반영이 "누가·언제·무슨 근거로"
+        # 이뤄졌는지 attempt 행 자체(failure_detail)와 별개로
+        # audit_logs에도 남겨 이중으로 추적 가능하게 한다.
+        try:
+            write_audit_log(
+                self.db,
+                company_id=company_id, user_id=recorded_by,
+                action="SALES_APPLICATION_PRIOR_EVIDENCE_RECORDED",
+                entity="purchase_sales_application_attempt",
+                entity_id=str(attempt.id),
+                description=(
+                    f"connection_id={connection_id}; product_code={product_code}; "
+                    f"event_occurred_at="
+                    f"{event_occurred_at.isoformat() if event_occurred_at else '미상'}; "
+                    f"evidence_summary={evidence_summary}"
+                ),
+            )
+            self.db.commit()
+        except Exception:  # noqa: BLE001 — 감사 기록 실패가 이 작업 자체를 막지 않는다
+            self.db.rollback()
+
         return attempt
 
     # ---------------- 내부 ----------------

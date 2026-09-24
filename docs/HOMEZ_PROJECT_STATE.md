@@ -1,5 +1,18 @@
 # Current Version
 
+**HOMEZ V7 — 판매신청·상품등록 잔여 실행 위험 마무리: 결과불명 이후 중복 상품등록 차단 구현 (2026-09-24, 13차). 12차가 "결함으로 기록만 하고 미수정"으로 남긴 위험을 애플리케이션 레벨 + DB 레벨(부분 UNIQUE INDEX) 이중 방어로 해결. 원본 DB·실 API는 여전히 미실행.**
+
+**결과(상세: `docs/HOMEZ_V7_DUPLICATE_REGISTRATION_GUARD_20260924.md`)**: 기준선 재확인 결과 로컬/원격 HEAD가 `6b1e7e3`(12차 커밋 다음에 다른 작업자의 문서 전용 커밋이 하나 더 있었음)임을 확인하고 그대로 보존했다. 12차 완료 보고의 "7개 파일" 서술이 오류였음을 `git show --stat`로 정정(실제 6개: 코드 2+문서 2+테스트 2).
+`MarketplaceSubmission`이 append-only이고 idempotency_key가 위저드 단위로 계산돼, 같은 상품 후보·같은 판매계정으로 새 위저드(또는 직접 새 idempotency_key로 `submit()`)를 만들면 같은 listing에 대한 미해결·성공 이전 시도를 확인하지 못하는 경로를 실제로 재현·수정했다: (1) `listing_wizard_live_service.py::preflight()`에 신규 블로커 `DUPLICATE_LIVE_ATTEMPT_ON_SAME_LISTING`(애플리케이션 레벨 SELECT 방어), (2) `model.py`의 `MarketplaceSubmission`에 부분 UNIQUE 인덱스(`company_id, listing_id`, `correlation_id IS NOT NULL AND (external_submission_ref IS NOT NULL OR status IN ('SUBMITTING','UNKNOWN'))`, DB 레벨 TOCTOU 최종 방어), (3) `send()`의 `IntegrityError` → 명확한 `ConflictException` 변환. 명시적 `FAILED` 이후 정상 재등록은 대조군 테스트로 계속 허용됨을 확인했다.
+CH1147184 보호 공백을 재확인: `NEEDS_REVIEW` 기능은 존재하나 원본 DB에는 여전히 기록되지 않았고(0 rows 재확인), 이 상품은 애초에 Submission 자체가 아직 생성되지 않은 상태라 신규 방어가 아직 실제로 걸릴 대상이 없다. REJECTED/RESULT_UNKNOWN 예외 분류(`apply_for_sale()`)와 `override_unresolved_status` 미노출을 코드로 재확인 — 둘 다 결함 없이 이미 올바르게 설계돼 있었다(신규 코드 불필요).
+격리 테스트: 신규 파일 6건(실 스레드·별도 ORM 세션 경쟁 테스트 포함) 전부 통과. 공유 스키마 계약 변경으로 판단해 `MarketplaceSubmission` 관련 전체 테스트 파일(24개)을 두 배치로 나눠 재실행: 183건 + 500건(skip 1) 전부 통과. 집중 회귀(판매신청·발주) 94건 통과. 세 배치 합계 777건 전부 통과, 실패·오류 0건, 가드 로그 `ATTEMPT_BLOCKED` 0건, 실 `homez.db` SHA-256 불변 재확인.
+Migration(`migrations/20260924_00_add_marketplace_submissions_live_claim_index.sql`)은 신선한 임시 DB + 실 DB 백업 워크카피에서 리허설만 완료, 원본 미적용.
+
+**남은 승인·외부 확인(전부 독립, 미실행, 중복 없음)**: ①원본 DB Migration 적용(9차 §6 + 이번 라운드 신규 인덱스 Migration, 총 3건) ②CH1147184 상품 상태 조회 1회(연결 id=4) ③CH1147184에 대한 `record_unconfirmed_prior_evidence()` 실제 원본 DB 반영 여부 결정 ④시험상품 최종 확정(사용자) ⑤쿠팡 판매자센터 시험 주문 정책 문의 발송 ⑥Wizard#1 재개(옵션 입력→채널 확정→이후 단계) ⑦새 승인 발급 및 이후 실제 발주·주문·반품.
+**"결과불명 이후 중복 상품등록 경로의 격리검증 완료"까지이며 "V7 실사용 완료"·"원본 DB 반영 완료"로 확대하지 않는다.**
+
+---
+
 **HOMEZ V7 — 자동 재신청 방지와 기존 상품등록 재개 안전성 확인 (2026-09-23, 12차). 결과불명/외부정황 상태에서 판매신청·발주 자동 재시도를 코드로 차단(격리 테스트 12건 신규 통과). 원본 DB·실 API는 여전히 미실행.**
 
 **결과(상세: `docs/HOMEZ_V7_AUTO_REAPPLICATION_SAFETY_20260923.md`)**: 11차까지는 제안만 했던 것을 실제 코드로 구현했다. `SalesApplicationStatus`에 `NEEDS_REVIEW`(외부 정황 증거는 있으나 내부 추적 기록 없음)를 추가하고 `RESULT_UNKNOWN`/`NEEDS_REVIEW`를 `BLOCKS_AUTO_RETRY`로 묶어, `ensure_sales_application_submitted()`가 이 상태에서는 `confirm_real_submission=True`만으로 자동 재시도하지 않게 했다(신규 `override_unresolved_status` 플래그가 명시적으로 있을 때만 재시도). `order_submission_service.py`의 유일한 호출부가 이 플래그를 넘기지 않으므로 발주도 같은 지점에서 함께 막힌다 — 두 곳을 따로 고칠 필요가 없었다. `REJECTED`(결과가 확실히 거부됨)는 기존처럼 자동 재시도를 유지했다(대조군 테스트로 확인).

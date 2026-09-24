@@ -50,11 +50,13 @@ from datetime import datetime
 
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
+from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import Numeric
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
+from sqlalchemy import text
 
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -742,6 +744,41 @@ class MarketplaceSubmission(Base):
         UniqueConstraint(
             "company_id", "idempotency_key",
             name="uq_marketplace_submissions_company_idempotency",
+        ),
+        # 2026-09-24 후속(자동 재신청 방지 라운드 3 — 중복 상품등록
+        # 차단, 설계·격리 리허설만, 원본 DB 미적용) — 위 UNIQUE는
+        # (company_id, idempotency_key) 조합만 막는다. idempotency_key는
+        # `wizard-{id}-account-{id}-submission`처럼 **위저드 단위**로
+        # 계산되므로, 같은 상품 후보·같은 판매계정으로 위저드를 새로
+        # 하나 더 만들면 새 idempotency_key로 완전히 새 행이 생겨
+        # 이 UNIQUE를 우회한다 — 그 새 행은 listing_id는 같지만(같은
+        # 후보+계정 조합은 marketplace_listings.UNIQUE로 하나뿐이다)
+        # idempotency_key가 다르다. preflight()의 애플리케이션 레벨
+        # 검사(listing_wizard_live_service.py, DUPLICATE_LIVE_ATTEMPT_
+        # ON_SAME_LISTING)가 이 우회를 대부분 막지만, 그 검사는 SELECT
+        # 라 두 프로세스가 동시에 검사를 통과한 뒤 이 아래 부분
+        # UNIQUE INDEX가 최종 방어선이 된다(claim 지점의 UPDATE가
+        # 대상). correlation_id는 실제 send()가 provider를 호출하기
+        # 직전에만 설정되므로(구조 검증만 하는 submission_service.
+        # submit()은 절대 설정하지 않는다), "같은 listing에 대해
+        # 실제 전송을 시도했고 아직 확정되지 않았거나(SUBMITTING/
+        # UNKNOWN) 이미 성공한(external_submission_ref 있음) 행은
+        # 동시에 하나만 존재한다"를 DB가 강제한다. 실제로 명시적
+        # 거절(FAILED)로 끝난 행은 이 조건에서 빠진다 — 정상적인
+        # 수정 후 재등록 경로까지 막지 않기 위해서다(append-only
+        # 이력은 그대로 남고, 이 인덱스는 오직 "동시에 몇 개까지
+        # 허용하는가"만 강제한다 — 과거 행을 지우거나 덮어쓰지
+        # 않는다).
+        Index(
+            "uq_marketplace_submissions_live_claim_per_listing",
+            "company_id", "listing_id",
+            unique=True,
+            sqlite_where=text(
+                "correlation_id IS NOT NULL AND ("
+                "external_submission_ref IS NOT NULL OR "
+                "status IN ('SUBMITTING', 'UNKNOWN')"
+                ")",
+            ),
         ),
     )
 
