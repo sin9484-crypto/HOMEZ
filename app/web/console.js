@@ -11663,6 +11663,40 @@
     return { attributes, confirmedRules };
   }
 
+  // 소비자상담 전화번호 고정값 — 상품마다 같은 번호를 다시 입력하지 않도록
+  // 사용자 설정(listing_defaults.consumer_service_phone)에 한 번 저장해 두고,
+  // 이 필드가 비어 있을 때만 자동 입력한다(이미 입력/저장된 값은 덮어쓰지 않음).
+  const LW_PHONE_NOTICE_SUFFIX = "::소비자상담관련 전화번호";
+  const LW_PHONE_PATTERN = /^[0-9+()\-\s]{5,30}$/;
+
+  function lwWirePhoneDefault(grid) {
+    const input = grid.querySelector(`[data-lw-notice-key$="${LW_PHONE_NOTICE_SUFFIX}"]`);
+    if (!input) return;
+    const wrap = document.createElement("div");
+    wrap.className = "stat-sub";
+    wrap.innerHTML = `<button type="button" class="btn btn-secondary btn-sm" data-lw-phone-default-save>${HomezI18n.t("lw.notice_phone_default_save")}</button>
+      <span>${HomezI18n.t("lw.notice_phone_default_hint")}</span>`;
+    input.parentElement.appendChild(wrap);
+    wrap.querySelector("[data-lw-phone-default-save]").addEventListener("click", async () => {
+      const value = input.value.trim();
+      if (value && !LW_PHONE_PATTERN.test(value)) {
+        toast(HomezI18n.t("lw.notice_phone_default_invalid"));
+        return;
+      }
+      const current = await userSettingFetch("listing_defaults");
+      const base = current && current.value && typeof current.value === "object" ? { ...current.value } : {};
+      if (value) base.consumer_service_phone = value; else delete base.consumer_service_phone;
+      const saved = await userSettingSave("listing_defaults", base, 1);
+      toast(HomezI18n.t(saved ? (value ? "lw.notice_phone_default_saved" : "lw.notice_phone_default_cleared") : "lw.notice_phone_default_failed"));
+    });
+    userSettingFetch("listing_defaults").then((resp) => {
+      const stored = resp && resp.value && typeof resp.value === "object" ? resp.value.consumer_service_phone : "";
+      if (!stored || input.value.trim() || !input.isConnected) return;
+      input.value = stored;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
   function lwRenderNoticeFields(block, definitions, values) {
     const host = block.querySelector("[data-lw-notice-fields]");
     const checkbox = block.querySelector(".lw-policy-notice-confirmed");
@@ -11701,6 +11735,7 @@
         refresh();
         lwScheduleAutosave();
       }));
+      lwWirePhoneDefault(grid);
       refresh();
     };
     host.querySelector("[data-lw-notice-category]")?.addEventListener("change", () => {

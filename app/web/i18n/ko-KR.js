@@ -1426,6 +1426,12 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.purchase_option_select_invalid": "쿠팡이 허용하는 값 중에서 선택하세요.",
   "lw.purchase_option_input_hint": "쿠팡 공식 카테고리 정보 기준 입력칸입니다.",
   "lw.purchase_option_group_choose_one": "이 그룹 중 하나만 입력하면 됩니다",
+  "lw.notice_phone_default_save": "고정값으로 저장",
+  "lw.notice_phone_default_hint": "저장하면 다음 상품부터 이 칸이 비어 있을 때 자동으로 채워집니다. 비운 채 저장하면 고정값이 삭제됩니다.",
+  "lw.notice_phone_default_saved": "소비자상담 전화번호를 고정값으로 저장했습니다.",
+  "lw.notice_phone_default_cleared": "소비자상담 전화번호 고정값을 삭제했습니다.",
+  "lw.notice_phone_default_failed": "고정값을 저장하지 못했습니다. 잠시 후 다시 시도하세요.",
+  "lw.notice_phone_default_invalid": "전화번호는 숫자, 하이픈, 괄호, +만 5~30자로 입력하세요.",
   "lw.policy_notice_confirmed": "상품정보제공고시 내용을 확인했습니다.",
 
   "lw.econ_cost_of_goods": "원가",

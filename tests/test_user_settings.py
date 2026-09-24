@@ -118,6 +118,27 @@ class UserSettingServiceTestCase(unittest.TestCase):
                 "value", 0, 1,
             )
 
+    def test_listing_defaults_key_stores_consumer_service_phone(self):
+        """상품등록 고정값(소비자상담 전화번호)은 허용 키 하나로 저장·
+        재조회되며, 값을 지우면(키 제거 후 저장) 다시 빈 값이 된다."""
+
+        created = self.service.put(
+            self.user.id, self.company.id, "listing_defaults",
+            {"consumer_service_phone": "010-0000-0000"}, 0, 1,
+        )
+        self.assertEqual(created["version"], 1)
+        self.assertEqual(
+            self.service.get(
+                self.user.id, self.company.id, "listing_defaults",
+            )["value"],
+            {"consumer_service_phone": "010-0000-0000"},
+        )
+        cleared = self.service.put(
+            self.user.id, self.company.id, "listing_defaults", {}, 1, 1,
+        )
+        self.assertEqual(cleared["value"], {})
+        self.assertEqual(cleared["version"], 2)
+
     # --------------------------------------------------
     # 최초 생성 / 재생성 충돌
     # --------------------------------------------------
