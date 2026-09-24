@@ -1,5 +1,20 @@
 # Current Version
 
+**HOMEZ V7 — 최초 신청 확인 권한 점검 및 A/B 실제 적용 승인 준비 (2026-09-24, 16차). `confirmed_first_application`의 UI→스키마→라우터→서비스 전달 경로 전수 확인(기본값 False 유지, 자동 파생 없음, 외부 증거로 오인 안 함). UI(console.js)가 이 새 필드를 아직 보내지 않는다는 것을 발견(후속 과제). 권한 경계 신규 테스트 4건(라우터 재인증 우회 불가, RESULT_UNKNOWN 우회 불가, 타 상품/회사 재사용 차단) 전부 통과. A/B 승인안 최종 제출, 원본은 여전히 미실행.**
+
+**결과(상세: `docs/HOMEZ_V7_FIRST_APPLICATION_PERMISSION_BOUNDARY_20260924.md`)**: 기준선 재확인 — 로컬/원격 HEAD `af467ad`(15차) 그대로. 다른 작업자의 별도 워크트리(`.claude/worktrees/quirky-diffie-3718ca/`) 존재 확인, 전혀 건드리지 않음.
+`confirmed_first_application` 전달 경로를 코드로 직접 추적: 기본값 False가 스키마→라우터→서비스 전 구간에서 유지되고 `confirm_real_submission`에서 파생되는 코드가 없음을 확인. **신규 발견**: `app/web/console.js:4817`의 실제 발주 버튼이 `confirm_real_submission: true`는 이미 보내지만 `confirmed_first_application`은 보내지 않음 — 이 버튼이 실제 배포되면 내부 기록 0건인 모든 상품(신규 상품 포함)에서 새 게이트에 막힘(안전한 방향의 실패, 결함 아님) — UI 갱신은 후속 과제로 명시(이번 라운드에서 구현 안 함, 새 기능 추가 금지 범위 존중).
+권한·식별 구조는 기존 코드(재인증 토큰 + VIEW_SENSITIVE_DATA 권한 + `PurchaseSalesApplicationAttempt.triggered_by`/`started_at` 기록)로 이미 충족됨을 확인 — 신규 감사로그 코드는 추가하지 않음(불필요 판단).
+신규 격리 테스트 4건: ①라우터 레벨에서 `confirmed_first_application=True`가 재인증 요구를 우회하지 않음 ②`RESULT_UNKNOWN`도 이 플래그로 우회 안 됨(기존은 NEEDS_REVIEW만 검증) ③한 상품에 대한 확인이 다른 상품·다른 회사에 재사용되지 않음(캐시 없음 구조적 증명) — 전부 PASS.
+"원본은 무방비" 표현을 폐기하고 4가지로 분리 기록: 코드 방어(정상 작동, 이번 라운드 재검증)/실행 서버 유무(서버 자체가 없어 "실행 중" 개념이 성립하지 않음)/원본 NEEDS_REVIEW 미기록(데이터 상태)/Migration 미적용 영향 범위(이 게이트는 스키마 불필요라 무관, 13차 DB 인덱스와 신규 테이블 2개만 영향받음).
+외부 확인 3종을 코드 근거로 분리: 연결 인증 최신성 확인과 CH1147184 상품 조회는 `lookup_product()` 성공 시 `verified_at`이 부수 효과로 갱신되는 **같은 API 호출 1회**임을 코드로 확인(별도 인증 호출 추가하지 않음), 계정별 판매신청 승인 상태 확인은 여전히 공식 방법 없음(기존 확정 재인용) — 확인 안 되면 자동 재신청하지 않는 원칙 유지.
+승인안 A/B를 15차와 완전 동일(파일명·순서·해시 일치 재확인)하게 최종 제출, 실제 사용자 승인은 이번에도 없었음을 명시.
+
+**남은 승인(15차와 동일 대상, 재확인만)**: 승인안 A(원본 Migration 3건) / 승인안 B(CH1147184 `record_unconfirmed_prior_evidence()` 원본 반영) / 외부 확인 ①+②(상품 조회 1회, 연결 인증 갱신 겸함) / 외부 확인 ③(공식 방법 없음, 영구 미확인 유지) / 이후 실행 8개 항목(15차 문서 §⑤ 표 그대로).
+**"최초 신청 확인 권한 경계 검증 완료 및 A/B 최종 제출"까지이며 "V7 실사용 완료"·"원본 DB 반영 완료"로 확대하지 않는다.**
+
+---
+
 **HOMEZ V7 — 미확인 판매신청 실행 차단 및 A/B 적용 준비 (2026-09-24, 15차). 14차의 "원본 데이터 보완 전에는 코드로 닫을 수 없는 경계" 판정을 정정 — 코드가 과거 이력을 자동으로 알아낼 수 없는 것과 미확인 상태의 실행을 차단할 수 없는 것은 다르다. `order_submission_service.py::submit_order()`에 `confirmed_first_application` 게이트를 신규 추가해 내부 판매신청 기록이 없는 상태의 자동 실행을 차단(모든 신규 상품 영구 차단은 아님). 사본에서 A(Migration 3건)+B(NEEDS_REVIEW 기록) 연결 검증 완료. 원본은 여전히 미실행.**
 
 **결과(상세: `docs/HOMEZ_V7_UNCONFIRMED_APPLICATION_EXECUTION_BOUNDARY_20260924.md`)**: 기준선 재확인 — 로컬/원격 HEAD `cef1e6c`(14차) 그대로. `confirm_real_submission`(실제 실행 승인)과 "이것이 확인된 최초 신청이다"라는 승인을 분리하는 신규 boolean `confirmed_first_application`을 `submit_order()`에 추가 — 내부 판매신청 행이 0건(`existing is None`)일 때만 관여하며, 이미 NEEDS_REVIEW/RESULT_UNKNOWN 행이 있으면 이 플래그와 무관하게 기존 차단이 그대로 적용됨(우회 불가, 전용 테스트로 확인). `sales_application_service.py`는 이번 라운드에서 수정하지 않음(범위를 `order_submission_service.py`의 자동 호출 지점으로 최소화). 라우터(`router.py`)가 실제로 이미 배선돼 있었다는 사실을 재확인해(기존 "라우터 미배선" 주석은 stale) `schema.py`의 `SubmitRealOrderRequest`에도 같은 필드를 추가·배선 — 새 필드 없이는 라이브 엔드포인트가 진짜 최초 신청조차 영원히 못 하게 될 뻔했음을 미리 발견해 방지.

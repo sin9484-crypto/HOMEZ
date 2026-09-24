@@ -597,6 +597,79 @@ class UnconfirmedFirstApplicationBoundaryTestCase(OrderSubmissionServiceTestCase
         )
         self.assertEqual(submit_order_calls, [])
 
+    def test_confirmed_first_application_does_not_bypass_result_unknown(self):
+        """지시문 명시(RESULT_UNKNOWN도 NEEDS_REVIEW와 별도로 검증) —
+        결과불명 상태도 `confirmed_first_application` 값과 무관하게
+        기존 차단이 그대로 적용된다."""
+
+        from app.core.exceptions import ConflictException
+
+        connection = self._make_ready_connection()
+        seeded_at = datetime.utcnow()
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code=VALID_KWARGS["product_code"],
+            status=SalesApplicationStatus.RESULT_UNKNOWN,
+            failure_detail="네트워크 타임아웃(테스트 시드)",
+            started_at=seeded_at, finished_at=seeded_at,
+        ))
+        self.db.commit()
+        apply_for_sale_calls, submit_order_calls = self._install_counting_adapter()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-boundary-unknown-no-bypass",
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
+            )
+        self.assertIn("확신할 수 없습니다", str(ctx.exception))
+        self.assertEqual(apply_for_sale_calls, [])
+        self.assertEqual(submit_order_calls, [])
+
+    def test_confirmation_for_one_target_does_not_satisfy_a_different_product_or_company(self):
+        """다른 회사·계정·상품의 확인 재사용 차단 — `confirmed_first_
+        application`은 매 호출마다 그 호출의 (connection, company,
+        product) 조합에만 적용된다. 한 상품에 대해 확인해 정상
+        진행됐다는 사실이 다른 상품이나 다른 회사의 게이트를 대신
+        통과시키지 않는다(값을 어딘가에 캐시·재사용하지 않는다는 것을
+        구조적으로 증명)."""
+
+        connection_a = self._make_ready_connection(company=self.company_a)
+        apply_for_sale_calls, submit_order_calls = self._install_counting_adapter()
+
+        first_kwargs = dict(VALID_KWARGS)
+        self.service.submit_order(
+            connection_a.id, self.company_a.id, idempotency_key="k-boundary-product-1",
+            confirm_real_submission=True, confirmed_first_application=True, **first_kwargs,
+        )
+        self.assertEqual(len(apply_for_sale_calls), 1)
+        self.assertEqual(len(submit_order_calls), 1)
+
+        # 같은 회사·같은 연결이지만 다른 상품코드 — 이전 확인이 재사용되면 안 된다.
+        from app.core.exceptions import ConflictException
+
+        second_kwargs = dict(VALID_KWARGS)
+        second_kwargs["product_code"] = "CH9999999"
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection_a.id, self.company_a.id, idempotency_key="k-boundary-product-2",
+                confirm_real_submission=True, **second_kwargs,
+            )
+        self.assertIn("확인된 최초 신청인지", str(ctx.exception))
+        self.assertEqual(len(apply_for_sale_calls), 1, "다른 상품에는 이전 확인이 재사용되면 안 된다.")
+
+        # 다른 회사의 같은 연결 id를 시도(자체 연결 생성) — 회사 경계도 재사용되지 않는다.
+        connection_b = self._make_ready_connection(company=self.company_b)
+        third_kwargs = dict(VALID_KWARGS)
+        with self.assertRaises(ConflictException):
+            self.service.submit_order(
+                connection_b.id, self.company_b.id, idempotency_key="k-boundary-company-b",
+                confirm_real_submission=True, **third_kwargs,
+            )
+        self.assertEqual(
+            len(apply_for_sale_calls), 1,
+            "다른 회사·연결에는 이전 확인이 재사용되면 안 된다.",
+        )
+
 
 class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase):
     """정상 응답 / 명시적 거절 / 응답 형식 오류 / 전송 결과 불명.

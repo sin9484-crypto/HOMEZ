@@ -606,7 +606,9 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
                 current_user=self.user_a, db=self.db,
             )
 
-    def _submit_request(self, *, confirm_real_submission=False):
+    def _submit_request(
+        self, *, confirm_real_submission=False, confirmed_first_application=False,
+    ):
 
         return SubmitRealOrderRequest(
             connection_id=4, idempotency_key="submit-test-1",
@@ -615,6 +617,7 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
             recv_name="홍길동", recv_tell="02-000-0000", recv_mobile="010-0000-0000",
             zipcode="00000", address="서울시 어딘가",
             confirm_real_submission=confirm_real_submission,
+            confirmed_first_application=confirmed_first_application,
         )
 
     def test_submit_without_recent_auth_rejected(self):
@@ -627,6 +630,25 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
         with self.assertRaises(UnauthorizedException):
             submit_real_order(
                 task.id, self._submit_request(),
+                current_user=self.user_a, db=self.db, recent_auth_token=None,
+            )
+
+    def test_confirmed_first_application_true_does_not_bypass_recent_auth(self):
+        """2026-09-24 후속(최초 신청 확인 권한 점검) — 단순 클라이언트
+        boolean(`confirmed_first_application=True`)은 외부 상태 확인
+        증거가 아니다. 이 값이 요청 바디에 있어도 재인증 토큰이 없으면
+        라우터의 기존 권한 게이트(`consume_recent_auth_token`)가
+        그대로 막는다 — 이 필드가 재인증·권한 검사를 우회하는 새 경로가
+        아님을 확인한다."""
+
+        task = self._create(self.user_a, key="submit:no-auth-with-first-app-flag")
+
+        with self.assertRaises(UnauthorizedException):
+            submit_real_order(
+                task.id,
+                self._submit_request(
+                    confirm_real_submission=True, confirmed_first_application=True,
+                ),
                 current_user=self.user_a, db=self.db, recent_auth_token=None,
             )
 
