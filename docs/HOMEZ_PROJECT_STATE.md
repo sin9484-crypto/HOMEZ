@@ -1,5 +1,17 @@
 # Current Version
 
+**HOMEZ V7 — D2 실행: A/B/C 승인 확인 및 상품등록 준비 (2026-09-24, 18차). 이 라운드의 프롬프트 자체를 승인으로 해석하지 않고, A(Migration 3건)·B(NEEDS_REVIEW 기록)·C(상품 조회 1회) 전부 미실행 — 읽기 전용 재확인만 수행. 미적용 Migration 3건 파일명·순서·해시 재확인(변경 없음). Wizard#1·상품후보 3의 등록 준비표를 작성해 확인값/미확인값(등록 차단 사유)을 분리 — SKU·구성수량·공급가·판매가·자료이용권리·판매제한 전부 미확인, 발주 승인#1 만료 확인(재사용 금지), 옵션 4종은 과거 관측(시점 미상)임을 명시. 코드 변경 없어 회귀 재실행하지 않음.**
+
+**결과(상세: `docs/HOMEZ_V7_D2_APPROVAL_CONFIRMATION_AND_REGISTRATION_READINESS_20260924.md`)**: 기준선 재확인 — 로컬/원격 HEAD `78b5e59`(17차) 그대로, 다른 작업자 워크트리 3개 보존.
+A 재확인: `plan_pending()`을 실 DB에 재실행해 미적용 3건이 기존 승인안과 파일명·순서·해시까지 완전히 일치함을 확인 — 차이 없으므로 미실행. B 재확인: company_id=1/connection_id=4(ONCHANNEL, sin945, CONNECTED)/product_code=CH1147184 전부 변경 없음, 내부 행 0건 재확인 — 미실행. C: 연결 id=4·상품코드 재확인만, 실제 조회 미호출.
+Wizard#1 상태 재확인(current_step=CHANNELS 정지, channel_selections=[], draft_json.options=[]/sku_list=[]) + `marketplace_listings#1`(DRAFT, external_listing_id=None) + `marketplace_submissions` 0건으로 "외부 등록 결과 불명확"이 아니라 "명확히 미시도"임을 확정. 등록 준비표 작성: 상품명·브랜드·반품조건·상품고시 일부는 확인됨, 옵션 4종 가격은 2026-09-21 문서로 복원된 과거 API 관측(시점 미상, 재확인 전 사용 금지)이며 재고(qty)는 null(미확인), SKU·구성수량·공급가·판매가·자료이용권리(`liveImageRightsConfirmed`류)·판매 제한(판매자 자격)은 전부 미확인으로 등록 차단 사유에 남김(추측 없음). `PurchaseOrderApproval#1`은 2026-09-14 10:09 만료 확인(DB엔 ACTIVE로 남는 지연평가 구조) — 재사용 금지 재확인. 연결 id=4 인증 최신성(`verified_at=2026-09-08`, 16일 경과)도 재검증 필요로 재확인.
+판매신청 확인 근거는 여전히 미확보(공식 화면 확인·공급처 문의 둘 다 미실행, 문의 발송은 별도 승인 대상 유지) — 17차의 "최초 신청 확인" 체크박스로 CH1147184를 우회하지 않음을 재확인.
+
+**남은 승인(17차와 동일 대상, 재확인만)**: 승인안 A(원본 Migration 3건) / 승인안 B(CH1147184 `record_unconfirmed_prior_evidence()` 원본 반영, 검토 해제는 별도) / 승인안 C(CH1147184 상품 조회 1회) / A·B·C 이후 남은 준비(판매신청 확인 방법 실행·Wizard#1 재개해 옵션·SKU·자료이용권리·판매제한 확정·새 발주 승인 발급) — 전부 개별 승인 대상, 포괄 승인 아님.
+**"A/B/C 재확인 및 상품등록 준비표 작성 완료"까지이며 "V7 실사용 완료"·"원본 DB 반영 완료"로 확대하지 않는다.**
+
+---
+
 **HOMEZ V7 — 최초 신청 UI와 검토 해제 흐름 완성 (2026-09-24, 17차). 16차가 발견한 UI 공백(console.js가 confirmed_first_application을 안 보냄)을 해소 — 발주 검토 화면에 "최초 신청 확인" 체크박스와 "검토 해제" 폼을 연결. 신규 서비스 메서드 resolve_needs_review_as_confirmed_submitted()로 과거 접수 증거 상품의 검토를 사람 확인 근거로 해제(외부 호출 0회, 새 스키마 불필요). 격리 테스트 189건 + 실제 화면(데스크톱·모바일) 검증 완료. A/B/C 승인안 재확인만(변경 없음), 원본은 여전히 미실행.**
 
 **결과(상세: `docs/HOMEZ_V7_FIRST_APPLICATION_UI_AND_REVIEW_RELEASE_20260924.md`)**: 기준선 재확인 — 로컬/원격 HEAD `4c5618c`(16차) 그대로, 다른 작업자 워크트리 3개 보존.
