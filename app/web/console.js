@@ -10273,8 +10273,13 @@
             description: el("lw-draft-description").value.trim() || null,
             keywords: splitList(el("lw-draft-keywords").value),
             certifications: splitList(el("lw-draft-certifications").value),
-            options: [],
-            sku_list: [],
+            // 2026-09-24 실사용 중 발견 — 이 화면에는 옵션/SKU 입력란이
+            // 없다(다른 경로로만 채워짐, APPROVAL 단계에서 읽기 전용으로만
+            // 표시). 여기서 빈 배열을 무조건 보내면 이 화면에서 "다음"을
+            // 누르는 것만으로 이미 저장된 옵션/SKU가 통째로 사라진다 —
+            // 이 화면이 편집하지 않는 필드는 그대로 보존한다.
+            options: draft.options || [],
+            sku_list: draft.sku_list || [],
             autosave_client_token: lwGetAutosaveToken(),
           }),
         });
