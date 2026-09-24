@@ -295,7 +295,7 @@ class InputValidationTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(BadRequestException):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-1",
-                confirm_real_submission=True, **kwargs,
+                confirm_real_submission=True, confirmed_first_application=True, **kwargs,
             )
 
     def test_invalid_option_quantity_rejected(self):
@@ -308,7 +308,7 @@ class InputValidationTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(BadRequestException):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-1",
-                confirm_real_submission=True, **kwargs,
+                confirm_real_submission=True, confirmed_first_application=True, **kwargs,
             )
 
 
@@ -331,7 +331,7 @@ class ConnectionReadinessTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-1",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertEqual(self.db.query(PurchaseOrderSubmissionAttempt).count(), 0)
 
@@ -345,7 +345,7 @@ class ConnectionReadinessTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(BadRequestException):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-1",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
 
@@ -382,7 +382,7 @@ class SalesApplicationUnresolvedStatusBlocksOrderTestCase(OrderSubmissionService
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-needs-review",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("확신할 수 없습니다", str(ctx.exception))
         self.assertEqual(
@@ -438,7 +438,7 @@ class SalesApplicationUnresolvedStatusBlocksOrderTestCase(OrderSubmissionService
         with self.assertRaises(ConflictException) as ctx:
             restarted_service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-needs-review-restart",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("확신할 수 없습니다", str(ctx.exception))
         self.assertEqual(
@@ -460,76 +460,101 @@ class SalesApplicationUnresolvedStatusBlocksOrderTestCase(OrderSubmissionService
         restarted_service.db.close()
 
 
-class UnrecordedPriorExternalEvidenceGapTestCase(OrderSubmissionServiceTestCaseBase):
-    """2026-09-24 후속(13차 검증 증거 보완, 지시문 §3) — 온채널
-    자동 재신청 방어와 쿠팡 MarketplaceSubmission 중복등록 방어를
-    분리해서 평가한다. 이 클래스는 CH1147184류 상태 — "과거 접수
-    증거는 있으나(실제로는 이 테스트가 알지 못하는 사실), 내부
-    `purchase_sales_application_attempts` 행이 0건이고,
-    `NEEDS_REVIEW`도 아직 기록되지 않은" 상태 — 를 그대로 재현해,
-    실제 발주 서비스 진입점(`submit_order()`)에서 판매신청 POST
-    (`apply_for_sale`)와 발주 Provider 호출(`submit_order`) 횟수를
-    직접 측정한다. 상품코드는 이 파일의 공용 `VALID_KWARGS`를 그대로
-    쓴다(CH1147184를 하드코딩하지 않는다 — 실제 접수 증거를 제품
-    코드에 넣지 않는다는 지시를 지킨다).
+class UnconfirmedFirstApplicationBoundaryTestCase(OrderSubmissionServiceTestCaseBase):
+    """2026-09-24 후속(미확인 판매신청 실행 차단 라운드) — 14차가
+    남긴 판정(CH1147184류 상태에서 판매신청·발주가 각각 1회 실행
+    됐다는 사실 자체)을 "코드로 닫을 수 없는 경계"로 정정하지 않는다
+    — 코드가 누락된 과거 이력을 자동으로 알아낼 수 없는 것과, 미확인
+    상태의 실행을 차단할 수 없는 것은 다르다. 이 클래스는 그 정정을
+    실제 코드·테스트로 증명한다.
 
-    **이 테스트가 확인하는 것은 결함이 아니라 설계상 알려진 경계다**:
-    내부 기록이 0건인 상태는 코드가 "진짜 최초 신청"과 "실제로는
-    시도됐으나 추적되지 않은 신청" 두 경우를 구분할 방법이 없다 —
-    후자를 구분하려면 사람이 `record_unconfirmed_prior_evidence()`
-    로 먼저 `NEEDS_REVIEW`를 기록해야 한다(원본 DB 반영은 별도
-    승인 대상, 이 테스트에서 실행하지 않음). 그래서 이 상태에서는
-    자동 재시도 방어가 걸리지 않고 판매신청 POST가 실제로 나간다 —
-    "쿠팡 Submission이 없으므로 온채널 위험도 없다"는 추론은 여기서
-    성립하지 않는다는 것을 코드로 직접 보여준다."""
+    CH1147184류 상태(과거 접수 증거는 있으나 이 테스트가 알지 못하는
+    사실, 내부 `purchase_sales_application_attempts` 행이 0건, `NEEDS_
+    REVIEW`도 아직 기록되지 않음)를 상품코드 하드코딩 없이(이 파일의
+    공용 `VALID_KWARGS` 사용) 재현해, 실제 발주 서비스 진입점
+    (`submit_order()`)에서 판매신청 POST(`apply_for_sale`)와 발주
+    Provider 호출(`submit_order`) 횟수를 직접 측정한다.
 
-    def test_zero_internal_rows_without_needs_review_is_not_protected_and_calls_real_apply_for_sale(self):
+    `order_submission_service.py::submit_order()`의 새 `confirmed_
+    first_application` 게이트(`confirm_real_submission`과 분리된
+    별도 확인)로: (1) 확인 없이는 두 호출 모두 0회로 차단되고,
+    (2) 명시적으로 확인하면 정상적으로 진행된다 — 모든 신규 상품을
+    영구 차단하지 않는다는 것을 대조군으로 증명한다."""
 
-        connection = self._make_ready_connection()
-
-        self.assertEqual(
-            self.db.query(PurchaseSalesApplicationAttempt).count(), 0,
-            "CH1147184 실제 상태를 그대로 재현한다 — 내부 판매신청 행이 0건이어야 한다.",
-        )
+    def _install_counting_adapter(self):
 
         apply_for_sale_calls = []
         submit_order_calls = []
 
         self._patch_point_balance_gate_passes()
 
-        class _EvidenceGapFakeAdapter:
+        class _CountingAdapter:
             def apply_for_sale(self_inner, external_product_id):
                 apply_for_sale_calls.append(external_product_id)
                 return _FakeSalesApplicationResult(applied_product_code=external_product_id)
 
             def submit_order(self_inner, request):
                 submit_order_calls.append(request)
-                return "ORDER-EVIDENCE-GAP-1"
+                return "ORDER-BOUNDARY-1"
 
         patcher = mock.patch(
             "app.domains.purchase_task.order_submission_service.get_purchase_channel_adapter",
-            return_value=_EvidenceGapFakeAdapter(),
+            return_value=_CountingAdapter(),
         )
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        return apply_for_sale_calls, submit_order_calls
+
+    def test_zero_internal_rows_without_confirmation_blocks_both_calls(self):
+
+        from app.core.exceptions import ConflictException
+
+        connection = self._make_ready_connection()
+        self.assertEqual(
+            self.db.query(PurchaseSalesApplicationAttempt).count(), 0,
+            "CH1147184 실제 상태를 그대로 재현한다 — 내부 판매신청 행이 0건이어야 한다.",
+        )
+        apply_for_sale_calls, submit_order_calls = self._install_counting_adapter()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-boundary-blocked",
+                confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("확인된 최초 신청인지", str(ctx.exception))
+        self.assertEqual(
+            apply_for_sale_calls, [],
+            "내부 기록 0건 + 미확인 상태에서는 confirmed_first_application=True 없이 "
+            "판매신청 POST가 나가면 안 된다 — confirm_real_submission만으로는 "
+            "재실행 승인을 겸하지 않는다.",
+        )
+        self.assertEqual(
+            submit_order_calls, [],
+            "판매신청 게이트에서 막혔으면 발주 Provider 호출까지 이어지면 안 된다.",
+        )
+        self.assertEqual(
+            self.db.query(PurchaseSalesApplicationAttempt).count(), 0,
+            "차단된 시도는 판매신청 시도 행조차 만들지 않는다(IN_FLIGHT로도 남지 않음).",
+        )
+        self.assertEqual(self.db.query(PurchaseOrderSubmissionAttempt).count(), 0)
+
+    def test_zero_internal_rows_with_explicit_confirmation_proceeds_normally(self):
+        """대조군 — 모든 신규 상품을 영구 차단하지 않는다는 것을
+        증명한다. 사람/호출자가 이것이 확인된 최초 신청임을 명시하면
+        (`confirmed_first_application=True`) 정상적으로 판매신청·
+        발주가 각각 1회 진행된다."""
+
+        connection = self._make_ready_connection()
+        apply_for_sale_calls, submit_order_calls = self._install_counting_adapter()
+
         self.service.submit_order(
-            connection.id, self.company_a.id, idempotency_key="k-evidence-gap",
-            confirm_real_submission=True, **VALID_KWARGS,
+            connection.id, self.company_a.id, idempotency_key="k-boundary-confirmed",
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
-        self.assertEqual(
-            len(apply_for_sale_calls), 1,
-            "공백 증거: 내부 기록 0건 상태는 '진짜 최초 신청'과 구분되지 않아 "
-            "판매신청 POST(apply_for_sale)가 실제로 1회 나간다 — NEEDS_REVIEW가 "
-            "원본 DB에 기록되기 전까지는 이 경로가 자동으로 막히지 않는다.",
-        )
-        self.assertEqual(
-            len(submit_order_calls), 1,
-            "판매신청이 (Fake) 접수 확인되면 발주 Provider 호출도 같은 요청 안에서 "
-            "이어서 1회 발생한다 — 두 호출 모두 발주 서비스 진입점 하나에서 나온 "
-            "결과임을 실제 진입점으로 확인한다.",
-        )
+        self.assertEqual(len(apply_for_sale_calls), 1)
+        self.assertEqual(len(submit_order_calls), 1)
         recorded = (
             self.db.query(PurchaseSalesApplicationAttempt)
             .filter(
@@ -538,12 +563,39 @@ class UnrecordedPriorExternalEvidenceGapTestCase(OrderSubmissionServiceTestCaseB
                 PurchaseSalesApplicationAttempt.product_code == VALID_KWARGS["product_code"],
             ).one()
         )
+        self.assertEqual(recorded.status, SalesApplicationStatus.SUBMITTED)
+
+    def test_confirmed_first_application_does_not_bypass_needs_review(self):
+        """NEEDS_REVIEW·RESULT_UNKNOWN 상태는 일반 플래그로 우회하지
+        못한다 — 이미 기록된 행이 있으면 `confirmed_first_application`
+        값과 무관하게 기존 BLOCKS_AUTO_RETRY 판정이 그대로 적용된다."""
+
+        from app.core.exceptions import ConflictException
+
+        connection = self._make_ready_connection()
+        seeded_at = datetime.utcnow()
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code=VALID_KWARGS["product_code"],
+            status=SalesApplicationStatus.NEEDS_REVIEW,
+            failure_detail="[정황 증거 반영 — 실제 판매신청 실행 아님] 우회 방지 테스트 시드",
+            started_at=seeded_at, finished_at=seeded_at,
+        ))
+        self.db.commit()
+        apply_for_sale_calls, submit_order_calls = self._install_counting_adapter()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-boundary-no-bypass",
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
+            )
+        self.assertIn("확신할 수 없습니다", str(ctx.exception))
         self.assertEqual(
-            recorded.status, SalesApplicationStatus.SUBMITTED,
-            "이 상태에서 진행된 시도는 '정상 최초 신청'과 동일한 코드 경로를 타 "
-            "SUBMITTED로 기록된다 — 이것이 바로 사람이 먼저 NEEDS_REVIEW를 "
-            "기록해야 하는 이유다(공백을 코드만으로는 닫을 수 없다).",
+            apply_for_sale_calls, [],
+            "confirmed_first_application=True를 함께 넘겨도 NEEDS_REVIEW 차단을 "
+            "우회하면 안 된다 — 이 플래그는 existing이 None일 때만 관여한다.",
         )
+        self.assertEqual(submit_order_calls, [])
 
 
 class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase):
@@ -567,7 +619,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
 
         attempt = self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-success",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
@@ -594,7 +646,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(OnchannelValidationError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-rejected",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         attempt = self.service.get_attempt(connection.id, self.company_a.id, "k-rejected")
@@ -613,7 +665,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(OnchannelResponseFormatError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-format",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         attempt = self.service.get_attempt(connection.id, self.company_a.id, "k-format")
@@ -633,7 +685,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(OnchannelNetworkError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-timeout",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         attempt = self.service.get_attempt(connection.id, self.company_a.id, "k-timeout")
@@ -654,7 +706,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(PurchaseChannelAdapterError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-cred",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         attempt = self.service.get_attempt(connection.id, self.company_a.id, "k-cred")
@@ -668,7 +720,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(RuntimeError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-unexpected",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         attempt = self.service.get_attempt(connection.id, self.company_a.id, "k-unexpected")
@@ -688,7 +740,7 @@ class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase
 
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-pii-check",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         from sqlalchemy import inspect as sa_inspect
@@ -782,14 +834,14 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
 
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-repeat",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
         self.assertEqual(len(call_log), 1)
 
         with self.assertRaises(ConflictException):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-repeat",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         # 두 번째 시도는 실제 Adapter까지 도달하지 않는다 — DB 잠금이
         # 네트워크 호출보다 먼저 막는다.
@@ -828,7 +880,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
             with self.assertRaises(RuntimeError):
                 self.service.submit_order(
                     connection.id, self.company_a.id, idempotency_key="k-crash",
-                    confirm_real_submission=True, **VALID_KWARGS,
+                    confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
                 )
 
         self.assertEqual(len(call_log), 1, "외부 호출 자체는 실제로 1회 나갔다(성공 응답까지 받음).")
@@ -861,7 +913,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(ConflictException):
             restarted_service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-crash",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertEqual(
             call_log_after_restart, [],
@@ -889,7 +941,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(ConflictException):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-concurrent",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertEqual(call_log, [])
 
@@ -944,7 +996,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(OnchannelNetworkError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-restart",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         # "재시작" — 완전히 새 세션·새 서비스 인스턴스로 같은 파일 DB에
@@ -975,7 +1027,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
             with self.assertRaises(ConflictException):
                 restarted_service.submit_order(
                     connection.id, self.company_a.id, idempotency_key="k-restart",
-                    confirm_real_submission=True, **VALID_KWARGS,
+                    confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
                 )
         self.assertEqual(
             call_log, [],
@@ -993,7 +1045,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
         with self.assertRaises(OnchannelNetworkError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-first",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         with mock.patch(
@@ -1011,7 +1063,7 @@ class DuplicateLockAndRestartRecoveryTestCase(OrderSubmissionServiceTestCaseBase
 
             attempt = self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-second-manual",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
 
@@ -1037,7 +1089,7 @@ class MultiTenantIsolationTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(Exception):
             self.service.submit_order(
                 connection.id, self.company_b.id, idempotency_key="k-cross",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertEqual(
             self.db.query(PurchaseOrderSubmissionAttempt)
@@ -1054,11 +1106,11 @@ class MultiTenantIsolationTestCase(OrderSubmissionServiceTestCaseBase):
 
         attempt_a = self.service.submit_order(
             conn_a.id, self.company_a.id, idempotency_key="shared-key",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
         attempt_b = self.service.submit_order(
             conn_b.id, self.company_b.id, idempotency_key="shared-key",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         self.assertEqual(attempt_a.status, OrderSubmissionStatus.SUCCEEDED)
@@ -1087,13 +1139,13 @@ class MultiTenantIsolationTestCase(OrderSubmissionServiceTestCaseBase):
         self._install_fake_adapter(result="ORDER-1")
         self.service.submit_order(
             conn_1.id, self.company_a.id, idempotency_key="same-key-diff-connection",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         with self.assertRaises(ConflictException):
             self.service.submit_order(
                 conn_2.id, self.company_a.id, idempotency_key="same-key-diff-connection",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
 
@@ -1214,7 +1266,7 @@ class NoSingleConditionAloneOpensRealOrderPathTestCase(OrderSubmissionServiceTes
                 self.service.submit_order(
                     connection.id, self.company_a.id,
                     idempotency_key="k-confirmed-but-blocked",
-                    confirm_real_submission=True, **VALID_KWARGS,
+                    confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
                 )
         self.assertEqual(
             submit_order_call_log, [],
@@ -1261,7 +1313,7 @@ class NoSingleConditionAloneOpensRealOrderPathTestCase(OrderSubmissionServiceTes
             attempt = self.service.submit_order(
                 connection.id, self.company_a.id,
                 idempotency_key=idempotency_key,
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
         self.assertEqual(
@@ -1526,7 +1578,7 @@ class NoSingleConditionAloneOpensRealOrderPathTestCase(OrderSubmissionServiceTes
         with self.assertRaises(Exception):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-cross-2",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertEqual(
             self.db.query(PurchaseOrderSubmissionAttempt)
@@ -1631,7 +1683,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
             self.service.submit_order(
                 connection.id, self.company_a.id,
                 idempotency_key="k-zero-stock-pending",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("가상재고 0 제안", str(ctx.exception))
 
@@ -1660,7 +1712,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
             self.service.submit_order(
                 connection.id, self.company_a.id,
                 idempotency_key="k-attribute-mismatch-pending",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("속성 비교", str(ctx.exception))
 
@@ -1676,7 +1728,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(OnchannelAuthenticationError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-point-fail",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
     def test_unclear_point_response_blocks(self):
@@ -1689,7 +1741,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-point-unclear",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("해석할 수 없습니다", str(ctx.exception))
 
@@ -1706,7 +1758,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(OnchannelNotFoundError):
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-product-fail",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
 
     def test_missing_option_price_blocks(self):
@@ -1720,7 +1772,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-option-missing",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("가격을 확인할 수 없습니다", str(ctx.exception))
 
@@ -1739,7 +1791,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-insufficient",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("보다 적습니다", str(ctx.exception))
 
@@ -1760,7 +1812,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-shipping-unconfirmed",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("배송비", str(ctx.exception))
         self.assertEqual(
@@ -1783,7 +1835,7 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-no-approval",
-                purchase_task_id=999, confirm_real_submission=True, **VALID_KWARGS,
+                purchase_task_id=999, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("승인", str(ctx.exception))
 
@@ -1866,7 +1918,7 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
 
         attempt = self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-approval-ok",
-            purchase_task_id=42, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=42, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
@@ -1897,7 +1949,7 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-approval-stale",
-                purchase_task_id=43, confirm_real_submission=True, **VALID_KWARGS,
+                purchase_task_id=43, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("가격", str(ctx.exception))
         self.assertEqual(call_log, [], "가격이 어긋나면 발주 Adapter가 호출되면 안 된다.")
@@ -1919,7 +1971,7 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-approval-expired",
-                purchase_task_id=44, confirm_real_submission=True, **VALID_KWARGS,
+                purchase_task_id=44, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("승인", str(ctx.exception))
 
@@ -1938,7 +1990,7 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-approval-insufficient",
-                purchase_task_id=45, confirm_real_submission=True, **VALID_KWARGS,
+                purchase_task_id=45, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("배송비 포함 최종 필요 포인트", str(ctx.exception))
 
@@ -1970,7 +2022,7 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
 
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-advance-task",
-            purchase_task_id=46, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=46, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         task = self.db.query(PurchaseTask).filter(PurchaseTask.id == 46).one()
@@ -1999,7 +2051,7 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
 
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-terminal-task",
-            purchase_task_id=47, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=47, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         task = self.db.query(PurchaseTask).filter(PurchaseTask.id == 47).one()
@@ -2037,7 +2089,7 @@ class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-estop",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("비상정지", str(ctx.exception))
         self.assertEqual(self.db.query(PurchaseOrderSubmissionAttempt).count(), 0)
@@ -2059,7 +2111,7 @@ class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-paused",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("일시 중지", str(ctx.exception))
 
@@ -2080,7 +2132,7 @@ class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):
         with self.assertRaises(ConflictException) as ctx:
             self.service.submit_order(
                 connection.id, self.company_a.id, idempotency_key="k-error-mode",
-                confirm_real_submission=True, **VALID_KWARGS,
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
             )
         self.assertIn("오류", str(ctx.exception))
 
@@ -2102,7 +2154,7 @@ class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):
 
         attempt = self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-not-affected",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
 
@@ -2117,7 +2169,7 @@ class AutomationSafetyGateTestCase(OrderSubmissionServiceTestCaseBase):
 
         attempt = self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-manual-default",
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
 
@@ -2207,7 +2259,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
 
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-limit-1",
-            purchase_task_id=201, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=201, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         # 송장조회(refresh_tracking_live)는 한 번도 실행하지 않았다.
@@ -2242,7 +2294,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
         )
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-limit-2",
-            purchase_task_id=202, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=202, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         policy = PurchaseTaskPolicyService(self.db)
@@ -2317,7 +2369,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
         )
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-limit-diff",
-            purchase_task_id=204, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=204, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
         self.assertEqual(self._spent(), 13000.0, "Stage 1 직후 승인액 기준.")
 
@@ -2353,7 +2405,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
         )
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-refund-1",
-            purchase_task_id=205, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=205, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         task_service = PurchaseTaskService(self.db)
@@ -2402,7 +2454,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
         )
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-refund-2",
-            purchase_task_id=206, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=206, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         task_service = PurchaseTaskService(self.db)
@@ -2460,7 +2512,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
         )
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-mixed-1",
-            purchase_task_id=207, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=207, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         record = PurchaseRecord(
@@ -2493,7 +2545,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
         self.service.submit_order(
             connection_a.id, self.company_a.id,
             idempotency_key="k-isolation-a", purchase_task_id=208,
-            confirm_real_submission=True, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         self.assertEqual(self._spent(company=self.company_a), 13000.0)
@@ -2527,7 +2579,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
 
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="k-overdrawn",
-            purchase_task_id=211, confirm_real_submission=True, **VALID_KWARGS,
+            purchase_task_id=211, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
         )
 
         self.db.refresh(reservation)
@@ -2587,7 +2639,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
             with self.assertRaises(RuntimeError):
                 self.service.submit_order(
                     connection.id, self.company_a.id, idempotency_key="k-save-fail",
-                    purchase_task_id=212, confirm_real_submission=True, **VALID_KWARGS,
+                    purchase_task_id=212, confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
                 )
 
         approval_service = PurchaseOrderApprovalService(self.db)

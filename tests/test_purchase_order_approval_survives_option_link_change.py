@@ -160,7 +160,7 @@ class ApprovalSurvivesOptionLinkChangeTestCase(OrderSubmissionServiceTestCaseBas
         attempt = self.service.submit_order(
             self.connection.id, self.company_a.id,
             idempotency_key="k-control-unchanged",
-            purchase_task_id=502, confirm_real_submission=True, **kwargs,
+            purchase_task_id=502, confirm_real_submission=True, confirmed_first_application=True, **kwargs,
         )
 
         self.assertEqual(len(call_log), 1)
@@ -194,7 +194,7 @@ class ApprovalSurvivesOptionLinkChangeTestCase(OrderSubmissionServiceTestCaseBas
             self.service.submit_order(
                 self.connection.id, self.company_a.id,
                 idempotency_key="k-blocked-by-link-change",
-                purchase_task_id=501, confirm_real_submission=True, **kwargs,
+                purchase_task_id=501, confirm_real_submission=True, confirmed_first_application=True, **kwargs,
             )
         self.assertIn("옵션", str(ctx.exception))
         self.assertEqual(
@@ -235,7 +235,7 @@ class ApprovalSurvivesOptionLinkChangeTestCase(OrderSubmissionServiceTestCaseBas
         attempt = self.service.submit_order(
             self.connection.id, self.company_a.id,
             idempotency_key="k-reapproved-succeeds",
-            purchase_task_id=501, confirm_real_submission=True, **kwargs,
+            purchase_task_id=501, confirm_real_submission=True, confirmed_first_application=True, **kwargs,
         )
 
         self.assertEqual(len(call_log), 1)

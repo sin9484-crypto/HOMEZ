@@ -350,11 +350,27 @@ class PurchaseOrderSubmissionService:
         address_detail: str = "", comment: str = "", site_name: str = "",
         purchase_task_id: int | None = None, triggered_by: int | None = None,
         confirm_real_submission: bool = False,
+        confirmed_first_application: bool = False,
     ) -> PurchaseOrderSubmissionAttempt:
         """실제 온채널 발주를 시도한다. `confirm_real_submission=True`를
         명시적으로 넘기지 않으면 아무 것도 하지 않고 거부한다(연결
         조회조차 하지 않는다 — 이 승인 게이트가 이 메서드의 첫 줄이다,
-        다른 어떤 검증보다 먼저 막는다)."""
+        다른 어떤 검증보다 먼저 막는다).
+
+        2026-09-24 후속(미확인 판매신청 실행 차단 라운드) —
+        `confirm_real_submission`은 "실제로 외부 요청을 보내라"는
+        승인일 뿐, "이 상품·연결에 판매신청을 (재)실행해도 된다"는
+        승인을 겸하지 않는다. 이 상품·연결에 내부 판매신청 기록이
+        전혀 없으면(`existing is None`) — 코드는 이것이 "진짜 최초
+        신청"인지 "과거에 추적되지 않은 방식으로 이미 시도된 적이
+        있는지" 구분할 수 없다. `confirmed_first_application=True`를
+        별도로 명시해야만("이것이 확인된 최초 신청이다") 그 상태에서
+        판매신청 자동 실행이 진행된다 — 없으면 실행 자체를 막는다
+        (§ 아래 게이트). 이미 추적 중인 행(REJECTED 재시도,
+        NEEDS_REVIEW/RESULT_UNKNOWN 등)에는 이 플래그가 전혀 관여하지
+        않는다 — 그 상태들은 여전히 `ensure_sales_application_
+        submitted()`/`override_unresolved_status`가 기존 그대로
+        판단한다(이 플래그로 우회되지 않는다)."""
 
         if not confirm_real_submission:
             raise BadRequestException(
@@ -443,6 +459,31 @@ class PurchaseOrderSubmissionService:
         if not self._sales_application_service.is_sales_application_confirmed(
             connection.id, company_id, product_code,
         ):
+            # 2026-09-24 후속 — 내부 판매신청 기록이 아예 없는
+            # 상태(existing is None)는 "확인된 최초 신청"과 "과거에
+            # 추적되지 않은 방식으로 이미 시도된 적이 있으나 기록이
+            # 누락된 상태"를 코드가 구분할 방법이 없다. 내부 기록
+            # 부재만으로 최초 신청 의도를 추정하지 않는다 — 별도
+            # 확인(`confirmed_first_application=True`) 없이는 이
+            # 지점에서 실행을 막는다. 이미 기록이 있는 행(REJECTED
+            # 재시도, NEEDS_REVIEW/RESULT_UNKNOWN)은 이 검사를 거치지
+            # 않고 그대로 ensure_sales_application_submitted()의 기존
+            # 판정(override_unresolved_status 포함)을 탄다 — 이
+            # 플래그가 그 판정을 우회하지 못한다.
+            existing_application = self._sales_application_service.get_attempt(
+                connection.id, company_id, product_code,
+            )
+            if existing_application is None and not confirmed_first_application:
+                raise ConflictException(
+                    f"상품({product_code})에 대한 내부 판매신청 기록이 "
+                    "없습니다 — 이것이 확인된 최초 신청인지 이 코드는 알 수 "
+                    "없습니다. confirm_real_submission=True는 \"실제로 요청을 "
+                    "보내라\"는 승인일 뿐 \"이것이 확인된 최초 신청이다\"라는 "
+                    "승인이 아닙니다. 최초 신청임을 확인했다면 "
+                    "confirmed_first_application=True를 별도로 명시하세요 — "
+                    "과거 접수 이력이 불확실하면 온채널 공식 화면이나 공급처 "
+                    "문의로 사람이 먼저 확인해야 합니다.",
+                )
             application = self._sales_application_service.ensure_sales_application_submitted(
                 connection.id, company_id, product_code,
                 triggered_by=triggered_by, confirm_real_submission=True,

@@ -1299,6 +1299,7 @@ def submit_real_order(
             comment=data.comment, site_name=data.site_name,
             purchase_task_id=task_id, triggered_by=current_user.id,
             confirm_real_submission=data.confirm_real_submission,
+            confirmed_first_application=data.confirmed_first_application,
         )
     except OnchannelApiError as exc:
         _translate_onchannel_error(exc)

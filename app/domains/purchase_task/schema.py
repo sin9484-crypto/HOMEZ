@@ -699,6 +699,11 @@ class SubmitRealOrderRequest(BaseModel):
     comment: str = ""
     site_name: str = ""
     confirm_real_submission: bool = False
+    confirmed_first_application: bool = False
+    """2026-09-24 후속(미확인 판매신청 실행 차단 라운드) — 이 상품·연결에
+    내부 판매신청 기록이 전혀 없을 때만 참조된다. `confirm_real_submission`
+    (실제 요청 실행 승인)과 별개로, "이것이 확인된 최초 신청이다"를
+    호출자가 명시적으로 선언해야 한다 — 기본값 False(fail-closed)."""
 
 
 class PurchaseOrderSubmissionAttemptResponse(BaseModel):

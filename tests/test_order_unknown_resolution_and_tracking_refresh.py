@@ -215,7 +215,7 @@ class OrderResolutionTestCaseBase(unittest.TestCase):
             self.service.submit_order(
                 connection.id, self.company_a.id,
                 idempotency_key=f"pt-{task_id}-unknown-1",
-                confirm_real_submission=True, purchase_task_id=task_id,
+                confirm_real_submission=True, confirmed_first_application=True, purchase_task_id=task_id,
                 **VALID_KWARGS,
             )
         attempt = self.service.get_attempt(
@@ -284,7 +284,7 @@ class UnresolvedUnknownBlocksRetryTestCase(OrderResolutionTestCaseBase):
             self.service.submit_order(
                 connection.id, self.company_a.id,
                 idempotency_key="pt-200-retry-1",
-                confirm_real_submission=True, purchase_task_id=200,
+                confirm_real_submission=True, confirmed_first_application=True, purchase_task_id=200,
                 **VALID_KWARGS,
             )
 
@@ -306,7 +306,7 @@ class UnresolvedUnknownBlocksRetryTestCase(OrderResolutionTestCaseBase):
         new_attempt = self.service.submit_order(
             connection.id, self.company_a.id,
             idempotency_key="pt-201-retry-1",
-            confirm_real_submission=True, purchase_task_id=201,
+            confirm_real_submission=True, confirmed_first_application=True, purchase_task_id=201,
             **VALID_KWARGS,
         )
         self.assertEqual(new_attempt.status, OrderSubmissionStatus.SUCCEEDED)
@@ -329,7 +329,7 @@ class UnresolvedUnknownBlocksRetryTestCase(OrderResolutionTestCaseBase):
             self.service.submit_order(
                 connection.id, self.company_a.id,
                 idempotency_key="pt-202-retry-1",
-                confirm_real_submission=True, purchase_task_id=202,
+                confirm_real_submission=True, confirmed_first_application=True, purchase_task_id=202,
                 **VALID_KWARGS,
             )
 
@@ -374,7 +374,7 @@ class ResolveUnknownAttemptTestCase(OrderResolutionTestCaseBase):
         self._install_fake_adapter(result="ORDER-OK")
         attempt = self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="pt-302-1",
-            confirm_real_submission=True, purchase_task_id=302, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, purchase_task_id=302, **VALID_KWARGS,
         )
         self.assertEqual(attempt.status, OrderSubmissionStatus.SUCCEEDED)
 
@@ -541,7 +541,7 @@ class AttemptHistoryTestCase(OrderResolutionTestCaseBase):
         self._install_fake_adapter(result="OC-1")
         self.service.submit_order(
             connection.id, self.company_a.id, idempotency_key="pt-401-1",
-            confirm_real_submission=True, purchase_task_id=401, **VALID_KWARGS,
+            confirm_real_submission=True, confirmed_first_application=True, purchase_task_id=401, **VALID_KWARGS,
         )
 
         history = self.service.list_attempts(401, self.company_b.id)
