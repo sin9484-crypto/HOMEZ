@@ -1425,6 +1425,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.purchase_option_value_required": "필수 구매 옵션입니다. 값을 입력하세요.",
   "lw.purchase_option_select_invalid": "쿠팡이 허용하는 값 중에서 선택하세요.",
   "lw.purchase_option_input_hint": "쿠팡 공식 카테고리 정보 기준 입력칸입니다.",
+  "lw.purchase_option_group_choose_one": "이 그룹 중 하나만 입력하면 됩니다",
   "lw.policy_notice_confirmed": "상품정보제공고시 내용을 확인했습니다.",
 
   "lw.econ_cost_of_goods": "원가",

@@ -11736,14 +11736,30 @@
       <h3>${HomezI18n.t("lw.policy_purchase_options")}</h3>
       <div class="lw-field-grid" data-lw-purchase-option-grid></div>`;
     const grid = host.querySelector("[data-lw-purchase-option-grid]");
+    // 2026-09-24 실사용 중 발견 — group_number가 "NONE"이 아닌
+    // 속성들은 쿠팡 공식 "번들 속성 그룹"으로 그중 하나만 채우면
+    // 된다(category_metadata.py::validate_purchase_options()와
+    // 동일 규칙, 여기서도 특정 그룹 번호·필드 이름을 하드코딩하지
+    // 않고 group_number 값 자체로만 판단한다). 화면에는 두 필드
+    // 모두 "*"를 독립적으로 보여주는 대신 그룹임을 표시한다.
+    const groupCounts = {};
+    exposedFields.forEach((field) => {
+      const g = field.group_number;
+      if (g && g !== "NONE") groupCounts[g] = (groupCounts[g] || 0) + 1;
+    });
     grid.innerHTML = exposedFields.map((field) => {
       const name = field.attribute_type_name;
       const savedValue = values[name] || "";
-      const requiredMark = field.required ? " *" : "";
+      const group = field.group_number && field.group_number !== "NONE" ? field.group_number : "";
+      const isGrouped = Boolean(group) && groupCounts[group] > 1;
+      const requiredMark = field.required
+        ? (isGrouped ? ` * (${HomezI18n.t("lw.purchase_option_group_choose_one")})` : " *")
+        : "";
+      const groupAttr = ` data-lw-purchase-option-group="${escapeHtml(group || "NONE")}"`;
       if (field.input_type === "SELECT" && (field.input_values || []).length) {
         return `
         <label class="field"><span class="field-label">${escapeHtml(name)}${requiredMark}</span>
-          <select data-lw-purchase-option-key="${escapeHtml(name)}" data-lw-purchase-option-required="${field.required ? "true" : "false"}">
+          <select data-lw-purchase-option-key="${escapeHtml(name)}" data-lw-purchase-option-required="${field.required ? "true" : "false"}"${groupAttr}>
             <option value="">${HomezI18n.t("common.select_placeholder")}</option>
             ${field.input_values.map((v) => `<option value="${escapeHtml(v)}" ${savedValue === v ? "selected" : ""}>${escapeHtml(v)}</option>`).join("")}
           </select>
@@ -11753,17 +11769,25 @@
       const unit = field.basic_unit ? ` (${escapeHtml(field.basic_unit)})` : "";
       return `
         <label class="field"><span class="field-label">${escapeHtml(name)}${unit}${requiredMark}</span>
-          <input type="text" data-lw-purchase-option-key="${escapeHtml(name)}" data-lw-purchase-option-required="${field.required ? "true" : "false"}" value="${escapeHtml(savedValue)}">
+          <input type="text" data-lw-purchase-option-key="${escapeHtml(name)}" data-lw-purchase-option-required="${field.required ? "true" : "false"}"${groupAttr} value="${escapeHtml(savedValue)}">
           <span class="field-error" data-lw-purchase-option-error></span>
           <span class="stat-sub">${HomezI18n.t("lw.purchase_option_input_hint")}</span>
         </label>`;
     }).join("");
     const refresh = () => {
-      grid.querySelectorAll("[data-lw-purchase-option-key]").forEach((input) => {
+      const inputs = Array.from(grid.querySelectorAll("[data-lw-purchase-option-key]"));
+      const filledGroups = new Set();
+      inputs.forEach((input) => {
+        const group = input.dataset.lwPurchaseOptionGroup;
+        if (group && group !== "NONE" && input.value.trim()) filledGroups.add(group);
+      });
+      inputs.forEach((input) => {
         const required = input.dataset.lwPurchaseOptionRequired === "true";
+        const group = input.dataset.lwPurchaseOptionGroup;
+        const groupSatisfied = Boolean(group) && group !== "NONE" && filledGroups.has(group);
         const errorEl = input.parentElement.querySelector("[data-lw-purchase-option-error]");
         if (!errorEl) return;
-        errorEl.textContent = required && !input.value.trim()
+        errorEl.textContent = required && !groupSatisfied && !input.value.trim()
           ? HomezI18n.t("lw.purchase_option_value_required") : "";
       });
     };

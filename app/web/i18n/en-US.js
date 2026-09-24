@@ -1412,6 +1412,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.purchase_option_value_required": "This purchase option is required. Please enter a value.",
   "lw.purchase_option_select_invalid": "Choose one of the values Coupang allows.",
   "lw.purchase_option_input_hint": "Free-text field per Coupang's official category data.",
+  "lw.purchase_option_group_choose_one": "Only one field in this group is needed",
   "lw.policy_purchase_options": "Purchase options",
   "lw.policy_purchase_options_invalid": "Purchase options must be valid JSON.",
   "lw.policy_notice_confirmed": "I reviewed the category notice information.",
