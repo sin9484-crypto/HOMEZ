@@ -12,6 +12,7 @@ Credential Manager를 건드리지 않는다(InMemoryCredentialStore만 사용).
 
 import unittest
 from datetime import datetime
+from decimal import Decimal
 
 from app.core.windows_credential_store import InMemoryCredentialStore
 from app.domains.purchase.supplier_order_providers import (
@@ -344,6 +345,100 @@ class OnchannelRealLookupTestCase(unittest.TestCase):
         self.assertEqual(result.title, "테스트 상품")
         self.assertEqual(len(result.options), 1)
         self.assertEqual(result.options[0].in_stock, True)
+
+    def test_lookup_product_maps_new_fields_through(self):
+        """2026-09-24 후속(상품등록 차단 항목 해소 라운드) — disc_price·
+        recom_cus_price·return_comment·img_url·sec_tax·prd_char1·
+        gosi_info가 ProductLookupResult까지 그대로 전달되는지 확인한다."""
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {
+            "result": {
+                "prd_code": "CH1234567", "product_nm": "테스트 상품",
+                "prd_state": 1,
+                "return_comment": "7일 이내 반품 가능",
+                "img_url": "https://img.onch3.co.kr/a.jpg",
+                "sec_tax": "Y", "prd_char1": "N",
+                "gosi_info": {"품명": "바디워시"},
+                "options": [
+                    {
+                        "num": 1, "option_nm": "기본", "option_price": 5000,
+                        "amount": 3, "disc_price": 4800, "recom_cus_price": 6000,
+                    },
+                ],
+            },
+        }
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_get=self._fake_get(200, body),
+        )
+
+        result = adapter.lookup_product("CH1234567")
+
+        self.assertEqual(result.status, 1)
+        self.assertEqual(result.return_policy_detail, "7일 이내 반품 가능")
+        self.assertEqual(result.image_url, "https://img.onch3.co.kr/a.jpg")
+        self.assertIs(result.tax_exempt, True)
+        self.assertIs(result.minor_sale_prohibited, False)
+        self.assertEqual(result.notice_info_raw, {"품명": "바디워시"})
+        self.assertEqual(result.options[0].discount_price, Decimal("4800"))
+        self.assertEqual(result.options[0].recommended_customer_price, Decimal("6000"))
+
+    def test_lookup_product_missing_new_fields_stay_none(self):
+        """새 필드가 응답에 아예 없으면 None으로 남는다 — 0/False로
+        대체하지 않는다."""
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {
+            "result": {
+                "prd_code": "CH1", "product_nm": "x", "prd_state": 1,
+                "options": [
+                    {"num": 1, "option_nm": "기본", "option_price": 1000, "amount": 1},
+                ],
+            },
+        }
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_get=self._fake_get(200, body),
+        )
+
+        result = adapter.lookup_product("CH1")
+
+        self.assertIsNone(result.return_policy_detail)
+        self.assertIsNone(result.image_url)
+        self.assertIsNone(result.tax_exempt)
+        self.assertIsNone(result.minor_sale_prohibited)
+        self.assertIsNone(result.notice_info_raw)
+        self.assertIsNone(result.options[0].discount_price)
+        self.assertIsNone(result.options[0].recommended_customer_price)
+
+    def test_lookup_product_wrong_type_new_fields_stay_none(self):
+        """잘못된 타입(disc_price가 문자열 등)은 예외 없이 해석 불가로
+        남는다."""
+
+        self.store.save("conn-1", {"auth_key": "test-jwt", "allowed_ip": ""})
+        body = {
+            "result": {
+                "prd_code": "CH1", "product_nm": "x", "prd_state": 1,
+                "sec_tax": "1", "gosi_info": "문자열",
+                "options": [
+                    {
+                        "num": 1, "option_nm": "기본", "option_price": 1000,
+                        "amount": 1, "disc_price": "9500원",
+                    },
+                ],
+            },
+        }
+        adapter = OnchannelChannelAdapter(
+            credential_store=self.store, credential_reference="conn-1",
+            http_get=self._fake_get(200, body),
+        )
+
+        result = adapter.lookup_product("CH1")
+
+        self.assertIsNone(result.tax_exempt)
+        self.assertIsNone(result.notice_info_raw)
+        self.assertIsNone(result.options[0].discount_price)
 
     def test_lookup_product_uses_this_connections_own_credential_not_others(self):
         """회사별 자격증명 참조 일관성 — 다른 연결의 자격증명이 섞이지

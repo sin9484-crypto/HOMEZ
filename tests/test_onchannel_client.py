@@ -258,6 +258,149 @@ class SuccessParsingTestCase(unittest.TestCase):
         self.assertEqual(fake_get.calls[0]["params"]["end_at"], "2026-09-08")
 
 
+class NewProductFieldParsingTestCase(unittest.TestCase):
+    """2026-09-24 후속(상품등록 차단 항목 해소 라운드) — disc_price·
+    recom_cus_price·return_comment·img_url·sec_tax·prd_char1·gosi_info
+    파싱. 정상·누락·null·잘못된 타입을 각각 구분하며, 누락/null/잘못된
+    타입을 0·False·빈 문자열 같은 '정상값'으로 대체하지 않는지 확인한다."""
+
+    def test_normal_values_are_parsed(self):
+
+        body = {
+            "status": 200,
+            "result": {
+                "id": 1, "prd_code": "CH1", "product_nm": "테스트 상품",
+                "prd_state": 1,
+                "return_comment": "7일 이내 반품 가능",
+                "img_url": "https://img.onch3.co.kr/a.jpg",
+                "sec_tax": "Y",
+                "prd_char1": "N",
+                "gosi_info": {"품명": "바디워시", "제조국": "대한민국"},
+                "options": [
+                    {
+                        "num": 111, "option_nm": "기본", "option_price": 10000,
+                        "amount": 5, "disc_price": 9500, "recom_cus_price": 12000,
+                    },
+                ],
+            },
+        }
+        fake_get = _fake_get_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1")
+
+        self.assertEqual(product.status, 1)
+        self.assertEqual(product.return_comment, "7일 이내 반품 가능")
+        self.assertEqual(product.img_url, "https://img.onch3.co.kr/a.jpg")
+        self.assertIs(product.tax_exempt, True)
+        self.assertIs(product.minor_sale_prohibited, False)
+        self.assertEqual(product.notice_info_raw, {"품명": "바디워시", "제조국": "대한민국"})
+        self.assertEqual(product.options[0].disc_price, 9500)
+        self.assertEqual(product.options[0].recom_cus_price, 12000)
+
+    def test_missing_fields_become_none_not_defaults(self):
+        """필드 자체가 응답에 없으면 None — 0/False/빈 dict로 대체하지
+        않는다."""
+
+        fake_get = _fake_get_factory(_FakeResponse(200, PRODUCT_DETAIL_SUCCESS_BODY))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1234567")
+
+        self.assertIsNone(product.return_comment)
+        self.assertIsNone(product.img_url)
+        self.assertIsNone(product.tax_exempt)
+        self.assertIsNone(product.minor_sale_prohibited)
+        self.assertIsNone(product.notice_info_raw)
+        self.assertIsNone(product.options[0].disc_price)
+        self.assertIsNone(product.options[0].recom_cus_price)
+
+    def test_explicit_null_values_become_none(self):
+
+        body = {
+            "status": 200,
+            "result": {
+                "id": 1, "prd_code": "CH1", "product_nm": "x", "prd_state": 1,
+                "return_comment": None, "img_url": None,
+                "sec_tax": None, "prd_char1": None, "gosi_info": None,
+                "options": [
+                    {
+                        "num": 1, "option_nm": "기본", "option_price": 1000,
+                        "amount": 1, "disc_price": None, "recom_cus_price": None,
+                    },
+                ],
+            },
+        }
+        fake_get = _fake_get_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1")
+
+        self.assertIsNone(product.return_comment)
+        self.assertIsNone(product.img_url)
+        self.assertIsNone(product.tax_exempt)
+        self.assertIsNone(product.minor_sale_prohibited)
+        self.assertIsNone(product.notice_info_raw)
+        self.assertIsNone(product.options[0].disc_price)
+        self.assertIsNone(product.options[0].recom_cus_price)
+
+    def test_wrong_type_values_become_none_not_a_crash(self):
+        """disc_price가 문자열, sec_tax/prd_char1이 'Y'/'N' 외 값,
+        gosi_info가 dict가 아닌 경우 — 예외를 내지 않고 해석 불가로
+        남긴다(추측 변환하지 않는다)."""
+
+        body = {
+            "status": 200,
+            "result": {
+                "id": 1, "prd_code": "CH1", "product_nm": "x", "prd_state": 1,
+                "return_comment": 12345, "img_url": ["not", "a", "string"],
+                "sec_tax": "1", "prd_char1": "yes", "gosi_info": "문자열입니다",
+                "options": [
+                    {
+                        "num": 1, "option_nm": "기본", "option_price": 1000,
+                        "amount": 1, "disc_price": "9500원", "recom_cus_price": True,
+                    },
+                ],
+            },
+        }
+        fake_get = _fake_get_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1")
+
+        self.assertIsNone(product.return_comment)
+        self.assertIsNone(product.img_url)
+        self.assertIsNone(product.tax_exempt)
+        self.assertIsNone(product.minor_sale_prohibited)
+        self.assertIsNone(product.notice_info_raw)
+        self.assertIsNone(product.options[0].disc_price)
+        self.assertIsNone(product.options[0].recom_cus_price)
+
+    def test_boolean_is_not_mistaken_for_int(self):
+        """disc_price=True(bool)는 int의 서브클래스지만 정상 가격으로
+        오인하지 않는다 — 기존 check_member_point 회귀 케이스와 동일한
+        원칙."""
+
+        body = {
+            "status": 200,
+            "result": {
+                "id": 1, "prd_code": "CH1", "product_nm": "x", "prd_state": 1,
+                "options": [
+                    {
+                        "num": 1, "option_nm": "기본", "option_price": 1000,
+                        "amount": 1, "disc_price": False,
+                    },
+                ],
+            },
+        }
+        fake_get = _fake_get_factory(_FakeResponse(200, body))
+        client = OnchannelApiClient(auth_key="k", http_get=fake_get)
+
+        product = client.get_product("CH1")
+
+        self.assertIsNone(product.options[0].disc_price)
+
+
 class ErrorClassificationTestCase(unittest.TestCase):
     """인증실패·권한부족·존재하지않음·호출제한·응답형식오류를 각각
     다른 예외 타입으로 구분하는지 확인한다 — 지시문 1번 핵심."""

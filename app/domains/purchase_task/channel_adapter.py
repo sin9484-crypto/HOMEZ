@@ -123,11 +123,17 @@ class LoginRequirementResult:
 
 @dataclass(frozen=True)
 class ChannelProductOption:
+    """2026-09-24 후속(상품등록 차단 항목 해소 라운드) —
+    `discount_price`/`recommended_customer_price`는 매입처 응답의
+    참고 필드일 뿐이다(적용 조건 미확인) — `price`를 이 값으로
+    대체·보정하지 않는다(제안값, 자동 채택 금지)."""
 
     option_id: str
     label: str
     price: Decimal | None
     in_stock: bool | None
+    discount_price: Decimal | None = None
+    recommended_customer_price: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +204,19 @@ class ProductLookupResult:
     package_quantity: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
     size_specification: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
     certification_identifiers: ChannelAttributeValue = UNKNOWN_ATTRIBUTE
+    # 2026-09-24 후속(상품등록 차단 항목 해소 라운드) — 아래 5개는
+    # 매입처 응답에 실제로 존재하는(공식 스펙 문서화된) 단순 필드를
+    # 그대로 노출한다. `notice_info_raw`(정보고시 원문)만 예외 —
+    # 내부 키가 공식적으로 미문서화라 파싱하지 않고 dict 그대로
+    # 불투명하게 넘긴다(사람이 직접 확인). `status`는 판매 상태
+    # (1~5)이지 "이 계정의 판매신청 승인 여부"가 아니다 — 이 둘을
+    # 혼동해 판매신청 게이트를 대신하지 않는다(기존 원칙 재확인).
+    status: str | None = None
+    return_policy_detail: str | None = None
+    image_url: str | None = None
+    tax_exempt: bool | None = None
+    minor_sale_prohibited: bool | None = None
+    notice_info_raw: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -755,6 +774,13 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
                 option_id=str(opt.option_id), label=opt.label,
                 price=Decimal(str(opt.price)) if opt.price is not None else None,
                 in_stock=(opt.stock_qty or 0) > 0 if opt.stock_qty is not None else None,
+                discount_price=(
+                    Decimal(str(opt.disc_price)) if opt.disc_price is not None else None
+                ),
+                recommended_customer_price=(
+                    Decimal(str(opt.recom_cus_price))
+                    if opt.recom_cus_price is not None else None
+                ),
             )
             for opt in product.options
         )
@@ -772,6 +798,12 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
             external_product_id=product.product_code, title=product.title,
             options=options, detail="온채널 실 API 조회 결과.",
             shipping_info=shipping_info,
+            status=product.status,
+            return_policy_detail=product.return_comment,
+            image_url=product.img_url,
+            tax_exempt=product.tax_exempt,
+            minor_sale_prohibited=product.minor_sale_prohibited,
+            notice_info_raw=product.notice_info_raw,
         )
 
     def list_products(

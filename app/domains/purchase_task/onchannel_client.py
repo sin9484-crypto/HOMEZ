@@ -107,11 +107,19 @@ class OnchannelNetworkError(OnchannelApiError):
 
 @dataclass(frozen=True)
 class OnchannelProductOption:
+    """2026-09-24 후속(상품등록 차단 항목 해소 라운드) —
+    `disc_price`(최종 준수가)·`recom_cus_price`(권장소비자가)는 공식
+    스펙에 라벨만 있고 적용 조건(할인 규칙·최저가 준수 등) 설명이
+    없다 — `price`(판매가)를 이 값으로 대체·보정하지 않는다. 원문
+    그대로만 보존해 사람이 판단할 참고 자료로 남긴다(제안값, 자동
+    채택 금지 — `OnchannelShippingInfo`의 기존 원칙과 동일)."""
 
     option_id: int
     label: str
     price: int | None
     stock_qty: int | None
+    disc_price: int | None = None
+    recom_cus_price: int | None = None
 
 
 @dataclass(frozen=True)
@@ -146,12 +154,26 @@ class OnchannelShippingInfo:
 
 @dataclass(frozen=True)
 class OnchannelProduct:
+    """2026-09-24 후속(상품등록 차단 항목 해소 라운드) —
+    `return_comment`/`img_url`/`tax_exempt`/`minor_sale_prohibited`는
+    공식 스펙에 명시적으로 문서화된 단순 필드라 그대로 매핑한다.
+    `notice_info_raw`(정보고시, 원문 `gosi_info`)는 다르다 — 스펙
+    자체가 "상세 필드는 정보고시 API를 참고하라"고만 적혀 있고 그
+    API도 스펙에 응답 스키마가 없어(`ProductLookupResult` 기존
+    주석과 동일한 근거), 내부 키를 추측해서 파싱하지 않는다 — 받은
+    그대로(원문 dict)만 불투명하게 보존해 사람이 직접 열어볼 수 있게
+    한다."""
 
     product_code: str
     title: str
     status: str | None
     options: tuple[OnchannelProductOption, ...]
     shipping_info: OnchannelShippingInfo | None = None
+    return_comment: str | None = None
+    img_url: str | None = None
+    tax_exempt: bool | None = None
+    minor_sale_prohibited: bool | None = None
+    notice_info_raw: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -379,38 +401,56 @@ class OnchannelApiClient:
         body = self._get(f"/openapi/seller/product/{product_code}")
         result = body["result"]
         try:
+            # 필드 하나라도 없거나 기대한 타입이 아니면 그 항목만
+            # None — 나머지 항목까지 통째로 버리지 않는다(부분 관측도
+            # 그대로 남긴다, 0/False/빈 문자열로 대체하지 않는다).
+            def _int_or_none(value):
+                if isinstance(value, int) and not isinstance(value, bool):
+                    return value
+                return None
+
+            def _str_or_none(value):
+                return value if isinstance(value, str) else None
+
+            def _yn_or_none(value):
+                # 2026-09-24 후속 — 공식 스펙이 "Y: .../N: ..." 형태로만
+                # 정의한 필드(sec_tax/prd_char1) 전용. Y/N이 아닌 값은
+                # True/False로 추측하지 않고 그대로 미확인 처리한다.
+                if value == "Y":
+                    return True
+                if value == "N":
+                    return False
+                return None
+
             options = tuple(
                 OnchannelProductOption(
                     option_id=opt["num"], label=opt.get("option_nm", ""),
                     price=opt.get("option_price"), stock_qty=opt.get("amount"),
+                    disc_price=_int_or_none(opt.get("disc_price")),
+                    recom_cus_price=_int_or_none(opt.get("recom_cus_price")),
                 )
                 for opt in (result.get("options") or [])
             )
             shipping_info = None
             extends = result.get("extends_info")
             if isinstance(extends, dict):
-                # 필드 하나라도 없거나 정수가 아니면 그 항목만 None —
-                # 나머지 항목까지 통째로 버리지 않는다(부분 관측도
-                # 그대로 남긴다, 0으로 대체하지 않는다).
-                def _int_or_none(value):
-                    if isinstance(value, int) and not isinstance(value, bool):
-                        return value
-                    return None
-
                 shipping_info = OnchannelShippingInfo(
-                    send_type=(
-                        extends.get("send_type")
-                        if isinstance(extends.get("send_type"), str) else None
-                    ),
+                    send_type=_str_or_none(extends.get("send_type")),
                     quantity_threshold=_int_or_none(extends.get("quantity")),
                     base_shipping_cost=_int_or_none(extends.get("send_price")),
                     jeju_shipping_cost=_int_or_none(extends.get("jeju_send_price")),
                     remote_area_shipping_cost=_int_or_none(extends.get("etc_send_price")),
                 )
+            gosi_info = result.get("gosi_info")
             return OnchannelProduct(
                 product_code=result["prd_code"], title=result.get("product_nm", ""),
                 status=result.get("prd_state"), options=options,
                 shipping_info=shipping_info,
+                return_comment=_str_or_none(result.get("return_comment")),
+                img_url=_str_or_none(result.get("img_url")),
+                tax_exempt=_yn_or_none(result.get("sec_tax")),
+                minor_sale_prohibited=_yn_or_none(result.get("prd_char1")),
+                notice_info_raw=gosi_info if isinstance(gosi_info, dict) else None,
             )
         except KeyError as exc:
             raise OnchannelResponseFormatError(
