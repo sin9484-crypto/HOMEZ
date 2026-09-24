@@ -174,7 +174,27 @@ def validate_purchase_options(
     속성만 검사한다(exposed=NONE은 검색전용옵션이라 구매옵션이
     아니다). SELECT는 반드시 공식 inputValues 안의 값이어야 한다 —
     자유 텍스트를 그대로 허용하지 않는다.
+
+    2026-09-24 실사용 중 발견 — 쿠팡 공식 문서(Category Metadata
+    Query) 확인 결과 group_number가 "NONE"이 아닌 속성들은 "번들
+    속성 그룹"으로, 그 그룹 중 하나만 채우면 된다(예: 이 상품의
+    "개당 용량"·"개당 중량"은 같은 그룹 — 온채널 정보고시의
+    "용량(중량) 또는 중량"과 동일한 양자택일 패턴). 이전 코드는 이
+    관계를 무시하고 각 속성을 독립적으로 required 검사해, 그룹 내
+    다른 속성을 이미 채웠는데도 나머지를 누락으로 잘못 표시했다.
     """
+
+    filled_groups: set[str] = set()
+    for field in field_definitions:
+        if not field.get("exposed"):
+            continue
+        group = field.get("group_number")
+        if not group or group == "NONE":
+            continue
+        name = field.get("attribute_type_name")
+        value = purchase_options.get(name)
+        if value is not None and str(value).strip():
+            filled_groups.add(group)
 
     missing: list[str] = []
     for field in field_definitions:
@@ -184,7 +204,9 @@ def validate_purchase_options(
         value = purchase_options.get(name)
         has_value = value is not None and str(value).strip()
         if not has_value:
-            if field.get("required"):
+            group = field.get("group_number")
+            group_satisfied = bool(group) and group != "NONE" and group in filled_groups
+            if field.get("required") and not group_satisfied:
                 missing.append(str(name))
             continue
         input_values = field.get("input_values") or []

@@ -317,5 +317,90 @@ class PurchaseOptionValidationTests(unittest.TestCase):
         self.assertEqual(missing, ["수량"])
 
 
+class PurchaseOptionGroupNumberTests(unittest.TestCase):
+    """
+    2026-09-24 실사용 중 발견 — 쿠팡 공식 문서(Category Metadata
+    Query) 확인 결과 group_number가 "NONE"이 아닌 속성은 "번들 속성
+    그룹"으로 그 중 하나만 채우면 된다(예: CH1147184/옵션 3945580의
+    실제 카테고리(56213) 메타데이터에서 "개당 용량"·"개당 중량"이
+    둘 다 group_number="1", required=true로 왔지만 실제로는 양자
+    택일). 수정 전 코드는 그룹을 무시해 이미 그룹 내 다른 속성을
+    채웠는데도 나머지를 누락으로 잘못 표시했다(재발 방지).
+    """
+
+    def setUp(self):
+        self.grouped_definitions = [
+            {
+                "attribute_type_name": "개당 중량", "input_type": "INPUT",
+                "data_type": "NUMBER", "usable_units": ["g", "kg"],
+                "input_values": [], "required": True, "exposed": True,
+                "group_number": "1",
+            },
+            {
+                "attribute_type_name": "개당 용량", "input_type": "INPUT",
+                "data_type": "NUMBER", "usable_units": ["L", "ml"],
+                "input_values": [], "required": True, "exposed": True,
+                "group_number": "1",
+            },
+            {
+                # 같은 그룹에 속하지 않는 독립 필수 속성은 그룹 충족과
+                # 무관하게 계속 그 자체로 필수여야 한다.
+                "attribute_type_name": "수량", "input_type": "INPUT",
+                "data_type": "NUMBER", "usable_units": ["개"],
+                "input_values": [], "required": True, "exposed": True,
+                "group_number": "NONE",
+            },
+        ]
+
+    def test_filling_one_group_member_satisfies_the_whole_group(self):
+        missing = validate_purchase_options(self.grouped_definitions, {
+            "개당 용량": "200ml", "수량": "1개",
+        })
+        self.assertNotIn("개당 중량", missing)
+        self.assertEqual(missing, [])
+
+    def test_filling_the_other_group_member_also_satisfies_the_group(self):
+        """어느 쪽을 채우든(대칭) 그룹이 충족돼야 한다."""
+
+        missing = validate_purchase_options(self.grouped_definitions, {
+            "개당 중량": "180g", "수량": "1개",
+        })
+        self.assertNotIn("개당 용량", missing)
+        self.assertEqual(missing, [])
+
+    def test_group_with_no_member_filled_still_blocks(self):
+        """그룹 전체가 비어 있으면(양쪽 다 미입력) 여전히 차단해야
+        한다 — 그룹이 "선택 사항"이 되는 것은 아니다, "그중 하나"가
+        필요할 뿐이다."""
+
+        missing = validate_purchase_options(self.grouped_definitions, {
+            "수량": "1개",
+        })
+        self.assertIn("개당 중량", missing)
+        self.assertIn("개당 용량", missing)
+
+    def test_group_number_none_field_stays_independently_required(self):
+        """group_number가 "NONE"인 속성은 기존과 동일하게 독립적으로
+        필수다 — 다른 그룹이 채워졌다고 면제되지 않는다."""
+
+        missing = validate_purchase_options(self.grouped_definitions, {
+            "개당 용량": "200ml",
+        })
+        self.assertIn("수량", missing)
+
+    def test_absent_group_number_key_behaves_like_none(self):
+        """기존 픽스처(group_number 키 자체가 없음)와의 하위 호환 —
+        키가 없으면 "NONE"과 동일하게 독립 필수로 취급해야 한다."""
+
+        definitions = [
+            {
+                "attribute_type_name": "색상", "input_type": "SELECT",
+                "input_values": ["레드"], "required": True, "exposed": True,
+            },
+        ]
+        missing = validate_purchase_options(definitions, {})
+        self.assertEqual(missing, ["색상"])
+
+
 if __name__ == "__main__":
     unittest.main()
