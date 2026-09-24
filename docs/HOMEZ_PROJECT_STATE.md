@@ -1,5 +1,17 @@
 # Current Version
 
+**HOMEZ V7 — 최초 신청 UI와 검토 해제 흐름 완성 (2026-09-24, 17차). 16차가 발견한 UI 공백(console.js가 confirmed_first_application을 안 보냄)을 해소 — 발주 검토 화면에 "최초 신청 확인" 체크박스와 "검토 해제" 폼을 연결. 신규 서비스 메서드 resolve_needs_review_as_confirmed_submitted()로 과거 접수 증거 상품의 검토를 사람 확인 근거로 해제(외부 호출 0회, 새 스키마 불필요). 격리 테스트 189건 + 실제 화면(데스크톱·모바일) 검증 완료. A/B/C 승인안 재확인만(변경 없음), 원본은 여전히 미실행.**
+
+**결과(상세: `docs/HOMEZ_V7_FIRST_APPLICATION_UI_AND_REVIEW_RELEASE_20260924.md`)**: 기준선 재확인 — 로컬/원격 HEAD `4c5618c`(16차) 그대로, 다른 작업자 워크트리 3개 보존.
+`build_order_submission_review()`(읽기 전용, 변경 없음 유지)에 `no_internal_record`/`needs_manual_review`/`evidence_detail` 필드를 추가해 화면이 세 가지 판매신청 상태(확인됨/최초 신청 확인 필요/검토 해제 필요)를 구분해 안내하게 했다. 체크박스는 기본 해제 상태이며 다른 버튼 클릭으로 자동 체크되지 않고, 다른 상품·재조회 시 항상 리셋됨을 실제 화면에서 확인. 신규 메서드 `resolve_needs_review_as_confirmed_submitted()`(sales_application_service.py)는 확인 출처(제한된 어휘)·확인 내용(필수)·확인자·확인 시각을 구조화해 기록하고, `apply_for_sale()`을 호출하지 않으며, 기존 정황 기록을 지우지 않고 이어 붙인다 — 새 라우터 엔드포인트(`AdminGuard`, 기존 `resolve_unknown_attempt`와 같은 권한 모델 재사용)로 연결.
+격리 테스트 신규 11건(서비스 7 + 발주 게이트 독립성 1 + 라우터 3) 전부 통과, 집중 회귀 189건(6개 파일 통합) 전부 통과. 격리 E2E 서버(2026-09-09 기존 스크립트 재사용, 실 DB·자격증명·네트워크 없음)로 데스크톱·모바일(375×812) 양쪽에서 체크박스 토글 시 판매신청 차단 사유만 실시간 제거되는 것과, 검토 해제 제출 후 실제로 "접수 확인됨"으로 전환되는 것을 직접 확인.
+A/B/C 승인안은 16차와 완전히 동일(파일명·순서·해시·대상 재확인만, 재작성 없음) — 이번 라운드에서도 원본 DB·Migration·NEEDS_REVIEW 기록·외부 API는 실행하지 않았다.
+
+**남은 승인(16차와 동일 대상, 재확인만)**: 승인안 A(원본 Migration 3건) / 승인안 B(CH1147184 `record_unconfirmed_prior_evidence()` 원본 반영) / 승인안 C(CH1147184 상품 조회 1회, 연결 인증 갱신은 부수효과일 뿐 별도 예산 아님) / 이후 실행 6단계(판매신청 확인→DB 적용·기록 보완→Wizard#1 옵션 검토→상품등록→매핑→실주문 시험, 각 개별 승인).
+**"최초 신청 UI·검토 해제 흐름 완성 및 실사용 검증 완료"까지이며 "V7 실사용 완료"·"원본 DB 반영 완료"로 확대하지 않는다.**
+
+---
+
 **HOMEZ V7 — 최초 신청 확인 권한 점검 및 A/B 실제 적용 승인 준비 (2026-09-24, 16차). `confirmed_first_application`의 UI→스키마→라우터→서비스 전달 경로 전수 확인(기본값 False 유지, 자동 파생 없음, 외부 증거로 오인 안 함). UI(console.js)가 이 새 필드를 아직 보내지 않는다는 것을 발견(후속 과제). 권한 경계 신규 테스트 4건(라우터 재인증 우회 불가, RESULT_UNKNOWN 우회 불가, 타 상품/회사 재사용 차단) 전부 통과. A/B 승인안 최종 제출, 원본은 여전히 미실행.**
 
 **결과(상세: `docs/HOMEZ_V7_FIRST_APPLICATION_PERMISSION_BOUNDARY_20260924.md`)**: 기준선 재확인 — 로컬/원격 HEAD `af467ad`(15차) 그대로. 다른 작업자의 별도 워크트리(`.claude/worktrees/quirky-diffie-3718ca/`) 존재 확인, 전혀 건드리지 않음.

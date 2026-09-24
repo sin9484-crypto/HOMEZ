@@ -73,6 +73,8 @@ from app.domains.purchase_task.schema import SubmitRealOrderRequest
 from app.domains.purchase_task.schema import PurchaseOrderSubmissionAttemptResponse
 from app.domains.purchase_task.schema import PurchaseOrderSubmissionAttemptHistoryItemResponse
 from app.domains.purchase_task.schema import ResolveUnknownAttemptRequest
+from app.domains.purchase_task.schema import ResolveSalesApplicationReviewRequest
+from app.domains.purchase_task.schema import SalesApplicationAttemptResponse
 from app.domains.purchase_task.schema import OrderSubmissionReviewOptionInput
 from app.domains.purchase_task.schema import ProductLookupResponse
 from app.domains.purchase_task.schema import CandidateCreate
@@ -1436,6 +1438,46 @@ def resolve_unknown_attempt(
         basis=data.basis, resolved_by=current_user.id,
     )
     return _attempt_to_response(attempt)
+
+
+@router.post(
+    "/{task_id}/order-approval/sales-application/resolve-review",
+    response_model=SalesApplicationAttemptResponse,
+)
+def resolve_sales_application_review(
+    task_id: int, data: ResolveSalesApplicationReviewRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-09-24 신규(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+    NEEDS_REVIEW/RESULT_UNKNOWN으로 막힌 판매신청을 사람이 온채널
+    판매자센터 화면이나 공급처 공식 회신으로 직접 확인한 결과로
+    해제한다. `resolve_unknown_attempt()`와 같은 성격(사람의 외부
+    확인을 기록)이라 같은 권한 모델(`AdminGuard`)을 그대로 재사용한다
+    — 이 호출 자체는 온채널에 어떤 네트워크 요청도 보내지 않는다.
+    `company_id`로 스코프되므로 다른 회사의 행은 애초에 조회조차
+    되지 않는다."""
+
+    from app.domains.purchase_task.sales_application_service import (
+        PurchaseSalesApplicationService,
+    )
+
+    task_service = PurchaseTaskService(db)
+    task_service.get_task(task_id, current_user.company_id)
+
+    service = PurchaseSalesApplicationService(db)
+    attempt = service.resolve_needs_review_as_confirmed_submitted(
+        data.connection_id, current_user.company_id, data.product_code,
+        confirmation_source=data.confirmation_source,
+        confirmation_summary=data.confirmation_summary,
+        confirmed_by=current_user.id,
+    )
+    return SalesApplicationAttemptResponse(
+        id=attempt.id, connection_id=attempt.connection_id,
+        product_code=attempt.product_code, status=attempt.status,
+        failure_detail=attempt.failure_detail,
+        started_at=attempt.started_at, finished_at=attempt.finished_at,
+    )
 
 
 @router.post(

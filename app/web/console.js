@@ -4533,7 +4533,26 @@
     ptRenderOrderSubmissionReview(resultEl, task, review);
   }
 
-  function ptRenderOrderSubmissionReview(resultEl, task, review) {
+  // 2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) — 서버가
+  // 항상 한국어로 내려주는 문구다(클라이언트 로케일과 무관, 기존
+  // 동작 그대로) — "최초 신청 확인" 체크박스는 서버 상태를 바꾸지
+  // 않으므로(실제 발주 전송 시점에만 confirmed_first_application으로
+  // 전달됨), 이 문구 하나만 화면 표시용으로 걸러낸다. 그 외 차단
+  // 사유(계약 미확인·포인트 부족 등)는 체크박스와 무관하게 그대로
+  // 남는다 — 체크한다고 다른 게이트가 열리지 않는다.
+  const PT_SALES_APPLICATION_NOT_CONFIRMED_TEXT =
+    "이 상품의 판매신청이 아직 접수 확인되지 않았습니다(발주 전 필수).";
+
+  function ptEffectiveBlockedReasons(review, firstApplicationConfirmed) {
+    if (review.sales_application.no_internal_record && firstApplicationConfirmed) {
+      return review.blocked_reasons.filter((r) => r !== PT_SALES_APPLICATION_NOT_CONFIRMED_TEXT);
+    }
+    return review.blocked_reasons;
+  }
+
+  function ptRenderOrderSubmissionReview(resultEl, task, review, firstApplicationConfirmed) {
+    firstApplicationConfirmed = Boolean(firstApplicationConfirmed);
+    const effectiveBlockedReasons = ptEffectiveBlockedReasons(review, firstApplicationConfirmed);
     const p = review.product;
     const optionsRows = p.options.length ? p.options.map((o) => `
       <tr>
@@ -4571,7 +4590,9 @@
         <dt>${escapeHtml(HomezI18n.t("purchase_task.review_sales_application_label"))}</dt>
         <dd>${review.sales_application.confirmed
           ? escapeHtml(HomezI18n.t("purchase_task.review_sales_application_confirmed"))
-          : `<span class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_sales_application_not_confirmed"))}</span>`}</dd>
+          : (review.sales_application.needs_manual_review
+            ? `<span class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_sales_application_needs_review"))}</span>`
+            : `<span class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_sales_application_not_confirmed"))}</span>`)}</dd>
         <dt>${escapeHtml(HomezI18n.t("purchase_task.review_point_balance_label"))}</dt>
         <dd>${review.point_balance.point_interpretable
           ? fmtMoney(review.point_balance.point)
@@ -4595,14 +4616,15 @@
         </dl>
         ${!recipient.unmasked ? `<button type="button" class="btn btn-ghost btn-sm" id="pt-review-unmask-btn">${escapeHtml(HomezI18n.t("purchase_task.review_unmask_btn"))}</button>` : `<p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_unmasked_hint"))}</p>`}
       </div>
-      ${review.blocked_reasons.length ? `
+      ${ptSalesApplicationActionPanelHtml(review, firstApplicationConfirmed)}
+      ${effectiveBlockedReasons.length ? `
         <div class="detail-panel">
           <h3>${escapeHtml(HomezI18n.t("purchase_task.review_blocked_heading"))}</h3>
-          <ul class="dash-todo-list">${review.blocked_reasons.map((r) => `<li class="field-error">${escapeHtml(r)}</li>`).join("")}</ul>
+          <ul class="dash-todo-list">${effectiveBlockedReasons.map((r) => `<li class="field-error">${escapeHtml(r)}</li>`).join("")}</ul>
         </div>
       ` : ""}
       ${ptOrderApprovalPanelHtml(review)}
-      ${ptOrderSubmitSectionHtml(review)}
+      ${ptOrderSubmitSectionHtml(review, effectiveBlockedReasons)}
       <div id="pt-review-attempt-result"></div>
     `;
 
@@ -4614,7 +4636,71 @@
       }));
     }
 
-    ptWireOrderApprovalHandlers(task, review);
+    ptWireOrderApprovalHandlers(task, review, firstApplicationConfirmed);
+  }
+
+  // 2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) — 판매
+  // 신청 상태에 따라 서로 다른 다음 행동을 안내한다. `confirmed`면
+  // 아무 것도 그리지 않는다. `no_internal_record`(내부 기록 자체가
+  // 없음)면 "최초 신청 확인" 체크박스를 보여준다 — 기본값은 항상
+  // 해제 상태다(다른 발주 승인·버튼 클릭으로 자동 체크되지 않는다).
+  // `needs_manual_review`(NEEDS_REVIEW/RESULT_UNKNOWN)면 체크박스
+  // 대신 "검토 해제" 입력 폼을 보여준다 — 과거 접수 이력이 있는
+  // 상품은 최초 신청 경로로 안내하지 않는다는 원칙을 화면 분기
+  // 자체로 강제한다(두 패널이 동시에 뜨는 경우가 없다).
+  function ptSalesApplicationActionPanelHtml(review, firstApplicationConfirmed) {
+    const sa = review.sales_application;
+    if (sa.confirmed) return "";
+
+    if (sa.needs_manual_review) {
+      return `
+        <div class="detail-panel">
+          <h3>${escapeHtml(HomezI18n.t("purchase_task.review_needs_review_heading"))}</h3>
+          <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_needs_review_target", {
+            connection: `${review.connection_mall_code} — ${review.connection_account_label}`,
+            product: review.product.title || "—",
+          }))}</p>
+          ${sa.evidence_detail ? `<pre class="pt-evidence-detail">${escapeHtml(sa.evidence_detail)}</pre>` : ""}
+          <p class="field-error">${escapeHtml(HomezI18n.t("purchase_task.review_needs_review_no_auto_retry"))}</p>
+          <form id="pt-resolve-review-form" class="pt-cc-inline-form" style="display:flex">
+            <label>${escapeHtml(HomezI18n.t("purchase_task.review_resolve_source_label"))}
+              <select class="pt-cc-form-input" id="pt-resolve-source">
+                <option value="">${escapeHtml(HomezI18n.t("purchase_task.review_resolve_source_placeholder"))}</option>
+                <option value="ONCHANNEL_SELLER_PORTAL_DIRECT_CHECK">${escapeHtml(HomezI18n.t("purchase_task.review_resolve_source_portal"))}</option>
+                <option value="SUPPLIER_OFFICIAL_INQUIRY_REPLY">${escapeHtml(HomezI18n.t("purchase_task.review_resolve_source_inquiry"))}</option>
+              </select>
+            </label>
+            <label>${escapeHtml(HomezI18n.t("purchase_task.review_resolve_summary_label"))}
+              <textarea class="pt-cc-form-input" id="pt-resolve-summary" maxlength="300" rows="2" placeholder="${escapeHtml(HomezI18n.t("purchase_task.review_resolve_summary_placeholder"))}"></textarea>
+            </label>
+            <p class="field-error" id="pt-resolve-review-error"></p>
+            <div class="pt-cc-inline-form-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="pt-resolve-review-btn">${escapeHtml(HomezI18n.t("purchase_task.review_resolve_btn"))}</button>
+            </div>
+          </form>
+        </div>
+      `;
+    }
+
+    if (sa.no_internal_record) {
+      return `
+        <div class="detail-panel">
+          <h3>${escapeHtml(HomezI18n.t("purchase_task.review_first_application_heading"))}</h3>
+          <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_first_application_target", {
+            connection: `${review.connection_mall_code} — ${review.connection_account_label}`,
+            product: review.product.title || "—",
+          }))}</p>
+          <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_first_application_external_call_warning"))}</p>
+          <label style="display:flex;align-items:flex-start;gap:8px;">
+            <input type="checkbox" id="pt-first-application-checkbox" ${firstApplicationConfirmed ? "checked" : ""}>
+            <span>${escapeHtml(HomezI18n.t("purchase_task.review_first_application_checkbox_label"))}</span>
+          </label>
+          <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_first_application_unsure_hint"))}</p>
+        </div>
+      `;
+    }
+
+    return "";
   }
 
   // 2026-09-11 후속(반자동 완료 라운드 Phase 5·7) — 유효한(ACTIVE,
@@ -4660,9 +4746,9 @@
   // 최종 승인 폼을 보여줄지는 정확히 하나의 조건으로만 갈린다 —
   // "지금 눌러야 할 행동 하나만 강조" 원칙(이 화면의 다른 곳과
   // 동일). 세 상태를 섞어 한 화면에 전부 펼쳐두지 않는다.
-  function ptOrderSubmitSectionHtml(review) {
+  function ptOrderSubmitSectionHtml(review, effectiveBlockedReasons) {
     const a = review.order_approval;
-    const ready = !review.send_blocked && a && a.status === "ACTIVE" && a.matches_current_price
+    const ready = effectiveBlockedReasons.length === 0 && a && a.status === "ACTIVE" && a.matches_current_price
       && review.recipient.unmasked;
 
     if (ready) {
@@ -4717,10 +4803,51 @@
     `;
   }
 
-  function ptWireOrderApprovalHandlers(task, review) {
+  function ptWireOrderApprovalHandlers(task, review, firstApplicationConfirmed) {
     const productCode = el("pt-review-product-code").value.trim();
     const optionId = el("pt-review-option-id").value.trim();
     const qty = Number(el("pt-review-qty").value) || 1;
+
+    // 2026-09-24 후속(최초 신청 UI 완성) — 체크박스는 서버 상태를
+    // 전혀 바꾸지 않는다(재조회 없이 같은 review 객체로 화면만 다시
+    // 그린다) — 실제 확인 여부는 발주 전송 시점에 한 번만 서버로
+    // 전달된다. 체크박스는 항상 이 렌더 호출 하나에서만 살아있다 —
+    // 다른 상품·작업으로 넘어가면(새 review 조회) 자동으로
+    // 초기화된다(재사용되지 않는다).
+    const firstApplicationCheckbox = document.getElementById("pt-first-application-checkbox");
+    if (firstApplicationCheckbox) {
+      firstApplicationCheckbox.addEventListener("change", () => {
+        const resultEl = el("pt-review-result");
+        ptRenderOrderSubmissionReview(resultEl, task, review, firstApplicationCheckbox.checked);
+      });
+    }
+
+    const resolveReviewBtn = document.getElementById("pt-resolve-review-btn");
+    if (resolveReviewBtn) {
+      resolveReviewBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const errEl = el("pt-resolve-review-error");
+        errEl.textContent = "";
+        const source = el("pt-resolve-source").value;
+        const summary = el("pt-resolve-summary").value.trim();
+        if (!source || !summary) {
+          errEl.textContent = HomezI18n.t("purchase_task.review_missing_input");
+          return;
+        }
+        try {
+          await apiFetch(`/purchase-tasks/${task.id}/order-approval/sales-application/resolve-review`, {
+            method: "POST",
+            body: JSON.stringify({
+              connection_id: review.connection_id, product_code: productCode,
+              confirmation_source: source, confirmation_summary: summary,
+            }),
+          });
+          toast(HomezI18n.t("purchase_task.review_resolve_success"), "success");
+          await ptRunOrderSubmissionReview(task, null);
+        } catch (err) {
+          errEl.textContent = (err && err.message) || HomezI18n.t("purchase_task.cc_action_error");
+        }
+      }));
+    }
 
     const shippingBtn = document.getElementById("pt-shipping-submit-btn");
     if (shippingBtn) {
@@ -4815,6 +4942,11 @@
               recv_mobile: recipient.phone, zipcode: recipient.zipcode,
               address: recipient.address,
               confirm_real_submission: true,
+              // 2026-09-24 후속 — 이 버튼을 누르는 행동 자체는 "확인된
+              // 최초 신청"의 승인이 아니다. 그 값은 오직 위 체크박스
+              // (내부 기록이 없는 상품일 때만 렌더됨)의 현재 상태에서만
+              // 온다 — 여기서 무조건 true로 굳히지 않는다.
+              confirmed_first_application: Boolean(firstApplicationConfirmed),
             }),
           });
           ptRenderOrderSubmissionAttemptResult(resultEl, attempt);

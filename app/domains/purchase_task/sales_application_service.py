@@ -290,6 +290,96 @@ class PurchaseSalesApplicationService:
 
         return attempt
 
+    # ---------------- 검토 해제(실행 아님, 사람의 확인 기록) ----------------
+
+    def resolve_needs_review_as_confirmed_submitted(
+        self, connection_id: int, company_id: int, product_code: str, *,
+        confirmation_source: str, confirmation_summary: str, confirmed_by: int,
+        confirmed_at: datetime | None = None,
+    ) -> PurchaseSalesApplicationAttempt:
+        """2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+        `NEEDS_REVIEW`/`RESULT_UNKNOWN`으로 막힌 행을, 사람이 온채널
+        판매자센터 화면을 직접 열어 실제로 확인했거나 공급처의 공식
+        문의 회신을 받아 "이 상품·연결의 판매신청이 실제로 접수/승인된
+        상태임을 확인했을 때만" 쓴다. **이 메서드 자체는 `apply_for_
+        sale()`을 절대 호출하지 않는다**(외부 호출 0회) — 사람이 이미
+        확인한 사실을 기록할 뿐이다.
+
+        `override_unresolved_status=True`(기존, `ensure_sales_
+        application_submitted()`)와의 차이: 그 플래그는 "다시 API를
+        호출해도 된다"는 재시도 승인이고, 이 메서드는 "이미 확인된
+        결과가 있으니 다시 호출할 필요가 없다"는 해제다 — 서로 다른
+        상황에 쓴다(재시도할 필요가 있으면 여전히 `override_
+        unresolved_status=True` + `confirm_real_submission=True`를
+        쓴다, 이 메서드가 그 경로를 대신하지 않는다).
+
+        `SATISFIES_ORDER_GATE`에 포함되는 `SUBMITTED`로 전환하지만,
+        이것만으로 발주(`submit_order()`)가 자동 실행되지는 않는다 —
+        발주는 여전히 별도의 `confirm_real_submission=True` 승인과
+        포인트·배송비 승인 게이트를 통과해야 한다(이 메서드가 여는
+        것은 판매신청 게이트 하나뿐이다).
+
+        원문 응답이 없으므로 `applied_product_code`를 생성하지
+        않는다(실제 API가 돌려준 값처럼 보이는 값을 지어내지 않는다) —
+        `product_code` 자체가 이미 식별자다. 기존 `failure_detail`
+        (최초 정황 기록)은 지우지 않고 그 아래에 이어 붙인다 — 사건
+        발생시각(과거 기록)과 이번 확인시각을 한 행 안에서도 구분해
+        볼 수 있게 한다."""
+
+        existing = self.get_attempt(connection_id, company_id, product_code)
+        if existing is None:
+            raise BadRequestException(
+                "해제할 검토 대상 행이 없습니다 — 이 상태는 검토가 필요한 "
+                "기록이 아직 없다는 뜻입니다.",
+            )
+        if existing.status not in SalesApplicationStatus.BLOCKS_AUTO_RETRY:
+            raise BadRequestException(
+                f"이 행은 검토 대기 상태가 아닙니다(현재 상태: {existing.status}) "
+                "— 해제할 필요가 없습니다.",
+            )
+        if not confirmation_source or not confirmation_summary:
+            raise BadRequestException(
+                "확인 출처(예: 온채널 판매자센터 화면 직접 확인, 공급처 공식 "
+                "문의 회신)와 실제로 확인한 내용을 반드시 함께 기록해야 "
+                "합니다 — 근거 없는 해제는 허용되지 않습니다.",
+            )
+
+        confirmed_at = confirmed_at or datetime.utcnow()
+        resolution_note = (
+            "[검토 해제 — 사람이 실제로 확인, 판매신청 API 재호출 아님] "
+            f"확인 출처={confirmation_source}; "
+            f"확인 시각={confirmed_at.isoformat()}; "
+            f"확인자=user#{confirmed_by}; "
+            f"확인 내용={confirmation_summary}"
+        )
+        existing.status = SalesApplicationStatus.SUBMITTED
+        existing.finished_at = confirmed_at
+        existing.failure_detail = (
+            f"{existing.failure_detail}\n{resolution_note}"
+            if existing.failure_detail else resolution_note
+        )
+        self.db.commit()
+        self.db.refresh(existing)
+
+        try:
+            write_audit_log(
+                self.db,
+                company_id=company_id, user_id=confirmed_by,
+                action="SALES_APPLICATION_NEEDS_REVIEW_RESOLVED",
+                entity="purchase_sales_application_attempt",
+                entity_id=str(existing.id),
+                description=(
+                    f"connection_id={connection_id}; product_code={product_code}; "
+                    f"confirmation_source={confirmation_source}; "
+                    f"confirmation_summary={confirmation_summary}"
+                ),
+            )
+            self.db.commit()
+        except Exception:  # noqa: BLE001 — 감사 기록 실패가 이 작업 자체를 막지 않는다
+            self.db.rollback()
+
+        return existing
+
     # ---------------- 내부 ----------------
 
     def _get_or_create_attempt(

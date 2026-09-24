@@ -542,9 +542,19 @@ class OrderSubmissionReviewRecipientResponse(BaseModel):
 class OrderSubmissionReviewSalesApplicationResponse(BaseModel):
     """2026-09-10 신규(Phase 3) — confirmed=True는 "온채널이 접수를
     확인했다"는 뜻일 뿐 "승인됐다"는 뜻이 아니다(승인 상태 조회
-    API 자체가 없다고 공식 답변으로 확정됨)."""
+    API 자체가 없다고 공식 답변으로 확정됨).
+
+    2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+    `no_internal_record`(내부 기록 자체가 없음, "최초 신청 확인"
+    체크박스 경로)와 `needs_manual_review`(NEEDS_REVIEW/RESULT_
+    UNKNOWN, "검토 해제" 경로)를 구분해 화면이 서로 다른 다음
+    행동을 안내할 수 있게 한다. 이 셋은 상호 배타적이다."""
 
     confirmed: bool
+    status: Optional[str] = None
+    no_internal_record: bool = False
+    needs_manual_review: bool = False
+    evidence_detail: Optional[str] = None
     detail: str
 
 
@@ -748,6 +758,30 @@ class ResolveUnknownAttemptRequest(BaseModel):
     resolution: str
     order_code: Optional[str] = None
     basis: Optional[str] = Field(default=None, max_length=500)
+
+
+class ResolveSalesApplicationReviewRequest(BaseModel):
+    """2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+    NEEDS_REVIEW/RESULT_UNKNOWN으로 막힌 판매신청을, 사람이 온채널
+    판매자센터 화면이나 공급처 공식 회신으로 실제 확인했을 때만
+    해제한다. 이 요청 자체는 온채널에 어떤 네트워크 요청도 보내지
+    않는다(확인된 사실을 기록할 뿐)."""
+
+    connection_id: int
+    product_code: str
+    confirmation_source: str = Field(..., min_length=1, max_length=100)
+    confirmation_summary: str = Field(..., min_length=1, max_length=300)
+
+
+class SalesApplicationAttemptResponse(BaseModel):
+
+    id: int
+    connection_id: int
+    product_code: str
+    status: str
+    failure_detail: Optional[str]
+    started_at: datetime
+    finished_at: Optional[datetime]
 
 
 class PurchaseOrderApprovalResponse(BaseModel):

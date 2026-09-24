@@ -2018,6 +2018,7 @@ class PurchaseTaskService:
         from app.domains.purchase_task.sales_application_service import (
             PurchaseSalesApplicationService,
         )
+        from app.domains.purchase_task.constants import SalesApplicationStatus
 
         sales_application_service = PurchaseSalesApplicationService(self.db)
         sales_application_confirmed = sales_application_service.is_sales_application_confirmed(
@@ -2027,6 +2028,19 @@ class PurchaseTaskService:
             blocked_reasons.append(
                 "이 상품의 판매신청이 아직 접수 확인되지 않았습니다(발주 전 필수).",
             )
+
+        # 2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+        # "접수 확인 안 됨" 하나로 뭉뚱그리지 않고, 화면이 어떤 다음
+        # 행동을 안내해야 하는지 구분해 넘긴다. 이 조회도 읽기
+        # 전용이다(상태를 바꾸지 않는다, get_attempt()는 SELECT만).
+        sales_application_attempt = sales_application_service.get_attempt(
+            connection.id, company_id, external_product_id,
+        )
+        sales_application_no_internal_record = sales_application_attempt is None
+        sales_application_needs_manual_review = (
+            sales_application_attempt is not None
+            and sales_application_attempt.status in SalesApplicationStatus.BLOCKS_AUTO_RETRY
+        )
 
         point_support = "UNKNOWN"
         point_value = None
@@ -2149,10 +2163,25 @@ class PurchaseTaskService:
             "recipient": recipient,
             "sales_application": {
                 "confirmed": sales_application_confirmed,
+                "status": (
+                    sales_application_attempt.status
+                    if sales_application_attempt is not None else None
+                ),
+                "no_internal_record": sales_application_no_internal_record,
+                "needs_manual_review": sales_application_needs_manual_review,
+                "evidence_detail": (
+                    sales_application_attempt.failure_detail
+                    if sales_application_needs_manual_review else None
+                ),
                 "detail": (
                     "판매신청 접수가 확인됐습니다(승인 여부는 별도로 "
                     "조회할 방법이 없습니다)." if sales_application_confirmed
-                    else "판매신청 접수 기록이 없습니다 — 발주 전 필수입니다."
+                    else (
+                        "판매신청 결과를 아직 확신할 수 없습니다 — 사람이 "
+                        "먼저 확인한 뒤 검토를 해제해야 합니다."
+                        if sales_application_needs_manual_review
+                        else "판매신청 접수 기록이 없습니다 — 발주 전 필수입니다."
+                    )
                 ),
             },
             "point_balance": {

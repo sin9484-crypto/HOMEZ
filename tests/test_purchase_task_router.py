@@ -76,6 +76,7 @@ from app.domains.purchase_task.router import (
     preview_csv_upload,
     record_purchase,
     reconcile_orders,
+    resolve_sales_application_review,
     resolve_unknown_attempt,
     run_match_check,
     submit_real_order,
@@ -94,6 +95,7 @@ from app.domains.purchase_task.schema import (
     PolicySettingUpdate,
     PurchaseTaskCreate,
     RecordPurchaseRequest,
+    ResolveSalesApplicationReviewRequest,
     ResolveUnknownAttemptRequest,
     ShippingCostConfirmationRequest,
     SourceAttributesInput,
@@ -767,6 +769,71 @@ class OrderApprovalRouterTestCase(unittest.TestCase):
         self.assertEqual(result.unknown_resolution_status, UnknownResolutionStatus.ORDER_CONFIRMED)
         self.assertEqual(result.unknown_resolved_order_code, "OC-CONFIRMED-ROUTER-1")
         self.assertEqual(result.unknown_resolved_by, self.user_a.id)
+
+    def _seed_needs_review(self, *, company, connection_id, product_code="CH1234567"):
+
+        from app.domains.purchase_task.sales_application_service import (
+            PurchaseSalesApplicationService,
+        )
+
+        service = PurchaseSalesApplicationService(self.db)
+        return service.record_unconfirmed_prior_evidence(
+            connection_id, company.id, product_code,
+            mall_code="ONCHANNEL", evidence_summary="라우터 시험용 정황 증거",
+            recorded_by=1,
+        )
+
+    def test_resolve_sales_application_review_via_router(self):
+        """2026-09-24 신규(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+        라우터를 거쳐 실제로 검토가 해제되는지 확인한다(온채널에는
+        어떤 요청도 나가지 않는다 — 이 테스트는 실제 Provider를
+        설치조차 하지 않는다)."""
+
+        task = self._create(self.user_a, key="resolve-review:success")
+        self._seed_needs_review(company=self.company_a, connection_id=self.connection_a.id)
+
+        result = resolve_sales_application_review(
+            task.id,
+            ResolveSalesApplicationReviewRequest(
+                connection_id=self.connection_a.id, product_code="CH1234567",
+                confirmation_source="온채널 판매자센터 화면 직접 확인",
+                confirmation_summary="실제 판매중 상태로 노출됨을 확인",
+            ),
+            current_user=self.user_a, db=self.db,
+        )
+        self.assertEqual(result.status, "SUBMITTED")
+        self.assertIn("검토 해제", result.failure_detail)
+
+    def test_other_company_cannot_resolve_sales_application_review(self):
+
+        task = self._create(self.user_a, key="resolve-review:isolated")
+        self._seed_needs_review(company=self.company_a, connection_id=self.connection_a.id)
+
+        with self.assertRaises(NotFoundException):
+            resolve_sales_application_review(
+                task.id,
+                ResolveSalesApplicationReviewRequest(
+                    connection_id=self.connection_a.id, product_code="CH1234567",
+                    confirmation_source="온채널 판매자센터 화면 직접 확인",
+                    confirmation_summary="다른 회사가 시도함",
+                ),
+                current_user=self.user_b, db=self.db,
+            )
+
+    def test_resolve_sales_application_review_without_prior_record_rejected(self):
+
+        task = self._create(self.user_a, key="resolve-review:no-record")
+
+        with self.assertRaises(BadRequestException):
+            resolve_sales_application_review(
+                task.id,
+                ResolveSalesApplicationReviewRequest(
+                    connection_id=self.connection_a.id, product_code="CH9999999",
+                    confirmation_source="온채널 판매자센터 화면 직접 확인",
+                    confirmation_summary="근거 없는 상품",
+                ),
+                current_user=self.user_a, db=self.db,
+            )
 
 
 if __name__ == "__main__":

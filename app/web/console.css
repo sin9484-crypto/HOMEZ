@@ -2043,6 +2043,14 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .pt-cc-inline-form .field-error { margin: 0; }
 .pt-cc-inline-form .field-error:empty { display: none; }
 
+/* 2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) — 판매신청
+   검토 사유(정황 증거 원문)를 줄바꿈 그대로 보여준다. */
+.pt-evidence-detail {
+  white-space: pre-wrap; word-break: break-word; font-size: 0.85em;
+  padding: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-muted, rgba(0,0,0,0.03)); margin: 6px 0;
+}
+
 /* 2026-09-11 후속(Phase 11) — .pt-cc-inline-form과 동일한 hidden
    규칙(같은 이유). */
 .pt-cc-capabilities-panel {

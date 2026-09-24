@@ -631,6 +631,191 @@ class RecordUnconfirmedPriorEvidenceTestCase(SalesApplicationServiceTestCaseBase
         self.assertIn("사건 발생 추정 시각=미상", attempt.failure_detail)
 
 
+class ResolveNeedsReviewAsConfirmedSubmittedTestCase(SalesApplicationServiceTestCaseBase):
+    """2026-09-24 후속(최초 신청 UI·검토 해제 흐름 완성 라운드) —
+    `resolve_needs_review_as_confirmed_submitted()`는 사람이 실제로
+    확인한 근거가 있을 때만 NEEDS_REVIEW/RESULT_UNKNOWN을 해제한다.
+    이 메서드 자체는 `apply_for_sale()`을 절대 호출하지 않는다."""
+
+    def test_resolve_without_evidence_is_rejected(self):
+
+        connection = self._make_ready_connection()
+        self.service.record_unconfirmed_prior_evidence(
+            connection.id, self.company_a.id, "CH1147184",
+            mall_code="ONCHANNEL", evidence_summary="테스트용 정황 증거",
+            recorded_by=1,
+        )
+
+        with self.assertRaises(BadRequestException):
+            self.service.resolve_needs_review_as_confirmed_submitted(
+                connection.id, self.company_a.id, "CH1147184",
+                confirmation_source="", confirmation_summary="",
+                confirmed_by=1,
+            )
+        unchanged = self.service.get_attempt(connection.id, self.company_a.id, "CH1147184")
+        self.assertEqual(
+            unchanged.status, SalesApplicationStatus.NEEDS_REVIEW,
+            "근거 없는 해제 시도는 상태를 바꾸면 안 된다.",
+        )
+
+    def test_resolve_with_no_existing_row_is_rejected(self):
+
+        connection = self._make_ready_connection()
+        with self.assertRaises(BadRequestException):
+            self.service.resolve_needs_review_as_confirmed_submitted(
+                connection.id, self.company_a.id, "CH9999999",
+                confirmation_source="온채널 판매자센터 화면 직접 확인",
+                confirmation_summary="상품이 실제로 판매중 상태로 노출됨",
+                confirmed_by=1,
+            )
+
+    def test_resolve_with_row_not_needing_review_is_rejected(self):
+        """이미 SUBMITTED거나 PENDING인 행은 해제할 필요가 없다 —
+        BLOCKS_AUTO_RETRY 상태가 아니면 거부한다."""
+
+        connection = self._make_ready_connection()
+        self._install_fake_adapter(
+            result=_FakeSalesApplicationResult(applied_product_code="CH1234567"),
+        )
+        self.service.ensure_sales_application_submitted(
+            connection.id, self.company_a.id, "CH1234567",
+            confirm_real_submission=True,
+        )
+        with self.assertRaises(BadRequestException):
+            self.service.resolve_needs_review_as_confirmed_submitted(
+                connection.id, self.company_a.id, "CH1234567",
+                confirmation_source="온채널 판매자센터 화면 직접 확인",
+                confirmation_summary="이미 확인됨",
+                confirmed_by=1,
+            )
+
+    def test_valid_evidence_resolves_to_submitted_without_external_call_and_preserves_history(self):
+
+        connection = self._make_ready_connection()
+        call_log = []
+        self._install_fake_adapter(
+            result=_FakeSalesApplicationResult(applied_product_code="CH1147184"),
+            call_log=call_log,
+        )
+        self.service.record_unconfirmed_prior_evidence(
+            connection.id, self.company_a.id, "CH1147184",
+            mall_code="ONCHANNEL",
+            evidence_summary="2026-09-14 POST 접수(감사 기록), 내부 추적 미기록",
+            recorded_by=1,
+        )
+        original_detail = self.service.get_attempt(
+            connection.id, self.company_a.id, "CH1147184",
+        ).failure_detail
+
+        resolved = self.service.resolve_needs_review_as_confirmed_submitted(
+            connection.id, self.company_a.id, "CH1147184",
+            confirmation_source="온채널 판매자센터 화면 직접 확인",
+            confirmation_summary="상품이 실제로 판매중 상태로 노출됨, 신청내역에 접수 표시 확인",
+            confirmed_by=7,
+        )
+
+        self.assertEqual(resolved.status, SalesApplicationStatus.SUBMITTED)
+        self.assertEqual(
+            call_log, [], "검토 해제는 apply_for_sale()을 절대 호출하지 않는다.",
+        )
+        self.assertIsNone(
+            resolved.applied_product_code,
+            "실제 API 응답이 없으므로 applied_product_code를 지어내지 않는다.",
+        )
+        self.assertIn(original_detail, resolved.failure_detail, "기존 정황 기록을 지우지 않는다.")
+        self.assertIn("검토 해제", resolved.failure_detail)
+        self.assertIn("확인 출처=온채널 판매자센터 화면 직접 확인", resolved.failure_detail)
+        self.assertIn("확인자=user#7", resolved.failure_detail)
+
+        self.assertTrue(
+            self.service.is_sales_application_confirmed(
+                connection.id, self.company_a.id, "CH1147184",
+            ),
+            "해제 이후에는 발주 전 판매신청 게이트를 정상적으로 통과해야 한다.",
+        )
+
+    def test_resolve_for_one_target_does_not_affect_a_different_product_or_connection(self):
+
+        connection_a = self._make_ready_connection(company=self.company_a)
+        self.service.record_unconfirmed_prior_evidence(
+            connection_a.id, self.company_a.id, "CH1147184",
+            mall_code="ONCHANNEL", evidence_summary="대상 A 전용 증거", recorded_by=1,
+        )
+        connection_b = self.connection_service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="두 번째 계정",
+        )
+        self.connection_service.save_credential(
+            connection_b.id, self.company_a.id, auth_key="second-jwt",
+        )
+        from datetime import datetime
+        row_b = self.db.query(PurchaseChannelConnection).get(connection_b.id)
+        row_b.status = "CONNECTED"
+        row_b.verified_at = datetime.utcnow()
+        self.db.commit()
+        self.service.record_unconfirmed_prior_evidence(
+            connection_b.id, self.company_a.id, "CH1147184",
+            mall_code="ONCHANNEL", evidence_summary="대상 B 전용 증거", recorded_by=1,
+        )
+
+        self.service.resolve_needs_review_as_confirmed_submitted(
+            connection_a.id, self.company_a.id, "CH1147184",
+            confirmation_source="온채널 판매자센터 화면 직접 확인",
+            confirmation_summary="대상 A만 확인함",
+            confirmed_by=1,
+        )
+
+        unaffected = self.service.get_attempt(connection_b.id, self.company_a.id, "CH1147184")
+        self.assertEqual(
+            unaffected.status, SalesApplicationStatus.NEEDS_REVIEW,
+            "다른 연결의 같은 상품코드는 이 해제의 영향을 받으면 안 된다.",
+        )
+
+    def test_double_resolve_call_keeps_state_consistent(self):
+        """중복 클릭 재현 — 이미 해제된 행을 다시 해제하려 하면
+        BLOCKS_AUTO_RETRY 상태가 아니므로 거부되고, 기존 SUBMITTED
+        상태와 감사 기록은 그대로 유지된다."""
+
+        connection = self._make_ready_connection()
+        self.service.record_unconfirmed_prior_evidence(
+            connection.id, self.company_a.id, "CH1147184",
+            mall_code="ONCHANNEL", evidence_summary="테스트용 정황 증거", recorded_by=1,
+        )
+        first = self.service.resolve_needs_review_as_confirmed_submitted(
+            connection.id, self.company_a.id, "CH1147184",
+            confirmation_source="온채널 판매자센터 화면 직접 확인",
+            confirmation_summary="1차 확인", confirmed_by=1,
+        )
+        with self.assertRaises(BadRequestException):
+            self.service.resolve_needs_review_as_confirmed_submitted(
+                connection.id, self.company_a.id, "CH1147184",
+                confirmation_source="온채널 판매자센터 화면 직접 확인",
+                confirmation_summary="2차 확인(중복 클릭)", confirmed_by=1,
+            )
+        unchanged = self.service.get_attempt(connection.id, self.company_a.id, "CH1147184")
+        self.assertEqual(unchanged.id, first.id)
+        self.assertEqual(unchanged.status, SalesApplicationStatus.SUBMITTED)
+        self.assertNotIn("2차 확인", unchanged.failure_detail)
+
+    def test_resolution_recorded_in_audit_log(self):
+
+        connection = self._make_ready_connection()
+        self.service.record_unconfirmed_prior_evidence(
+            connection.id, self.company_a.id, "CH1147184",
+            mall_code="ONCHANNEL", evidence_summary="테스트용 정황 증거", recorded_by=1,
+        )
+        self.service.resolve_needs_review_as_confirmed_submitted(
+            connection.id, self.company_a.id, "CH1147184",
+            confirmation_source="공급처 공식 문의 회신",
+            confirmation_summary="공급처가 접수 완료를 확인해 줌",
+            confirmed_by=3,
+        )
+        # 이 픽스처는 audit_logs 테이블이 없다 — write_audit_log()가
+        # 실패해도(try/except) 이 작업 자체는 이미 성공해 있어야 한다는
+        # 것을 재확인한다(감사 실패가 주 작업을 막지 않는다는 계약).
+        final = self.service.get_attempt(connection.id, self.company_a.id, "CH1147184")
+        self.assertEqual(final.status, SalesApplicationStatus.SUBMITTED)
+
+
 class ProductStatusNeverSatisfiesApplicationGateTestCase(SalesApplicationServiceTestCaseBase):
     """2026-09-23 후속 — 상품의 판매 상태(온채널 status enum 1~5)와
     "이 계정의 판매신청이 접수 확인됐다"는 서로 다른 사실이다. 승인

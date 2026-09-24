@@ -2027,6 +2027,52 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
         self.assertIn("가격", str(ctx.exception))
         self.assertEqual(call_log, [], "가격이 어긋나면 발주 Adapter가 호출되면 안 된다.")
 
+    def test_resolved_review_does_not_bypass_expired_approval_gate(self):
+        """2026-09-24 후속(검토 해제 흐름 완성 라운드) — 판매신청
+        검토를 해제해도(SUBMITTED로 전환) 발주 승인(Gate D)은 완전히
+        독립된 게이트다. 만료된 승인은 검토 해제 여부와 무관하게
+        여전히 발주 Adapter 호출을 막아야 한다."""
+
+        from datetime import datetime, timedelta
+        from app.domains.purchase_task.sales_application_service import (
+            PurchaseSalesApplicationService,
+        )
+
+        connection = self._make_ready_connection()
+        sales_service = PurchaseSalesApplicationService(
+            self.db, credential_store=self.credential_store,
+        )
+        sales_service.record_unconfirmed_prior_evidence(
+            connection.id, self.company_a.id, "CH1234567",
+            mall_code="ONCHANNEL", evidence_summary="사전 정황 증거", recorded_by=1,
+        )
+        sales_service.resolve_needs_review_as_confirmed_submitted(
+            connection.id, self.company_a.id, "CH1234567",
+            confirmation_source="온채널 판매자센터 화면 직접 확인",
+            confirmation_summary="실제 판매중 확인", confirmed_by=1,
+        )
+
+        call_log = []
+        self._install_point_and_product_adapter_with_submit(call_log=call_log)
+        approval = self._insert_active_approval(
+            connection_id=connection.id, product_code="CH1234567",
+            item_amount_snapshot=10000, shipping_cost_amount=3000,
+            purchase_task_id=46,
+        )
+        approval.expires_at = datetime.utcnow() - timedelta(seconds=1)
+        self.db.commit()
+
+        with self.assertRaises(ConflictException) as ctx:
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-resolved-then-expired",
+                purchase_task_id=46, confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("승인", str(ctx.exception))
+        self.assertEqual(
+            call_log, [],
+            "검토 해제가 다른 게이트(승인 만료)를 우회하면 안 된다 — 발주 Adapter는 호출되지 않아야 한다.",
+        )
+
     def test_expired_approval_blocks(self):
 
         from datetime import datetime, timedelta
