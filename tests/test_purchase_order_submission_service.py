@@ -408,6 +408,143 @@ class SalesApplicationUnresolvedStatusBlocksOrderTestCase(OrderSubmissionService
         )
         self.assertEqual(unchanged.failure_detail, "[정황 증거 반영 — 실제 판매신청 실행 아님] 테스트 시드")
 
+    def test_needs_review_still_blocks_after_process_restart(self):
+        """2026-09-24 후속(13차 검증 증거 보완) — NEEDS_REVIEW가
+        메모리 상의 같은 서비스 인스턴스에서만 막히는 게 아니라,
+        완전히 새 세션·새 서비스 인스턴스(같은 파일 DB, "프로세스
+        재시작" 흉내)에서도 동일하게 막히는지 확인한다. 기존
+        재시작 검증(`test_result_unknown_attempt_survives_process_
+        restart_and_still_blocks_retry`)은 발주 시도(PurchaseOrder
+        SubmissionAttempt) 잠금 대상이었고, 이 테스트는 그보다 앞
+        단계인 판매신청 게이트(PurchaseSalesApplicationAttempt)
+        대상이다 — 서로 다른 테이블·다른 코드 경로이므로 별도로
+        증명이 필요하다."""
+
+        connection = self._make_ready_connection()
+        seeded_at = datetime.utcnow()
+        self.db.add(PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=connection.id,
+            mall_code="ONCHANNEL", product_code=VALID_KWARGS["product_code"],
+            status=SalesApplicationStatus.NEEDS_REVIEW,
+            failure_detail="[정황 증거 반영 — 실제 판매신청 실행 아님] 재시작 테스트 시드",
+            started_at=seeded_at, finished_at=seeded_at,
+        ))
+        self.db.commit()
+
+        restarted_service = self._new_service_same_db()
+        call_log_after_restart = []
+        self._install_fake_adapter(result="ORDER-AFTER-RESTART", call_log=call_log_after_restart)
+
+        with self.assertRaises(ConflictException) as ctx:
+            restarted_service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-needs-review-restart",
+                confirm_real_submission=True, **VALID_KWARGS,
+            )
+        self.assertIn("확신할 수 없습니다", str(ctx.exception))
+        self.assertEqual(
+            call_log_after_restart, [],
+            "재시작 후 새 서비스 인스턴스에서도 실제 발주 함수는 절대 호출되면 안 된다.",
+        )
+        self.assertEqual(
+            self.db.query(PurchaseOrderSubmissionAttempt).count(), 0,
+            "재시작 후에도 판매신청 게이트에서 막혔으면 발주 시도 행이 생기면 안 된다.",
+        )
+        # _new_service_same_db()의 addCleanup(new_db.close)는 unittest
+        # 규칙상 tearDown() *이후*에 실행된다 — tearDown()의
+        # engine.dispose() 시점에 이 세션의 연결이 아직 체크아웃된
+        # 채로 남아 있으면 Windows에서 os.remove(self.db_path)가
+        # WinError 32(다른 프로세스가 파일 사용 중)로 실패한다. 이
+        # 검증 자체와 무관한 자원 정리 문제이므로 여기서 명시적으로
+        # 먼저 닫는다(중복 close는 안전 — SQLAlchemy Session.close()
+        # 는 멱등적이다).
+        restarted_service.db.close()
+
+
+class UnrecordedPriorExternalEvidenceGapTestCase(OrderSubmissionServiceTestCaseBase):
+    """2026-09-24 후속(13차 검증 증거 보완, 지시문 §3) — 온채널
+    자동 재신청 방어와 쿠팡 MarketplaceSubmission 중복등록 방어를
+    분리해서 평가한다. 이 클래스는 CH1147184류 상태 — "과거 접수
+    증거는 있으나(실제로는 이 테스트가 알지 못하는 사실), 내부
+    `purchase_sales_application_attempts` 행이 0건이고,
+    `NEEDS_REVIEW`도 아직 기록되지 않은" 상태 — 를 그대로 재현해,
+    실제 발주 서비스 진입점(`submit_order()`)에서 판매신청 POST
+    (`apply_for_sale`)와 발주 Provider 호출(`submit_order`) 횟수를
+    직접 측정한다. 상품코드는 이 파일의 공용 `VALID_KWARGS`를 그대로
+    쓴다(CH1147184를 하드코딩하지 않는다 — 실제 접수 증거를 제품
+    코드에 넣지 않는다는 지시를 지킨다).
+
+    **이 테스트가 확인하는 것은 결함이 아니라 설계상 알려진 경계다**:
+    내부 기록이 0건인 상태는 코드가 "진짜 최초 신청"과 "실제로는
+    시도됐으나 추적되지 않은 신청" 두 경우를 구분할 방법이 없다 —
+    후자를 구분하려면 사람이 `record_unconfirmed_prior_evidence()`
+    로 먼저 `NEEDS_REVIEW`를 기록해야 한다(원본 DB 반영은 별도
+    승인 대상, 이 테스트에서 실행하지 않음). 그래서 이 상태에서는
+    자동 재시도 방어가 걸리지 않고 판매신청 POST가 실제로 나간다 —
+    "쿠팡 Submission이 없으므로 온채널 위험도 없다"는 추론은 여기서
+    성립하지 않는다는 것을 코드로 직접 보여준다."""
+
+    def test_zero_internal_rows_without_needs_review_is_not_protected_and_calls_real_apply_for_sale(self):
+
+        connection = self._make_ready_connection()
+
+        self.assertEqual(
+            self.db.query(PurchaseSalesApplicationAttempt).count(), 0,
+            "CH1147184 실제 상태를 그대로 재현한다 — 내부 판매신청 행이 0건이어야 한다.",
+        )
+
+        apply_for_sale_calls = []
+        submit_order_calls = []
+
+        self._patch_point_balance_gate_passes()
+
+        class _EvidenceGapFakeAdapter:
+            def apply_for_sale(self_inner, external_product_id):
+                apply_for_sale_calls.append(external_product_id)
+                return _FakeSalesApplicationResult(applied_product_code=external_product_id)
+
+            def submit_order(self_inner, request):
+                submit_order_calls.append(request)
+                return "ORDER-EVIDENCE-GAP-1"
+
+        patcher = mock.patch(
+            "app.domains.purchase_task.order_submission_service.get_purchase_channel_adapter",
+            return_value=_EvidenceGapFakeAdapter(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.service.submit_order(
+            connection.id, self.company_a.id, idempotency_key="k-evidence-gap",
+            confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        self.assertEqual(
+            len(apply_for_sale_calls), 1,
+            "공백 증거: 내부 기록 0건 상태는 '진짜 최초 신청'과 구분되지 않아 "
+            "판매신청 POST(apply_for_sale)가 실제로 1회 나간다 — NEEDS_REVIEW가 "
+            "원본 DB에 기록되기 전까지는 이 경로가 자동으로 막히지 않는다.",
+        )
+        self.assertEqual(
+            len(submit_order_calls), 1,
+            "판매신청이 (Fake) 접수 확인되면 발주 Provider 호출도 같은 요청 안에서 "
+            "이어서 1회 발생한다 — 두 호출 모두 발주 서비스 진입점 하나에서 나온 "
+            "결과임을 실제 진입점으로 확인한다.",
+        )
+        recorded = (
+            self.db.query(PurchaseSalesApplicationAttempt)
+            .filter(
+                PurchaseSalesApplicationAttempt.company_id == self.company_a.id,
+                PurchaseSalesApplicationAttempt.connection_id == connection.id,
+                PurchaseSalesApplicationAttempt.product_code == VALID_KWARGS["product_code"],
+            ).one()
+        )
+        self.assertEqual(
+            recorded.status, SalesApplicationStatus.SUBMITTED,
+            "이 상태에서 진행된 시도는 '정상 최초 신청'과 동일한 코드 경로를 타 "
+            "SUBMITTED로 기록된다 — 이것이 바로 사람이 먼저 NEEDS_REVIEW를 "
+            "기록해야 하는 이유다(공백을 코드만으로는 닫을 수 없다).",
+        )
+
 
 class SuccessAndFailureClassificationTestCase(OrderSubmissionServiceTestCaseBase):
     """정상 응답 / 명시적 거절 / 응답 형식 오류 / 전송 결과 불명.
