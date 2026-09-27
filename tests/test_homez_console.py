@@ -64,6 +64,33 @@ class ConsoleStaticAssetsTestCase(unittest.TestCase):
         self.assertIn("/console/static/console.css", content)
         self.assertIn("/console/static/console.js", content)
 
+    def test_console_html_cache_busts_static_asset_references(self):
+        """2026-09-27 — 정적 자산(.js/.css)은 no-store 대상에서 제외돼
+        있고 HTML은 고정 URL로 참조했다 — 파일을 고쳐도 브라우저가
+        예전 캐시를 계속 서빙할 수 있었다(이번 세션에서 반복 재현된
+        문제). 각 자산 URL에 파일 수정시각 기반 쿼리가 붙어야 한다."""
+
+        resp = web_router.console_page()
+        content = resp.body.decode("utf-8")
+
+        for asset_path in web_router._CACHE_BUST_ASSET_PATHS:
+            self.assertRegex(
+                content, rf'"{asset_path}\?v=\d+"',
+                f"{asset_path} 참조에 캐시무효화 쿼리가 없습니다.",
+            )
+
+    def test_cache_bust_query_changes_when_file_mtime_changes(self):
+
+        css_path = os.path.join(WEB_DIR, "console.css")
+        original_mtime = os.path.getmtime(css_path)
+        try:
+            v1 = web_router._cache_bust_query(css_path)
+            os.utime(css_path, (original_mtime + 5, original_mtime + 5))
+            v2 = web_router._cache_bust_query(css_path)
+            self.assertNotEqual(v1, v2)
+        finally:
+            os.utime(css_path, (original_mtime, original_mtime))
+
     def test_console_css_served(self):
 
         resp = web_router.console_css()

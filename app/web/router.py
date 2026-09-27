@@ -107,6 +107,44 @@ class FunctionModeRequest(BaseModel):
 # 정적 화면 (인증 불필요 — 로그인 폼 자체가 이 페이지 안에 있음)
 # --------------------------------------------------
 
+# 2026-09-27 — console.js/i18n 파일은 HTML이 고정 URL(쿼리 없음)로
+# 참조하고, 정적 자산은 no-store 대상에서 제외돼 있다(위 미들웨어
+# 주석 — "반복 로드 성능"을 위한 의도적 설계). 그 결과 파일을 고쳐도
+# 새 URL이 아니므로 브라우저가 이전 캐시를 계속 서빙할 수 있다 —
+# 이번 세션에서 반복 재현된 문제. VERSION 상수는 코드를 고칠 때마다
+# 수동으로 올려야 해서 잊기 쉬우므로, 대신 파일 자체의 수정시각을
+# 캐시무효화 값으로 붙인다(수정 즉시 URL이 바뀌어 자동으로 무효화,
+# 수동 버전 관리 불필요).
+_CACHE_BUST_ASSET_PATHS = (
+    "/console/static/console.css",
+    "/console/static/i18n/ko-KR.js",
+    "/console/static/i18n/en-US.js",
+    "/console/static/i18n/i18n.js",
+    "/console/static/console.js",
+)
+
+
+def _cache_bust_query(local_path: str) -> str:
+
+    try:
+        return str(int(os.path.getmtime(local_path)))
+    except OSError:
+        return "0"
+
+
+def _apply_cache_busting(html: str) -> str:
+
+    for asset_path in _CACHE_BUST_ASSET_PATHS:
+        if asset_path.startswith("/console/static/i18n/"):
+            local_path = os.path.join(WEB_DIR, "i18n", asset_path.rsplit("/", 1)[-1])
+        else:
+            local_path = os.path.join(WEB_DIR, asset_path.rsplit("/", 1)[-1])
+        version = _cache_bust_query(local_path)
+        html = html.replace(f'"{asset_path}"', f'"{asset_path}?v={version}"')
+
+    return html
+
+
 @router.get(
     "/console",
     response_class=HTMLResponse,
@@ -125,7 +163,7 @@ def console_page():
     with open(html_path, encoding="utf-8") as f:
         content = f.read()
 
-    return HTMLResponse(content=content)
+    return HTMLResponse(content=_apply_cache_busting(content))
 
 
 @router.get(

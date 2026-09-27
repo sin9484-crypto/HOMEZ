@@ -91,6 +91,32 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
         nearby = self.js[idx:idx + 400]
         self.assertIn("lwRestoreFulfillmentDraftOptionsAndNotice(block, w.id)", nearby)
 
+    def test_notice_category_dropdown_reapplies_draft_on_every_rerender(self):
+        """실제 브라우저 재현으로 발견된 결함 — 정보고시 "유형" 드롭다운
+        자체를 전환할 때도(카테고리 추천·조회 버튼과 무관하게)
+        renderGroup()이 그 그룹을 매번 빈 값으로 다시 그린다. 다른
+        그룹을 거쳐 되돌아오면 그 사이 자동저장이 빈 상태를 그대로
+        저장해 이전 입력을 지웠다 — 재렌더 직후 즉시 복원해야 한다."""
+
+        idx = self.js.index("const renderGroup = () => {")
+        end = self.js.index("host.querySelector(\"[data-lw-notice-category]\")?.addEventListener", idx)
+        body = self.js[idx:end]
+        self.assertIn("lwWirePhoneDefault(grid);", body)
+        self.assertIn(
+            "lwRestoreFulfillmentDraftOptionsAndNotice(block, lwState.wizard.id);",
+            body,
+        )
+        # 전화번호 자동채움 다음, refresh() 이전에 와야 한다(빈 값으로
+        # 갓 그려진 직후·검증 표시 이전에 채워야 에러가 잘못 뜨지 않는다).
+        self.assertLess(
+            body.index("lwWirePhoneDefault(grid)"),
+            body.index("lwRestoreFulfillmentDraftOptionsAndNotice"),
+        )
+        self.assertLess(
+            body.index("lwRestoreFulfillmentDraftOptionsAndNotice"),
+            body.rindex("refresh();"),
+        )
+
     def test_save_preserves_purchase_options_and_notice_when_not_yet_rendered(self):
         """실제 브라우저 재현으로 확인된 결함 — 카테고리 조회 전에는
         구매옵션·정보고시 입력칸이 아예 없어서, 그 상태로 자동저장하면

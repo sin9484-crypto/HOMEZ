@@ -11930,6 +11930,14 @@
         lwScheduleAutosave();
       }));
       lwWirePhoneDefault(grid);
+      // 2026-09-27 — 실제 화면 재현으로 발견: 이 정보고시 "유형"
+      // 드롭다운 자체를 전환할 때도(카테고리 추천·조회 버튼이 아니라)
+      // renderGroup()이 매번 그 그룹을 빈 값으로 다시 그린다. 되돌아가지
+      // 않고 다른 그룹을 거쳐 다시 돌아오는 사이 자동저장이 실행되면
+      // 그 "일시적으로 빈 상태"가 로컬 초안에 그대로 저장돼 이전에
+      // 입력해 둔 값을 지운다 — 카테고리 재조회 버튼 경로와 동일하게,
+      // 매번 다시 그린 직후 로컬 초안 값을 즉시 채워 넣는다.
+      if (lwState.wizard) lwRestoreFulfillmentDraftOptionsAndNotice(block, lwState.wizard.id);
       refresh();
     };
     host.querySelector("[data-lw-notice-category]")?.addEventListener("change", () => {
