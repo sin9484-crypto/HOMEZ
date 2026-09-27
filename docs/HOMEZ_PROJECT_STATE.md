@@ -1,6 +1,14 @@
 # Current Version
 
-**HOMEZ V7 — 동일회사 운영자간 초안 격리 검증(합성 계정), 이미지 사용권 기존 근거로 확정, 서버 저장은 여전히 사업값 대기 (2026-09-27, 38차).**
+**HOMEZ V7 — 브랜드 검색 실제 연동 완료·레이펄스 실사용 확인, 서버 저장은 가격·배송 결정만 남음 (2026-09-27, 39차).**
+
+- **38차 판정 정정**: "브랜드 검색 1회만 승인하면 해결"이라던 이전 라운드 판단이 틀렸다 — 실제로는 `search_coupang_brand` 라우터가 `FakeCoupangBrandProvider`에 무조건 연결돼 있어 승인해도 진짜 외부 호출이 0회였다(항상 데모 3개 중 매칭). 출고지·반품지·카테고리 연동은 이 문제와 무관하게 그대로 실제로 동작 중임을 재확인(확대 해석하지 않음).
+- **공식 계약 확인(WebFetch, 2026-09-27)**: [Product Creation](https://developers.coupang.com/hc/en-us/articles/360033877853-Product-Creation) — `brand`/`brandId` 둘 다 선택값, brandId 없이 brand 이름만 제출 가능. [브랜드 검색 API](https://developers.coupang.com/hc/ko/articles/58230017410841-브랜드-검색) — `POST /v2/providers/seller_api/apis/api/v1/marketplace/brands/search`, 기존 HMAC 인증(coupang_signing.py) 그대로 재사용, 정식 문서화된 기능(베타 아님). 응답에 Enrollment(입점) 상태 필드는 없음.
+- **최소 구현**: `coupang_brand_provider.py`에 `CoupangLiveBrandProvider` 추가(기존 `CoupangCategoryMetadataProvider`와 동일한 서명·요청·에러 처리 패턴 재사용, 신규 인증 방식 없음). `listing_wizard_router.py`의 `search_coupang_brand`를 기존 `_coupang_metadata_provider`와 동일한 구조(`HOMEZ_TEST_FAKE_COUPANG_PROVIDER` 테스트 훅 + `WindowsCredentialStore`)로 재작성 — Fake는 격리 테스트 전용으로만 남김, 실제 화면은 항상 실 Provider를 거침. Enrollment 상태는 실 API가 제공하지 않으므로 항상 "UNKNOWN"(임의 추정 금지). HOMEZ 내부 NO_BRAND/OFFICIAL_BRAND 이분 구조 자체는 유지(공식 계약보다 엄격한 fail-closed 설계지만, 기존 감사 근거(F-02)에 따른 의도된 안전장치로 판단해 완화하지 않음).
+- **실제 사용 확인(기존 승인 1회 재사용, 신규 승인 아님)**: 실제 화면에서 "공식 브랜드 검색"으로 "레이펄스" 검색 → 실제 쿠팡 API 호출 정확히 1회(`GET .../brand-search?query=레이펄스`, 네트워크 로그로 확인) → "레이펄스(KR-120395)" 정확히 일치하는 결과 확인(유사명 "마이펄스"/"레이너스"는 선택하지 않음) → 선택 완료. `brandState=OFFICIAL_BRAND`로 확정, "브랜드 정보를 확인해 주세요" 경고 사라짐 확인.
+- **서버 저장**: 여전히 미완료 — 반품배송비·반품회수비·최대구매수량·옵션(3945580) 판매가·정상가만 남음(사용자 결정 대기 중, 추천값을 확정값으로 저장하지 않음).
+
+**서버**: 코드 반영 위해 재시작 1회(브랜드 Provider), 로그인 세션 유지, 로컬 초안 보존 확인 후 진행.
 
 - **격리 남은 범위 확인**: 37차의 "다른 회사 Wizard 접근 거부"만으로는 같은 회사 내 개인 초안 격리를 증명하지 못한다는 지적을 반영 — Wizard 로컬 초안 자체는 `created_by_user_id`가 접근 제어에 전혀 쓰이지 않아(`get_for_company`만 검사) **회사 공유 자원**이 맞음을 서비스 코드로 재확인(수정 대상 아님, 기존 계약). 반면 전화번호 고정값(`user_settings.listing_defaults`)은 개인 설정이어야 하므로, 합성 계정(같은 회사·다른 user_id) 격리 테스트를 신규 추가해 실제로 섞이지 않음을 확인(`test_same_company_different_operator_has_independent_listing_defaults`) — 기존 격리 테스트는 회사·사용자를 동시에 바꿔 user_id 필터 자체는 증명하지 못했던 공백을 메움. 실제 다른 사용자 계정 접근은 하지 않음.
 - **이미지 사용권 체크**: 임의 체크가 아니라 기존 근거 재사용 — `media_assets#1`(product_candidate#3 소유, 현재 URL과 일치)이 2026-09-14 `MEDIA_ASSET_RIGHTS_VERIFIED`(근거=SUPPLIER_BRAND_PERMISSION)로 이미 VERIFIED 상태임을 DB로 확인 후 체크. 근거가 없었다면 체크하지 않았을 것.

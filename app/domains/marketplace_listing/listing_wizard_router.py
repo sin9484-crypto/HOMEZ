@@ -389,6 +389,47 @@ _FAKE_BRAND_SEARCH_SEED = {
 }
 
 
+def _coupang_brand_provider(db: Session, company_id: int):
+    # 2026-09-27 — _coupang_metadata_provider()와 동일한 패턴(기존
+    # HOMEZ_TEST_FAKE_COUPANG_PROVIDER 테스트 훅 + WindowsCredentialStore
+    # 재사용). 격리 테스트에서만 Fake를 쓰고, 실제 화면에서는 항상 이
+    # 실 Provider를 거친다.
+    import os
+    if os.environ.get("HOMEZ_TEST_FAKE_COUPANG_PROVIDER") == "1":
+        from app.domains.marketplace_listing.coupang_brand_provider import (
+            BrandSearchResult, FakeCoupangBrandProvider,
+        )
+        seed = {
+            key: [BrandSearchResult(**row) for row in rows]
+            for key, rows in _FAKE_BRAND_SEARCH_SEED.items()
+        }
+        return FakeCoupangBrandProvider(seed)
+
+    from app.core.exceptions import ServiceUnavailableException
+    from app.core.windows_credential_store import WindowsCredentialStore
+    from app.domains.marketplace_listing.coupang_brand_provider import (
+        CoupangBrandProviderError, CoupangLiveBrandProvider,
+    )
+    from app.domains.store_connection.model import StoreConnection
+
+    connection = (
+        db.query(StoreConnection)
+        .filter(StoreConnection.company_id == company_id)
+        .filter(StoreConnection.marketplace_code == "COUPANG")
+        .filter(StoreConnection.connection_status == "CONNECTED")
+        .first()
+    )
+    if connection is None or not connection.credential_reference:
+        raise ServiceUnavailableException("연결된 쿠팡 판매계정이 필요합니다.")
+    try:
+        credential = WindowsCredentialStore().read(connection.credential_reference)
+        return CoupangLiveBrandProvider(credential)
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailableException):
+            raise
+        raise ServiceUnavailableException("쿠팡 브랜드 검색을 준비할 수 없습니다.") from exc
+
+
 @router.get("/{wizard_id}/coupang/brand-search")
 def search_coupang_brand(
     wizard_id: int,
@@ -396,26 +437,30 @@ def search_coupang_brand(
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
+    from app.core.exceptions import ServiceUnavailableException
     from app.domains.marketplace_listing.coupang_brand_provider import (
-        BrandSearchResult, FakeCoupangBrandProvider, brand_lookup_fingerprint,
+        CoupangBrandProviderError, brand_lookup_fingerprint,
     )
 
     ListingWizardService(db).get(wizard_id, current_user.company_id)
 
-    seed = {
-        key: [BrandSearchResult(**row) for row in rows]
-        for key, rows in _FAKE_BRAND_SEARCH_SEED.items()
-    }
-    provider = FakeCoupangBrandProvider(seed)
-    results = provider.search_brand(query)
+    import os
+    is_fake = os.environ.get("HOMEZ_TEST_FAKE_COUPANG_PROVIDER") == "1"
+    provider = _coupang_brand_provider(db, current_user.company_id)
+    try:
+        results = provider.search_brand(query)
+    except CoupangBrandProviderError as exc:
+        raise ServiceUnavailableException(str(exc)) from exc
 
     return {
-        "connected": False,
+        "connected": not is_fake,
         "results": [
             {
                 "brand_id": r.brand_id,
                 "official_brand_name": r.official_brand_name,
                 "enrollment_status": r.enrollment_status,
+                "is_uid_required": r.is_uid_required,
+                "allowed_uid_types": list(r.allowed_uid_types),
                 "lookup_fingerprint": brand_lookup_fingerprint(query, r),
             }
             for r in results

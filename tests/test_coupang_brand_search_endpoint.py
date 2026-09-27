@@ -5,12 +5,19 @@ Homez OS
 File : tests/test_coupang_brand_search_endpoint.py
 
 2026-08-30 V7 후속 안정화 Phase 3 — GET /listing-wizards/{id}/coupang/
-brand-search 라우터 계약 검증. Fake Provider만 사용한다(실제 쿠팡
-브랜드 검색 API를 호출하는 코드 자체가 없음 — connected:false로
-명시).
+brand-search 라우터 계약 검증.
+
+2026-09-27 후속 — 실제 쿠팡 브랜드 검색 API가 공식 문서화돼 있음을
+확인해 CoupangLiveBrandProvider로 실제 연동했다(coupang_brand_
+provider.py 참고). 이 파일은 다른 Provider 테스트와 동일한 관례대로
+HOMEZ_TEST_FAKE_COUPANG_PROVIDER=1을 명시적으로 설정해 Fake 경로만
+검증한다(연결된 판매계정 없이도 라우터 계약을 확인하기 위함) — 실제
+Provider의 파싱 로직은 test_coupang_live_brand_provider.py가 별도로
+검증한다.
 =========================================================
 """
 
+import os
 import unittest
 
 from app.domains.marketplace_listing.listing_wizard_router import (
@@ -32,6 +39,21 @@ class _StubUser:
 
 
 class CoupangBrandSearchEndpointTestCase(ListingWizardServiceTestCase):
+    """이 클래스는 ListingWizardServiceTestCase를 상속해 공용 fixture만
+    재사용한다 — unittest가 부모의 test_* 메서드까지 이 서브클래스
+    아래에서 함께 discover하므로, HOMEZ_TEST_FAKE_COUPANG_PROVIDER를
+    setUp()에 두면 이 파일과 무관한 상속된 테스트에까지 영향을 준다
+    (실제로 한 건이 멈추는 것을 확인함). 그래서 이 env var는 아래처럼
+    브랜드 검색 호출 각각을 감싸는 범위로만 좁힌다."""
+
+    def _search_with_fake_provider(self, wizard_id, query, current_user):
+        os.environ["HOMEZ_TEST_FAKE_COUPANG_PROVIDER"] = "1"
+        try:
+            return search_coupang_brand(
+                wizard_id, query=query, current_user=current_user, db=self.db,
+            )
+        finally:
+            os.environ.pop("HOMEZ_TEST_FAKE_COUPANG_PROVIDER", None)
 
     def _wizard(self):
         candidate, _channel, account, media = self._full_setup()
@@ -50,9 +72,8 @@ class CoupangBrandSearchEndpointTestCase(ListingWizardServiceTestCase):
     def test_known_seed_query_returns_demo_flagged_results(self):
         wizard = self._wizard()
 
-        response = search_coupang_brand(
-            wizard.id, query="홈즈",
-            current_user=self._admin_user(), db=self.db,
+        response = self._search_with_fake_provider(
+            wizard.id, "홈즈", self._admin_user(),
         )
 
         self.assertFalse(response["connected"])
@@ -65,9 +86,8 @@ class CoupangBrandSearchEndpointTestCase(ListingWizardServiceTestCase):
     def test_unknown_query_returns_empty_results_not_error(self):
         wizard = self._wizard()
 
-        response = search_coupang_brand(
-            wizard.id, query="존재하지않는브랜드검색어",
-            current_user=self._admin_user(), db=self.db,
+        response = self._search_with_fake_provider(
+            wizard.id, "존재하지않는브랜드검색어", self._admin_user(),
         )
 
         self.assertFalse(response["connected"])
@@ -76,9 +96,8 @@ class CoupangBrandSearchEndpointTestCase(ListingWizardServiceTestCase):
     def test_not_enrolled_seed_is_flagged(self):
         wizard = self._wizard()
 
-        response = search_coupang_brand(
-            wizard.id, query="에브리홈즈",
-            current_user=self._admin_user(), db=self.db,
+        response = self._search_with_fake_provider(
+            wizard.id, "에브리홈즈", self._admin_user(),
         )
 
         self.assertEqual(response["results"][0]["enrollment_status"], "NOT_ENROLLED")
@@ -86,12 +105,8 @@ class CoupangBrandSearchEndpointTestCase(ListingWizardServiceTestCase):
     def test_fingerprint_changes_with_query(self):
         wizard = self._wizard()
 
-        a = search_coupang_brand(
-            wizard.id, query="홈즈", current_user=self._admin_user(), db=self.db,
-        )
-        b = search_coupang_brand(
-            wizard.id, query="homez", current_user=self._admin_user(), db=self.db,
-        )
+        a = self._search_with_fake_provider(wizard.id, "홈즈", self._admin_user())
+        b = self._search_with_fake_provider(wizard.id, "homez", self._admin_user())
 
         self.assertNotEqual(
             a["results"][0]["lookup_fingerprint"], b["results"][0]["lookup_fingerprint"],
