@@ -106,11 +106,35 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
     def test_successful_real_save_clears_draft_before_advancing(self):
 
         idx = self.js.index("/listing-wizards/${w.id}/fulfillment")
-        chunk = self.js[idx:idx + 800]
+        chunk = self.js[idx:idx + 1200]
         self.assertIn("lwClearFulfillmentDraft(block, w.id)", chunk)
         clear_pos = chunk.index("lwClearFulfillmentDraft")
         advance_pos = chunk.index("lwAdvanceAfterSave(fresh)")
         self.assertLess(clear_pos, advance_pos)
+
+    def test_draft_clear_skips_blocks_edited_during_the_save_request(self):
+        """실제 브라우저에서 확인 가능한 경쟁 조건 — PATCH 응답을
+        기다리는 동안 사용자가 다른 칸을 더 입력하면, 그 입력은 이번
+        payload에 없다. 저장 성공만으로 무조건 초안을 지우면 서버에
+        전달되지 않은 새 입력까지 함께 사라진다."""
+
+        idx = self.js.index("const preSaveDraftSnapshots = blocks.map(")
+        body = self.js[idx:idx + 1100]
+        self.assertIn("nowSnapshot === preSaveDraftSnapshots[idx]", body)
+        self.assertIn("lwClearFulfillmentDraft(block, w.id)", body)
+        # 스냅샷은 실제 fetch 호출보다 앞서 찍혀야 한다.
+        fetch_idx = self.js.index("await apiFetch(`/listing-wizards/${w.id}/fulfillment`")
+        self.assertLess(idx, fetch_idx)
+
+    def test_autosave_reports_when_nothing_was_actually_saved(self):
+        """lwSaveCurrentStep(silent)의 반환값을 버리면, 필수값 미충족으로
+        서버에 아무것도 저장되지 않았을 때도 "자동 저장 중…" 문구가
+        영원히 남아 사용자를 오도한다 — 실제 화면 재현으로 확인된 결함."""
+
+        idx = self.js.index("function lwScheduleAutosave()")
+        body = self.js[idx:idx + 900]
+        self.assertIn("const saved = await lwSaveCurrentStep({ silent: true })", body)
+        self.assertIn('if (!saved && statusEl) statusEl.textContent = HomezI18n.t("lw.autosave_not_saved")', body)
 
 
 if __name__ == "__main__":

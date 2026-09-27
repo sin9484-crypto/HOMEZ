@@ -9935,7 +9935,14 @@
       if (typeof lwSaveCurrentStep !== "function") return;
       const statusEl = el("lw-save-status");
       if (statusEl) statusEl.textContent = HomezI18n.t("lw.autosave_saving");
-      await lwSaveCurrentStep({ silent: true });
+      // 2026-09-27 — lwSaveCurrentStep(silent)의 반환값을 그동안 버려서,
+      // 필수값 미충족으로 실제로는 서버에 아무것도 저장되지 않았을
+      // 때도 "자동 저장 중…" 문구가 영원히 남아있었다(FULFILLMENT처럼
+      // 완전한 값이 갖춰지기 전엔 서버 PATCH 자체가 발생하지 않는
+      // 단계에서 실제로 재현됨). 저장이 실제로 일어나지 않았으면
+      // 그 사실을 정확히 표시한다 — "저장됨"으로 오도하지 않는다.
+      const saved = await lwSaveCurrentStep({ silent: true });
+      if (!saved && statusEl) statusEl.textContent = HomezI18n.t("lw.autosave_not_saved");
     }, 1500);
   }
 
@@ -11756,6 +11763,15 @@
           channel_policy_confirmed_evidence_rule_codes: policyInput.confirmedRules,
         });
       }
+      // 2026-09-27 — PATCH 전송 직전 화면 상태를 찍어둔다. 응답이
+      // 오는 동안(네트워크 왕복 시간) 사용자가 다른 칸을 더 입력했을
+      // 수 있다 — 그 입력은 이번 payload에는 없으므로, 저장 성공
+      // 직후 무조건 초안을 지우면 서버에 전달되지도 않은 새 입력까지
+      // 함께 사라진다. 응답 시점에 화면이 이 스냅샷과 똑같을 때만
+      // 지운다.
+      const preSaveDraftSnapshots = blocks.map(
+        (block) => JSON.stringify(lwCollectFulfillmentDraftFromBlock(block)),
+      );
       try {
         const fresh = await apiFetch(`/listing-wizards/${w.id}/fulfillment`, {
           method: "PATCH",
@@ -11771,8 +11787,12 @@
           // 서버가 실제로 저장을 받아들였다 — 이제 서버 값이
           // authoritative이므로 로컬 초안은 정리한다(계속 남겨두면
           // 다음 방문 때 이미 저장된 값 위에 오래된 초안이 덮어써질
-          // 위험이 있다).
-          blocks.forEach((block) => lwClearFulfillmentDraft(block, w.id));
+          // 위험이 있다). 단, 전송 중 화면이 바뀐 블록은 지우지 않고
+          // 다음 성공 저장 때 정리되게 둔다.
+          blocks.forEach((block, idx) => {
+            const nowSnapshot = JSON.stringify(lwCollectFulfillmentDraftFromBlock(block));
+            if (nowSnapshot === preSaveDraftSnapshots[idx]) lwClearFulfillmentDraft(block, w.id);
+          });
           lwAdvanceAfterSave(fresh);
         }
         return true;

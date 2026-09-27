@@ -1433,6 +1433,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.notice_phone_default_failed": "고정값을 저장하지 못했습니다. 잠시 후 다시 시도하세요.",
   "lw.notice_phone_default_invalid": "전화번호는 숫자, 하이픈, 괄호, +만 5~30자로 입력하세요.",
   "lw.fulfillment_draft_restored": "이전에 입력했던 값을 이 화면에 다시 채웠습니다. 출고지·반품지·카테고리는 다시 조회해 확인하세요.",
+  "lw.autosave_not_saved": "필수값이 부족해 자동저장되지 않았습니다.",
   "lw.policy_notice_confirmed": "상품정보제공고시 내용을 확인했습니다.",
 
   "lw.econ_cost_of_goods": "원가",

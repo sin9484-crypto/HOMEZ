@@ -1420,6 +1420,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.notice_phone_default_failed": "Could not save the fixed value. Try again shortly.",
   "lw.notice_phone_default_invalid": "Use 5-30 characters: digits, hyphens, parentheses, or +.",
   "lw.fulfillment_draft_restored": "Refilled this screen with your earlier input. Re-check the outbound place, return center, and category.",
+  "lw.autosave_not_saved": "Not auto-saved — required fields are still missing.",
   "lw.policy_purchase_options": "Purchase options",
   "lw.policy_purchase_options_invalid": "Purchase options must be valid JSON.",
   "lw.policy_notice_confirmed": "I reviewed the category notice information.",
