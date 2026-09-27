@@ -11097,6 +11097,17 @@
       purchaseOptions,
       noticeCategory: block.querySelector("[data-lw-notice-category]")?.value || "",
       notice,
+      // 2026-09-28 실사용 재현 — 브랜드 패널(.lw-brand-state-panel)은
+      // 이전까지 이 초안에 전혀 포함되지 않아서, 카테고리 조회/서버
+      // 재시작으로 화면이 다시 그려질 때마다 이미 확인·선택해 둔 공식
+      // 브랜드(예: 레이펄스 KR-120395)가 UNRESOLVED로 되돌아갔다 —
+      // 매번 다시 검색해야 했다. brandState가 UNRESOLVED가 아닐 때만
+      // 저장한다(미확인 상태를 굳이 들고 있을 필요 없음).
+      brandStateJson: (() => {
+        const json = block.querySelector(".lw-brand-state-panel")?.dataset.lwBrandStateJson || "";
+        if (!json) return "";
+        try { return JSON.parse(json).brandState === "UNRESOLVED" ? "" : json; } catch (_err) { return ""; }
+      })(),
       savedAt: Date.now(),
     };
   }
@@ -11180,6 +11191,21 @@
     if (returnSel && draft.returnCode && !returnSel.dataset.savedCode) {
       returnSel.dataset.savedCode = draft.returnCode;
     }
+    // 서버가 이미 브랜드를 저장해 UNRESOLVED가 아니면(sel.required_fields
+    // 로부터 렌더된 상태) 건드리지 않는다 — 로컬 초안은 서버 값 위에
+    // 조용히 덮어쓰지 않는다는 기존 원칙과 동일하게, 빈 상태일 때만
+    // 채운다.
+    const brandPanel = block.querySelector(".lw-brand-state-panel");
+    if (brandPanel && draft.brandStateJson) {
+      let currentBrandState;
+      try { currentBrandState = JSON.parse(brandPanel.dataset.lwBrandStateJson || "{}"); } catch (_err) { currentBrandState = {}; }
+      if (!currentBrandState.brandState || currentBrandState.brandState === "UNRESOLVED") {
+        try {
+          brandPanel.outerHTML = lwRenderBrandStatePanel(JSON.parse(draft.brandStateJson));
+          lwWireBrandStatePanel(block);
+        } catch (_err) { /* 저장된 브랜드 초안이 손상됐으면 조용히 건너뛴다 */ }
+      }
+    }
     lwRestoreFulfillmentDraftOptionsAndNotice(block, wizardId);
     return true;
   }
@@ -11192,6 +11218,12 @@
     };
     block.addEventListener("input", schedule);
     block.addEventListener("change", schedule);
+    // 2026-09-28 — 브랜드 탭·검색결과 "선택" 버튼은 input/change가
+    // 아니라 click만 발생시킨다(lwWireBrandStatePanel 자체 로직) — 그
+    // 이벤트를 여기서 가로채 바꾸지 않고, 이 블록에서 버블링되는
+    // click도 함께 감시해 브랜드 선택 직후에도 로컬 초안이 저장되게
+    // 한다(다른 버튼 클릭에도 여분으로 저장이 걸리지만 부작용 없음).
+    block.addEventListener("click", schedule);
   }
 
   async function lwRenderFulfillmentStep(content) {

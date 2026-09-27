@@ -162,6 +162,29 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
         self.assertIn("const saved = await lwSaveCurrentStep({ silent: true })", body)
         self.assertIn('if (!saved && statusEl) statusEl.textContent = HomezI18n.t("lw.autosave_not_saved")', body)
 
+    def test_brand_state_is_collected_only_when_resolved(self):
+        """실제 브라우저 재현으로 발견된 결함 — 브랜드 패널은 이전까지
+        로컬 초안에 전혀 포함되지 않아서, 카테고리 재조회·서버 재시작
+        마다 이미 확인·선택한 공식 브랜드가 UNRESOLVED로 되돌아갔다."""
+
+        body = self._fn_body("function lwCollectFulfillmentDraftFromBlock(block)", 1600)
+        self.assertIn("lw-brand-state-panel", body)
+        self.assertIn('.brandState === "UNRESOLVED" ? "" : json', body)
+
+    def test_brand_state_restore_never_overwrites_a_resolved_state(self):
+        body = self._fn_body("function lwRestoreFulfillmentDraft(block, wizardId)", 2200)
+        self.assertIn('!currentBrandState.brandState || currentBrandState.brandState === "UNRESOLVED"', body)
+        self.assertIn("lwRenderBrandStatePanel(JSON.parse(draft.brandStateJson))", body)
+        self.assertIn("lwWireBrandStatePanel(block)", body)
+
+    def test_brand_tab_and_select_clicks_are_not_lost_by_local_draft_autosave(self):
+        """브랜드 탭·검색결과 "선택"은 click만 내고 input/change를
+        내지 않는다 — 로컬 초안 자동저장이 click도 감시해야 브랜드
+        선택 직후 바로 저장된다(다음 재렌더까지 기다리지 않음)."""
+
+        body = self._fn_body("function lwWireFulfillmentDraftAutosave(block, wizardId)", 700)
+        self.assertIn('block.addEventListener("click", schedule)', body)
+
 
 if __name__ == "__main__":
     unittest.main()
