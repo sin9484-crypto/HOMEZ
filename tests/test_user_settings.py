@@ -118,6 +118,40 @@ class UserSettingServiceTestCase(unittest.TestCase):
                 "value", 0, 1,
             )
 
+    def test_same_company_different_operator_has_independent_listing_defaults(self):
+        """2026-09-27 — 기존 격리 테스트(test_other_company_user_has_
+        independent_setting_scope)는 회사·사용자를 동시에 바꿔서 실제로는
+        company_id 필터만으로도 통과할 수 있었다(user_id 필터가 실제로
+        효과가 있는지는 증명하지 못함). 소비자상담 전화번호 고정값은
+        같은 회사의 다른 운영자에게도 개인 설정이어야 한다 — 회사는
+        같고 user_id만 다른 두 번째 운영자로 실제 분리를 확인한다."""
+
+        colleague = _fake_user(self.company.id)
+        self.assertEqual(colleague.company_id, self.user.company_id)
+        self.assertNotEqual(colleague.id, self.user.id)
+
+        self.service.put(
+            self.user.id, self.company.id, "listing_defaults",
+            {"consumer_service_phone": "010-1111-1111"}, 0, 1,
+        )
+
+        colleague_view = self.service.get(
+            colleague.id, self.company.id, "listing_defaults",
+        )
+        self.assertIsNone(colleague_view["value"])
+
+        self.service.put(
+            colleague.id, self.company.id, "listing_defaults",
+            {"consumer_service_phone": "010-2222-2222"}, 0, 1,
+        )
+
+        mine_after = self.service.get(
+            self.user.id, self.company.id, "listing_defaults",
+        )
+        self.assertEqual(
+            mine_after["value"], {"consumer_service_phone": "010-1111-1111"},
+        )
+
     def test_listing_defaults_key_stores_consumer_service_phone(self):
         """상품등록 고정값(소비자상담 전화번호)은 허용 키 하나로 저장·
         재조회되며, 값을 지우면(키 제거 후 저장) 다시 빈 값이 된다."""
