@@ -87,7 +87,7 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
 
     def test_category_recommend_reapplies_draft_after_metadata_refetch(self):
 
-        idx = self.js.index("lwRenderItemComboBuilder(block, metadata.purchase_option_fields || [], []);")
+        idx = self.js.index("isSameCategoryMetadata ? prevComboItems : []")
         nearby = self.js[idx:idx + 400]
         self.assertIn("lwRestoreFulfillmentDraftOptionsAndNotice(block, w.id)", nearby)
 
@@ -199,6 +199,33 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
         body = self._fn_body("function lwSaveFulfillmentDraft(block, wizardId)", 1900)
         self.assertIn("draft.comboItems === null", body)
         self.assertIn("existing?.comboItems", body)
+
+    def test_category_recommend_preserves_combo_rows_when_metadata_fingerprint_unchanged(self):
+        """실제 코드 재확인으로 발견된 결함 — "카테고리 추천" 버튼은
+        같은 카테고리를 다시 조회한 경우와 실제로 다른 카테고리로
+        바뀐 경우를 구분하지 않고 매번 옵션조합표(다중옵션 행,
+        optionAttributes 포함)를 빈 배열로 재생성해 조용히 지웠다.
+        Metadata 지문이 재조회 전후로 같으면(축 정의가 그대로임을
+        뜻함) 조합 생성 행까지 포함해 그대로 유지해야 한다."""
+
+        idx = self.js.index('content.querySelectorAll("[data-lw-category-recommend]")')
+        end = self.js.index("if (detail) {", idx)
+        body = self.js[idx:end]
+        self.assertIn(
+            'const prevFingerprint = block.querySelector(".lw-category-metadata-fingerprint")?.value || "";',
+            body,
+        )
+        self.assertIn('block.querySelector("[data-lw-item-combo-builder]")?.dataset.lwComboItems', body)
+        self.assertIn(
+            "const isSameCategoryMetadata = !!prevFingerprint && prevFingerprint === metadata.metadata_fingerprint;",
+            body,
+        )
+        self.assertIn("isSameCategoryMetadata ? prevComboItems : []", body)
+        # 지문 캡처는 반드시 그 값을 새 값으로 덮어쓰기 전에 이루어져야
+        # 한다 — 순서가 바뀌면 항상 "같음"으로 잘못 판정된다.
+        capture_pos = body.index("const prevFingerprint")
+        overwrite_pos = body.index('block.querySelector(".lw-category-metadata-fingerprint").value = metadata')
+        self.assertLess(capture_pos, overwrite_pos)
 
     def test_combo_manual_rows_are_restored_by_sku_not_array_position(self):
         """배열 순서나 상품명이 아니라 externalVendorSku(안정적인 옵션

@@ -11504,6 +11504,17 @@
         const block = btn.closest(".lw-channel-block");
         const detail = block.querySelector("[data-lw-policy-detail]");
         if (detail) detail.textContent = HomezI18n.t("common.loading");
+        // 실제 재현으로 확인된 결함 — 이 버튼은 "같은 카테고리를 다시
+        // 조회"한 경우와 "다른 카테고리로 바뀐" 경우를 구분하지 않고
+        // 매번 조합표(다중옵션 행)를 비웠다. Metadata 지문이 이전과
+        // 같으면(=축 정의가 그대로) 재조회 전 조합표를 그대로 넘긴다.
+        const prevFingerprint = block.querySelector(".lw-category-metadata-fingerprint")?.value || "";
+        let prevComboItems = [];
+        try {
+          prevComboItems = JSON.parse(
+            block.querySelector("[data-lw-item-combo-builder]")?.dataset.lwComboItems || "[]",
+          );
+        } catch (_err) { prevComboItems = []; }
         try {
           const recommendation = await apiFetch(`/listing-wizards/${w.id}/category-recommendation`, { method: "POST" });
           const metadata = await apiFetch(`/listing-wizards/${w.id}/category-metadata/${encodeURIComponent(recommendation.display_category_code)}`);
@@ -11515,10 +11526,14 @@
           // 기준으로 무효다 — 빈 값으로 다시 그려 재확인을 강제한다
           // (2026-08-29 쿠팡 상품등록 핵심 차단 해결, Section 4 요구).
           lwRenderPurchaseOptionFields(block, metadata.purchase_option_fields || [], {});
-          // 카테고리가 바뀌면 옵션 조합도 전부 무효다 — 새로 만들어야
-          // 한다(기존 조합을 그대로 들고 있으면 새 카테고리의 잘못된
-          // attributeTypeName이 섞여 들어갈 수 있다).
-          lwRenderItemComboBuilder(block, metadata.purchase_option_fields || [], []);
+          // 지문이 실제로 바뀐 경우만 조합축 정의가 달라진 것으로 보고
+          // 조합표를 비운다 — 지문이 같으면(같은 카테고리 재조회) 조합
+          // 생성 행(optionAttributes 포함)까지 그대로 유지한다.
+          const isSameCategoryMetadata = !!prevFingerprint && prevFingerprint === metadata.metadata_fingerprint;
+          lwRenderItemComboBuilder(
+            block, metadata.purchase_option_fields || [],
+            isSameCategoryMetadata ? prevComboItems : [],
+          );
           // 방금 막 빈 값으로 다시 그린 구매옵션·정보고시 입력칸에,
           // 로컬 초안에 남아있던 값이 있으면 채운다(같은 카테고리를
           // 다시 조회한 경우 재입력을 강요하지 않는다).
