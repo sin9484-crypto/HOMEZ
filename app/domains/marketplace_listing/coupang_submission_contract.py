@@ -87,6 +87,25 @@ def _is_public_http_url(value: str) -> bool:
         return False
 
 
+def _is_valid_positive_price(value: Any) -> bool:
+    """2026-09-28 — 가격은 "값이 있다"만으로 부족하다. null·빈 문자열·
+    0·음수·숫자가 아닌 문자열은 전부 무효로 판정한다(쿠팡에 잘못된
+    값을 그대로 보내지 않는다). bool은 int의 서브클래스이지만 가격으로
+    오인하지 않는다(이 저장소의 기존 check_member_point류 회귀와
+    동일한 원칙)."""
+
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, str):
+        try:
+            return float(value.strip()) > 0
+        except ValueError:
+            return False
+    return False
+
+
 _CONTENTS_TYPES = frozenset({
     "IMAGE", "IMAGE_NO_SPACE", "TEXT", "IMAGE_TEXT", "TEXT_IMAGE",
     "IMAGE_IMAGE", "TEXT_TEXT", "TITLE", "HTML",
@@ -281,11 +300,25 @@ def validate_coupang_submission_contract(
             # 저장 자체는 가격 없이도 성공할 수 있었다(실제 화면
             # 재현으로 확인된 결함) — 여기서 막아 그 하드 실패를
             # 사용자에게 읽을 수 있는 오류로 먼저 드러낸다.
-            item_sale_price = entry.get("salePrice")
-            item_original_price = entry.get("originalPrice")
-            if item_sale_price is None and required_fields.get("salePrice") is None:
+            #
+            # 2026-09-28 후속 — "없음"만 막으면 부족하다. null·빈
+            # 문자열·0·음수·숫자가 아닌 값은 KeyError는 피해도 쿠팡에
+            # 잘못된 값을 그대로 보내거나(실 API 거부) 이후 숫자 변환
+            # 단계에서 다시 예외로 끝날 수 있다 — 여기서 유효한 양수
+            # 인지까지 판정해 하나의 읽을 수 있는 오류로 막는다.
+            effective_sale_price = (
+                entry.get("salePrice")
+                if entry.get("salePrice") is not None
+                else required_fields.get("salePrice")
+            )
+            effective_original_price = (
+                entry.get("originalPrice")
+                if entry.get("originalPrice") is not None
+                else required_fields.get("originalPrice")
+            )
+            if not _is_valid_positive_price(effective_sale_price):
                 price_missing_items.append(str(entry.get("itemName") or entry.get("externalVendorSku") or "?"))
-            elif item_original_price is None and required_fields.get("originalPrice") is None:
+            elif not _is_valid_positive_price(effective_original_price):
                 price_missing_items.append(str(entry.get("itemName") or entry.get("externalVendorSku") or "?"))
             sku = entry.get("externalVendorSku")
             # 2026-09-21 옵션 연결 완성 — 스키마를 거치지 않은 옛 초안도
@@ -341,7 +374,8 @@ def validate_coupang_submission_contract(
         if price_missing_items:
             issues.append(_issue(
                 "ITEM_PRICE_REQUIRED",
-                "다음 옵션의 판매가·정상가를 입력해 주세요: "
+                "다음 옵션의 판매가·정상가가 비어 있거나 0 이하이거나 "
+                "숫자가 아닙니다 — 올바른 금액을 입력해 주세요: "
                 + ", ".join(sorted(set(price_missing_items))),
                 "FULFILLMENT", "required_fields.items[].salePrice",
                 "lw-item-combo-builder",

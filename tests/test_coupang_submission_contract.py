@@ -172,6 +172,38 @@ class RequiredFieldBlockingTestCase(unittest.TestCase):
         self.assertFalse(result.ready)
         self.assertIn("ITEM_PRICE_REQUIRED", result.blocking_codes)
 
+    def test_item_zero_or_negative_or_non_numeric_price_blocks(self):
+        """2026-09-28 후속 — "없음"만 막으면 부족하다. 0·음수·숫자가
+        아닌 문자열은 KeyError는 피해도 쿠팡에 잘못된 값을 그대로
+        보내거나 이후 숫자 변환에서 다시 예외로 끝날 수 있다."""
+
+        for bad_price in (0, -100, "not-a-number", "", True):
+            with self.subTest(bad_price=bad_price):
+                result = validate_coupang_submission_contract(
+                    draft=DRAFT,
+                    required_fields=_valid_required_fields(
+                        items=[{
+                            "itemName": "기본", "externalVendorSku": "SKU-BASE",
+                            "salePrice": bad_price, "originalPrice": 12900,
+                        }],
+                    ),
+                    channel_policy_attributes=NOTICE_ATTRIBUTES,
+                )
+                self.assertIn("ITEM_PRICE_REQUIRED", result.blocking_codes)
+
+    def test_item_numeric_string_price_is_accepted(self):
+        result = validate_coupang_submission_contract(
+            draft=DRAFT,
+            required_fields=_valid_required_fields(
+                items=[{
+                    "itemName": "기본", "externalVendorSku": "SKU-BASE",
+                    "salePrice": "12900", "originalPrice": "12900",
+                }],
+            ),
+            channel_policy_attributes=NOTICE_ATTRIBUTES,
+        )
+        self.assertNotIn("ITEM_PRICE_REQUIRED", result.blocking_codes)
+
     def test_item_own_price_satisfies_requirement_even_without_top_level_fallback(self):
         result = validate_coupang_submission_contract(
             draft=DRAFT,
