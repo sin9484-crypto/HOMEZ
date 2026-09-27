@@ -11031,6 +11031,162 @@
     });
   }
 
+  // 2026-09-27 — 5단계(FULFILLMENT) 반복 입력 손실 방지. 이 단계는
+  // 배송비 등 필수값이 전부 갖춰지기 전에는 서버 PATCH 자체가 발생하지
+  // 않는다(fail-closed, 30차에 이미 구조적 사실로 확인 — 여기서 그
+  // 계약을 바꾸지 않는다). 그래서 브라우저 탭이 닫히거나 서버가
+  // 재시작되면 화면에 입력해 둔 값이 전부 사라졌다(반복 관측된 문제).
+  // 서버 저장 계약은 그대로 두고 이 화면 전용 로컬 초안(localStorage)만
+  // 추가한다 — "초안 저장"(로컬, 검증 없음)과 "다음 단계 진입"(서버,
+  // 기존 검증 그대로)을 분리하기 위함이다.
+  //
+  // 의도적으로 이 초안에 포함하지 않는 것:
+  // - 출고지/반품지 코드값 자체(.value) — 드롭다운 옵션은 실제 재조회
+  //   전까지 존재하지 않는다. 대신 select.dataset.savedCode만 되살려
+  //   기존 populateLogistics()의 "저장된 값이 더 이상 유효하지 않음"
+  //   재검증 로직을 그대로 재사용한다(오래된 값을 최신으로 취급하지
+  //   않는다).
+  // - 카테고리 코드·메타데이터 버전/지문 — 이 값들은 실제 카테고리
+  //   조회 API 응답과 항상 같이 와야 한다. 코드만 복원하고 구매옵션
+  //   정의(definitions)는 복원하지 못하면, 서버 검증이 "정의가 없으니
+  //   검사 생략"으로 조용히 우회될 위험이 있다 — 그래서 카테고리는
+  //   항상 재조회로만 채운다.
+  // - 소비자상담 전화번호 — 이미 별도 고정값 기능(listing_defaults)이
+  //   있다, 중복 저장하지 않는다.
+  // - 이미지 사용권 확인·정보고시 확인 체크박스 — 그 순간의 확인을
+  //   의미하는 값이라 자동 복원하지 않는다(사용자가 매번 다시 확인).
+  const LW_FULFILLMENT_DRAFT_FIELD_SELECTORS = [
+    ".lw-fulfillment-mode", ".lw-live-image-url",
+    ".lw-delivery-charge-type", ".lw-delivery-charge",
+    ".lw-delivery-charge-on-return", ".lw-return-charge",
+    ".lw-max-buy-count", ".lw-delivery-company", ".lw-vendor-user-id",
+    ".lw-policy-origin-country", ".lw-policy-brand",
+    ".lw-policy-product-identifier",
+  ];
+
+  function lwFulfillmentDraftKey(wizardId, accountId) {
+    return `homez_lw_fulfillment_draft_v1_${wizardId}_${accountId}`;
+  }
+
+  function lwCollectFulfillmentDraftFromBlock(block) {
+    const values = {};
+    LW_FULFILLMENT_DRAFT_FIELD_SELECTORS.forEach((sel) => {
+      const input = block.querySelector(sel);
+      if (input && input.value.trim()) values[sel] = input.value;
+    });
+    const purchaseOptions = {};
+    block.querySelectorAll("[data-lw-purchase-option-key]").forEach((input) => {
+      if (input.value.trim()) purchaseOptions[input.dataset.lwPurchaseOptionKey] = input.value;
+    });
+    const notice = {};
+    block.querySelectorAll("[data-lw-notice-key]").forEach((input) => {
+      if (String(input.dataset.lwNoticeKey).endsWith(LW_PHONE_NOTICE_SUFFIX)) return;
+      if (input.value.trim()) notice[input.dataset.lwNoticeKey] = input.value;
+    });
+    return {
+      values,
+      outboundCode: block.querySelector(".lw-outbound-place")?.dataset.savedCode || "",
+      returnCode: block.querySelector(".lw-return-center")?.dataset.savedCode || "",
+      purchaseOptions,
+      noticeCategory: block.querySelector("[data-lw-notice-category]")?.value || "",
+      notice,
+      savedAt: Date.now(),
+    };
+  }
+
+  function lwSaveFulfillmentDraft(block, wizardId) {
+    try {
+      const key = lwFulfillmentDraftKey(wizardId, block.dataset.lwAccount);
+      const draft = lwCollectFulfillmentDraftFromBlock(block);
+      // 구매옵션·정보고시 입력칸은 카테고리를 아직 조회하지 않은 화면
+      // 에는 아예 존재하지 않는다(실제 브라우저 재현으로 확인됨) — 그
+      // 상태에서 그대로 저장하면 "지금 없음"이 "사용자가 지웠음"으로
+      // 오인돼, 이전에 이미 저장해 둔 구매옵션·정보고시 초안이 카테고리
+      // 재조회 전 자동저장 한 번에 지워진다. 해당 그룹의 입력칸이 지금
+      // 화면에 하나도 없으면 그 그룹만 기존 초안 값을 그대로 둔다.
+      let existing = null;
+      try { existing = JSON.parse(localStorage.getItem(key) || "null"); } catch (_err) { existing = null; }
+      if (!block.querySelector("[data-lw-purchase-option-key]") && existing?.purchaseOptions) {
+        draft.purchaseOptions = existing.purchaseOptions;
+      }
+      if (!block.querySelector("[data-lw-notice-key]") && existing) {
+        if (existing.notice) draft.notice = existing.notice;
+        if (existing.noticeCategory) draft.noticeCategory = existing.noticeCategory;
+      }
+      localStorage.setItem(key, JSON.stringify(draft));
+    } catch (_err) { /* localStorage 접근 불가(사생활 모드 등) — 조용히 무시 */ }
+  }
+
+  function lwClearFulfillmentDraft(block, wizardId) {
+    try {
+      localStorage.removeItem(lwFulfillmentDraftKey(wizardId, block.dataset.lwAccount));
+    } catch (_err) { /* 무시 */ }
+  }
+
+  function lwSetAndFire(input, value) {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // 구매옵션·정보고시 값은 카테고리 조회 전에는 대응하는 input이 아직
+  // 없다 — 빈 값 채우기이므로 대상이 없으면 그냥 아무 일도 하지
+  // 않는다. 초기 mount 시점과 "카테고리 추천·조회" 재조회 직후 양쪽
+  // 모두에서 호출한다.
+  function lwRestoreFulfillmentDraftOptionsAndNotice(block, wizardId) {
+    let draft;
+    try {
+      const raw = localStorage.getItem(lwFulfillmentDraftKey(wizardId, block.dataset.lwAccount));
+      draft = raw ? JSON.parse(raw) : null;
+    } catch (_err) { draft = null; }
+    if (!draft) return;
+    Object.entries(draft.purchaseOptions || {}).forEach(([key, v]) => {
+      const input = block.querySelector(`[data-lw-purchase-option-key="${CSS.escape(key)}"]`);
+      if (input && !input.value.trim()) lwSetAndFire(input, v);
+    });
+    if (draft.noticeCategory) {
+      const catSel = block.querySelector("[data-lw-notice-category]");
+      if (catSel && !catSel.value) lwSetAndFire(catSel, draft.noticeCategory);
+    }
+    Object.entries(draft.notice || {}).forEach(([key, v]) => {
+      const input = block.querySelector(`[data-lw-notice-key="${CSS.escape(key)}"]`);
+      if (input && !input.value.trim()) lwSetAndFire(input, v);
+    });
+  }
+
+  function lwRestoreFulfillmentDraft(block, wizardId) {
+    let draft;
+    try {
+      const raw = localStorage.getItem(lwFulfillmentDraftKey(wizardId, block.dataset.lwAccount));
+      draft = raw ? JSON.parse(raw) : null;
+    } catch (_err) { draft = null; }
+    if (!draft) return false;
+    Object.entries(draft.values || {}).forEach(([sel, v]) => {
+      const input = block.querySelector(sel);
+      if (input && !input.value.trim()) lwSetAndFire(input, v);
+    });
+    const outboundSel = block.querySelector(".lw-outbound-place");
+    if (outboundSel && draft.outboundCode && !outboundSel.dataset.savedCode) {
+      outboundSel.dataset.savedCode = draft.outboundCode;
+    }
+    const returnSel = block.querySelector(".lw-return-center");
+    if (returnSel && draft.returnCode && !returnSel.dataset.savedCode) {
+      returnSel.dataset.savedCode = draft.returnCode;
+    }
+    lwRestoreFulfillmentDraftOptionsAndNotice(block, wizardId);
+    return true;
+  }
+
+  function lwWireFulfillmentDraftAutosave(block, wizardId) {
+    let timer = null;
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => lwSaveFulfillmentDraft(block, wizardId), 400);
+    };
+    block.addEventListener("input", schedule);
+    block.addEventListener("change", schedule);
+  }
+
   async function lwRenderFulfillmentStep(content) {
     const w = lwState.wizard;
     const selections = w.channel_selections || [];
@@ -11299,6 +11455,10 @@
           // 한다(기존 조합을 그대로 들고 있으면 새 카테고리의 잘못된
           // attributeTypeName이 섞여 들어갈 수 있다).
           lwRenderItemComboBuilder(block, metadata.purchase_option_fields || [], []);
+          // 방금 막 빈 값으로 다시 그린 구매옵션·정보고시 입력칸에,
+          // 로컬 초안에 남아있던 값이 있으면 채운다(같은 카테고리를
+          // 다시 조회한 경우 재입력을 강요하지 않는다).
+          lwRestoreFulfillmentDraftOptionsAndNotice(block, w.id);
           if (detail) {
             detail.textContent = "";
             detail.classList.remove("field-error");
@@ -11452,6 +11612,11 @@
         (savedSelection?.required_fields?.items || []),
       );
     });
+    content.querySelectorAll(".lw-channel-block").forEach((block) => {
+      const restored = lwRestoreFulfillmentDraft(block, w.id);
+      if (restored) toast(HomezI18n.t("lw.fulfillment_draft_restored"));
+      lwWireFulfillmentDraftAutosave(block, w.id);
+    });
 
     lwSaveCurrentStep = async (opts = {}) => {
       const errEl = el("lw-fulfillment-error");
@@ -11600,7 +11765,16 @@
             autosave_client_token: lwGetAutosaveToken(),
           }),
         });
-        if (opts.silent) lwApplySilentSave(fresh); else lwAdvanceAfterSave(fresh);
+        if (opts.silent) {
+          lwApplySilentSave(fresh);
+        } else {
+          // 서버가 실제로 저장을 받아들였다 — 이제 서버 값이
+          // authoritative이므로 로컬 초안은 정리한다(계속 남겨두면
+          // 다음 방문 때 이미 저장된 값 위에 오래된 초안이 덮어써질
+          // 위험이 있다).
+          blocks.forEach((block) => lwClearFulfillmentDraft(block, w.id));
+          lwAdvanceAfterSave(fresh);
+        }
         return true;
       } catch (err) {
         lwApplyConflictOrError(err, errEl);
