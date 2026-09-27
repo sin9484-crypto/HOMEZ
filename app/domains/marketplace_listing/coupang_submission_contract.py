@@ -269,9 +269,24 @@ def validate_coupang_submission_contract(
         seen_combinations: set[str] = set()
         duplicate_combination = False
         sku_required = False
+        price_missing_items: list[str] = []
         for entry in items:
             if not isinstance(entry, dict):
                 continue
+            # 2026-09-28 — coupang_live_payload.py가 item.get("salePrice",
+            # required_fields["salePrice"])로 채운다(대괄호 접근 —
+            # 둘 다 없으면 KeyError로 하드 실패). 그런데 이 값을 필수로
+            # 요구하는 검증이 클라이언트(lwSaveCurrentStep)·서버
+            # (update_fulfillment)·이 계약 어디에도 없어서, 5단계
+            # 저장 자체는 가격 없이도 성공할 수 있었다(실제 화면
+            # 재현으로 확인된 결함) — 여기서 막아 그 하드 실패를
+            # 사용자에게 읽을 수 있는 오류로 먼저 드러낸다.
+            item_sale_price = entry.get("salePrice")
+            item_original_price = entry.get("originalPrice")
+            if item_sale_price is None and required_fields.get("salePrice") is None:
+                price_missing_items.append(str(entry.get("itemName") or entry.get("externalVendorSku") or "?"))
+            elif item_original_price is None and required_fields.get("originalPrice") is None:
+                price_missing_items.append(str(entry.get("itemName") or entry.get("externalVendorSku") or "?"))
             sku = entry.get("externalVendorSku")
             # 2026-09-21 옵션 연결 완성 — 스키마를 거치지 않은 옛 초안도
             # 여기서 막는다(SKU는 주문 수집의 channel_sku와 만나는 조인
@@ -321,6 +336,14 @@ def validate_coupang_submission_contract(
                 "앞뒤에 공백이 있거나 150자를 넘으면 안 됩니다. 이 값이 주문 "
                 "수집 뒤 공급처 옵션 연결의 기준이 됩니다.",
                 "FULFILLMENT", "required_fields.items[].externalVendorSku",
+                "lw-item-combo-builder",
+            ))
+        if price_missing_items:
+            issues.append(_issue(
+                "ITEM_PRICE_REQUIRED",
+                "다음 옵션의 판매가·정상가를 입력해 주세요: "
+                + ", ".join(sorted(set(price_missing_items))),
+                "FULFILLMENT", "required_fields.items[].salePrice",
                 "lw-item-combo-builder",
             ))
         if duplicate_skus:

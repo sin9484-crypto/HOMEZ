@@ -185,6 +185,34 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
         body = self._fn_body("function lwWireFulfillmentDraftAutosave(block, wizardId)", 700)
         self.assertIn('block.addEventListener("click", schedule)', body)
 
+    def test_combo_items_collection_distinguishes_not_rendered_from_deleted(self):
+        """실제 브라우저 재현으로 발견된 결함 — 옵션조합표(itemName/SKU/
+        가격)가 로컬 초안에 전혀 없어서 카테고리 재조회마다 사라졌다.
+        [data-lw-item-rows] 표 자체가 없는 상태(아직 렌더 안 됨)와
+        사용자가 행을 전부 지운 상태(표는 있고 배열만 빈 상태)를
+        null vs [] 로 구분해야 한다."""
+
+        body = self._fn_body("function lwCollectFulfillmentDraftFromBlock(block)", 2600)
+        self.assertIn("comboHost?.querySelector(\"[data-lw-item-rows]\")) return null", body)
+
+    def test_combo_items_save_preserves_existing_when_not_yet_rendered(self):
+        body = self._fn_body("function lwSaveFulfillmentDraft(block, wizardId)", 1900)
+        self.assertIn("draft.comboItems === null", body)
+        self.assertIn("existing?.comboItems", body)
+
+    def test_combo_manual_rows_are_restored_by_sku_not_array_position(self):
+        """배열 순서나 상품명이 아니라 externalVendorSku(안정적인 옵션
+        식별자)로 중복을 판단해야 중복 생성을 막을 수 있다. 조합
+        생성된 행(optionAttributes 있음)은 카테고리가 바뀌면 축 정의가
+        달라질 수 있어 여기서 되살리지 않는다."""
+
+        idx = self.js.index("let items = (savedItems || []).map((item) => ({ ...item }));")
+        end = self.js.index("host.innerHTML = `", idx)
+        body = self.js[idx:end]
+        self.assertIn("if (it.optionAttributes) return;", body)
+        self.assertIn("existingSkus.has(it.externalVendorSku)) return;", body)
+        self.assertIn("if (!items.length", body)
+
 
 if __name__ == "__main__":
     unittest.main()

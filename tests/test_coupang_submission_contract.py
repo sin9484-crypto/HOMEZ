@@ -154,6 +154,38 @@ class RequiredFieldBlockingTestCase(unittest.TestCase):
         self.assertFalse(result.ready)
         self.assertIn("CONTENTS_REQUIRED", result.blocking_codes)
 
+    def test_item_missing_price_blocks(self):
+        """2026-09-28 실제 화면 재현으로 발견된 결함 — coupang_live_
+        payload.py는 item.get("salePrice", required_fields["salePrice"])
+        로 채우는데(대괄호 접근, 둘 다 없으면 KeyError), 그 필수성을
+        검증하는 곳이 클라이언트·서버·이 계약 어디에도 없어서 5단계
+        저장 자체는 가격 없이도 성공할 수 있었다."""
+
+        result = validate_coupang_submission_contract(
+            draft=DRAFT,
+            required_fields=_valid_required_fields(
+                items=[{"itemName": "기본", "externalVendorSku": "SKU-BASE"}],
+                originalPrice=None, salePrice=None,
+            ),
+            channel_policy_attributes=NOTICE_ATTRIBUTES,
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("ITEM_PRICE_REQUIRED", result.blocking_codes)
+
+    def test_item_own_price_satisfies_requirement_even_without_top_level_fallback(self):
+        result = validate_coupang_submission_contract(
+            draft=DRAFT,
+            required_fields=_valid_required_fields(
+                items=[{
+                    "itemName": "기본", "externalVendorSku": "SKU-BASE",
+                    "salePrice": 12900, "originalPrice": 12900,
+                }],
+                originalPrice=None, salePrice=None,
+            ),
+            channel_policy_attributes=NOTICE_ATTRIBUTES,
+        )
+        self.assertNotIn("ITEM_PRICE_REQUIRED", result.blocking_codes)
+
     def test_purchase_option_wrong_value_blocks(self):
         field_definitions = [{
             "attribute_type_name": "색상", "input_type": "SELECT",

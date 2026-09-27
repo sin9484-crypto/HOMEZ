@@ -11108,6 +11108,22 @@
         if (!json) return "";
         try { return JSON.parse(json).brandState === "UNRESOLVED" ? "" : json; } catch (_err) { return ""; }
       })(),
+      // 2026-09-28 실사용 재현 — 옵션 조합표(itemName/SKU/가격/개당수량)
+      // 도 이 초안에 없었다 — 카테고리 재조회·재시작마다 "행 직접
+      // 추가"로 만든 행을 다시 입력해야 했다. host.dataset.
+      // lwComboItems를 그대로 저장한다(있는 그대로 — 빈 배열도 "사용자가
+      // 전부 지웠다"는 유효한 상태이므로 그대로 저장한다, 여기서
+      // 걸러내지 않는다. "아직 렌더 안 됨"과 "사용자가 지움"의 구분은
+      // lwSaveFulfillmentDraft가 [data-lw-item-rows] 존재 여부로 한다).
+      comboItems: (() => {
+        const comboHost = block.querySelector("[data-lw-item-combo-builder]");
+        // [data-lw-item-rows] 표 자체가 없으면(카테고리 미조회 등)
+        // "아직 그릴 대상 없음"이다 — 이때는 host.dataset.lwComboItems가
+        // "[]" 문자열로 이미 채워져 있어도(코드 자체 기본값) 그게
+        // "사용자가 다 지웠다"는 뜻이 아니므로 null로 구분한다.
+        if (!comboHost?.querySelector("[data-lw-item-rows]")) return null;
+        try { return JSON.parse(comboHost.dataset.lwComboItems || "[]"); } catch (_err) { return null; }
+      })(),
       savedAt: Date.now(),
     };
   }
@@ -11130,6 +11146,15 @@
       if (!block.querySelector("[data-lw-notice-key]") && existing) {
         if (existing.notice) draft.notice = existing.notice;
         if (existing.noticeCategory) draft.noticeCategory = existing.noticeCategory;
+      }
+      // 옵션 조합표도 동일한 원칙 — [data-lw-item-rows]가 지금 화면에
+      // 없으면(카테고리 미조회/재조회 직후) comboItems=null이 된다.
+      // 그건 "사용자가 행을 지웠다"가 아니라 "아직 그릴 대상이 없다"는
+      // 뜻이므로 기존 초안 값을 그대로 둔다. rows 컨테이너가 실제로
+      // 있는데 배열이 비어 있으면(사용자가 전부 삭제) 그 빈 상태를
+      // 그대로 존중해 덮어쓴다 — 되살리지 않는다.
+      if (draft.comboItems === null) {
+        if (existing?.comboItems) draft.comboItems = existing.comboItems;
       }
       localStorage.setItem(key, JSON.stringify(draft));
     } catch (_err) { /* localStorage 접근 불가(사생활 모드 등) — 조용히 무시 */ }
@@ -12159,6 +12184,28 @@
     });
 
     let items = (savedItems || []).map((item) => ({ ...item }));
+
+    // 2026-09-28 실사용 재현 — 카테고리를 다시 조회하면 이 표는 항상
+    // 빈 배열로 다시 그려진다(위 주석 — 조합 축이 바뀔 수 있어 기존
+    // 설계가 의도한 동작, 여기서 바꾸지 않는다). 그런데 "직접 추가"로
+    // 만든 단일 행(optionAttributes 없음 — 조합축과 무관한 수동 SKU)
+    // 까지 매번 다시 입력해야 했다. optionAttributes가 있는(조합
+    // 생성된) 행은 새 카테고리 축과 안 맞을 수 있어 여기서 되살리지
+    // 않는다 — 수동 행만, 같은 externalVendorSku가 아직 없을 때만
+    // 병합한다(중복 생성 방지, 배열 순서·상품명이 아니라 SKU로 식별).
+    if (!items.length && lwState.wizard) {
+      try {
+        const raw = localStorage.getItem(lwFulfillmentDraftKey(lwState.wizard.id, block.dataset.lwAccount));
+        const draft = raw ? JSON.parse(raw) : null;
+        const existingSkus = new Set(items.map((it) => it.externalVendorSku).filter(Boolean));
+        (draft?.comboItems || []).forEach((it) => {
+          if (it.optionAttributes) return;
+          if (!it.externalVendorSku || existingSkus.has(it.externalVendorSku)) return;
+          items.push({ ...it });
+          existingSkus.add(it.externalVendorSku);
+        });
+      } catch (_err) { /* 손상된 초안은 조용히 무시 */ }
+    }
 
     host.innerHTML = `
       <p class="field-label">${HomezI18n.t("lw.combo_builder_title")}</p>
