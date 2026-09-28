@@ -993,5 +993,57 @@ class ConsoleMoneyFormattingLocaleTestCase(unittest.TestCase):
         self.assertNotIn("toLocaleString", body)
 
 
+class SubmissionContractIssueTranslationTestCase(unittest.TestCase):
+    """
+    2026-09-28(46차 실사용 재현 발견) — listing_wizard_precheck.py는
+    coupang_submission_contract.py가 만든 각 이슈 code를
+    "listing_wizard.precheck.contract.<code lower>" 키로 화면에
+    번역해 보여준다(계약 자체의 message_ko는 의도적으로 버림 —
+    "완성된 한국어 문장을 만들지 않는다"는 이 모듈의 기존 원칙).
+    실제 브라우저 재현(VENDOR_USER_ID_REQUIRED)으로 발견된 결함 —
+    이 계약이 만드는 31개 code 중 27개가 두 locale 카탈로그 어디에도
+    번역이 없어서, 화면에 코드값과 일반 안내문("[CODE] 확인이
+    필요합니다")만 보이고 실제로 무엇을 확인해야 하는지 사라졌다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+
+        contract_path = os.path.join(
+            REPO_ROOT, "app", "domains", "marketplace_listing",
+            "coupang_submission_contract.py",
+        )
+        with open(contract_path, encoding="utf-8") as f:
+            contract_src = f.read()
+        cls.codes = sorted(set(re.findall(
+            r'_issue\(\s*\n?\s*"([A-Z_]+)"', contract_src,
+        )))
+        cls.ko = _load_js_object_literal(
+            os.path.join(I18N_DIR, "ko-KR.js"), "HOMEZ_I18N_CATALOG_KO_KR",
+        )
+        cls.en = _load_js_object_literal(
+            os.path.join(I18N_DIR, "en-US.js"), "HOMEZ_I18N_CATALOG_EN_US",
+        )
+
+    def test_found_at_least_the_known_issue_codes(self):
+        """정규식 추출 자체가 조용히 깨져 0개를 찾지 않았는지 확인."""
+
+        self.assertGreaterEqual(len(self.codes), 31)
+
+    def test_every_contract_issue_code_has_ko_and_en_translation(self):
+
+        missing_ko = []
+        missing_en = []
+        for code in self.codes:
+            key = "listing_wizard.precheck.contract." + code.lower()
+            if key not in self.ko:
+                missing_ko.append(key)
+            if key not in self.en:
+                missing_en.append(key)
+
+        self.assertEqual(missing_ko, [], f"ko-KR.js에 누락된 키: {missing_ko}")
+        self.assertEqual(missing_en, [], f"en-US.js에 누락된 키: {missing_en}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,15 @@
 # Current Version
 
+**HOMEZ V7 — 7단계 사전검사 차단 4건 중 2건 실제 해소(상세설명 이미지 연결·정책검사 실행), i18n 키 27개 누락 발견·수정, 남은 2건은 사용자 입력 대기 (2026-09-28, 46차).**
+
+- **차단 항목 재분류(코드부터 직접 확인, 추측 아님)**:
+  - `VENDOR_USER_ID_REQUIRED` — **데이터 누락**. 로컬 초안(`LW_FULFILLMENT_DRAFT_FIELD_SELECTORS`에 `.lw-vendor-user-id` 포함)에도 값이 없어, 저장 중 유실이 아니라 애초에 한 번도 입력된 적 없음을 확인. 쿠팡 WING 로그인 아이디이며 vendorId·API access key와 다른 값 — 사용자 직접 입력 필요(원문은 로그·문서에 남기지 않음).
+  - `CONTENTS_REQUIRED`(상세설명 이미지) — **데이터 누락, 이번에 해소함**. `media_assets` 조회 결과 이 상품 후보엔 대표(MAIN) 이미지 1장뿐 DETAIL 자산이 없었다. `POST /media-assets/generate-detail-page`(외부 네트워크 호출 없음 — 순수 Pillow 로컬 합성, `detail_page_generator.py` 자체 docstring으로 확인)를 실제 화면(3단계 "상세이미지 만들기")으로 호출하되, 브랜드명(레이펄스)·사용방법(정보고시에 이미 저장된 원문 그대로, 188자)·스펙 2건(용량 200ml/제조국 대한민국)만 기존 확인된 값으로 채우고 태그라인·특장점은 근거가 없어 비워둠(마케팅 문구 생성 안 함). 생성된 DETAIL 자산(id=2)을 5단계 "선택한 이미지로 상세설명 구성"으로 실제 연결 — `required_fields.contents`에 반영 확인, 사전검사에서 사라짐.
+  - `CHANNEL_POLICY_NOT_EVALUATED` — **미실행 검사, 이번에 실행함(WARNING, 비차단)**. `channel_policy/service.py::evaluate_and_record()`는 로컬 DB(`channel_policy_rules`)만 읽는 순수 로컬 검사(외부 API 아님)로 코드 확인 후 실제 화면 "지금 검사"로 실행. 결과는 `CHANNEL_POLICY_DATA_REQUIRED`(이 채널의 정책 카탈로그가 이 환경에 한 번도 시딩되지 않음 — 2026-08-21 감사에서 이미 설계된 fail-closed 구분, 임의로 규칙을 만들어 채우지 않음). 원래도 비차단(WARNING)이라 승인 자체를 막지 않음.
+  - `ECONOMICS_PROVISIONAL` — **정책 결정(45차에서 개발자가 새로 추가한 차단)**. 채널수수료·포장비·광고비·반품준비율·세금기준율 5개가 여전히 미확인 — 실제 발생 비용 확인 전까지 사용자 확인 없이 채우지 않음.
+- **부수 발견·수정(i18n 27개 키 누락)**: 사전검사 화면이 `coupang_submission_contract.py`의 이슈 code를 `listing_wizard.precheck.contract.<code>` 키로 번역하는데, 실제 정의된 31개 code 중 27개(VENDOR_USER_ID_REQUIRED 포함)가 양쪽 locale 어디에도 키가 없어 일반 fallback 문구("[CODE] 확인이 필요합니다")만 보이고 있었다. 원 개발자가 이미 작성해 둔 `message_ko`의 정적 부분(동적 상세 목록은 제외)을 그대로 재사용해 27개 키를 양쪽 locale에 추가, 재발 방지용 회귀 테스트(`SubmissionContractIssueTranslationTestCase`, 코드의 모든 issue code가 두 locale에 실제 존재하는지 자동 대조) 신설. `test_i18n.py` 53/53 통과.
+- **재조회로 확인한 남은 차단**: `POST /listing-wizards/1/validate` 재실행 결과 BLOCKING 2건(VENDOR_USER_ID_REQUIRED, ECONOMICS_PROVISIONAL)만 남음(기존 3건에서 감소), WARNING 1건(CHANNEL_POLICY_DATA_REQUIRED)은 비차단으로 유지. 로컬 초안·5단계 입력값·6단계 잠정 계산 전부 보존 확인.
+
 **HOMEZ V7 — 6단계(가격·마진) "미확인 비용을 0으로 대체" 결함 근본 수정(스키마·계산기·사전검사·화면), Wizard#1 실제 잠정 계산 저장·재조회 완료 (2026-09-28, 45차).**
 
 - **발견한 결함**: 6단계 경제성(가격·마진) 입력에서 빈 칸을 저장할 때 화면(console.js)이 `input.value.trim() || "0"`으로 **모든** 미입력 필드를 문자열 "0"으로 바꿔 서버에 보냈다. 서버 스키마(`EconomicsInputItem`)도 채널수수료·포장비 등 7개 필드의 기본값이 `Decimal("0")`이어서, 한 번도 확인하지 않은 비용이 "확인된 0원"으로 계산·저장·정산 데이터에 섞여 들어갈 수 있었다 — AI Capability Registry에 이미 문서화된 PROFITABILITY_CALCULATION 계약의 `forbidden_operations`("확인되지 않은 비용을 0으로 대체")와 `missing_data_handling`("누락 필드는 missing_cost_fields에 명시, is_provisional=True")을 실제 코드가 지키지 못하고 있던 것.
