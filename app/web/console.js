@@ -12486,6 +12486,10 @@
       ["ad_cost", "lw.econ_ad_cost"], ["return_reserve_rate", "lw.econ_return_reserve_rate"],
       ["tax_basis_rate", "lw.econ_tax_basis_rate"],
     ];
+    const fieldLabel = (key) => {
+      const found = fieldDef.find(([k]) => k === key);
+      return found ? HomezI18n.t(found[1]) : key;
+    };
 
     content.innerHTML = `
       <h2>${HomezI18n.t("lw.step.economics")}</h2>
@@ -12499,12 +12503,20 @@
             ${fieldDef.map(([key, i18nKey]) => `
               <label class="field">
                 <span class="field-label">${HomezI18n.t(i18nKey)}</span>
-                <input type="text" class="lw-econ-input" data-key="${key}" value="${inp[key] ?? "0"}">
+                <input type="text" class="lw-econ-input" data-key="${key}" placeholder="${HomezI18n.t("lw.econ_unconfirmed_placeholder")}" value="${inp[key] ?? ""}">
               </label>`).join("")}
           </div>
           ${res ? `
+          ${res.is_provisional ? `
+          <p class="banner banner-warning">${HomezI18n.t("lw.econ_provisional_banner", {
+            fields: (res.missing_cost_fields || []).map(fieldLabel).join(", "),
+          })}</p>` : ""}
+          ${res.sale_price_mismatch_reference != null ? `
+          <p class="banner banner-warning">${HomezI18n.t("lw.econ_sale_price_mismatch", {
+            reference: HomezI18n.formatCurrency(res.sale_price_mismatch_reference),
+          })}</p>` : ""}
           <div class="lw-margin-result">
-            ${HomezI18n.t("lw.econ_margin_amount")}: <strong>${escapeHtml(HomezI18n.formatCurrency(res.margin_amount))}</strong> ·
+            ${HomezI18n.t(res.is_provisional ? "lw.econ_confirmed_balance" : "lw.econ_margin_amount")}: <strong>${escapeHtml(HomezI18n.formatCurrency(res.margin_amount))}</strong> ·
             ${HomezI18n.t("lw.econ_margin_rate")}: <strong>${escapeHtml(HomezI18n.formatPercent(Number(res.margin_rate), 2))}</strong> ·
             ${HomezI18n.t("lw.econ_break_even")}: <strong>${res.break_even_price === null ? HomezI18n.t("lw.econ_break_even_impossible") : escapeHtml(HomezI18n.formatCurrency(res.break_even_price))}</strong>
           </div>` : ""}
@@ -12520,7 +12532,12 @@
       const items = blocks.map((block) => {
         const item = { marketplace_account_id: Number(block.dataset.lwAccount) };
         block.querySelectorAll(".lw-econ-input").forEach((input) => {
-          item[input.dataset.key] = input.value.trim() || "0";
+          // 2026-09-28(45차) — 빈 입력을 "0"으로 바꿔 보내지 않는다.
+          // 빈 값은 null(아직 확인 안 됨)로 보낸다 — 서버가 그대로
+          // 미확인으로 저장·계산한다(0원 확정과 구분). 필수 항목
+          // (원가·판매가)이 비어 있으면 서버가 422로 명확히 거부한다.
+          const raw = input.value.trim();
+          item[input.dataset.key] = raw === "" ? null : raw;
         });
         return item;
       });

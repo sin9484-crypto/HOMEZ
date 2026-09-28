@@ -638,7 +638,9 @@ class ListingWizardApprovalPreviewRedactionTestCase(
                 items=[EconomicsInputItem(
                     marketplace_account_id=account.id,
                     cost_of_goods="5000", sale_price="9000",
-                    channel_fee_rate="0.1",
+                    channel_fee_rate="0.1", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0", ad_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
                 )],
             ),
         )

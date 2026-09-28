@@ -311,6 +311,21 @@ def run_precheck(
             ))
             continue
 
+        # 2026-09-28(45차) — is_provisional은 "채널수수료·포장비 등
+        # 하나 이상이 아직 확인되지 않아 이 결과가 확인된 비용만 반영한
+        # 잠정값"이라는 뜻이다(0원으로 대체된 게 아니다). AI Capability
+        # Registry 계약(PROFITABILITY_CALCULATION)이 이미 "잠정/확정
+        # 구분 표시"를 요구하고 있었다 — 잠정 상태로는 승인 단계로
+        # 넘어가지 못하게 막아야 기존 "마진 계산 완료 후 승인" 정책이
+        # 그대로 유지된다(완화·우회하지 않는다).
+        if result.get("is_provisional"):
+            issues.append(_issue(
+                "ECONOMICS_PROVISIONAL", WizardStep.ECONOMICS, True,
+                "listing_wizard.precheck.economics_provisional",
+                channel=str(account_id),
+                params={"missing_cost_fields": result.get("missing_cost_fields", [])},
+            ))
+
         if Decimal(str(result.get("margin_amount", "0"))) < 0:
             issues.append(_issue(
                 "ECONOMICS_NEGATIVE_MARGIN", WizardStep.ECONOMICS, True,

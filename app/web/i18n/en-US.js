@@ -1439,6 +1439,10 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.econ_break_even": "Break-even price",
   "lw.econ_break_even_impossible": "Not computable (fee total is 100% or more)",
   "lw.econ_calc_note": "Margin calculation runs on the server (Decimal) only and is not affected by locale — results appear immediately after saving.",
+  "lw.econ_unconfirmed_placeholder": "Unconfirmed (left blank ≠ saved as 0)",
+  "lw.econ_provisional_banner": "Some costs are still unconfirmed ({fields}) — the figures below only reflect confirmed costs and are not the final margin.",
+  "lw.econ_confirmed_balance": "Balance based on confirmed costs",
+  "lw.econ_sale_price_mismatch": "This differs from the sale price confirmed in step 5 ({reference}) — actual Coupang registration uses the step-5 value; this calculation uses the price entered above.",
 
   "lw.precheck_run_btn": "Run prechecks",
   "lw.precheck_none_blocking": "No blocking issues — you can proceed to the next step (Approval).",
@@ -1603,6 +1607,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "listing_wizard.precheck.channel_policy_stale": "The policy baseline has changed since the last check — run the policy check again.",
   "listing_wizard.precheck.channel_policy_actions_required": "Additional evidence (certification, disclosure info, etc.) is required before submitting to this channel.",
   "listing_wizard.precheck.economics_missing": "No pricing/margin input for this channel.",
+  "listing_wizard.precheck.economics_provisional": "Some costs (channel fee, packaging, etc.) are not confirmed yet, so this margin only reflects confirmed costs so far. Fill in or confirm as 0 the remaining items.",
   "listing_wizard.precheck.economics_negative_margin": "Expected margin for this channel is negative.",
   "listing_wizard.precheck.economics_break_even_impossible": "Break-even can't be computed for this channel — fee total is 100% or more.",
   "listing_wizard.precheck.emergency_stop_active": "Emergency Stop is active, so this can't proceed.",

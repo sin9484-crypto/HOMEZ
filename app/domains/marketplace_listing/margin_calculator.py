@@ -25,6 +25,14 @@ locale에 영향받지 않는다(문자열 포맷은 화면 전담, 이 모듈�
     흐름에서는 발생하지 않는다).
   break_even_price = fixed_costs / (1 - rate_sum), rate_sum >= 1이면
     수학적으로 손익분기가 불가능하므로 None(0으로 추측하지 않음).
+
+2026-09-28(45차) — `cost_of_goods`/`sale_price`를 제외한 7개 입력은
+`None`(미확인)일 수 있다. `None`은 공식의 합산·곱셈에서 0으로
+연산하되(계산 자체는 계속 진행), 그 필드명을 `missing_cost_fields`에
+기록하고 `is_provisional=True`를 세운다 — "미확인 = 0원"이 아니라
+"미확인 비용은 이 합계에 없다"는 뜻이다. 호출부(서비스·화면)는
+`is_provisional`이 True인 결과를 "확정 마진"이 아니라 "확인된 비용
+기준 잠정값"으로만 표시해야 한다.
 =========================================================
 """
 
@@ -52,20 +60,46 @@ def _rate(value: Decimal) -> Decimal:
     return value.quantize(_RATE_QUANT, rounding=ROUND_HALF_UP)
 
 
+_ASSUMPTION_FIELDS = (
+    "channel_fee_rate", "payment_fee_rate", "shipping_cost",
+    "packaging_cost", "ad_cost", "return_reserve_rate", "tax_basis_rate",
+)
+
+
+def _confirmed(value: Decimal | None) -> Decimal:
+    """None(미확인)을 연산용 0으로 치환한다 — 결과가 "0원 확정"이라는
+    뜻은 아니며, 호출부가 missing_cost_fields로 그 사실을 함께 받는다."""
+
+    return value if value is not None else Decimal("0")
+
+
 def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
 
-    channel_fee = item.sale_price * item.channel_fee_rate
-    payment_fee = item.sale_price * item.payment_fee_rate
-    return_reserve = item.sale_price * item.return_reserve_rate
-    tax = item.sale_price * item.tax_basis_rate
+    missing_cost_fields = [
+        name for name in _ASSUMPTION_FIELDS
+        if getattr(item, name) is None
+    ]
+
+    channel_fee_rate = _confirmed(item.channel_fee_rate)
+    payment_fee_rate = _confirmed(item.payment_fee_rate)
+    shipping_cost = _confirmed(item.shipping_cost)
+    packaging_cost = _confirmed(item.packaging_cost)
+    ad_cost = _confirmed(item.ad_cost)
+    return_reserve_rate = _confirmed(item.return_reserve_rate)
+    tax_basis_rate = _confirmed(item.tax_basis_rate)
+
+    channel_fee = item.sale_price * channel_fee_rate
+    payment_fee = item.sale_price * payment_fee_rate
+    return_reserve = item.sale_price * return_reserve_rate
+    tax = item.sale_price * tax_basis_rate
 
     total_cost = (
         item.cost_of_goods
         + channel_fee
         + payment_fee
-        + item.shipping_cost
-        + item.packaging_cost
-        + item.ad_cost
+        + shipping_cost
+        + packaging_cost
+        + ad_cost
         + return_reserve
         + tax
     )
@@ -80,15 +114,15 @@ def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
 
     fixed_costs = (
         item.cost_of_goods
-        + item.shipping_cost
-        + item.packaging_cost
-        + item.ad_cost
+        + shipping_cost
+        + packaging_cost
+        + ad_cost
     )
     rate_sum = (
-        item.channel_fee_rate
-        + item.payment_fee_rate
-        + item.return_reserve_rate
-        + item.tax_basis_rate
+        channel_fee_rate
+        + payment_fee_rate
+        + return_reserve_rate
+        + tax_basis_rate
     )
 
     if rate_sum >= 1:
@@ -103,6 +137,8 @@ def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
         margin_amount=_money(margin_amount),
         margin_rate=_rate(margin_rate),
         break_even_price=break_even_price,
+        is_provisional=bool(missing_cost_fields),
+        missing_cost_fields=missing_cost_fields,
     )
 
 
@@ -126,19 +162,26 @@ def derive_sale_price_for_margin_rate(
     분모가 0 이하이면(수수료 합+목표 마진율이 이미 100% 이상이라
     구조적으로 달성 불가능) None을 반환한다 — break_even_price와
     동일하게 0으로 추측하지 않는다(fail-closed).
+
+    2026-09-28(45차) — 다른 7개 입력과 마찬가지로 None(미확인)을
+    허용한다. calculate_economics()와 동일하게 None은 연산용 0으로
+    치환한다(이 역산 결과 자체가 "미확인 비용을 반영하지 않은 잠정
+    판매가"라는 것은 호출부가 필요하면 item의 None 필드를 직접 확인해
+    판단해야 한다 — 이 함수는 EconomicsResultItem을 반환하지 않으므로
+    is_provisional을 실어 보낼 자리가 없다).
     """
 
     fixed_costs = (
         item.cost_of_goods
-        + item.shipping_cost
-        + item.packaging_cost
-        + item.ad_cost
+        + _confirmed(item.shipping_cost)
+        + _confirmed(item.packaging_cost)
+        + _confirmed(item.ad_cost)
     )
     rate_sum = (
-        item.channel_fee_rate
-        + item.payment_fee_rate
-        + item.return_reserve_rate
-        + item.tax_basis_rate
+        _confirmed(item.channel_fee_rate)
+        + _confirmed(item.payment_fee_rate)
+        + _confirmed(item.return_reserve_rate)
+        + _confirmed(item.tax_basis_rate)
     )
     denominator = Decimal("1") - rate_sum - target_margin_rate
     if denominator <= 0:

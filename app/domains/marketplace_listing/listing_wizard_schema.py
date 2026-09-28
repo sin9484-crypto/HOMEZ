@@ -278,18 +278,29 @@ class EconomicsInputItem(BaseModel):
     """
     입력은 전부 Decimal — 마진 계산기는 이 값을 그대로 소비한다.
     비율(fee/reserve/tax)은 0~1 사이 소수(예: 10% -> 0.10)로 받는다.
+
+    2026-09-28(45차) — `cost_of_goods`/`sale_price`를 제외한 7개
+    "가정" 필드는 `None`을 허용한다(기본값 없음). AI Capability
+    Registry 계약(PROFITABILITY_CALCULATION.missing_data_handling=
+    "누락 필드는 missing_cost_fields에 명시, is_provisional=True",
+    forbidden_operations에 "확인되지 않은 비용을 0으로 대체" 명시)이
+    이미 요구하던 구분인데 실제 구현이 빠져 있던 결함이다 — 화면이
+    빈 입력을 문자열 "0"으로 바꿔 보내 사용자가 한 번도 확인하지
+    않은 채널수수료·포장비 등이 "확정된 0원"으로 저장·계산됐다.
+    이제 `None`은 "아직 확인 안 됨"을 뜻하고, `Decimal("0")`은
+    "실제로 0원으로 확인됨"을 뜻한다 — 서로 다른 값이다.
     """
 
     marketplace_account_id: int
     cost_of_goods: Decimal = Field(ge=0)
     sale_price: Decimal = Field(ge=0)
-    channel_fee_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
-    payment_fee_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
-    shipping_cost: Decimal = Field(default=Decimal("0"), ge=0)
-    packaging_cost: Decimal = Field(default=Decimal("0"), ge=0)
-    ad_cost: Decimal = Field(default=Decimal("0"), ge=0)
-    return_reserve_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
-    tax_basis_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
+    channel_fee_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    payment_fee_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    shipping_cost: Decimal | None = Field(default=None, ge=0)
+    packaging_cost: Decimal | None = Field(default=None, ge=0)
+    ad_cost: Decimal | None = Field(default=None, ge=0)
+    return_reserve_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    tax_basis_rate: Decimal | None = Field(default=None, ge=0, le=1)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -306,6 +317,18 @@ class EconomicsResultItem(BaseModel):
     이상이면 어떤 가격을 매겨도 손익분기 자체가 수학적으로 불가능하므로
     None이다(0으로 추측하지 않는다 — fail-closed) — 사전검사 엔진이
     이 경우를 BLOCKING 사유로 잡는다.
+
+    2026-09-28(45차) — `is_provisional`/`missing_cost_fields`: 입력
+    중 하나라도 `None`(미확인)이면 그 필드는 계산에서 완전히 제외된
+    것이지 0원으로 취급된 게 아니다. 이때 `total_cost`/`margin_amount`
+    /`margin_rate`/`break_even_price`는 "확인된 비용만 반영한 잠정
+    값"이며 실제 최종 마진이 아니다 — 화면은 이 경우 "확인된 비용
+    기준 잔액" 등으로 표시해야 하고 완성된 마진 판정처럼 보여주면
+    안 된다. `sale_price_mismatch_reference`는 같은 계정의 5단계
+    (FULFILLMENT) 확정 판매가와 이 결과의 판매가가 다를 때만 그
+    5단계 판매가를 담는다(불일치를 조용히 무시하지 않고 표시하기
+    위함 — 저장을 막지는 않는다, 비교 기준 자체가 모호한 다중옵션
+    상품은 표시하지 않는다).
     """
 
     marketplace_account_id: int
@@ -314,6 +337,9 @@ class EconomicsResultItem(BaseModel):
     margin_amount: Decimal
     margin_rate: Decimal
     break_even_price: Decimal | None
+    is_provisional: bool = False
+    missing_cost_fields: list[str] = Field(default_factory=list)
+    sale_price_mismatch_reference: Decimal | None = None
 
 
 class ValidationIssue(BaseModel):

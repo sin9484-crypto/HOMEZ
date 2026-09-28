@@ -18,6 +18,8 @@ submission.py)에 위임한다.
 
 import json
 from datetime import datetime
+from decimal import Decimal
+from decimal import InvalidOperation
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -723,6 +725,54 @@ class ListingWizardService:
 
         return self.get(wizard_id, company_id)
 
+    @staticmethod
+    def _fulfillment_sale_price_reference(
+        wizard: ListingWizard, account_id: int,
+    ) -> Decimal | None:
+        """
+        2026-09-28(45차) — 5단계(FULFILLMENT)에서 이미 확정·저장한
+        옵션별 salePrice와, 6단계에서 입력하는 sale_price가 서로 다른
+        숫자여도 지금까지는 아무 표시 없이 조용히 각자 계산됐다(실제
+        쿠팡 등록 payload는 5단계 값만 쓰므로 등록 데이터 자체가
+        틀리지는 않지만, 6단계 마진 미리보기가 실제와 다른 판매가로
+        계산될 수 있다는 뜻이라 표시가 필요하다).
+
+        옵션(items)이 1개뿐이면 그 salePrice를 비교 기준으로 반환한다.
+        옵션이 여러 개이고 salePrice가 서로 다르면 어느 것을 기준으로
+        삼을지 모호하므로(다중옵션은 이 6단계 입력 자체가 계정 단위지
+        옵션 단위가 아니다) None을 반환해 비교 자체를 건너뛴다 — 추측
+        하지 않는다.
+        """
+
+        for sel in json.loads(wizard.channel_selections_json or "[]"):
+            if not isinstance(sel, dict):
+                continue
+            if sel.get("marketplace_account_id") != account_id:
+                continue
+            required_fields = sel.get("required_fields") or {}
+            items = required_fields.get("items") or []
+            prices: set[Decimal] = set()
+            for entry in items:
+                if not isinstance(entry, dict):
+                    continue
+                # coupang_live_payload.py와 동일한 fallback — 옵션별
+                # salePrice가 없으면 최상위 required_fields.salePrice를
+                # 쓴다(실제 제출 페이로드가 그렇게 계산되므로 비교
+                # 기준도 같아야 한다).
+                raw = entry.get("salePrice")
+                if raw is None:
+                    raw = required_fields.get("salePrice")
+                if raw is None:
+                    continue
+                try:
+                    prices.add(Decimal(str(raw)))
+                except InvalidOperation:
+                    continue
+            if len(prices) == 1:
+                return next(iter(prices))
+            return None
+        return None
+
     def update_economics(
         self, wizard_id: int, company_id: int,
         data: WizardEconomicsUpdateRequest,
@@ -737,6 +787,12 @@ class ListingWizardService:
         require_active_capability(CapabilityCode.PROFITABILITY_CALCULATION)
 
         results = calculate_economics_batch(data.items)
+        for result in results:
+            reference = self._fulfillment_sale_price_reference(
+                wizard, result.marketplace_account_id,
+            )
+            if reference is not None and reference != result.expected_revenue:
+                result.sale_price_mismatch_reference = reference
 
         input_json = json.dumps(
             [item.model_dump(mode="json") for item in data.items],

@@ -21,6 +21,9 @@ from app.domains.marketplace_listing.margin_calculator import (
 from app.domains.marketplace_listing.margin_calculator import (
     calculate_economics_batch,
 )
+from app.domains.marketplace_listing.margin_calculator import (
+    derive_sale_price_for_margin_rate,
+)
 
 
 def _item(**overrides) -> EconomicsInputItem:
@@ -137,6 +140,83 @@ class MarginCalculatorTestCase(unittest.TestCase):
             [r.marketplace_account_id for r in results], [1, 2],
         )
         self.assertEqual(results[1].expected_revenue, Decimal("20000.00"))
+
+    def test_none_fields_are_excluded_not_treated_as_zero(self):
+        """
+        2026-09-28(45차) — None(미확인)은 0원 확정과 다르다. 채널
+        수수료·배송비 등 7개를 전부 None으로 두면 total_cost는
+        cost_of_goods만 반영해야 한다(0으로 대체돼 같은 숫자가 나올
+        수는 있지만, 그 의미가 다르다는 것을 is_provisional/
+        missing_cost_fields로 구분해야 한다).
+        """
+
+        result = calculate_economics(_item(
+            channel_fee_rate=None, payment_fee_rate=None,
+            shipping_cost=None, packaging_cost=None, ad_cost=None,
+            return_reserve_rate=None, tax_basis_rate=None,
+        ))
+
+        self.assertEqual(result.total_cost, Decimal("5000.00"))
+        self.assertTrue(result.is_provisional)
+        self.assertEqual(
+            set(result.missing_cost_fields),
+            {
+                "channel_fee_rate", "payment_fee_rate", "shipping_cost",
+                "packaging_cost", "ad_cost", "return_reserve_rate",
+                "tax_basis_rate",
+            },
+        )
+
+    def test_explicit_zero_is_not_provisional(self):
+        """명시적으로 확인된 0원은 미확인이 아니다 — is_provisional이
+        서지 않아야 한다(기존 `test_zero_fees_and_costs_gives_full_
+        margin`과 동일한 입력, 새 필드만 추가 확인)."""
+
+        result = calculate_economics(_item(
+            cost_of_goods=Decimal("0"), channel_fee_rate=Decimal("0"),
+            payment_fee_rate=Decimal("0"), shipping_cost=Decimal("0"),
+            packaging_cost=Decimal("0"), ad_cost=Decimal("0"),
+            return_reserve_rate=Decimal("0"), tax_basis_rate=Decimal("0"),
+        ))
+
+        self.assertFalse(result.is_provisional)
+        self.assertEqual(result.missing_cost_fields, [])
+
+    def test_missing_cost_fields_lists_only_the_none_fields(self):
+        """일부만 미확인이면 그 필드만 정확히 나열해야 한다."""
+
+        result = calculate_economics(_item(
+            packaging_cost=None, return_reserve_rate=None,
+        ))
+
+        self.assertTrue(result.is_provisional)
+        self.assertEqual(
+            set(result.missing_cost_fields),
+            {"packaging_cost", "return_reserve_rate"},
+        )
+
+    def test_default_fixture_has_no_missing_fields(self):
+        """기존 전체 확정 fixture(`_item()`)는 새 필드 추가 후에도
+        여전히 provisional이 아니어야 한다(회귀 방지)."""
+
+        result = calculate_economics(_item())
+
+        self.assertFalse(result.is_provisional)
+        self.assertEqual(result.missing_cost_fields, [])
+
+    def test_derive_sale_price_for_margin_rate_handles_none_fields(self):
+        """역산 함수도 None 필드에서 TypeError 없이 0으로 연산해야
+        한다(합계·곱셈 연산자가 NoneType을 만나면 그대로 죽는다)."""
+
+        item = _item(
+            shipping_cost=None, packaging_cost=None, ad_cost=None,
+            payment_fee_rate=None, return_reserve_rate=None,
+            tax_basis_rate=None,
+        )
+        derived = derive_sale_price_for_margin_rate(item, Decimal("0.1"))
+        # fixed_costs = cost_of_goods(5000)만 남음, rate_sum = channel_fee_rate(0.1)만 남음
+        # sale_price = 5000 / (1 - 0.1 - 0.1) = 6250.00
+        self.assertEqual(derived, Decimal("6250.00"))
 
     def test_result_is_locale_invariant_pure_decimal(self):
         """

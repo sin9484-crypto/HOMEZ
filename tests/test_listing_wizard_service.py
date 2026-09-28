@@ -26,7 +26,10 @@ import os
 import tempfile
 import unittest
 from datetime import datetime
+from decimal import Decimal
 from unittest import mock
+
+from pydantic import ValidationError
 
 from sqlalchemy import create_engine
 from sqlalchemy import text
@@ -508,7 +511,9 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 items=[EconomicsInputItem(
                     marketplace_account_id=account.id,
                     cost_of_goods="5000", sale_price="9000",
-                    channel_fee_rate="0.1",
+                    channel_fee_rate="0.1", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0", ad_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
                 )],
             ),
         )
@@ -620,7 +625,9 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 items=[EconomicsInputItem(
                     marketplace_account_id=account.id,
                     cost_of_goods="5000", sale_price="12900",
-                    channel_fee_rate="0.1",
+                    channel_fee_rate="0.1", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0", ad_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
                 )],
             ),
         )
@@ -975,6 +982,255 @@ class ListingWizardServiceTestCase(unittest.TestCase):
         self.assertEqual(result.status, "NEEDS_CORRECTION")
         self.assertTrue(any(
             issue.code == "ECONOMICS_NEGATIVE_MARGIN" for issue in result.issues
+        ))
+
+    def test_economics_input_item_requires_cost_of_goods_and_sale_price(self):
+        """
+        2026-09-28(45차) — 화면이 빈 입력을 더 이상 "0"으로 바꿔
+        보내지 않는다(null로 보낸다). 원가·판매가는 기본값이 없는
+        필수 필드이므로 None이 오면 Pydantic이 즉시 거부해야 한다 —
+        서버가 조용히 0으로 대체하면 안 된다(화면만 고쳐도 API 직접
+        요청에서는 같은 결함이 남는다는 지시의 핵심).
+        """
+
+        with self.assertRaises(ValidationError):
+            EconomicsInputItem(
+                marketplace_account_id=1,
+                cost_of_goods=None, sale_price="9000",
+            )
+        with self.assertRaises(ValidationError):
+            EconomicsInputItem(
+                marketplace_account_id=1,
+                cost_of_goods="5000", sale_price=None,
+            )
+
+    def test_update_economics_persists_none_as_unconfirmed_not_zero(self):
+        """
+        2026-09-28(45차) — 채널수수료 등 7개 중 일부만 입력하고 나머지는
+        비워서(None) 보내면, 저장된 economics_input_json에 실제로
+        null이 들어가야 하고(문자열 "0"이 아니다), 계산 결과는
+        is_provisional=True + missing_cost_fields에 정확히 그 필드들이
+        담겨야 한다.
+        """
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._create_wizard()
+        wizard = self.service.update_source(
+            wizard.id, self.company_id,
+            WizardSourceUpdateRequest(
+                expected_version=wizard.version,
+                product_candidate_id=candidate.id,
+            ),
+        )
+        wizard = self.service.update_draft(
+            wizard.id, self.company_id,
+            WizardDraftUpdateRequest(
+                expected_version=wizard.version, product_name="상품",
+            ),
+        )
+        wizard = self.service.update_media(
+            wizard.id, self.company_id,
+            WizardMediaUpdateRequest(
+                expected_version=wizard.version,
+                selected_media_asset_ids=[media.id],
+            ),
+        )
+        wizard = self.service.update_channels(
+            wizard.id, self.company_id,
+            WizardChannelsUpdateRequest(
+                expected_version=wizard.version,
+                marketplace_account_ids=[account.id],
+            ),
+        )
+        self._cache_coupang_logistics(wizard.id)
+        wizard = self.service.update_fulfillment(
+            wizard.id, self.company_id,
+            WizardFulfillmentUpdateRequest(
+                expected_version=wizard.version,
+                selections=[FulfillmentSelectionInput(
+                    marketplace_account_id=account.id,
+                    fulfillment_mode=FulfillmentMode.SELLER_FULFILLED,
+                    outbound_shipping_place_code="88001",
+                    return_center_code="RET-TEST-1",
+                    required_fields=VALID_REQUIRED_FIELDS,
+                )],
+            ),
+        )
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="5050", sale_price="12900",
+                    channel_fee_rate="0.096",
+                    # payment_fee_rate/shipping_cost/packaging_cost/
+                    # ad_cost/return_reserve_rate/tax_basis_rate는
+                    # 아예 생략 — 모델 기본값(None)을 그대로 쓴다.
+                )],
+            ),
+        )
+
+        stored_input = json.loads(wizard.economics_input_json)[0]
+        self.assertIsNone(stored_input["packaging_cost"])
+        self.assertIsNone(stored_input["ad_cost"])
+        self.assertNotEqual(stored_input["packaging_cost"], "0")
+
+        result = json.loads(wizard.economics_result_json)[0]
+        self.assertTrue(result["is_provisional"])
+        self.assertEqual(
+            set(result["missing_cost_fields"]),
+            {
+                "payment_fee_rate", "shipping_cost", "packaging_cost",
+                "ad_cost", "return_reserve_rate", "tax_basis_rate",
+            },
+        )
+        # 확인된 비용(원가 5050 + 채널수수료 12900*0.096=1238.40)만
+        # 반영된 잠정 total_cost — 나머지 6개는 0으로 몰래 합산되지
+        # 않았다.
+        self.assertEqual(Decimal(str(result["total_cost"])), Decimal("6288.40"))
+
+    def test_update_economics_flags_sale_price_mismatch_without_blocking(self):
+        """5단계에서 확정한 판매가(VALID_REQUIRED_FIELDS의 "9000")와
+        6단계 입력 판매가가 다르면 결과에 그 사실이 표시돼야 한다 —
+        조용히 계산만 하고 넘어가지 않는다. 단, 저장/validate 자체를
+        막지는 않는다(등록 payload는 5단계 값만 쓰므로)."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._create_wizard()
+        wizard = self.service.update_source(
+            wizard.id, self.company_id,
+            WizardSourceUpdateRequest(
+                expected_version=wizard.version,
+                product_candidate_id=candidate.id,
+            ),
+        )
+        wizard = self.service.update_draft(
+            wizard.id, self.company_id,
+            WizardDraftUpdateRequest(
+                expected_version=wizard.version, product_name="상품",
+            ),
+        )
+        wizard = self.service.update_media(
+            wizard.id, self.company_id,
+            WizardMediaUpdateRequest(
+                expected_version=wizard.version,
+                selected_media_asset_ids=[media.id],
+            ),
+        )
+        wizard = self.service.update_channels(
+            wizard.id, self.company_id,
+            WizardChannelsUpdateRequest(
+                expected_version=wizard.version,
+                marketplace_account_ids=[account.id],
+            ),
+        )
+        self._cache_coupang_logistics(wizard.id)
+        wizard = self.service.update_fulfillment(
+            wizard.id, self.company_id,
+            WizardFulfillmentUpdateRequest(
+                expected_version=wizard.version,
+                selections=[FulfillmentSelectionInput(
+                    marketplace_account_id=account.id,
+                    fulfillment_mode=FulfillmentMode.SELLER_FULFILLED,
+                    outbound_shipping_place_code="88001",
+                    return_center_code="RET-TEST-1",
+                    required_fields=VALID_REQUIRED_FIELDS,
+                    channel_policy_attributes=VALID_CHANNEL_POLICY_ATTRIBUTES,
+                )],
+            ),
+        )
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="5000", sale_price="12900",
+                    channel_fee_rate="0", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0", ad_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
+                )],
+            ),
+        )
+
+        result = json.loads(wizard.economics_result_json)[0]
+        self.assertEqual(Decimal(str(result["sale_price_mismatch_reference"])), Decimal("9000"))
+
+        validated = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        self.assertEqual(validated.status, "READY_FOR_APPROVAL", validated.issues)
+
+    def test_validate_blocks_on_economics_provisional(self):
+        """2026-09-28(45차) — 채널수수료 등 하나 이상이 미확인이면
+        margin_amount가 양수라도(=ECONOMICS_NEGATIVE_MARGIN이 뜨지
+        않아도) 승인 단계로 넘어가면 안 된다. 확인되지 않은 비용을
+        0으로 대체해 통과시키는 것과 같은 결과이기 때문이다."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._create_wizard()
+        wizard = self.service.update_source(
+            wizard.id, self.company_id,
+            WizardSourceUpdateRequest(
+                expected_version=wizard.version,
+                product_candidate_id=candidate.id,
+            ),
+        )
+        wizard = self.service.update_draft(
+            wizard.id, self.company_id,
+            WizardDraftUpdateRequest(
+                expected_version=wizard.version, product_name="상품",
+            ),
+        )
+        wizard = self.service.update_media(
+            wizard.id, self.company_id,
+            WizardMediaUpdateRequest(
+                expected_version=wizard.version,
+                selected_media_asset_ids=[media.id],
+            ),
+        )
+        wizard = self.service.update_channels(
+            wizard.id, self.company_id,
+            WizardChannelsUpdateRequest(
+                expected_version=wizard.version,
+                marketplace_account_ids=[account.id],
+            ),
+        )
+        self._cache_coupang_logistics(wizard.id)
+        wizard = self.service.update_fulfillment(
+            wizard.id, self.company_id,
+            WizardFulfillmentUpdateRequest(
+                expected_version=wizard.version,
+                selections=[FulfillmentSelectionInput(
+                    marketplace_account_id=account.id,
+                    fulfillment_mode=FulfillmentMode.SELLER_FULFILLED,
+                    outbound_shipping_place_code="88001",
+                    return_center_code="RET-TEST-1",
+                    required_fields=VALID_REQUIRED_FIELDS,
+                )],
+            ),
+        )
+        # 원가·판매가만 확정하고 나머지 7개는 전부 미확인(None) 상태로
+        # 둔다 — margin_amount = 9000 - 5000 = 4000(양수), 하지만
+        # 여전히 잠정값이다.
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="5000", sale_price="9000",
+                )],
+            ),
+        )
+
+        result = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        self.assertEqual(result.status, "NEEDS_CORRECTION")
+        self.assertTrue(any(
+            issue.code == "ECONOMICS_PROVISIONAL" for issue in result.issues
         ))
 
     def test_coupang_fulfillment_rejects_unverified_logistics_codes(self):
@@ -1462,10 +1718,16 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                     EconomicsInputItem(
                         marketplace_account_id=account1.id,
                         cost_of_goods="5000", sale_price="9000",
+                        channel_fee_rate="0", payment_fee_rate="0",
+                        shipping_cost="0", packaging_cost="0", ad_cost="0",
+                        return_reserve_rate="0", tax_basis_rate="0",
                     ),
                     EconomicsInputItem(
                         marketplace_account_id=account2.id,
                         cost_of_goods="5000", sale_price="9000",
+                        channel_fee_rate="0", payment_fee_rate="0",
+                        shipping_cost="0", packaging_cost="0", ad_cost="0",
+                        return_reserve_rate="0", tax_basis_rate="0",
                     ),
                 ],
             ),
@@ -1872,6 +2134,9 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 items=[EconomicsInputItem(
                     marketplace_account_id=account.id,
                     cost_of_goods="5000", sale_price="30000",
+                    channel_fee_rate="0", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0", ad_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
                 )],
             ),
         )

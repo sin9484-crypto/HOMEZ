@@ -1450,6 +1450,10 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.econ_break_even": "손익분기 가격",
   "lw.econ_break_even_impossible": "계산 불가(수수료 합계가 100% 이상)",
   "lw.econ_calc_note": "마진 계산은 서버(Decimal)에서만 수행되며 지역 설정에 영향받지 않는다 — 입력 후 저장하면 결과가 즉시 표시된다.",
+  "lw.econ_unconfirmed_placeholder": "미확인(비워두면 0원으로 저장되지 않음)",
+  "lw.econ_provisional_banner": "아직 확인되지 않은 비용이 있습니다({fields}) — 아래 수치는 확인된 비용만 반영한 잠정값이며 실제 최종 마진이 아닙니다.",
+  "lw.econ_confirmed_balance": "확인된 비용 기준 잔액",
+  "lw.econ_sale_price_mismatch": "5단계에서 확정한 판매가({reference})와 다릅니다 — 실제 쿠팡 등록에는 5단계 값이 사용되며, 이 계산은 위에 입력한 판매가 기준입니다.",
 
   "lw.precheck_run_btn": "사전검사 실행",
   "lw.precheck_none_blocking": "차단 사유가 없습니다 — 다음 단계(승인)로 진행할 수 있습니다.",
@@ -1614,6 +1618,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "listing_wizard.precheck.channel_policy_stale": "정책 기준이 마지막 검사 이후 변경됐습니다 — 정책 검사를 다시 실행하세요.",
   "listing_wizard.precheck.channel_policy_actions_required": "이 채널에 제출하려면 추가 증빙(인증서·고시정보 등)이 필요합니다.",
   "listing_wizard.precheck.economics_missing": "이 채널의 가격·마진 입력이 없습니다.",
+  "listing_wizard.precheck.economics_provisional": "채널수수료·포장비 등 일부 비용이 아직 확인되지 않아, 마진 계산이 확인된 비용만 반영한 잠정값입니다. 미확인 항목을 채우거나 0원으로 확인해 주세요.",
   "listing_wizard.precheck.economics_negative_margin": "이 채널의 예상 마진이 음수입니다.",
   "listing_wizard.precheck.economics_break_even_impossible": "이 채널은 수수료 합계가 100% 이상이라 손익분기가 계산되지 않습니다.",
   "listing_wizard.precheck.emergency_stop_active": "Emergency Stop이 활성화되어 있어 진행할 수 없습니다.",

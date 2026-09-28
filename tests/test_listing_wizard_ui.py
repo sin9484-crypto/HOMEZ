@@ -264,6 +264,55 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
         self.assertIn("if (opts.silent) {", body)
         self.assertIn("lwAdvanceAfterSave(fresh);", body)
 
+    def test_economics_step_never_forces_blank_input_to_zero(self):
+        """
+        2026-09-28(45차) — 실제 결함: 빈 입력칸을 저장 시 문자열
+        "0"으로 바꿔 보내서, 사용자가 한 번도 확인하지 않은 채널수수료
+        등이 "확정된 0원"으로 계산·저장됐다(AI Capability Registry
+        계약의 forbidden_operations "확인되지 않은 비용을 0으로
+        대체"를 정면으로 어긴 결함). 빈 값은 null로 보내야 한다.
+        """
+
+        start = self.js.index("function lwRenderEconomicsStep(content)")
+        end = self.js.index("\n  }\n\n  // ---- 7단계", start)
+        body = self.js[start:end]
+        self.assertNotIn('input.value.trim() || "0"', body)
+        self.assertIn('raw === "" ? null : raw', body)
+
+    def test_economics_step_input_does_not_prefill_blank_with_zero(self):
+        """입력칸 자체도 빈 값을 "0"으로 미리 채워 보여주면 안 된다
+        (아직 아무것도 확인 안 된 상태를 "0원 확정"처럼 보이게 한다)."""
+
+        start = self.js.index("function lwRenderEconomicsStep(content)")
+        end = self.js.index("\n  }\n\n  // ---- 7단계", start)
+        body = self.js[start:end]
+        self.assertNotIn('value="${inp[key] ?? "0"}"', body)
+        self.assertIn('value="${inp[key] ?? ""}"', body)
+
+    def test_economics_step_shows_provisional_banner_and_relabels_balance(self):
+        """미확인 비용이 있으면(`is_provisional`) 배너로 알리고, "마진
+        금액" 대신 "확인된 비용 기준 잔액"으로 라벨을 바꿔야 한다 —
+        미완성 계산을 완성된 마진 판정처럼 보여주지 않는다."""
+
+        start = self.js.index("function lwRenderEconomicsStep(content)")
+        end = self.js.index("\n  }\n\n  // ---- 7단계", start)
+        body = self.js[start:end]
+        self.assertIn("res.is_provisional", body)
+        self.assertIn('"lw.econ_provisional_banner"', body)
+        self.assertIn(
+            'HomezI18n.t(res.is_provisional ? "lw.econ_confirmed_balance" : "lw.econ_margin_amount")',
+            body,
+        )
+
+    def test_economics_step_shows_sale_price_mismatch_warning(self):
+        """5단계 판매가와 다르면 조용히 계산하지 않고 표시한다."""
+
+        start = self.js.index("function lwRenderEconomicsStep(content)")
+        end = self.js.index("\n  }\n\n  // ---- 7단계", start)
+        body = self.js[start:end]
+        self.assertIn("res.sale_price_mismatch_reference != null", body)
+        self.assertIn('"lw.econ_sale_price_mismatch"', body)
+
     def test_precheck_step_advances_past_already_approved_wizard(self):
         """
         회귀 방지(Gate K, 2026-08-08 실제 Migration 리허설 중 실제
