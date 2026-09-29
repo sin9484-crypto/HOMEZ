@@ -433,6 +433,38 @@ class ChannelPolicyEngineTestCase(unittest.TestCase):
             )
 
     # --------------------------------------------------
+    # 8-1. 최소 목표 마진율의 기존 확정 기본값 연결(49차)
+    # --------------------------------------------------
+
+    def test_effective_min_target_margin_rate_defaults_to_confirmed_policy(self):
+        """HOMEZ_USER_OPERATION_SETTINGS.md §6이 이미 확정한 15%를,
+        회사가 자체 값을 저장한 적이 없어도(company_channel_policy_
+        settings에 행이 없어도) 조회 시점에 반환해야 한다 — "설정
+        누락"과 "정책 자체가 없음"을 구분한다. 이 메서드 호출 자체는
+        실제 DB에 새 행을 쓰지 않는다(조회 전용)."""
+
+        from decimal import Decimal
+
+        rate = self.service.get_effective_min_target_margin_rate(999)
+        self.assertEqual(rate, Decimal("0.15"))
+        self.assertIsNone(self.service.get_or_default_settings(999))
+
+    def test_effective_min_target_margin_rate_prefers_company_override(self):
+        """회사가 명시적으로 저장한 값이 있으면 기본값(15%) 대신 그
+        값을 써야 한다."""
+
+        from decimal import Decimal
+
+        self.service.upsert_settings(
+            1, updated_by=1,
+            data=UpdateCompanyChannelPolicySettingsRequest(
+                expected_version=0, min_target_margin_rate="0.22",
+            ),
+        )
+        rate = self.service.get_effective_min_target_margin_rate(1)
+        self.assertEqual(rate, Decimal("0.22"))
+
+    # --------------------------------------------------
     # 9. 정책 통과 전 수익성 추천 차단(정책·수익성 분리 증명)
     # --------------------------------------------------
 

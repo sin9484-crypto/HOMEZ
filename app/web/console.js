@@ -11662,6 +11662,15 @@
           error.textContent = HomezI18n.t("lw.contents_selection_required");
           return;
         }
+        // 2026-09-29(49차) — 실제 재현으로 확인된 결함: 이 버튼은
+        // 로컬 이미지 합성과 무관하게, 선택된 자산을 외부에서 접근
+        // 가능한 공개 URL로 만드는 실제 업로드(ensure_public_url())를
+        // 내부적으로 수행한다 — 사용자가 이 사실을 클릭 전에 알 수
+        // 없었다. 취소하면 아래 apiFetch가 아예 호출되지 않는다(외부
+        // 전송 0회).
+        if (!window.confirm(HomezI18n.t("lw.contents_build_upload_confirm"))) {
+          return;
+        }
         status.textContent = HomezI18n.t("common.loading");
         try {
           const result = await apiFetch(`/listing-wizards/${w.id}/coupang/contents-from-media`, {

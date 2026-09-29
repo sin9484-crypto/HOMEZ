@@ -325,6 +325,28 @@ def run_precheck(
                 channel=str(account_id),
                 params={"missing_cost_fields": result.get("missing_cost_fields", [])},
             ))
+        else:
+            # 2026-09-29(49차) — "비용 전항목 확인"과 "최소마진 15%"는
+            # 대체 기준이 아니라 서로 다른 두 조건이다(사용자 지시).
+            # 비용이 비어 있는 동안(is_provisional=True)은 위에서 이미
+            # 차단했으므로, 여기서는 그 반대 — 비용이 전부 확인된
+            # 경우에만 실제 마진율을 기존 확정 정책(§6, 기본 15%)과
+            # 비교한다. 미확정 비용을 뺀 잔액으로 "15% 충족"을 판정하지
+            # 않기 위해 이 분기는 is_provisional=False일 때만 평가한다.
+            target_rate = channel_policy_service.get_effective_min_target_margin_rate(
+                company_id,
+            )
+            margin_rate = Decimal(str(result.get("margin_rate", "0")))
+            if margin_rate < target_rate:
+                issues.append(_issue(
+                    "ECONOMICS_BELOW_TARGET_MARGIN", WizardStep.ECONOMICS,
+                    True, "listing_wizard.precheck.economics_below_target_margin",
+                    channel=str(account_id),
+                    params={
+                        "margin_rate": str(margin_rate),
+                        "target_rate": str(target_rate),
+                    },
+                ))
 
         if Decimal(str(result.get("margin_amount", "0"))) < 0:
             issues.append(_issue(

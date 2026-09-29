@@ -1310,6 +1310,138 @@ class ListingWizardServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
 
+    def _setup_wizard_through_fulfillment(self, candidate, account, media):
+
+        wizard = self._create_wizard()
+        wizard = self.service.update_source(
+            wizard.id, self.company_id,
+            WizardSourceUpdateRequest(
+                expected_version=wizard.version,
+                product_candidate_id=candidate.id,
+            ),
+        )
+        wizard = self.service.update_draft(
+            wizard.id, self.company_id,
+            WizardDraftUpdateRequest(
+                expected_version=wizard.version, product_name="상품",
+            ),
+        )
+        wizard = self.service.update_media(
+            wizard.id, self.company_id,
+            WizardMediaUpdateRequest(
+                expected_version=wizard.version,
+                selected_media_asset_ids=[media.id],
+            ),
+        )
+        wizard = self.service.update_channels(
+            wizard.id, self.company_id,
+            WizardChannelsUpdateRequest(
+                expected_version=wizard.version,
+                marketplace_account_ids=[account.id],
+            ),
+        )
+        self._cache_coupang_logistics(wizard.id)
+        return self.service.update_fulfillment(
+            wizard.id, self.company_id,
+            WizardFulfillmentUpdateRequest(
+                expected_version=wizard.version,
+                selections=[FulfillmentSelectionInput(
+                    marketplace_account_id=account.id,
+                    fulfillment_mode=FulfillmentMode.SELLER_FULFILLED,
+                    outbound_shipping_place_code="88001",
+                    return_center_code="RET-TEST-1",
+                    required_fields=VALID_REQUIRED_FIELDS,
+                    channel_policy_attributes=VALID_CHANNEL_POLICY_ATTRIBUTES,
+                )],
+            ),
+        )
+
+    def test_economics_below_target_margin_blocks_when_costs_fully_confirmed(self):
+        """2026-09-29(49차) — 비용이 전부 확인됐고(is_provisional=False)
+        마진율이 기존 확정 정책 기본값(15%)에 못 미치면 별도로
+        차단해야 한다 — "모든 비용 확인"이 "최소마진 충족"을 대신하지
+        않는다는 것을 직접 검증한다. 원가 9000·판매가 10000·수수료
+        0% → margin_rate=10% < 15%."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._setup_wizard_through_fulfillment(candidate, account, media)
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="9000", sale_price="10000",
+                    channel_fee_rate="0", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
+                )],
+            ),
+        )
+
+        result = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        self.assertEqual(result.status, "NEEDS_CORRECTION")
+        self.assertTrue(any(
+            issue.code == "ECONOMICS_BELOW_TARGET_MARGIN"
+            for issue in result.issues
+        ))
+
+    def test_economics_below_target_margin_does_not_fire_while_provisional(self):
+        """미확정 비용이 있는 동안(is_provisional=True)은 확인된
+        비용만으로 계산한 마진율이 아무리 높아도(여기서는 90%)
+        "15% 충족"으로 판정해 통과시키면 안 된다 — 그 마진율 자체가
+        아직 신뢰할 수 없는 잔액이기 때문이다. ECONOMICS_PROVISIONAL이
+        먼저 막고, ECONOMICS_BELOW_TARGET_MARGIN은 아예 평가되지
+        않아야 한다(둘 다 뜨면 같은 상황을 두 번 판정하는 것)."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._setup_wizard_through_fulfillment(candidate, account, media)
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="1000", sale_price="10000",
+                    # channel_fee_rate 등 나머지는 전부 미확인(None).
+                )],
+            ),
+        )
+
+        result = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        issue_codes = [issue.code for issue in result.issues]
+        self.assertIn("ECONOMICS_PROVISIONAL", issue_codes)
+        self.assertNotIn("ECONOMICS_BELOW_TARGET_MARGIN", issue_codes)
+
+    def test_economics_meets_target_margin_does_not_block(self):
+        """마진율이 기준(15%) 이상이고 비용이 전부 확인되면
+        ECONOMICS_BELOW_TARGET_MARGIN이 뜨지 않아야 한다."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._setup_wizard_through_fulfillment(candidate, account, media)
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="8000", sale_price="10000",
+                    channel_fee_rate="0", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
+                )],
+            ),
+        )
+
+        result = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
+
     def test_coupang_fulfillment_rejects_unverified_logistics_codes(self):
         candidate, _channel, account, media = self._full_setup()
         wizard = self._create_wizard()

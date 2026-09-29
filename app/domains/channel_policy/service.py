@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -566,6 +567,27 @@ class ChannelPolicyService:
         self.db.refresh(settings)
 
         return self.get_or_default_settings(company_id)
+
+    # 2026-09-29(49차) — HOMEZ_USER_OPERATION_SETTINGS.md §6이 이미
+    # 확정한 값("최소 예상 마진율: 15%", 적용 대상 "새로운 판매와
+    # 자동발주"). 회사가 CompanyChannelPolicySettings.min_target_
+    # margin_rate를 직접 설정하지 않았다고 해서 "이 회사엔 마진 기준이
+    # 없다"는 뜻이 아니다 — 문서로 이미 확정된 기본값이 있는데 그
+    # 값을 실제 회사 설정에 아직 쓰지 않은 것뿐이다(설정 누락과 정책
+    # 부재를 구분). 회사가 자체 값을 명시적으로 저장하면 그 값이
+    # 우선한다.
+    DEFAULT_MIN_TARGET_MARGIN_RATE = Decimal("0.15")
+
+    def get_effective_min_target_margin_rate(self, company_id: int) -> Decimal:
+        """이 회사에 적용할 최소 목표 마진율 — 회사 자체 설정이 있으면
+        그 값, 없으면 기존 확정 정책의 기본값(15%)을 그대로 반환한다.
+        실제 DB에 0.15를 새로 쓰지 않는다(회사 설정 변경은 별도
+        승인·경로를 거친다) — 조회 시점에만 기본값을 적용한다."""
+
+        settings = self.repository.get_settings(company_id)
+        if settings is not None and settings.min_target_margin_rate is not None:
+            return settings.min_target_margin_rate
+        return self.DEFAULT_MIN_TARGET_MARGIN_RATE
 
     # --------------------------------------------------
     # 마진 추정(상품 선별 단계 — listing_wizard 6단계와 별개)

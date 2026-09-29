@@ -321,6 +321,32 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
         self.assertIn("res.sale_price_mismatch_reference != null", body)
         self.assertIn('"lw.econ_sale_price_mismatch"', body)
 
+    def test_contents_build_confirms_external_upload_before_calling_api(self):
+        """2026-09-29(49차) — 실제 재현으로 확인된 결함: "선택한
+        이미지로 상세설명 구성" 버튼이 클릭 전 아무 안내 없이 선택된
+        자산을 외부(Cloudflare R2)에 공개 업로드했다(ensure_public_url
+        내부 호출). 클릭 시 먼저 확인 대화상자를 띄우고, 취소하면
+        실제 전송 API(apiFetch)가 전혀 호출되지 않아야 한다."""
+
+        idx = self.js.index('content.querySelectorAll("[data-lw-contents-build]")')
+        end = self.js.index(
+            'content.querySelectorAll(".lw-channel-block").forEach((block) => {',
+            idx,
+        )
+        body = self.js[idx:end]
+        confirm_pos = body.index('window.confirm(HomezI18n.t("lw.contents_build_upload_confirm"))')
+        fetch_pos = body.index("coupang/contents-from-media")
+        self.assertLess(
+            confirm_pos, fetch_pos,
+            "외부 업로드 확인 대화상자는 반드시 실제 전송 호출보다 먼저 나와야 한다",
+        )
+        # 취소 시(!confirm) 조기 return하므로 아래 apiFetch 블록에
+        # 도달하지 않는다 — 소스상 return이 confirm 실패 분기 안에
+        # 있는지 확인한다(정적 검사로 호출 0회를 보장하는 방식).
+        confirm_block_end = body.index("\n        }\n", confirm_pos)
+        confirm_block = body[confirm_pos:confirm_block_end]
+        self.assertIn("return;", confirm_block)
+
     def test_precheck_step_advances_past_already_approved_wizard(self):
         """
         회귀 방지(Gate K, 2026-08-08 실제 Migration 리허설 중 실제
