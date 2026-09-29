@@ -1,5 +1,15 @@
 # Current Version
 
+**HOMEZ V7 — 광고비 "정책상 계산 제외"·실제 미확인 비용 구분, 채널수수료 9.6% 기존 정책(보수적 적용) 근거로 실제 반영, 실제 등록 실행 경로(중복방지·결과불명 처리) 코드 확인 완료 (2026-09-28, 47차).**
+
+- **광고비 구분(코드 수정)**: `EconomicsResultItem.excluded_cost_fields` 신설 — HOMEZ_USER_OPERATION_SETTINGS.md §6이 이미 확정한 "광고비는 초기 이익 계산에서 제외" 정책 항목(ad_cost)을 `missing_cost_fields`/`is_provisional` 판정에서 분리했다. 이전에는 이 필드 하나 때문에 나머지 비용이 전부 확인돼도 영구히 ECONOMICS_PROVISIONAL이 해소되지 않는 구조였다.
+- **채널수수료 실제 반영**: HOMEZ_USER_OPERATION_SETTINGS.md §6의 기존 확정 정책("수수료가 확정되기 전에는 보수적으로 높게 적용한다")을 근거로, 45차에 조사해 둔 쿠팡 공식 카테고리별 수수료 페이지의 "뷰티" 카테고리 수치(9.6%, 2019-11-25 기준 표기)를 실제 Wizard#1에 입력·저장. `missing_cost_fields`가 5개→3개(포장비·반품준비율·세금기준율만 남음)로 감소. 서버 재조회로 `version` 28→30, `margin_rate`(확인된 비용 기준) 28.00% 확인.
+- **ECONOMICS_PROVISIONAL 근거 재확인(코드 변경 없음, 조사만)**: 이 차단은 47차 이전(45차)에 개발자가 새로 추가한 것이며 기존 확정 정책과 동일하지 않다. 기존 확정 정책은 `docs/HOMEZ_USER_OPERATION_SETTINGS.md` §6 "최소 예상 마진율 15%"이며 그 적용 대상은 "새로운 판매와 자동발주"다. 그러나 이 15% 기준의 실제 코드 구현(`CompanyChannelPolicySettings.min_target_margin_rate` + `ChannelPolicyService.estimate_margin()`)은 참고용 미리보기 엔드포인트에만 연결돼 있고 위저드 승인 게이트(`listing_wizard_precheck.py`)에는 연결된 적이 없다 — 실제 DB 조회로 이 회사의 `min_target_margin_rate`가 전혀 설정(0행)돼 있지 않음도 확인했다. 두 기준(전 항목 확인 vs 마진율 15%) 중 무엇으로 게이트를 재설계할지는 사용자 결정 필요(별도 코드 변경 범위, 이번 라운드에 실행하지 않음).
+- **채널 정책 카탈로그 미시딩 원인 확정**: `channel_policy_rules` 자동 시딩(`seed_channel_policy_catalog_at_boot`)은 `app/desktop/main.py`(Desktop 부팅 경로) 전용이며 `app/main.py`(이 dev 서버가 실제로 쓰는 진입점)에는 호출이 없다 — "이 채널에 정책이 없다"가 아니라 "이 dev 실행 방식이 정상 초기화 절차를 우회한다"는 환경 특성. 이미 검증된 수동 관리자 엔드포인트(`POST /channel-policy/rules/seed-catalog`, 멱등, 코드에 이미 정의된 `CHANNEL_POLICY_RULE_CATALOG` 상수를 그대로 동기화)가 존재 — 실행 여부는 DB 쓰기라 별도 승인 필요, 이번 라운드에 실행하지 않음.
+- **상세이미지 실제 검증**: 46차에 생성한 이미지(780×1297px)를 직접 열어 확인 — 사용방법 문구가 확인된 원문 188자와 완전히 일치, 잘림·왜곡 없음. `<img src>`가 이미 R2 공개 URL(`pub-....r2.dev`)이라 로컬 자산이 아니라 외부에서 실제로 접근 가능한 제출 준비 상태임을 확인.
+- **실제 등록 실행 경로(코드 확인만, 실행 안 함)**: `listing_wizard_live_service.py::send()`/`preflight()`를 직접 읽어 확인 — (1) 같은 listing에 대한 중복 시도는 부분 UNIQUE INDEX + 조건부 UPDATE로 DB 레벨에서 차단, (2) 외부 호출(`provider.create_product`) 전에 PENDING→SUBMITTING 전환을 반드시 먼저 커밋, (3) 예외/타임아웃은 결과를 UNKNOWN으로 기록하고 자동 재시도 안 함("auto_retry_allowed=false" 감사로그 고정 기록), (4) 성공 응답 후 로컬 저장 자체가 실패해도 sellerProductId를 감사로그에 best-effort로 남겨 수동 정합화 근거 보존, (5) `create_product` 호출은 `send()` 1회당 정확히 1번(내부 재시도 없음). 전부 이미 구현·감사된 기존 코드로 확인했을 뿐 새로 만들지 않았다.
+- **남은 차단(변경 없음)**: `VENDOR_USER_ID_REQUIRED`(WING 아이디, 사용자 직접 입력 필요) — 실제 값 요청은 화면 응답으로 별도 전달.
+
 **HOMEZ V7 — 7단계 사전검사 차단 4건 중 2건 실제 해소(상세설명 이미지 연결·정책검사 실행), i18n 키 27개 누락 발견·수정, 남은 2건은 사용자 입력 대기 (2026-09-28, 46차).**
 
 - **차단 항목 재분류(코드부터 직접 확인, 추측 아님)**:
