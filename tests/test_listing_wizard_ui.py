@@ -10,9 +10,11 @@ Gate I/J(2026-08-08) — 상품등록 통합 마법사 Desktop UI 정적 검증.
 =========================================================
 """
 
+import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -321,12 +323,14 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
         self.assertIn("res.sale_price_mismatch_reference != null", body)
         self.assertIn('"lw.econ_sale_price_mismatch"', body)
 
-    def test_contents_build_confirms_external_upload_before_calling_api(self):
+    def test_contents_build_confirm_dialog_appears_before_upload_call_in_source(self):
         """2026-09-29(49차) — 실제 재현으로 확인된 결함: "선택한
         이미지로 상세설명 구성" 버튼이 클릭 전 아무 안내 없이 선택된
         자산을 외부(Cloudflare R2)에 공개 업로드했다(ensure_public_url
-        내부 호출). 클릭 시 먼저 확인 대화상자를 띄우고, 취소하면
-        실제 전송 API(apiFetch)가 전혀 호출되지 않아야 한다."""
+        내부 호출). 이 테스트는 소스 순서만 확인한다(확인 대화상자가
+        실제 전송 호출보다 코드상 먼저 온다) — "취소 시 호출 0회"라는
+        실행 결과 자체는 정적 순서만으로는 증명되지 않으므로
+        아래의 별도 동작 검증 테스트(Node 실행)가 그 증명을 맡는다."""
 
         idx = self.js.index('content.querySelectorAll("[data-lw-contents-build]")')
         end = self.js.index(
@@ -340,12 +344,99 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
             confirm_pos, fetch_pos,
             "외부 업로드 확인 대화상자는 반드시 실제 전송 호출보다 먼저 나와야 한다",
         )
-        # 취소 시(!confirm) 조기 return하므로 아래 apiFetch 블록에
-        # 도달하지 않는다 — 소스상 return이 confirm 실패 분기 안에
-        # 있는지 확인한다(정적 검사로 호출 0회를 보장하는 방식).
-        confirm_block_end = body.index("\n        }\n", confirm_pos)
-        confirm_block = body[confirm_pos:confirm_block_end]
-        self.assertIn("return;", confirm_block)
+
+    def test_contents_build_cancel_makes_zero_upload_calls_accept_makes_one(self):
+        """2026-09-29(50차) — 정적 순서 검사만으로 "취소 시 외부 호출
+        0회"를 실증했다고 주장하지 말라는 지시에 따라, console.js의
+        해당 클릭 핸들러 본문을 그대로 추출해 Node로 실제 실행한다.
+        window.confirm을 false/true로 각각 모킹해 실제 전송 함수
+        (apiFetch) 호출 횟수를 직접 센다 — 취소 시 0회, 동의 시 정확히
+        1회(그리고 그 경로에서만 lwScheduleAutosave까지 도달)를
+        코드 실행으로 증명한다. 실제 R2 업로드나 기존 자산 변경은
+        전혀 실행하지 않는다(apiFetch 자체를 순수 모킹)."""
+
+        node_path = shutil.which("node")
+        if node_path is None:
+            self.skipTest("Node.js를 찾을 수 없어 동작 검증을 건너뜁니다.")
+
+        start_marker = 'const block = btn.closest(".lw-channel-block");'
+        anchor = self.js.index('content.querySelectorAll("[data-lw-contents-build]")')
+        start = self.js.index(start_marker, anchor)
+        end = self.js.index("\n      }));\n    });", start)
+        handler_body = self.js[start:end]
+        self.assertIn("window.confirm(", handler_body)
+        self.assertIn("coupang/contents-from-media", handler_body)
+
+        harness = """
+'use strict';
+const HANDLER_BODY = %s;
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+
+async function runScenario(confirmReturns) {
+  let fetchCallCount = 0;
+  let scheduleAutosaveCalls = 0;
+  const checkbox = { value: '2' };
+  const fakeBlock = {
+    querySelector: (sel) => {
+      if (sel === '[data-lw-contents-host]') return { dataset: {} };
+      if (sel === '[data-lw-contents-status]') return { textContent: '' };
+      if (sel === '[data-lw-contents-error]') return { textContent: '' };
+      return null;
+    },
+    querySelectorAll: (sel) => {
+      if (sel === '.lw-contents-asset-checkbox:checked') return [checkbox];
+      return [];
+    },
+  };
+  const btn = { closest: () => fakeBlock };
+  const w = { id: 1 };
+  const HomezI18n = { t: (k) => k };
+  const windowMock = { confirm: () => confirmReturns };
+  const apiFetch = async () => { fetchCallCount++; return { contents: [] }; };
+  const lwScheduleAutosave = () => { scheduleAutosaveCalls++; };
+
+  const fn = new AsyncFunction(
+    'btn', 'w', 'HomezI18n', 'window', 'apiFetch', 'lwScheduleAutosave',
+    HANDLER_BODY,
+  );
+  await fn(btn, w, HomezI18n, windowMock, apiFetch, lwScheduleAutosave);
+  return { fetchCallCount, scheduleAutosaveCalls };
+}
+
+(async () => {
+  const cancelled = await runScenario(false);
+  const accepted = await runScenario(true);
+  console.log(JSON.stringify({ cancelled, accepted }));
+})();
+""" % json.dumps(handler_body)
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8",
+        ) as f:
+            f.write(harness)
+            harness_path = f.name
+        try:
+            result = subprocess.run(
+                [node_path, harness_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout.strip().splitlines()[-1])
+        finally:
+            os.remove(harness_path)
+
+        self.assertEqual(
+            output["cancelled"]["fetchCallCount"], 0,
+            "취소 시 외부 전송 함수가 호출되지 않아야 한다",
+        )
+        self.assertEqual(
+            output["cancelled"]["scheduleAutosaveCalls"], 0,
+        )
+        self.assertEqual(
+            output["accepted"]["fetchCallCount"], 1,
+            "동의 시 외부 전송 함수가 정확히 1회 호출돼야 한다",
+        )
+        self.assertEqual(output["accepted"]["scheduleAutosaveCalls"], 1)
 
     def test_precheck_step_advances_past_already_approved_wizard(self):
         """

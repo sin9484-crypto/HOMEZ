@@ -1442,6 +1442,37 @@ class ListingWizardServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
 
+    def test_economics_exactly_at_target_margin_boundary_passes(self):
+        """2026-09-29(50차) — "최소 15%"는 15% 미만만 막는다는 뜻이다
+        (15% 자체는 통과). 원가 8500·판매가 10000 → margin_rate가
+        정확히 0.1500(반올림 오차 없이)이 되도록 구성해 경계값에서
+        차단되지 않는지 직접 확인한다."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._setup_wizard_through_fulfillment(candidate, account, media)
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="8500", sale_price="10000",
+                    channel_fee_rate="0", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
+                )],
+            ),
+        )
+        stored_result = json.loads(wizard.economics_result_json)[0]
+        self.assertEqual(
+            Decimal(str(stored_result["margin_rate"])), Decimal("0.1500"),
+        )
+
+        result = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
+
     def test_coupang_fulfillment_rejects_unverified_logistics_codes(self):
         candidate, _channel, account, media = self._full_setup()
         wizard = self._create_wizard()
