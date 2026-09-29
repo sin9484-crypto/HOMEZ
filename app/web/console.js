@@ -12520,7 +12520,10 @@
             reference: HomezI18n.formatCurrency(res.sale_price_mismatch_reference),
           })}</p>` : ""}
           <div class="lw-margin-result">
-            ${HomezI18n.t(res.is_provisional ? "lw.econ_confirmed_balance" : "lw.econ_margin_amount")}: <strong>${escapeHtml(HomezI18n.formatCurrency(res.margin_amount))}</strong> ·
+            ${HomezI18n.t(
+              (res.is_provisional || (res.excluded_cost_fields || []).length)
+                ? "lw.econ_confirmed_balance" : "lw.econ_margin_amount",
+            )}: <strong>${escapeHtml(HomezI18n.formatCurrency(res.margin_amount))}</strong> ·
             ${HomezI18n.t("lw.econ_margin_rate")}: <strong>${escapeHtml(HomezI18n.formatPercent(Number(res.margin_rate), 2))}</strong> ·
             ${HomezI18n.t("lw.econ_break_even")}: <strong>${res.break_even_price === null ? HomezI18n.t("lw.econ_break_even_impossible") : escapeHtml(HomezI18n.formatCurrency(res.break_even_price))}</strong>
           </div>` : ""}

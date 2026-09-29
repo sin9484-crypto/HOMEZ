@@ -292,15 +292,23 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
     def test_economics_step_shows_provisional_banner_and_relabels_balance(self):
         """미확인 비용이 있으면(`is_provisional`) 배너로 알리고, "마진
         금액" 대신 "확인된 비용 기준 잔액"으로 라벨을 바꿔야 한다 —
-        미완성 계산을 완성된 마진 판정처럼 보여주지 않는다."""
+        미완성 계산을 완성된 마진 판정처럼 보여주지 않는다.
+
+        2026-09-29(48차) — `excluded_cost_fields`(광고비처럼 정책상
+        영구 제외된 항목)가 있을 때도 반드시 "확인된 비용 기준
+        잔액"으로 표시해야 한다 — is_provisional만으로 판단하면,
+        광고비만 제외되고 나머지가 전부 확인된 상태에서 "마진 금액"
+        (완성된 순이익)이라고 잘못 표시하게 된다(광고비는 영구 제외
+        항목이라 이 조건은 절대 해소되지 않는다)."""
 
         start = self.js.index("function lwRenderEconomicsStep(content)")
         end = self.js.index("\n  }\n\n  // ---- 7단계", start)
         body = self.js[start:end]
         self.assertIn("res.is_provisional", body)
         self.assertIn('"lw.econ_provisional_banner"', body)
+        self.assertIn("res.excluded_cost_fields || []).length", body)
         self.assertIn(
-            'HomezI18n.t(res.is_provisional ? "lw.econ_confirmed_balance" : "lw.econ_margin_amount")',
+            '? "lw.econ_confirmed_balance" : "lw.econ_margin_amount"',
             body,
         )
 
