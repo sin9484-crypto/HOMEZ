@@ -12503,10 +12503,14 @@
             ${fieldDef.map(([key, i18nKey]) => `
               <label class="field">
                 <span class="field-label">${HomezI18n.t(i18nKey)}</span>
-                <input type="text" class="lw-econ-input" data-key="${key}" placeholder="${HomezI18n.t("lw.econ_unconfirmed_placeholder")}" value="${inp[key] ?? ""}">
+                <input type="text" class="lw-econ-input" data-key="${key}" placeholder="${HomezI18n.t(key === "ad_cost" ? "lw.econ_excluded_placeholder" : "lw.econ_unconfirmed_placeholder")}" value="${inp[key] ?? ""}">
               </label>`).join("")}
           </div>
           ${res ? `
+          ${(res.excluded_cost_fields || []).length ? `
+          <p class="banner banner-info">${HomezI18n.t("lw.econ_excluded_banner", {
+            fields: (res.excluded_cost_fields || []).map(fieldLabel).join(", "),
+          })}</p>` : ""}
           ${res.is_provisional ? `
           <p class="banner banner-warning">${HomezI18n.t("lw.econ_provisional_banner", {
             fields: (res.missing_cost_fields || []).map(fieldLabel).join(", "),

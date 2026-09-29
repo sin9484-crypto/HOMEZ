@@ -144,10 +144,14 @@ class MarginCalculatorTestCase(unittest.TestCase):
     def test_none_fields_are_excluded_not_treated_as_zero(self):
         """
         2026-09-28(45차) — None(미확인)은 0원 확정과 다르다. 채널
-        수수료·배송비 등 7개를 전부 None으로 두면 total_cost는
-        cost_of_goods만 반영해야 한다(0으로 대체돼 같은 숫자가 나올
-        수는 있지만, 그 의미가 다르다는 것을 is_provisional/
-        missing_cost_fields로 구분해야 한다).
+        수수료·배송비 등을 None으로 두면 total_cost는 cost_of_goods만
+        반영해야 한다(0으로 대체돼 같은 숫자가 나올 수는 있지만, 그
+        의미가 다르다는 것을 is_provisional/missing_cost_fields로
+        구분해야 한다).
+
+        2026-09-28(47차) — ad_cost는 여기 포함하지 않는다. "미확인"이
+        아니라 회사 정책상 "제외"이므로 missing_cost_fields가 아니라
+        excluded_cost_fields로 간다(아래 별도 테스트).
         """
 
         result = calculate_economics(_item(
@@ -162,10 +166,44 @@ class MarginCalculatorTestCase(unittest.TestCase):
             set(result.missing_cost_fields),
             {
                 "channel_fee_rate", "payment_fee_rate", "shipping_cost",
-                "packaging_cost", "ad_cost", "return_reserve_rate",
+                "packaging_cost", "return_reserve_rate",
                 "tax_basis_rate",
             },
         )
+        self.assertEqual(result.excluded_cost_fields, ["ad_cost"])
+
+    def test_ad_cost_none_is_policy_excluded_not_missing(self):
+        """
+        2026-09-28(47차) — HOMEZ_USER_OPERATION_SETTINGS.md §6(기존
+        확정 정책): "광고비는 초기 이익 계산에서 제외한다." ad_cost만
+        None이고 나머지 6개가 전부 확인된 경우, is_provisional이
+        서면 안 된다(광고비는 사용자가 확인해야 할 미확인 항목이
+        아니라 이미 결정된 제외 항목이므로 — 이 필드 하나 때문에
+        영구히 잠정 상태로 남으면 안 된다).
+        """
+
+        result = calculate_economics(_item(ad_cost=None))
+
+        self.assertFalse(result.is_provisional)
+        self.assertEqual(result.missing_cost_fields, [])
+        self.assertEqual(result.excluded_cost_fields, ["ad_cost"])
+        # ad_cost=None은 연산에서 0으로 처리된다(정책 제외 = 0으로
+        # 취급해 계산에서 뺀다는 뜻 — 값을 아는데 0이라는 것과는
+        # 다르지만 연산 결과는 같다). 5000(원가) + 1000(수수료10%)
+        # + 200(결제2%) + 1000(배송) + 200(포장) + 0(광고,제외)
+        # + 100(반품1%) + 300(세금3%) = 7800.
+        self.assertEqual(result.total_cost, Decimal("7800.00"))
+
+    def test_explicit_ad_cost_value_is_neither_missing_nor_excluded(self):
+        """광고비를 실제로 입력하면(정책 예외로 사용자가 굳이 반영을
+        원하는 경우) excluded_cost_fields에도 나오면 안 된다 — None일
+        때만 "정책상 제외 중"이다."""
+
+        result = calculate_economics(_item(ad_cost=Decimal("500")))
+
+        self.assertEqual(result.excluded_cost_fields, [])
+        self.assertEqual(result.missing_cost_fields, [])
+        self.assertFalse(result.is_provisional)
 
     def test_explicit_zero_is_not_provisional(self):
         """명시적으로 확인된 0원은 미확인이 아니다 — is_provisional이

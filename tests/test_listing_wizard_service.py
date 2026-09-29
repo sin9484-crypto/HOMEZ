@@ -1082,12 +1082,17 @@ class ListingWizardServiceTestCase(unittest.TestCase):
             set(result["missing_cost_fields"]),
             {
                 "payment_fee_rate", "shipping_cost", "packaging_cost",
-                "ad_cost", "return_reserve_rate", "tax_basis_rate",
+                "return_reserve_rate", "tax_basis_rate",
             },
         )
+        # 2026-09-28(47차) — ad_cost는 미확인이 아니라 기존 확정 정책
+        # ("광고비는 초기 이익 계산에서 제외") 때문에 비어 있는
+        # 것이므로 missing_cost_fields가 아니라 excluded_cost_fields로
+        # 간다.
+        self.assertEqual(result["excluded_cost_fields"], ["ad_cost"])
         # 확인된 비용(원가 5050 + 채널수수료 12900*0.096=1238.40)만
-        # 반영된 잠정 total_cost — 나머지 6개는 0으로 몰래 합산되지
-        # 않았다.
+        # 반영된 잠정 total_cost — 나머지 미확인 5개(+정책 제외 1개)는
+        # 0으로 몰래 합산되지 않았다.
         self.assertEqual(Decimal(str(result["total_cost"])), Decimal("6288.40"))
 
     def test_update_economics_flags_sale_price_mismatch_without_blocking(self):
@@ -1232,6 +1237,78 @@ class ListingWizardServiceTestCase(unittest.TestCase):
         self.assertTrue(any(
             issue.code == "ECONOMICS_PROVISIONAL" for issue in result.issues
         ))
+
+    def test_economics_provisional_ignores_policy_excluded_ad_cost(self):
+        """2026-09-28(47차) — HOMEZ_USER_OPERATION_SETTINGS.md §6이
+        이미 확정한 "광고비는 초기 이익 계산에서 제외" 정책 때문에
+        ad_cost만 비워 둔 경우는 잠정(is_provisional) 상태가 아니다
+        — 나머지 6개 비용이 전부 확인됐으면 ECONOMICS_PROVISIONAL로
+        막히면 안 된다(이미 결정된 제외 항목을 미확인처럼 취급해
+        영구 차단하지 않는다)."""
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._create_wizard()
+        wizard = self.service.update_source(
+            wizard.id, self.company_id,
+            WizardSourceUpdateRequest(
+                expected_version=wizard.version,
+                product_candidate_id=candidate.id,
+            ),
+        )
+        wizard = self.service.update_draft(
+            wizard.id, self.company_id,
+            WizardDraftUpdateRequest(
+                expected_version=wizard.version, product_name="상품",
+            ),
+        )
+        wizard = self.service.update_media(
+            wizard.id, self.company_id,
+            WizardMediaUpdateRequest(
+                expected_version=wizard.version,
+                selected_media_asset_ids=[media.id],
+            ),
+        )
+        wizard = self.service.update_channels(
+            wizard.id, self.company_id,
+            WizardChannelsUpdateRequest(
+                expected_version=wizard.version,
+                marketplace_account_ids=[account.id],
+            ),
+        )
+        self._cache_coupang_logistics(wizard.id)
+        wizard = self.service.update_fulfillment(
+            wizard.id, self.company_id,
+            WizardFulfillmentUpdateRequest(
+                expected_version=wizard.version,
+                selections=[FulfillmentSelectionInput(
+                    marketplace_account_id=account.id,
+                    fulfillment_mode=FulfillmentMode.SELLER_FULFILLED,
+                    outbound_shipping_place_code="88001",
+                    return_center_code="RET-TEST-1",
+                    required_fields=VALID_REQUIRED_FIELDS,
+                    channel_policy_attributes=VALID_CHANNEL_POLICY_ATTRIBUTES,
+                )],
+            ),
+        )
+        wizard = self.service.update_economics(
+            wizard.id, self.company_id,
+            WizardEconomicsUpdateRequest(
+                expected_version=wizard.version,
+                items=[EconomicsInputItem(
+                    marketplace_account_id=account.id,
+                    cost_of_goods="5000", sale_price="9000",
+                    channel_fee_rate="0.1", payment_fee_rate="0",
+                    shipping_cost="0", packaging_cost="0",
+                    return_reserve_rate="0", tax_basis_rate="0",
+                    # ad_cost 생략 — 정책상 제외, 미확인이 아니다.
+                )],
+            ),
+        )
+
+        result = self.service.validate(
+            wizard.id, self.company_id, wizard.version,
+        )
+        self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
 
     def test_coupang_fulfillment_rejects_unverified_logistics_codes(self):
         candidate, _channel, account, media = self._full_setup()

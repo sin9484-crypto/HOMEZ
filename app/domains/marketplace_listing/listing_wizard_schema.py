@@ -329,6 +329,14 @@ class EconomicsResultItem(BaseModel):
     5단계 판매가를 담는다(불일치를 조용히 무시하지 않고 표시하기
     위함 — 저장을 막지는 않는다, 비교 기준 자체가 모호한 다중옵션
     상품은 표시하지 않는다).
+
+    2026-09-28(47차) — `excluded_cost_fields`: `missing_cost_fields`와
+    다르다. HOMEZ_USER_OPERATION_SETTINGS.md §6이 이미 "광고비는
+    초기 이익 계산에서 제외한다"고 확정해 둔 항목(현재는 ad_cost
+    하나)은 사용자가 값을 몰라서 비어 있는 게 아니라 회사 정책상
+    절대 채워지지 않는 필드다 — `is_provisional`/사전검사 차단
+    (`ECONOMICS_PROVISIONAL`) 판정에서 제외하고, 화면에는 "제외됨
+    (정책)"으로 별도 표시한다.
     """
 
     marketplace_account_id: int
@@ -339,6 +347,7 @@ class EconomicsResultItem(BaseModel):
     break_even_price: Decimal | None
     is_provisional: bool = False
     missing_cost_fields: list[str] = Field(default_factory=list)
+    excluded_cost_fields: list[str] = Field(default_factory=list)
     sale_price_mismatch_reference: Decimal | None = None
 
 

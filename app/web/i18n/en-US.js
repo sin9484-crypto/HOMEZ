@@ -1440,6 +1440,8 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.econ_break_even_impossible": "Not computable (fee total is 100% or more)",
   "lw.econ_calc_note": "Margin calculation runs on the server (Decimal) only and is not affected by locale — results appear immediately after saving.",
   "lw.econ_unconfirmed_placeholder": "Unconfirmed (left blank ≠ saved as 0)",
+  "lw.econ_excluded_placeholder": "Excluded from initial calc by policy (not confirmed as 0)",
+  "lw.econ_excluded_banner": "{fields} is excluded from the initial profit calculation by company policy (not confirmed as 0 — simply out of scope for this figure) — no further confirmation is requested for it.",
   "lw.econ_provisional_banner": "Some costs are still unconfirmed ({fields}) — the figures below only reflect confirmed costs and are not the final margin.",
   "lw.econ_confirmed_balance": "Balance based on confirmed costs",
   "lw.econ_sale_price_mismatch": "This differs from the sale price confirmed in step 5 ({reference}) — actual Coupang registration uses the step-5 value; this calculation uses the price entered above.",

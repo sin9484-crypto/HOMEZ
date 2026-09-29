@@ -65,10 +65,21 @@ _ASSUMPTION_FIELDS = (
     "packaging_cost", "ad_cost", "return_reserve_rate", "tax_basis_rate",
 )
 
+# 2026-09-28(47차) — HOMEZ_USER_OPERATION_SETTINGS.md §6(수익성 기준,
+# 기존 확정 정책)이 명시한 "광고비는 초기 이익 계산에서 제외한다"는
+# 데이터가 없어서 비워둔 미확인 상태가 아니라, 회사가 이미 결정해 둔
+# 계산 범위 제외다. 둘을 같은 missing_cost_fields로 섞으면 (1) 사용자
+# 에게 이미 답이 정해진 광고비를 다시 확정해 달라고 요구하게 되고,
+# (2) 이 필드 하나 때문에 다른 비용이 전부 확인돼도 영원히
+# is_provisional=True로 남는다(정책상 절대 채워지지 않는 필드이므로).
+# 정책상 제외된 필드는 별도의 excluded_cost_fields로 분리한다.
+_POLICY_EXCLUDED_FIELDS = ("ad_cost",)
+
 
 def _confirmed(value: Decimal | None) -> Decimal:
-    """None(미확인)을 연산용 0으로 치환한다 — 결과가 "0원 확정"이라는
-    뜻은 아니며, 호출부가 missing_cost_fields로 그 사실을 함께 받는다."""
+    """None(미확인 또는 정책상 제외)을 연산용 0으로 치환한다 — 결과가
+    "0원 확정"이라는 뜻은 아니며, 호출부가 missing_cost_fields/
+    excluded_cost_fields로 그 사실을 함께 받는다."""
 
     return value if value is not None else Decimal("0")
 
@@ -77,6 +88,10 @@ def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
 
     missing_cost_fields = [
         name for name in _ASSUMPTION_FIELDS
+        if name not in _POLICY_EXCLUDED_FIELDS and getattr(item, name) is None
+    ]
+    excluded_cost_fields = [
+        name for name in _POLICY_EXCLUDED_FIELDS
         if getattr(item, name) is None
     ]
 
@@ -139,6 +154,7 @@ def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
         break_even_price=break_even_price,
         is_provisional=bool(missing_cost_fields),
         missing_cost_fields=missing_cost_fields,
+        excluded_cost_fields=excluded_cost_fields,
     )
 
 
