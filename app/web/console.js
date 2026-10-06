@@ -2184,7 +2184,7 @@
             <td data-label="${colProduct}">${escapeHtml(r.product_identifier)}</td>
             <td data-label="${colStatus}">${statusPillHtml(r.overall_status)}</td>
             <td data-label="${colCreated}">${fmtDate(r.created_at)}</td>
-            <td data-label="${colResolved}">${r.resolved_at ? fmtDate(r.resolved_at) : "—"}</td>
+            <td data-label="${colResolved}">${r.resolved_at ? fmtDate(r.resolved_at) : (r.covered_by_run_id ? escapeHtml(HomezI18n.t("pac.covered_by_value", { id: r.covered_by_run_id })) : "—")}</td>
           </tr>
         `).join("")}</tbody>
       </table>
@@ -2252,8 +2252,14 @@
     return translated && translated !== key ? translated : fieldName;
   }
 
+  // 선택값이 필요한 것은 차단 필드(is_blocking_field)의 미일치·미확인 항목뿐이다.
+  // 비차단 항목(모델명·인증정보)은 미확인이어도 해소를 막지 않고 미확인으로 남는다.
   function pacNeedsSelection(item) {
-    return item.match_status !== "MATCHED";
+    return item.match_status !== "MATCHED" && item.is_blocking_field !== false;
+  }
+
+  function pacIsNonBlockingUnconfirmed(item) {
+    return item.match_status !== "MATCHED" && item.is_blocking_field === false;
   }
 
   // 매입처/판매채널/HOMEZ 현재 값 중 실제로 존재하는(중복 제거한)
@@ -2298,7 +2304,11 @@
         <td data-label="${escapeHtml(HomezI18n.t("pac.col_selection"))}">
           ${resolved
             ? escapeHtml(item.selected_value ?? "—")
-            : (pacNeedsSelection(item) ? pacSelectionInputHtml(item) : "—")}
+            : (pacNeedsSelection(item)
+              ? pacSelectionInputHtml(item)
+              : (pacIsNonBlockingUnconfirmed(item)
+                ? `<span class="field-hint">${escapeHtml(HomezI18n.t("pac.non_blocking_unconfirmed"))}</span>`
+                : "—"))}
         </td>
       </tr>
     `).join("");
@@ -2312,6 +2322,7 @@
         <dl class="kv-list">
           <dt>${escapeHtml(HomezI18n.t("pac.col_created_at"))}</dt><dd>${fmtDate(run.created_at)}</dd>
           ${run.resolved_at ? `<dt>${escapeHtml(HomezI18n.t("pac.detail_resolved_at"))}</dt><dd>${fmtDate(run.resolved_at)}</dd>` : ""}
+          ${run.covered_by_run_id ? `<dt>${escapeHtml(HomezI18n.t("pac.detail_covered_by"))}</dt><dd>${escapeHtml(HomezI18n.t("pac.covered_by_value", { id: run.covered_by_run_id }))}</dd>` : ""}
           ${run.resolution_note ? `<dt>${escapeHtml(HomezI18n.t("pac.detail_resolution_note"))}</dt><dd>${escapeHtml(run.resolution_note)}</dd>` : ""}
         </dl>
       </div>
@@ -4268,6 +4279,7 @@
           <dt>${escapeHtml(HomezI18n.t("retail_purchase.attr_brand"))}</dt><dd>${escapeHtml(task.brand || "—")}</dd>
           <dt>${escapeHtml(HomezI18n.t("retail_purchase.attr_model"))}</dt><dd>${escapeHtml(task.model_name || "—")}</dd>
           <dt>${escapeHtml(HomezI18n.t("purchase_task.field_coupang_sale_amount"))}</dt><dd>${task.coupang_sale_amount ?? "—"}</dd>
+          <dt>${escapeHtml(HomezI18n.t("purchase_task.field_task_fee_amount_estimate"))}</dt><dd>${task.coupang_fee_amount ?? "—"}</dd>
           <dt>${escapeHtml(HomezI18n.t("purchase_task.field_expected_net_profit"))}</dt><dd>${task.expected_net_profit ?? "—"}</dd>
           <dt>${escapeHtml(HomezI18n.t("purchase_task.field_expected_margin_rate"))}</dt><dd>${task.expected_margin_rate === null || task.expected_margin_rate === undefined ? "—" : `${Math.round(task.expected_margin_rate * 10) / 10}%`}</dd>
           <dt>${escapeHtml(HomezI18n.t("purchase_task.field_purchase_deadline"))}</dt><dd>${fmtDate(task.purchase_deadline)}</dd>
@@ -4759,7 +4771,7 @@
       `;
     }
 
-    const needsShippingInput = !a || ["PENDING_SHIPPING_COST", "EXPIRED", "INVALIDATED_PRICE_CHANGE", "INVALIDATED_SHIPPING_CHANGE"].includes(a.status) || !a.matches_current_price;
+    const needsShippingInput = !a || ["PENDING_SHIPPING_COST", "EXPIRED", "INVALIDATED_PRICE_CHANGE", "INVALIDATED_SHIPPING_CHANGE", "INVALIDATED_POLICY_CHANGE"].includes(a.status) || !a.matches_current_price;
     const priceAndPointsKnown = review.product.estimated_item_amount !== null && review.product.estimated_item_amount !== undefined
       && review.point_balance.point_interpretable;
     const canFinalize = a && a.shipping_cost_amount !== null && a.shipping_cost_amount !== undefined
@@ -6157,6 +6169,11 @@
       el("pt-pol-reservation-hours").value = ptCurrentPolicy.budget_reservation_hours;
       el("pt-pol-require-return").checked = !!ptCurrentPolicy.require_return_allowed;
       el("pt-pol-password").value = "";
+      // 비워 두면 "무제한"이 아니라 권장 한도가 적용된다 — 값은 비운 채로 두고
+      // 안내만 placeholder로 보여 준다(placeholder가 정책값으로 저장되지 않는다).
+      el("pt-pol-per-order-max").placeholder = HomezI18n.t("purchase_task.policy_placeholder_per_order");
+      el("pt-pol-daily-limit").placeholder = HomezI18n.t("purchase_task.policy_placeholder_daily");
+      el("pt-pol-monthly-budget").placeholder = HomezI18n.t("purchase_task.policy_placeholder_monthly");
 
       const submitBtn = ptFreshButton("pt-policy-submit");
       const cancelBtn = ptFreshButton("pt-policy-cancel");
@@ -6181,6 +6198,44 @@
         const password = el("pt-pol-password").value;
         if (!password) {
           el("pt-policy-error").textContent = HomezI18n.t("ma.error_current_password_required");
+          return;
+        }
+        // 전체 폼 저장이므로, 실제로 바뀌는 항목을 이전→이후로 보여 주고
+        // 확인받는다 — 최소마진만 바꾸려다 다른 한도가 함께 바뀌는 일을
+        // 저장 전에 알아챌 수 있게 한다.
+        const policyFields = [
+          ["pt-pol-per-order-max", "per_order_max_amount", 1],
+          ["pt-pol-daily-limit", "daily_purchase_limit_amount", 1],
+          ["pt-pol-monthly-budget", "monthly_purchase_budget_amount", 1],
+          ["pt-pol-max-quantity", "max_quantity_per_product", 1],
+          ["pt-pol-min-profit", "min_net_profit", 1],
+          ["pt-pol-min-margin", "min_margin_rate", 100],
+          ["pt-pol-max-increase", "max_price_increase_rate", 100],
+          ["pt-pol-max-delivery", "max_delivery_days", 1],
+          ["pt-pol-min-match", "min_match_confidence", 1],
+          ["pt-pol-max-concurrent", "max_concurrent_tasks", 1],
+          ["pt-pol-reservation-hours", "budget_reservation_hours", 1],
+        ];
+        const unset = HomezI18n.t("purchase_task.policy_value_unset");
+        const changedLines = [];
+        policyFields.forEach(([id, key, scale]) => {
+          const before = ptCurrentPolicy[key] == null
+            ? null : Number((ptCurrentPolicy[key] * scale).toFixed(6));
+          const after = numOrNull(id);
+          if (before !== after) {
+            const label = el(id).closest("label").querySelector(".field-label").textContent;
+            changedLines.push(`${label}: ${before ?? unset} → ${after ?? unset}`);
+          }
+        });
+        if (!!ptCurrentPolicy.require_return_allowed !== el("pt-pol-require-return").checked) {
+          changedLines.push(
+            `${HomezI18n.t("retail_purchase.field_require_return_allowed")}: `
+            + `${!!ptCurrentPolicy.require_return_allowed} → ${el("pt-pol-require-return").checked}`,
+          );
+        }
+        if (changedLines.length && !window.confirm(
+          HomezI18n.t("purchase_task.policy_confirm_changes", { changes: changedLines.join("\n") }),
+        )) {
           return;
         }
         submitBtn.disabled = true;
@@ -12515,6 +12570,11 @@
                 <input type="text" class="lw-econ-input" data-key="${key}" placeholder="${HomezI18n.t(key === "ad_cost" ? "lw.econ_excluded_placeholder" : "lw.econ_unconfirmed_placeholder")}" value="${inp[key] ?? ""}">
               </label>`).join("")}
           </div>
+          <label class="field field-inline">
+            <input type="checkbox" class="lw-econ-use-fee-for-purchase" ${inp.use_channel_fee_for_purchase_estimate ? "checked" : ""}>
+            <span>${HomezI18n.t("lw.econ_use_fee_for_purchase")}</span>
+          </label>
+          <p class="stat-sub">${HomezI18n.t("lw.econ_use_fee_for_purchase_hint")}</p>
           ${res ? `
           ${(res.excluded_cost_fields || []).length ? `
           <p class="banner banner-info">${HomezI18n.t("lw.econ_excluded_banner", {
@@ -12555,6 +12615,11 @@
           const raw = input.value.trim();
           item[input.dataset.key] = raw === "" ? null : raw;
         });
+        // 발주 예상비용 사용 선택은 입력칸이 아니라 체크박스라 따로 담는다.
+        // (빠지면 저장할 때마다 선택이 사라진다.)
+        item.use_channel_fee_for_purchase_estimate = !!block.querySelector(
+          ".lw-econ-use-fee-for-purchase",
+        )?.checked;
         return item;
       });
       try {
@@ -13081,6 +13146,9 @@
     OPERATOR_APPROVAL_MODE_REQUIRED: "lw.live_blocker_mode",
     VALID_APPROVAL_REQUIRED: "lw.live_blocker_approval",
     APPROVED_PAYLOAD_CHANGED: "lw.live_blocker_payload_changed",
+    MIN_MARGIN_POLICY_NOT_MET: "lw.live_blocker_min_margin",
+    ECONOMICS_PROVISIONAL: "lw.live_blocker_economics_provisional",
+    ECONOMICS_REQUIRED: "lw.live_blocker_economics_required",
     CHANNEL_SELECTION_REQUIRED: "lw.live_blocker_selection",
     PUBLIC_IMAGE_URL_REQUIRED: "lw.live_blocker_public_image",
     REPRESENTATION_IMAGE_REQUIRED: "lw.live_blocker_representation_image",
@@ -13089,6 +13157,13 @@
     NOTICE_INFORMATION_REQUIRED: "lw.live_blocker_notice",
     ITEM_REQUIRED: "lw.live_blocker_item",
     PRODUCT_NAME_REQUIRED: "lw.live_blocker_product_name",
+    PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED: "lw.live_blocker_attr_mismatch",
+    SUPPLIER_SOURCE_IDENTIFIER_UNCLEAR: "lw.live_blocker_attr_identifier",
+    ATTRIBUTE_RESOLUTION_NOT_BOUND_TO_REGISTRATION: "lw.live_blocker_attr_not_bound",
+    SELLER_CONNECTION_NOT_FOUND: "lw.live_blocker_seller_not_found",
+    SELLER_CONNECTION_AMBIGUOUS: "lw.live_blocker_seller_ambiguous",
+    SELLER_CONNECTION_NOT_CONNECTED: "lw.live_blocker_seller_not_connected",
+    SELLER_CONNECTION_CHANGED_AFTER_APPROVAL: "lw.live_blocker_seller_changed",
   };
 
   function lwLiveStatusLabel(status) {
@@ -13625,6 +13700,9 @@
               <td>${c.status === "PENDING" && c.submission_id
                 ? `<button class="btn btn-secondary btn-sm lw-live-check-btn"
                      data-submission-id="${c.submission_id}">${HomezI18n.t("lw.live_preflight_btn")}</button>
+                   <button class="btn btn-secondary btn-sm lw-attr-record-btn"
+                     data-submission-id="${c.submission_id}"
+                     data-account-id="${c.marketplace_account_id}">${HomezI18n.t("lw.attr_record_btn")}</button>
                    <button class="btn btn-primary btn-sm lw-live-send-btn"
                      data-submission-id="${c.submission_id}" disabled>${HomezI18n.t("lw.live_send_btn")}</button>
                    <div class="field-hint lw-live-message" data-submission-id="${c.submission_id}"></div>`
@@ -13688,6 +13766,29 @@
           } catch (err) {
             sendButton.disabled = true;
             message.textContent = err.message || HomezI18n.t("lw.live_preflight_failed");
+            message.classList.add("field-error");
+          }
+        }));
+      });
+
+      // 지금 등록하려는 내용(상품명·옵션·구성수량·용량·제조사·원산지)을 저장된 공급처
+      // 조회 값과 한 속성 비교로 기록한다(새 비교 추가만, 외부 조회·전송 없음). 해소는
+      // 속성 비교 화면에서 사람이 한다.
+      content.querySelectorAll(".lw-attr-record-btn").forEach((button) => {
+        button.addEventListener("click", () => withButtonGuard(button, async () => {
+          const submissionId = button.dataset.submissionId;
+          const message = content.querySelector(
+            `.lw-live-message[data-submission-id="${submissionId}"]`,
+          );
+          try {
+            const run = await apiFetch(
+              `/listing-wizards/${lwState.wizard.id}/accounts/${button.dataset.accountId}/attribute-comparison`,
+              { method: "POST" },
+            );
+            toast(HomezI18n.t("lw.attr_record_done"), "success");
+            navigateTo("product-attr-comparison-detail", { id: run.id });
+          } catch (err) {
+            message.textContent = err.message || HomezI18n.t("lw.attr_record_failed");
             message.classList.add("field-error");
           }
         }));

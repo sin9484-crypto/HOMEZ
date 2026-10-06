@@ -149,20 +149,17 @@ class WizardOptionLinkBase(unittest.TestCase):
         entries[0]["required_fields"]["items"] = items
         self.wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
         self.db.commit()
+        # 2026-10-05 — 쿠팡 전송은 승인한 판매계정의 판매 연결이 있어야 하므로(전송 전 점검),
+        # 라이브 위저드 픽스처가 연결을 먼저 만들어 둔다. 여기서는 그 연결을 쓰고,
+        # store=False는 "등록 뒤에 이 판매계정의 연결이 없어진" 경우를 만든다.
+        connection = self.db.query(StoreConnection).filter_by(
+            company_id=self.company_id,
+        ).first()
         if store:
-            account = self.live.marketplace.get_account_for_company(
-                submission.marketplace_account_id, self.company_id,
-            )
-            channel = self.live.marketplace.get_channel(account.channel_id)
-            row = StoreConnection(
-                company_id=self.company_id, marketplace_code=channel.code,
-                seller_identifier=account.account_code, display_name="쿠팡",
-                connection_status="CONNECTED", created_by=1,
-                creation_idempotency_key="wiz-store", creation_request_fingerprint="f" * 64,
-            )
-            self.db.add(row)
+            self.store_id = connection.id
+        else:
+            self.db.delete(connection)
             self.db.commit()
-            self.store_id = row.id
         return submission
 
     def _view(self):

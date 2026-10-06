@@ -337,13 +337,25 @@ class DeleteConnectionTestCase(ChannelConnectionServiceTestCaseBase):
 
         super().setUp()
 
-        from app.domains.purchase_task.model import PurchaseRecord, PurchaseTask
+        from app.domains.product_attribute_match.model import (
+            ProductAttributeComparisonItem, ProductAttributeComparisonRun,
+        )
+        from app.domains.purchase_task.model import (
+            PurchaseRecord, PurchaseSalesApplicationAttempt, PurchaseTask,
+        )
 
         Base.metadata.create_all(
-            bind=self.engine, tables=[PurchaseTask.__table__, PurchaseRecord.__table__],
+            bind=self.engine, tables=[
+                PurchaseTask.__table__, PurchaseRecord.__table__,
+                PurchaseSalesApplicationAttempt.__table__,
+                ProductAttributeComparisonRun.__table__,
+                ProductAttributeComparisonItem.__table__,
+            ],
         )
         self.PurchaseTask = PurchaseTask
         self.PurchaseRecord = PurchaseRecord
+        self.PurchaseSalesApplicationAttempt = PurchaseSalesApplicationAttempt
+        self.ProductAttributeComparisonRun = ProductAttributeComparisonRun
 
     def test_delete_unused_connection_removes_row_and_events(self):
 
@@ -407,6 +419,73 @@ class DeleteConnectionTestCase(ChannelConnectionServiceTestCaseBase):
             self.service.delete_connection(c.id, self.company_a.id)
 
         self.assertIsNotNone(self.db.query(PurchaseChannelConnection).get(c.id))
+
+    def test_delete_blocked_when_connection_has_unresolved_attribute_comparison(self):
+        """미해소 BLOCKED 속성 비교가 이 연결의 id로 조회되므로, 연결을 지워
+        그 차단이 조회에서 사라지게 해서는 안 된다."""
+
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="비교 기록 있음",
+        )
+        ProductAttributeMatchService(self.db).run_comparison(
+            company_id=self.company_a.id, product_identifier="CH-X",
+            connection_id=c.id, supplier_values={}, sales_channel_values={},
+            homez_current_values={},
+        )
+        match = ProductAttributeMatchService(self.db)
+        self.assertTrue(
+            match.has_blocking_mismatch_for_supplier_source(
+                self.company_a.id, "ONCHANNEL:CH-X",
+            ),
+        )
+
+        with self.assertRaises(ConflictException):
+            self.service.delete_connection(c.id, self.company_a.id)
+
+        self.assertIsNotNone(self.db.query(PurchaseChannelConnection).get(c.id))
+        self.assertTrue(
+            match.has_blocking_mismatch_for_supplier_source(
+                self.company_a.id, "ONCHANNEL:CH-X",
+            ),
+        )
+
+    def test_delete_blocked_when_connection_has_sales_application_record(self):
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="판매신청 기록 있음",
+        )
+        self.db.add(self.PurchaseSalesApplicationAttempt(
+            company_id=self.company_a.id, connection_id=c.id,
+            mall_code="ONCHANNEL", product_code="CH-X", status="NEEDS_REVIEW",
+        ))
+        self.db.commit()
+
+        with self.assertRaises(ConflictException):
+            self.service.delete_connection(c.id, self.company_a.id)
+
+        self.assertIsNotNone(self.db.query(PurchaseChannelConnection).get(c.id))
+
+    def test_deactivating_connection_with_comparison_record_is_still_allowed(self):
+        """완전 삭제만 막는다 — "연결 해제"(비활성화)는 기록이 있어도 가능하다."""
+
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        c = self.service.create_connection(
+            self.company_a.id, mall_code="ONCHANNEL", account_label="해제 가능",
+        )
+        ProductAttributeMatchService(self.db).run_comparison(
+            company_id=self.company_a.id, product_identifier="CH-X",
+            connection_id=c.id, supplier_values={}, sales_channel_values={},
+            homez_current_values={},
+        )
+        self.service.deactivate_connection(c.id, self.company_a.id)
+        self.assertFalse(self.db.query(PurchaseChannelConnection).get(c.id).is_active)
 
     def test_delete_rejects_other_company(self):
 

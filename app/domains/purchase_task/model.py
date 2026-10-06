@@ -1211,7 +1211,50 @@ class SupplierOptionLink(Base):
     )
 
 
+class ChannelActionRequest(Base):
+    """2026-10-05 판매채널 외부 변경(판매중지·주문 취소)의 작업 장부 — 추가형 테이블 1개.
+
+    외부 요청을 보내기 전에 (회사, 동작, 대상) 한 행을 먼저 확정한다. 유일 제약이 같은
+    대상에 대한 동시 요청·재시작 후 재실행의 중복 호출을 막는 최종 방어선이다.
+    상태 의미는 `ChannelActionStatus` 참고. 비밀값·고객 개인정보는 저장하지 않는다
+    (`detail`은 공급처·쿠팡 응답의 code/message 요약만, 300자 제한)."""
+
+    __tablename__ = "channel_action_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "action_type", "target_key",
+            name="uq_channel_action_request_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # 논리 참조(store_connections.id) — 요청을 보낸 쿠팡 판매 연결.
+    store_connection_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    action_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # 대상 식별: SALE_STOP="vi:<vendorItemId>", ORDER_CANCEL="order:<주문번호>:box:<박스번호>".
+    target_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error_class: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    triggered_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+    )
+
+
 __all__ = [
+    "ChannelActionRequest",
     "PurchaseTask",
     "PurchaseTaskCandidate",
     "PurchaseTaskBudgetReservation",

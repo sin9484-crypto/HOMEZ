@@ -302,6 +302,15 @@ class EconomicsInputItem(BaseModel):
     return_reserve_rate: Decimal | None = Field(default=None, ge=0, le=1)
     tax_basis_rate: Decimal | None = Field(default=None, ge=0, le=1)
 
+    # 2026-10-04 — 이 판매계정의 채널수수료율을 **발주 예상비용에도** 써도
+    # 된다는 운영자의 명시적 선택. 기본은 False(미승인). 이 입력은 위저드
+    # 8단계 승인 패키지(재인증·지문·승인 이력)에 함께 들어가므로 승인한
+    # 운영자·시점이 남고, 이 판매계정 항목에만 적용되며(다른 계정·회사에
+    # 확대 안 됨), 승인을 취소하면 효력도 사라진다. 요율 자체가 검증됐다는
+    # 뜻이 아니라 "채택한 예상 요율을 발주 예상비용에 써도 된다"는 뜻이다.
+    # 마진 계산에는 영향이 없다.
+    use_channel_fee_for_purchase_estimate: bool = False
+
     model_config = ConfigDict(extra="forbid")
 
 

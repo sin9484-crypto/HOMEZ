@@ -185,4 +185,99 @@ def build_coupang_live_payload(
     return {k: v for k, v in payload.items() if v is not None}, []
 
 
-__all__ = ["build_coupang_live_payload"]
+_ATTRIBUTE_VALUE_MAX_LENGTH = 300  # product_attribute_comparison_items 값 칸 길이
+
+# 구매옵션 속성 이름(쿠팡 카테고리 메타데이터의 attributeTypeName). 수량은 상품
+# 구성수량(구매옵션 "수량")이며 unitCount·maximumBuyCount와 다른 값이다.
+_QUANTITY_ATTRIBUTE_NAMES = ("수량",)
+_SIZE_ATTRIBUTE_NAMES = ("개당 용량", "개당 중량", "용량", "중량")
+_MANUFACTURER_NOTICE_KEYWORDS = ("제조업자", "제조자", "제조사", "제조원")
+_ORIGIN_NOTICE_KEYWORDS = ("제조국", "원산지")
+
+
+def _clip(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    return text[:_ATTRIBUTE_VALUE_MAX_LENGTH]
+
+
+def extract_registration_attribute_values(
+    payload: dict[str, Any],
+) -> dict[str, str | None]:
+    """실제로 쿠팡에 보낼 payload(`build_coupang_live_payload`의 결과)에서 속성 비교 대상
+    값을 뽑는다. 위저드 입력이 아니라 **최종 payload**를 기준으로 하므로, 비교가
+    확인한 내용과 실제 등록되는 내용이 같은 출처에서 나온다. 값이 없으면 None이며
+    추측으로 채우지 않는다.
+
+    * NAME: sellerProductName
+    * OPTIONS: 각 item의 itemName과 externalVendorSku
+    * QUANTITY: 각 item의 구매옵션 "수량" 속성 — unitCount·maximumBuyCount·주문 수량이
+      아니다(그 값으로 대체하지 않는다)
+    * SIZE: 구매옵션의 개당 용량/중량 속성과 정보고시의 용량(중량)
+    * MANUFACTURER: payload.manufacture, 정보고시의 제조업자/제조자/제조사 항목
+    * ORIGIN_COUNTRY: 정보고시의 제조국/원산지 항목
+
+    정보고시 항목 이름으로 찾지 못하는 카테고리는 해당 필드가 None이 되어(= 확인 불가)
+    비교에서 계속 확인 필요로 남는다.
+    """
+
+    items = payload.get("items") or []
+
+    def _attr_values(names: tuple[str, ...]) -> list[str]:
+        found: list[str] = []
+        for item in items:
+            row = "(없음)"
+            for attribute in item.get("attributes") or []:
+                if str(attribute.get("attributeTypeName")) in names:
+                    row = f'{attribute.get("attributeTypeName")}={attribute.get("attributeValueName")}'
+                    break
+            found.append(row)
+        return found
+
+    def _notice_values(keywords: tuple[str, ...]) -> list[str]:
+        if not items:
+            return []
+        return [
+            f'{notice.get("noticeCategoryDetailName")}={notice.get("content")}'
+            for notice in (items[0].get("notices") or [])
+            if any(
+                keyword in str(notice.get("noticeCategoryDetailName") or "")
+                for keyword in keywords
+            )
+        ]
+
+    quantity_rows = _attr_values(_QUANTITY_ATTRIBUTE_NAMES)
+    quantity = (
+        " | ".join(quantity_rows)
+        if any(row != "(없음)" for row in quantity_rows) else None
+    )
+
+    size_parts: list[str] = []
+    for item in items:
+        for attribute in item.get("attributes") or []:
+            if str(attribute.get("attributeTypeName")) in _SIZE_ATTRIBUTE_NAMES:
+                size_parts.append(
+                    f'{attribute.get("attributeTypeName")}={attribute.get("attributeValueName")}',
+                )
+    size_parts.extend(_notice_values(("용량", "중량")))
+
+    manufacturer_parts = []
+    if payload.get("manufacture"):
+        manufacturer_parts.append(f'manufacture={payload["manufacture"]}')
+    manufacturer_parts.extend(_notice_values(_MANUFACTURER_NOTICE_KEYWORDS))
+
+    return {
+        "NAME": _clip(payload.get("sellerProductName")),
+        "OPTIONS": _clip(" | ".join(
+            f'{item.get("itemName")} [{item.get("externalVendorSku")}]'
+            for item in items
+        )),
+        "QUANTITY": _clip(quantity),
+        "SIZE": _clip(" | ".join(size_parts)),
+        "MANUFACTURER": _clip(" | ".join(manufacturer_parts)),
+        "ORIGIN_COUNTRY": _clip(" | ".join(_notice_values(_ORIGIN_NOTICE_KEYWORDS))),
+    }
+
+
+__all__ = ["build_coupang_live_payload", "extract_registration_attribute_values"]

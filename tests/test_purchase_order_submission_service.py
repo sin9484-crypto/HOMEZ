@@ -1683,8 +1683,9 @@ class _FakeProductOption:
 
 class _FakeProductResult:
 
-    def __init__(self, *, support="SUPPORTED", options=()):
+    def __init__(self, *, support="SUPPORTED", options=(), status=None):
         self.support = support
+        self.status = status
         self.external_product_id = "CH1234567"
         self.title = "테스트 상품"
         self.options = options
@@ -1912,6 +1913,167 @@ class PointBalanceGateTestCase(OrderSubmissionServiceTestCaseBase):
             )
         self.assertIn("승인", str(ctx.exception))
 
+    def test_explicit_supplier_stop_sale_does_not_order_and_starts_stop_sale_handling(self):
+        """2026-10-05 — 공급처가 판매중단(상태 3)을 명시하면 발주하지 않고
+        판매중지·주문 취소 처리 서비스가 한 번 호출된다."""
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+            product_result=_FakeProductResult(status="3"),
+        )
+
+        with mock.patch(
+            "app.domains.purchase_task.supplier_stop_sale_service."
+            "SupplierStopSaleService.handle_explicit_stop_sale",
+        ) as handler:
+            handler.return_value.summary.return_value = "요약"
+            with self.assertRaises(ConflictException) as ctx:
+                self.service.submit_order(
+                    connection.id, self.company_a.id, idempotency_key="k-stop-sale",
+                    confirm_real_submission=True, confirmed_first_application=True,
+                    **VALID_KWARGS,
+                )
+
+        self.assertIn("판매중단을 명시", str(ctx.exception))
+        handler.assert_called_once()
+        kwargs = handler.call_args.kwargs
+        self.assertEqual(kwargs["company_id"], self.company_a.id)
+        self.assertEqual(kwargs["connection_id"], connection.id)
+        self.assertEqual(kwargs["product_code"], VALID_KWARGS["product_code"])
+        self.assertEqual(kwargs["supplier_status"], "3")
+
+    def test_lookup_error_unsupported_or_other_status_never_triggers_stop_sale(self):
+        """통신·인증 오류, 미지원 응답, 판매중단이 아닌 상태는 판매중지 처리를
+        시작하지 않는다(발주 차단 사유만 다르다)."""
+
+        connection = self._make_ready_connection()
+        cases = (
+            ("error", dict(product_error=RuntimeError("timeout"))),
+            ("unsupported", dict(product_result=_FakeProductResult(
+                support="UNKNOWN", status="3"))),
+            ("status-1", dict(product_result=_FakeProductResult(status="1"))),
+            ("status-none", dict(product_result=_FakeProductResult(status=None))),
+        )
+        for label, kwargs in cases:
+            self._install_point_and_product_adapter(
+                point_result=_FakePointResult(point=1_000_000), **kwargs,
+            )
+            with mock.patch(
+                "app.domains.purchase_task.supplier_stop_sale_service."
+                "SupplierStopSaleService.handle_explicit_stop_sale",
+            ) as handler:
+                with self.assertRaises(Exception):
+                    self.service.submit_order(
+                        connection.id, self.company_a.id, idempotency_key=f"k-nostop-{label}",
+                        confirm_real_submission=True, confirmed_first_application=True,
+                        **VALID_KWARGS,
+                    )
+            handler.assert_not_called()
+
+    _HANDLER = (
+        "app.domains.purchase_task.supplier_stop_sale_service."
+        "SupplierStopSaleService.handle_explicit_stop_sale"
+    )
+
+    def test_stop_sale_is_detected_even_when_other_order_gates_would_block_first(self):
+        """2026-10-05 — 발주 허용 게이트(판매신청 미확인·포인트 조회 실패)가 먼저 막더라도
+        공급처의 명시적 판매중단 감지는 실행된다. 감지는 읽기 전용이며 발주를 허용하지 않는다."""
+
+        connection = self._make_ready_connection()
+        base = dict(
+            idempotency_key="k-detect-first", confirm_real_submission=True, **VALID_KWARGS,
+        )
+
+        # (a) 내부 판매신청 기록이 없고 최초 신청 확인도 없는 상태 — 평소엔 판매신청 게이트가 막는다
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+            product_result=_FakeProductResult(status="1"),
+        )
+        with self.assertRaises(ConflictException) as control:
+            self.service.submit_order(connection.id, self.company_a.id, **base)
+        self.assertIn("판매신청", str(control.exception))  # 대조군: 판매중단이 아니면 기존 게이트
+
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+            product_result=_FakeProductResult(status="3"),
+        )
+        with mock.patch(self._HANDLER) as handler:
+            handler.return_value.summary.return_value = "요약"
+            with self.assertRaises(ConflictException) as ctx:
+                self.service.submit_order(connection.id, self.company_a.id, **base)
+        self.assertIn("판매중단을 명시", str(ctx.exception))
+        handler.assert_called_once()
+
+        # (b) 포인트 조회가 실패하는 상태 — 포인트 게이트보다 앞에서 감지된다
+        self._install_point_and_product_adapter(
+            point_error=RuntimeError("point down"),
+            product_result=_FakeProductResult(status="3"),
+        )
+        with mock.patch(self._HANDLER) as handler:
+            handler.return_value.summary.return_value = "요약"
+            with self.assertRaises(ConflictException) as ctx:
+                self.service.submit_order(
+                    connection.id, self.company_a.id, confirmed_first_application=True, **base)
+        self.assertIn("판매중단을 명시", str(ctx.exception))
+        handler.assert_called_once()
+
+    def test_detection_never_runs_when_emergency_stop_or_purchase_function_is_halted(self):
+        """비상정지와 매입 발주 기능 일시중지는 이 진입점 앞에서 막힌다 — 공급처 조회도 하지 않는다."""
+
+        from app.domains.automation_safety.constants import FunctionCode
+        from app.domains.automation_safety.constants import FunctionMode
+        from app.domains.automation_safety.model import FunctionAutomationState
+        from app.domains.automation_safety.service import SafetyService
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+            product_result=_FakeProductResult(status="3"),
+        )
+        kwargs = dict(
+            idempotency_key="k-halted", confirm_real_submission=True,
+            confirmed_first_application=True, **VALID_KWARGS,
+        )
+        detect = (
+            "app.domains.purchase_task.supplier_stop_sale_service."
+            "SupplierStopSaleService.detect_and_handle"
+        )
+
+        self.db.add(FunctionAutomationState(
+            company_id=self.company_a.id, function_code=FunctionCode.PURCHASE_ORDER,
+            mode=FunctionMode.PAUSED, set_by=1,
+        ))
+        self.db.commit()
+        with mock.patch(detect) as detector:
+            with self.assertRaises(ConflictException):
+                self.service.submit_order(connection.id, self.company_a.id, **kwargs)
+        detector.assert_not_called()
+
+        self.db.query(FunctionAutomationState).delete()
+        self.db.commit()
+        SafetyService(self.db).activate_emergency_stop("test", set_by=1, is_admin=True)
+        with mock.patch(detect) as detector:
+            with self.assertRaises(ConflictException):
+                self.service.submit_order(connection.id, self.company_a.id, **kwargs)
+        detector.assert_not_called()
+
+    def test_stop_sale_detection_does_not_allow_ordering(self):
+        """판매중단 감지는 공급 불가 확인일 뿐 발주 허용이 아니다 — 판매중단이 아니어도
+        기존 금전 안전 게이트(판매신청·포인트·승인)는 그대로 발주를 막는다."""
+
+        connection = self._make_ready_connection()
+        self._install_point_and_product_adapter(
+            point_result=_FakePointResult(point=1_000_000),
+            product_result=_FakeProductResult(status="1"),
+        )
+        with self.assertRaises(ConflictException):
+            self.service.submit_order(
+                connection.id, self.company_a.id, idempotency_key="k-no-allow",
+                confirm_real_submission=True, confirmed_first_application=True, **VALID_KWARGS,
+            )
+        self.assertEqual(self.db.query(PurchaseOrderSubmissionAttempt).count(), 0)
+
 
 class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
     """2026-09-11 신규(반자동 완료 라운드 Phase 5·7) — 유효한 사용자
@@ -1960,6 +2122,27 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
     ):
 
         from datetime import datetime, timedelta
+
+        # 2026-10-04 — 발주 직전 재검증이 작업의 판매금액·수수료로 현재
+        # 정책 마진을 다시 판정하므로, 승인만 있고 작업이 없는 상태는
+        # 더 이상 통과하지 않는다(fail-closed). 이 헬퍼를 쓰는 테스트는
+        # 마진이 아니라 다른 게이트를 검증하므로 충분히 높은 마진의
+        # 작업 행을 함께 만든다.
+        if (
+            self.db.query(PurchaseTask)
+            .filter(
+                PurchaseTask.id == purchase_task_id,
+                PurchaseTask.company_id == self.company_a.id,
+            ).first() is None
+        ):
+            self.db.add(PurchaseTask(
+                id=purchase_task_id, company_id=self.company_a.id,
+                source_order_id=purchase_task_id,
+                product_title="승인 테스트 상품",
+                idempotency_key=f"approval-helper-task-{purchase_task_id}",
+                coupang_sale_amount=100000.0, coupang_fee_amount=5000.0,
+            ))
+            self.db.commit()
 
         approval = PurchaseOrderApproval(
             company_id=self.company_a.id, connection_id=connection_id,
@@ -2119,10 +2302,14 @@ class OrderApprovalGateIntegrationTestCase(OrderSubmissionServiceTestCaseBase):
     # 끊긴다(record_purchase()는 이 트랙에서 전혀 호출되지 않는다).
 
     def _create_task(self, *, task_id, status=PurchaseTaskStatus.SEARCH_REQUIRED):
+        # 2026-10-04 — 발주 직전 재판정이 판매금액·수수료로 현재 정책 마진을
+        # 다시 계산하므로, 마진이 아닌 다른 동작을 검증하는 이 작업에도
+        # 충분히 높은 마진의 금액을 둔다(없으면 fail-closed로 막힘).
         task = PurchaseTask(
             id=task_id, company_id=self.company_a.id, source_order_id=1,
             product_title="테스트 상품", idempotency_key=f"task-{task_id}",
             status=status,
+            coupang_sale_amount=100000.0, coupang_fee_amount=5000.0,
         )
         self.db.add(task)
         self.db.commit()
@@ -2336,6 +2523,7 @@ class OnchannelSpendLimitProtectionTestCase(OrderApprovalGateIntegrationTestCase
             id=task_id, company_id=company.id, source_order_id=task_id,
             product_title="테스트 상품", idempotency_key=f"task-{task_id}",
             status=status,
+            coupang_sale_amount=100000.0, coupang_fee_amount=5000.0,
         )
         self.db.add(task)
         self.db.commit()

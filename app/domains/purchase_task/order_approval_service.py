@@ -397,49 +397,11 @@ class PurchaseOrderApprovalService:
                     f"— 현재 진행 중 {open_count}건.",
                 )
 
-        margin_amount = None
-        margin_rate = None
-        if task.coupang_sale_amount is not None and task.coupang_fee_amount is not None:
-            from app.domains.purchase_task.margin_calculator import (
-                CandidateCostInput, calculate_margin,
-            )
-
-            cost_input = CandidateCostInput(
-                candidate_id=0,
-                estimated_price=Decimal(str(item_amount)),
-                estimated_shipping_fee=Decimal(str(approval.shipping_cost_amount)),
-            )
-            result = calculate_margin(
-                cost_input,
-                coupang_sale_amount=Decimal(str(task.coupang_sale_amount)),
-                coupang_fee_amount=Decimal(str(task.coupang_fee_amount)),
-            )
-            margin_amount = int(result.expected_net_profit)
-            margin_rate = float(result.expected_margin_rate) / 100
-
-            min_margin_rate = (
-                setting.min_margin_rate
-                if setting.min_margin_rate is not None else RECOMMENDED_MIN_MARGIN_RATE
-            )
-            min_net_profit = (
-                setting.min_net_profit
-                if setting.min_net_profit is not None else RECOMMENDED_MIN_NET_PROFIT
-            )
-            if margin_rate < min_margin_rate:
-                blocked_reasons.append(
-                    f"예상 마진율({margin_rate * 100:.1f}%)이 최소 기준"
-                    f"({min_margin_rate * 100:.1f}%) 미달.",
-                )
-            if margin_amount < min_net_profit:
-                blocked_reasons.append(
-                    f"예상 순이익금({margin_amount}원)이 최소 기준"
-                    f"({int(min_net_profit)}원) 미달.",
-                )
-        else:
-            blocked_reasons.append(
-                "원 쿠팡 주문의 판매금액·수수료 정보가 없어 마진을 계산할 "
-                "수 없습니다 — 0으로 추정하지 않고 차단합니다.",
-            )
+        margin_amount, margin_rate, margin_reasons = self._margin_policy_reasons(
+            task, setting, item_amount, approval.shipping_cost_amount,
+        )
+        blocked_reasons.extend(margin_reasons)
+        blocked_reasons.extend(self._quantity_policy_reasons(setting, options))
 
         approval.item_amount_snapshot = item_amount
         approval.required_points_snapshot = required_points
@@ -670,7 +632,132 @@ class PurchaseOrderApprovalService:
             raise ConflictException(
                 "발주 직전 재검증에서 조건이 변경되었습니다: " + ", ".join(blocked),
             )
+
+        # 2026-10-04 — 승인 이후 최소마진 기준 등 정책이 바뀌었어도 이미
+        # 받은 승인이 새 기준을 우회하지 못하게, 외부 전송 직전에 현재
+        # 정책으로 마진을 다시 판정한다(승인 스냅샷은 바꾸지 않는다).
+        from app.domains.purchase_task.model import PurchaseTask
+
+        task = (
+            self.db.query(PurchaseTask)
+            .filter(
+                PurchaseTask.id == purchase_task_id,
+                PurchaseTask.company_id == company_id,
+            )
+            .first()
+        )
+        if task is None:
+            raise NotFoundException("매입 작업을 찾을 수 없습니다.")
+        _amount, _rate, margin_reasons = self._margin_policy_reasons(
+            task, setting, current_item_amount,
+            approval.shipping_cost_amount or 0,
+        )
+        margin_reasons = margin_reasons + self._quantity_policy_reasons(
+            setting, current_options,
+        )
+        if margin_reasons:
+            approval.status = PurchaseOrderApprovalStatus.INVALIDATED_POLICY_CHANGE
+            approval.invalidated_reason = (
+                "발주 직전 재판정에서 현재 정책 기준에 맞지 않습니다: "
+                + " / ".join(margin_reasons)
+            )
+            self.db.commit()
+            raise ConflictException(approval.invalidated_reason)
         return approval
+
+    @staticmethod
+    def _quantity_policy_reasons(setting, options) -> list[str]:
+        """상품별 최대 구매수량(max_quantity_per_product)을 실제 구매하려는
+        수량(옵션 수량 합)으로 다시 판정한다.
+
+        이전에는 후보 평가 단계(policy_service.evaluate)에서만 검사해, 후보
+        선정 뒤 수량이 늘거나 한도가 줄어도 최종 승인·발주 직전에는
+        걸리지 않았다. null이면 기존처럼 수량 제한이 없다(후보 평가와 같은
+        의미, 권장 기본값을 적용하지 않는다). 옵션 수량을 모르면(options가
+        None) 검사할 수 없으므로 건너뛴다 — 호출부가 알려 주지 않은 값을
+        추측하지 않는다."""
+
+        limit = getattr(setting, "max_quantity_per_product", None)
+        if limit is None or options is None:
+            return []
+        total_qty = 0
+        for option in options:
+            qty = option.get("qty") if isinstance(option, dict) else None
+            if isinstance(qty, int) and not isinstance(qty, bool):
+                total_qty += qty
+        if total_qty > limit:
+            return [
+                f"상품별 최대 구매수량({limit}개) 초과 — 요청 수량 {total_qty}개.",
+            ]
+        return []
+
+    def _margin_policy_reasons(
+        self, task, setting, item_amount: int, shipping_cost_amount: int,
+    ) -> tuple[int | None, float | None, list[str]]:
+        """최종 승인과 발주 직전 재검증이 같은 마진 판정을 쓴다.
+
+        2026-10-04 — (1) 판정은 반올림·float 없는 Decimal로 한다(기준율 ×
+        판매금액 − 순이익 > 0이면 미달). (2) 후보 평가(`PurchaseTaskService.
+        select_candidate`)와 같은 비용 정의가 되도록 정책의 기본 추가
+        배송비·기본 반품위험 충당금(원 단위 금액)도 함께 반영한다 — 이전에는
+        최종 승인만 이 둘을 빼 두 게이트의 마진이 달랐다. 판매금액·수수료
+        금액이 없으면 0으로 추정하지 않고 차단한다. 위저드의 마진(수수료율·
+        반품준비율·포장비·세금 포함)과는 비용 정의가 다르다는 점은 바뀌지
+        않는다."""
+
+        if task.coupang_sale_amount is None or task.coupang_fee_amount is None:
+            return None, None, [
+                "원 쿠팡 주문의 판매금액·수수료 정보가 없어 마진을 계산할 "
+                "수 없습니다 — 0으로 추정하지 않고 차단합니다.",
+            ]
+
+        from app.domains.purchase_task.margin_calculator import (
+            CandidateCostInput, calculate_margin, min_margin_shortfall,
+        )
+
+        cost_input = CandidateCostInput(
+            candidate_id=0,
+            estimated_price=Decimal(str(item_amount)),
+            estimated_shipping_fee=Decimal(str(shipping_cost_amount)),
+        )
+        sale_amount = Decimal(str(task.coupang_sale_amount))
+        result = calculate_margin(
+            cost_input,
+            coupang_sale_amount=sale_amount,
+            coupang_fee_amount=Decimal(str(task.coupang_fee_amount)),
+            additional_shipping_fee=Decimal(
+                str(setting.default_additional_shipping_fee or 0),
+            ),
+            return_risk_reserve=Decimal(
+                str(setting.default_return_risk_reserve or 0),
+            ),
+        )
+        margin_amount = int(result.expected_net_profit)
+        margin_rate = float(result.expected_margin_rate) / 100
+
+        reasons: list[str] = []
+        min_margin_rate = (
+            setting.min_margin_rate
+            if setting.min_margin_rate is not None else RECOMMENDED_MIN_MARGIN_RATE
+        )
+        min_net_profit = (
+            setting.min_net_profit
+            if setting.min_net_profit is not None else RECOMMENDED_MIN_NET_PROFIT
+        )
+        if min_margin_shortfall(
+            result.expected_net_profit, sale_amount,
+            Decimal(str(min_margin_rate)),
+        ) > 0:
+            reasons.append(
+                f"예상 마진율({margin_rate * 100:.1f}%)이 최소 기준"
+                f"({min_margin_rate * 100:.1f}%) 미달.",
+            )
+        if result.expected_net_profit < Decimal(str(min_net_profit)):
+            reasons.append(
+                f"예상 순이익금({margin_amount}원)이 최소 기준"
+                f"({int(min_net_profit)}원) 미달.",
+            )
+        return margin_amount, margin_rate, reasons
 
     @_synchronized(_finalize_approval_lock)
     def mark_consumed(self, approval: PurchaseOrderApproval) -> None:

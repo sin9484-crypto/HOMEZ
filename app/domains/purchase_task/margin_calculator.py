@@ -88,6 +88,17 @@ def calculate_margin(
     )
 
 
+def min_margin_shortfall(
+    expected_net_profit: Decimal, coupang_sale_amount: Decimal,
+    min_margin_rate: Decimal,
+) -> Decimal:
+    """최소마진 기준에 모자란 금액(반올림·float 없는 Decimal). 0 이하면
+    기준 충족, 양수면 미달. `기준율 × 판매금액 − 예상 순이익`을 직접
+    비교하므로 퍼센트 환산이나 float 변환에서 생기는 오차가 없다."""
+
+    return min_margin_rate * coupang_sale_amount - expected_net_profit
+
+
 def rank_candidates(
     results: list[MarginResult], candidates: list[CandidateCostInput],
     *, min_net_profit: Decimal | None = None,

@@ -300,6 +300,22 @@ EVENT_CATALOG: dict[str, NotificationEventDefinition] = {
                 "supplier sellability could not be confirmed."
             ),
         ),
+        # 2026-10-05 — 공급처가 상품 판매중단을 명시해 발주하지 않고
+        # 판매중지·미출고 주문 취소 처리를 시작/준비한 사건.
+        _e(
+            "SUPPLIER_STOP_SALE_CONFIRMED", NotificationCategory.PRODUCT,
+            NotificationSeverity.HIGH, default_email_immediate=True,
+            wired=True,
+            description_ko=(
+                "공급처가 상품 판매중단을 명시해 발주하지 않았습니다. "
+                "판매중지·주문 취소 처리 결과와 확인이 필요한 주문을 "
+                "직접 확인해 주세요."
+            ),
+            description_en=(
+                "The supplier explicitly stopped selling a product, so no "
+                "order was placed. Review the stop-sale and cancellation results."
+            ),
+        ),
         _e(
             "SUPPLIER_LOOKUP_REPEATED_FAILURE", NotificationCategory.SECURITY,
             NotificationSeverity.HIGH, default_email_immediate=True,

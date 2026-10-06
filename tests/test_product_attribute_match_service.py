@@ -29,6 +29,7 @@ from app.domains.product_attribute_match.constants import AttributeMatchStatus
 from app.domains.product_attribute_match.constants import ComparisonRunStatus
 from app.domains.product_attribute_match.constants import ProductAttributeField
 from app.domains.product_attribute_match.service import ProductAttributeMatchService
+from app.domains.purchase_task.model import PurchaseChannelConnection
 from app.domains.role.model import Role  # noqa: F401 - Company relationship 등록용
 from app.domains.user.model import User
 
@@ -96,6 +97,123 @@ class ProductAttributeMatchServiceTestCase(unittest.TestCase):
             field: (name, "TEST", None) for field in ProductAttributeField.ALL
         }
         return values
+
+    # ------------------------------
+    # 공급처 상품 기준 조회(등록 직전 점검이 후보의 source_reference로 조회)
+    # ------------------------------
+
+    def _company_b(self):
+        other = Company(
+            name="다른 회사", business_number="888-88-88882", ceo="테스트",
+            phone="02-000-0001", email="other@example.com", address="테스트",
+        )
+        self.db.add(other)
+        self.db.commit()
+        return other
+
+    def _connection(self, company, mall_code="ONCHANNEL"):
+        row = PurchaseChannelConnection(
+            company_id=company.id, mall_code=mall_code,
+            connection_method="CREDENTIAL", account_label="테스트 계정",
+            status="CONNECTED",
+        )
+        self.db.add(row)
+        self.db.commit()
+        return row
+
+    def _run(self, company, code, connection, *, blocked=True, created_at=None):
+        values = {} if blocked else self._all_fields_matched()
+        run = self.service.run_comparison(
+            company_id=company.id, product_identifier=code,
+            connection_id=connection.id if connection is not None else None,
+            supplier_values=values,
+            sales_channel_values=values, homez_current_values=values,
+        )
+        if created_at is not None:
+            run.created_at = created_at
+            self.db.commit()
+        return run
+
+    def _blocking(self, company, ref="ONCHANNEL:CH-X"):
+        return self.service.has_blocking_mismatch_for_supplier_source(company.id, ref)
+
+    def test_parse_supplier_source_reference(self):
+
+        parse = ProductAttributeMatchService.parse_supplier_source_reference
+        self.assertEqual(parse("ONCHANNEL:CH1147184"), ("ONCHANNEL", "CH1147184"))
+        for unclear in (None, "", "ONCHANNEL", ":CH1", "ONCHANNEL:", "  :  "):
+            self.assertIsNone(parse(unclear), unclear)
+
+    def test_blocked_comparison_of_the_suppliers_product_is_found(self):
+
+        conn = self._connection(self.company)
+        self._run(self.company, "CH-X", conn, blocked=True)
+        self.assertTrue(self._blocking(self.company))
+
+    def test_resolved_blocked_comparison_no_longer_blocks(self):
+
+        conn = self._connection(self.company)
+        run = self._run(self.company, "CH-X", conn, blocked=True)
+        from datetime import datetime
+        run.resolved_at = datetime.utcnow()
+        run.resolved_by = self.admin.id
+        self.db.commit()
+        self.assertFalse(self._blocking(self.company))
+
+    def test_latest_run_decides_not_an_older_one(self):
+
+        from datetime import datetime, timedelta
+        conn = self._connection(self.company)
+        now = datetime.utcnow()
+        self._run(self.company, "CH-X", conn, blocked=True, created_at=now - timedelta(days=2))
+        self._run(self.company, "CH-X", conn, blocked=False, created_at=now - timedelta(days=1))
+        self.assertFalse(self._blocking(self.company))  # 나중에 통과한 비교가 최신
+
+        self._run(self.company, "CH-X", conn, blocked=True, created_at=now)
+        self.assertTrue(self._blocking(self.company))  # 그 뒤 다시 BLOCKED면 차단
+
+    def test_another_companys_blocked_run_never_leaks(self):
+
+        other = self._company_b()
+        other_conn = self._connection(other)
+        self._connection(self.company)  # 이 회사도 같은 매입처 연결은 있지만 기록은 없음
+        self._run(other, "CH-X", other_conn, blocked=True)
+        self.assertFalse(self._blocking(self.company))
+        self.assertTrue(self._blocking(other))
+
+    def test_same_code_on_a_different_supplier_mall_is_not_mixed(self):
+
+        onchannel = self._connection(self.company, "ONCHANNEL")
+        naver = self._connection(self.company, "NAVER_SHOPPING")
+        self._run(self.company, "CH-X", naver, blocked=True)
+        self.assertFalse(self._blocking(self.company, "ONCHANNEL:CH-X"))
+        self.assertTrue(self._blocking(self.company, "NAVER_SHOPPING:CH-X"))
+        self.assertIsNotNone(onchannel)
+
+    def test_run_without_a_connection_is_not_attributed_to_any_supplier(self):
+
+        self._connection(self.company)
+        self._run(self.company, "CH-X", None, blocked=True)
+        self.assertFalse(self._blocking(self.company))
+
+    def test_two_connections_of_the_same_mall_block_if_any_is_unresolved(self):
+        """어느 연결에서 온 상품인지 불명확하면 안전한 쪽(하나라도 미해소
+        BLOCKED면 차단)."""
+
+        from datetime import datetime, timedelta
+        first = self._connection(self.company)
+        second = self._connection(self.company)
+        now = datetime.utcnow()
+        self._run(self.company, "CH-X", first, blocked=False, created_at=now)
+        self._run(self.company, "CH-X", second, blocked=True, created_at=now - timedelta(hours=1))
+        self.assertTrue(self._blocking(self.company))
+
+    def test_unclear_mapping_or_no_runs_is_not_applicable(self):
+
+        self._connection(self.company)
+        for unclear in (None, "", "no-colon", "ONCHANNEL:"):
+            self.assertFalse(self._blocking(self.company, unclear), unclear)
+        self.assertFalse(self._blocking(self.company, "ONCHANNEL:NEVER-COMPARED"))
 
     # ------------------------------
     # 필드 비교 판정(MATCHED/MISMATCHED/UNCONFIRMED)
@@ -312,10 +430,11 @@ class ProductAttributeMatchServiceTestCase(unittest.TestCase):
             self.service.has_blocking_attribute_mismatch(self.company.id, "P10"),
         )
 
-    def test_new_comparison_after_resolution_can_block_again(self):
-        """과거 비교가 해소됐어도, 같은 상품을 다시 비교했을 때 또
-        불일치가 나오면 새로 차단한다(과거 해소가 영구 면제를 주지
-        않는다)."""
+    def test_new_comparison_with_changed_content_after_resolution_blocks_again(self):
+        """과거 비교가 해소됐어도, 같은 상품을 다시 비교했을 때 **비교 내용이
+        바뀌어** 또 불일치가 나오면 새로 차단한다(과거 해소가 영구 면제를 주지
+        않는다). 2026-10-05: 내용이 같은 재조회는 해소를 유지한다 — 아래
+        test_same_content_requery_keeps_the_resolution 참고."""
 
         first = self.service.run_comparison(
             company_id=self.company.id, product_identifier="P11",
@@ -334,7 +453,7 @@ class ProductAttributeMatchServiceTestCase(unittest.TestCase):
 
         self.service.run_comparison(
             company_id=self.company.id, product_identifier="P11",
-            supplier_values=self._all_fields_matched(),
+            supplier_values=self._all_fields_matched(name="바뀐 상품명"),
             sales_channel_values=_blank(*ProductAttributeField.ALL),
             homez_current_values=_blank(*ProductAttributeField.ALL),
         )

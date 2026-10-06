@@ -437,7 +437,7 @@ class ChannelPolicyEngineTestCase(unittest.TestCase):
     # --------------------------------------------------
 
     def test_effective_min_target_margin_rate_defaults_to_confirmed_policy(self):
-        """HOMEZ_USER_OPERATION_SETTINGS.md §6이 이미 확정한 15%를,
+        """HOMEZ_USER_OPERATION_SETTINGS.md §6이 확정한 최소 마진율(2026-10-04 사용자 지시로 18%)을,
         회사가 자체 값을 저장한 적이 없어도(company_channel_policy_
         settings에 행이 없어도) 조회 시점에 반환해야 한다 — "설정
         누락"과 "정책 자체가 없음"을 구분한다. 이 메서드 호출 자체는
@@ -446,7 +446,7 @@ class ChannelPolicyEngineTestCase(unittest.TestCase):
         from decimal import Decimal
 
         rate = self.service.get_effective_min_target_margin_rate(999)
-        self.assertEqual(rate, Decimal("0.15"))
+        self.assertEqual(rate, Decimal("0.18"))
         self.assertIsNone(self.service.get_or_default_settings(999))
 
     def test_effective_min_target_margin_rate_prefers_company_override(self):
@@ -524,6 +524,34 @@ class ChannelPolicyEngineTestCase(unittest.TestCase):
         self.assertFalse(margin.is_provisional)
         self.assertFalse(margin.meets_company_target)
         self.assertEqual(str(margin.company_target_margin_rate), "0.9000")
+
+    def test_margin_meets_company_target_uses_unrounded_value(self):
+        """2026-10-04 — 기준 18%에서 17.995%는 반올림 표시(0.1800)와
+        상관없이 미달이고, 정확히 18%와 그 위는 충족이다."""
+
+        self.service.upsert_settings(
+            1, updated_by=1,
+            data=UpdateCompanyChannelPolicySettingsRequest(
+                expected_version=0, min_target_margin_rate="0.18",
+            ),
+        )
+
+        def estimate(cost):
+            return self.service.estimate_margin(
+                1,
+                MarginEstimateInput(
+                    sale_price=10000, cost_of_goods=cost,
+                    channel_fee_rate="0", payment_fee_rate="0",
+                    shipping_cost=0, packaging_cost=0, ad_cost=0,
+                    return_reserve_rate="0", tax_basis_rate="0",
+                ),
+            )
+
+        below = estimate("8200.50")
+        self.assertEqual(str(below.margin_rate), "0.1800")  # 표시만 반올림
+        self.assertFalse(below.meets_company_target)
+        self.assertTrue(estimate("8200").meets_company_target)
+        self.assertTrue(estimate("8199.50").meets_company_target)
 
     def test_margin_target_none_when_settings_not_configured(self):
 

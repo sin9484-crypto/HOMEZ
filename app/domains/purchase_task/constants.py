@@ -757,12 +757,16 @@ class PurchaseOrderApprovalStatus:
     EXPIRED = "EXPIRED"
     INVALIDATED_PRICE_CHANGE = "INVALIDATED_PRICE_CHANGE"
     INVALIDATED_SHIPPING_CHANGE = "INVALIDATED_SHIPPING_CHANGE"
+    # 2026-10-04 — 승인 이후 최소마진 등 정책이 바뀌어 발주 직전 재판정에서
+    # 막힌 승인.
+    INVALIDATED_POLICY_CHANGE = "INVALIDATED_POLICY_CHANGE"
     CONSUMED = "CONSUMED"
     SUPERSEDED = "SUPERSEDED"
 
     ALL = (
         PENDING_SHIPPING_COST, ACTIVE, EXPIRED, INVALIDATED_PRICE_CHANGE,
-        INVALIDATED_SHIPPING_CHANGE, CONSUMED, SUPERSEDED,
+        INVALIDATED_SHIPPING_CHANGE, INVALIDATED_POLICY_CHANGE, CONSUMED,
+        SUPERSEDED,
     )
 
     # 실제 발주를 허용하는 유일한 상태.
@@ -832,13 +836,50 @@ RECOMMENDED_DAILY_PURCHASE_LIMIT_AMOUNT = 100_000
 # PurchaseTask 생성 시점의 policy_service.evaluate()에서만 한 번
 # 확인되고 이 최종 게이트에서는 재확인되지 않았다).
 RECOMMENDED_MONTHLY_PURCHASE_BUDGET_AMOUNT = 500_000
-RECOMMENDED_MIN_MARGIN_RATE = 0.15
+# 2026-10-04 — 사용자 지시로 최소 예상 마진율 정책 15% → 18%(HOMEZ_USER_
+# OPERATION_SETTINGS.md §6). 회사 설정(min_margin_rate)이 비어 있을 때만
+# 쓰이는 기본값이다. 실제 회사 설정값은 이 상수를 따라 바뀌지 않는다.
+RECOMMENDED_MIN_MARGIN_RATE = 0.18
 RECOMMENDED_MIN_NET_PROFIT = 5_000
 RECOMMENDED_MIN_RESIDUAL_POINTS = 100_000
 RECOMMENDED_APPROVAL_VALIDITY_MINUTES = 10
 
 
+class ChannelActionType:
+    """2026-10-05 — 판매채널에 실제로 외부 변경을 보내는 동작의 종류(작업 장부)."""
+
+    SALE_STOP = "SALE_STOP"          # 쿠팡 옵션(vendorItemId) 판매중지
+    ORDER_CANCEL = "ORDER_CANCEL"    # 쿠팡 고객 주문(발주서) 품목 취소
+
+    ALL = (SALE_STOP, ORDER_CANCEL)
+
+
+class ChannelActionStatus:
+    """작업 장부 상태. 외부 요청을 보내기 **전에** REQUESTING을 먼저 확정(commit)한다 —
+    그래서 외부 성공 직후 프로세스가 죽거나 내부 저장이 실패해도 다음 실행은 이
+    장부를 보고 같은 요청을 다시 보내지 않는다(REQUESTING으로 남은 행은 결과불명)."""
+
+    REQUESTING = "REQUESTING"            # 요청 직전/진행 중(남아 있으면 결과불명으로 취급)
+    SUCCEEDED = "SUCCEEDED"              # 외부 성공 확인
+    RETRYABLE = "RETRYABLE"              # 적용되지 않았음이 확실하고 다시 시도해도 되는 오류(429)
+    ACTION_REQUIRED = "ACTION_REQUIRED"  # 요청·권한·미지원·상태 오류 — 원인 해결 전 자동 반복 금지
+    UNKNOWN = "UNKNOWN"                  # 적용 여부 불명 — 자동 재요청 금지, 조회·대조로만 확인
+
+    ALL = (REQUESTING, SUCCEEDED, RETRYABLE, ACTION_REQUIRED, UNKNOWN)
+
+
+class ChannelActionPolicy:
+    """재시도 가능한 오류(RETRYABLE)에만 적용하는 횟수·간격. 호출은 사건이 다시 처리될 때만
+    일어난다(별도 스케줄러 없음). 쿠팡 공식 문서에 호출 한도 수치가 없어 보수적으로 둔다."""
+
+    MAX_ATTEMPTS = 3
+    RETRY_DELAYS_SECONDS = (900, 3600)  # 1회 실패 후 15분, 2회 실패 후 60분
+
+
 __all__ = [
+    "ChannelActionType",
+    "ChannelActionStatus",
+    "ChannelActionPolicy",
     "PurchaseTaskStatus",
     "ShoppingMallCode",
     "PurchaseTaskCandidateMatchTier",

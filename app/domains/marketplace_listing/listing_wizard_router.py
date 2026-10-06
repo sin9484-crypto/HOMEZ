@@ -226,7 +226,53 @@ router = APIRouter(
 )
 
 
-def _coupang_metadata_provider(db: Session, company_id: int):
+def _resolve_coupang_connection(db: Session, company_id: int, account_id_resolver):
+    """실제 쿠팡 호출에 쓸 판매 연결 — 대상 판매계정에서 명시적으로 해석한다.
+
+    이전에는 "회사+COUPANG+CONNECTED 중 .first() / 가장 큰 id"를 골라 승인한 계정과
+    실제 자격증명이 다른 연결일 수 있었다. 대상 계정을 지정하지 않았거나(`None`) 연결을
+    하나로 확정할 수 없으면 외부 호출 전에 막는다(coupang_seller_connection.py)."""
+
+    from app.core.exceptions import ServiceUnavailableException
+    from app.domains.marketplace_listing.coupang_seller_connection import (
+        resolve_seller_connection,
+    )
+
+    if account_id_resolver is None:
+        raise ServiceUnavailableException(
+            "연결된 쿠팡 판매계정이 필요합니다 — 대상 판매계정이 지정되지 않았습니다.",
+        )
+    return resolve_seller_connection(db, company_id, account_id_resolver())
+
+
+def _wizard_account_resolver(wizard, requested_account_id: int | None):
+    from app.domains.marketplace_listing.coupang_seller_connection import (
+        wizard_target_account_id,
+    )
+
+    return lambda: wizard_target_account_id(wizard, requested_account_id)
+
+
+def _submission_account_resolver(db: Session, company_id: int, submission_id: int):
+    """등록 전송·상태 조회·정합화는 제출(submission)이 가진 판매계정 기준이다."""
+
+    def resolve() -> int:
+        from app.core.exceptions import NotFoundException
+        from app.domains.marketplace_listing.repository import (
+            MarketplaceListingRepository,
+        )
+
+        submission = MarketplaceListingRepository(db).get_submission_for_company(
+            submission_id, company_id,
+        )
+        if submission is None:
+            raise NotFoundException("제출 작업을 찾을 수 없습니다.")
+        return submission.marketplace_account_id
+
+    return resolve
+
+
+def _coupang_metadata_provider(db: Session, company_id: int, account_id_resolver=None):
     # 2026-08-29 Pre-Live 감사 Phase C — 격리 패키징 검증 전용 테스트
     # 훅. installer/homez.iss의 HOMEZ_TEST_FORCE_* 패턴과 동일한 원칙:
     # 이 정확한 이름의 환경변수가 명시적으로 "1"일 때만 개입하고,
@@ -246,15 +292,7 @@ def _coupang_metadata_provider(db: Session, company_id: int):
     )
     from app.domains.store_connection.model import StoreConnection
 
-    connection = (
-        db.query(StoreConnection)
-        .filter(StoreConnection.company_id == company_id)
-        .filter(StoreConnection.marketplace_code == "COUPANG")
-        .filter(StoreConnection.connection_status == "CONNECTED")
-        .first()
-    )
-    if connection is None or not connection.credential_reference:
-        raise ServiceUnavailableException("연결된 쿠팡 판매계정이 필요합니다.")
+    connection = _resolve_coupang_connection(db, company_id, account_id_resolver)
     try:
         credential = WindowsCredentialStore().read(connection.credential_reference)
         return CoupangCategoryMetadataProvider(credential)
@@ -264,7 +302,7 @@ def _coupang_metadata_provider(db: Session, company_id: int):
         raise ServiceUnavailableException("쿠팡 카테고리 조회를 준비할 수 없습니다.") from exc
 
 
-def _coupang_logistics_provider(db: Session, company_id: int):
+def _coupang_logistics_provider(db: Session, company_id: int, account_id_resolver=None):
     # 2026-08-29 Pre-Live 감사 Phase C 테스트 훅 — 위 _coupang_metadata_
     # provider()와 동일 원칙.
     import os
@@ -281,15 +319,7 @@ def _coupang_logistics_provider(db: Session, company_id: int):
     )
     from app.domains.store_connection.model import StoreConnection
 
-    connection = (
-        db.query(StoreConnection)
-        .filter(StoreConnection.company_id == company_id)
-        .filter(StoreConnection.marketplace_code == "COUPANG")
-        .filter(StoreConnection.connection_status == "CONNECTED")
-        .first()
-    )
-    if connection is None or not connection.credential_reference:
-        raise ServiceUnavailableException("연결된 쿠팡 판매계정이 필요합니다.")
+    connection = _resolve_coupang_connection(db, company_id, account_id_resolver)
     try:
         credential = WindowsCredentialStore().read(connection.credential_reference)
         return CoupangLogisticsProvider(credential)
@@ -297,7 +327,7 @@ def _coupang_logistics_provider(db: Session, company_id: int):
         raise ServiceUnavailableException("쿠팡 출고지·반품지 조회를 준비할 수 없습니다.") from exc
 
 
-def _coupang_live_product_provider(db: Session, company_id: int):
+def _coupang_live_product_provider(db: Session, company_id: int, account_id_resolver=None):
     # 2026-08-29 Pre-Live 감사 Phase C 테스트 훅 — 위 두 팩토리 함수와
     # 동일 원칙. 실제 쿠팡 상품 생성/조회 API를 대체하는 지점이므로
     # 특히 이 정확한 이름의 환경변수 없이는 절대 개입하지 않는다.
@@ -315,17 +345,7 @@ def _coupang_live_product_provider(db: Session, company_id: int):
     )
     from app.domains.store_connection.model import StoreConnection
 
-    connection = (
-        db.query(StoreConnection)
-        .filter(StoreConnection.company_id == company_id)
-        .filter(StoreConnection.marketplace_code == "COUPANG")
-        .filter(StoreConnection.connection_status == "CONNECTED")
-        .filter(StoreConnection.credential_reference.is_not(None))
-        .order_by(StoreConnection.id.desc())
-        .first()
-    )
-    if connection is None:
-        raise ServiceUnavailableException("연결된 쿠팡 판매계정이 필요합니다.")
+    connection = _resolve_coupang_connection(db, company_id, account_id_resolver)
     try:
         credential = WindowsCredentialStore().read(
             connection.credential_reference,
@@ -340,6 +360,7 @@ def _coupang_live_product_provider(db: Session, company_id: int):
 @router.get("/{wizard_id}/coupang/outbound-shipping-places")
 def list_coupang_outbound_shipping_places(
     wizard_id: int,
+    marketplace_account_id: int | None = Query(default=None),
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
@@ -347,9 +368,11 @@ def list_coupang_outbound_shipping_places(
     from app.domains.marketplace_listing.coupang_logistics_provider import (
         CoupangLogisticsProviderError, cache_locations,
     )
-    ListingWizardService(db).get(wizard_id, current_user.company_id)
+    wizard = ListingWizardService(db).get(wizard_id, current_user.company_id)
     try:
-        items = _coupang_logistics_provider(db, current_user.company_id).list_outbound_shipping_places()
+        items = _coupang_logistics_provider(
+            db, current_user.company_id, _wizard_account_resolver(wizard, marketplace_account_id),
+        ).list_outbound_shipping_places()
     except CoupangLogisticsProviderError as exc:
         raise ServiceUnavailableException(str(exc)) from exc
     cache_locations(current_user.company_id, wizard_id, "outbound", items)
@@ -359,6 +382,7 @@ def list_coupang_outbound_shipping_places(
 @router.get("/{wizard_id}/coupang/return-shipping-centers")
 def list_coupang_return_shipping_centers(
     wizard_id: int,
+    marketplace_account_id: int | None = Query(default=None),
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
@@ -366,9 +390,11 @@ def list_coupang_return_shipping_centers(
     from app.domains.marketplace_listing.coupang_logistics_provider import (
         CoupangLogisticsProviderError, cache_locations,
     )
-    ListingWizardService(db).get(wizard_id, current_user.company_id)
+    wizard = ListingWizardService(db).get(wizard_id, current_user.company_id)
     try:
-        items = _coupang_logistics_provider(db, current_user.company_id).list_return_shipping_centers()
+        items = _coupang_logistics_provider(
+            db, current_user.company_id, _wizard_account_resolver(wizard, marketplace_account_id),
+        ).list_return_shipping_centers()
     except CoupangLogisticsProviderError as exc:
         raise ServiceUnavailableException(str(exc)) from exc
     cache_locations(current_user.company_id, wizard_id, "return", items)
@@ -389,7 +415,7 @@ _FAKE_BRAND_SEARCH_SEED = {
 }
 
 
-def _coupang_brand_provider(db: Session, company_id: int):
+def _coupang_brand_provider(db: Session, company_id: int, account_id_resolver=None):
     # 2026-09-27 — _coupang_metadata_provider()와 동일한 패턴(기존
     # HOMEZ_TEST_FAKE_COUPANG_PROVIDER 테스트 훅 + WindowsCredentialStore
     # 재사용). 격리 테스트에서만 Fake를 쓰고, 실제 화면에서는 항상 이
@@ -412,15 +438,7 @@ def _coupang_brand_provider(db: Session, company_id: int):
     )
     from app.domains.store_connection.model import StoreConnection
 
-    connection = (
-        db.query(StoreConnection)
-        .filter(StoreConnection.company_id == company_id)
-        .filter(StoreConnection.marketplace_code == "COUPANG")
-        .filter(StoreConnection.connection_status == "CONNECTED")
-        .first()
-    )
-    if connection is None or not connection.credential_reference:
-        raise ServiceUnavailableException("연결된 쿠팡 판매계정이 필요합니다.")
+    connection = _resolve_coupang_connection(db, company_id, account_id_resolver)
     try:
         credential = WindowsCredentialStore().read(connection.credential_reference)
         return CoupangLiveBrandProvider(credential)
@@ -434,6 +452,7 @@ def _coupang_brand_provider(db: Session, company_id: int):
 def search_coupang_brand(
     wizard_id: int,
     query: str = Query(..., min_length=1, max_length=100),
+    marketplace_account_id: int | None = Query(default=None),
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
@@ -442,11 +461,13 @@ def search_coupang_brand(
         CoupangBrandProviderError, brand_lookup_fingerprint,
     )
 
-    ListingWizardService(db).get(wizard_id, current_user.company_id)
+    wizard = ListingWizardService(db).get(wizard_id, current_user.company_id)
 
     import os
     is_fake = os.environ.get("HOMEZ_TEST_FAKE_COUPANG_PROVIDER") == "1"
-    provider = _coupang_brand_provider(db, current_user.company_id)
+    provider = _coupang_brand_provider(
+        db, current_user.company_id, _wizard_account_resolver(wizard, marketplace_account_id),
+    )
     try:
         results = provider.search_brand(query)
     except CoupangBrandProviderError as exc:
@@ -550,6 +571,7 @@ def build_coupang_contents_from_media(
 )
 def recommend_category(
     wizard_id: int,
+    marketplace_account_id: int | None = Query(default=None),
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
@@ -566,7 +588,9 @@ def recommend_category(
     )
     if candidate is None:
         raise ServiceUnavailableException("카테고리를 추천할 상품 후보를 찾을 수 없습니다.")
-    provider = _coupang_metadata_provider(db, current_user.company_id)
+    provider = _coupang_metadata_provider(
+        db, current_user.company_id, _wizard_account_resolver(wizard, marketplace_account_id),
+    )
     try:
         return provider.recommend(
             candidate.product_name,
@@ -583,18 +607,21 @@ def recommend_category(
 )
 def get_category_metadata(
     wizard_id: int, display_category_code: str,
+    marketplace_account_id: int | None = Query(default=None),
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
     from app.domains.marketplace_listing.category_metadata import metadata_fingerprint
     service = ListingWizardService(db)
-    service.get(wizard_id, current_user.company_id)
+    wizard = service.get(wizard_id, current_user.company_id)
     from app.core.exceptions import ServiceUnavailableException
     from app.domains.marketplace_listing.coupang_category_metadata_provider import (
         CategoryMetadataProviderError,
     )
     try:
-        metadata = _coupang_metadata_provider(db, current_user.company_id).get(display_category_code)
+        metadata = _coupang_metadata_provider(
+            db, current_user.company_id, _wizard_account_resolver(wizard, marketplace_account_id),
+        ).get(display_category_code)
     except CategoryMetadataProviderError as exc:
         raise ServiceUnavailableException(str(exc)) from exc
     return {
@@ -614,6 +641,7 @@ def get_category_metadata(
 @router.get("/{wizard_id}/category-metadata/{display_category_code}/raw-attributes")
 def get_category_metadata_raw_attributes(
     wizard_id: int, display_category_code: str,
+    marketplace_account_id: int | None = Query(default=None),
     current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
     db: Session = Depends(get_db),
 ):
@@ -623,12 +651,14 @@ def get_category_metadata_raw_attributes(
     동작이 아니다."""
 
     service = ListingWizardService(db)
-    service.get(wizard_id, current_user.company_id)
+    wizard = service.get(wizard_id, current_user.company_id)
     from app.core.exceptions import ServiceUnavailableException
     from app.domains.marketplace_listing.coupang_category_metadata_provider import (
         CategoryMetadataProviderError,
     )
-    provider = _coupang_metadata_provider(db, current_user.company_id)
+    provider = _coupang_metadata_provider(
+        db, current_user.company_id, _wizard_account_resolver(wizard, marketplace_account_id),
+    )
     try:
         response = provider._request(
             "GET", provider.METADATA_PATH.format(code=display_category_code),
@@ -1326,6 +1356,31 @@ def live_submission_preflight(
     )
 
 
+@router.post("/{wizard_id}/accounts/{marketplace_account_id}/attribute-comparison")
+def record_registration_attribute_comparison(
+    wizard_id: int,
+    marketplace_account_id: int,
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    """등록 내용과 저장된 공급처 조회 값을 속성 비교 run으로 기록한다(새 run 추가만,
+    외부 호출 없음). 해소는 별도로 사람이 한다."""
+
+    from app.domains.marketplace_listing.listing_wizard_live_service import (
+        ListingWizardLiveService,
+    )
+    from app.domains.product_attribute_match.router import _present
+    from app.domains.product_attribute_match.service import (
+        ProductAttributeMatchService,
+    )
+
+    run = ListingWizardLiveService(db).record_registration_comparison(
+        wizard_id, marketplace_account_id, current_user.company_id,
+        triggered_by=current_user.id,
+    )
+    return _present(ProductAttributeMatchService(db), run)
+
+
 @router.post(
     "/{wizard_id}/submissions/{submission_id}/send-live",
     response_model=WizardLiveSendResponse,
@@ -1358,7 +1413,10 @@ def send_live_submission(
     if not consume_recent_auth_token(recent_auth_token, current_user.id):
         raise ForbiddenException("현재 비밀번호 재확인이 필요합니다.")
 
-    provider = _coupang_live_product_provider(db, current_user.company_id)
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
     return service.send(
         wizard_id, submission_id, current_user.company_id, provider,
     )
@@ -1389,7 +1447,10 @@ def live_submission_status(
     )
 
     service = ListingWizardLiveService(db)
-    provider = _coupang_live_product_provider(db, current_user.company_id)
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
     return service.check_status(
         wizard_id, submission_id, current_user.company_id, provider,
     )
@@ -1477,7 +1538,10 @@ def sync_submission_option_identifiers(
         ListingWizardOptionLinkService,
     )
 
-    provider = _coupang_live_product_provider(db, current_user.company_id)
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
     return ListingWizardOptionLinkService(db).sync_identifiers(
         wizard_id, submission_id, current_user.company_id, provider,
         actor_user_id=current_user.id,
@@ -1560,7 +1624,10 @@ def preview_submission_reconciliation(
     실제 적용 전에 무엇이 일치·불일치·확인불가인지 먼저 확인한다.
     """
 
-    provider = _coupang_live_product_provider(db, current_user.company_id)
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
     assessment = preview_reconciliation(
         db, submission_id=submission_id, company_id=current_user.company_id,
         operator_confirmed_seller_product_id=(
@@ -1598,7 +1665,10 @@ def apply_submission_reconciliation(
     이 호출 내부에서 모든 검증을 처음부터 다시 수행한다.
     """
 
-    provider = _coupang_live_product_provider(db, current_user.company_id)
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
     result = apply_reconciliation(
         db, submission_id=submission_id, company_id=current_user.company_id,
         operator_confirmed_seller_product_id=(

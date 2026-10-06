@@ -431,6 +431,32 @@ class ReactivateOrderFunctionRequest(BaseModel):
     confirmation_note: str = Field(min_length=1)
 
 
+class SupplierStopSaleReconcileRequest(BaseModel):
+    """운영자 조회·대조(읽기 전용) 요청 — 외부 변경 요청은 보내지 않는다."""
+
+    connection_id: int = Field(gt=0)
+    product_code: str = Field(min_length=1, max_length=50)
+
+
+class SupplierStopSaleReExecuteRequest(BaseModel):
+    """운영자 외부 변경 재실행 요청. 승인된 쿠팡 업체코드가 필수다. WING 로그인 ID는 값을 직접
+    받지 않고, 지정한 위저드가 선택한 판매계정이 요청 대상 판매 연결과 같을 때만 그 값을 쓴다."""
+
+    connection_id: int = Field(gt=0)
+    product_code: str = Field(min_length=1, max_length=50)
+    expected_vendor_id: str = Field(min_length=1, max_length=50)
+    source_wizard_id: int | None = Field(default=None, gt=0)
+    retry_action_required: bool = False
+
+
+class SupplierStopSaleReportResponse(BaseModel):
+    product_code: str
+    confirmed: bool
+    summary: str
+    incomplete_count: int
+    results: list[dict]
+
+
 class AssignChannelConnectionRequest(BaseModel):
 
     connection_id: int = Field(gt=0)

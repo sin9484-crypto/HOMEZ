@@ -670,6 +670,9 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             # 2026-09-15 전면 감사 후속 Phase 9J(10-18) — 리콜/판매중지
             # 확인으로 상품이 차단됐을 때.
             "RECALL_PRODUCT_BLOCKED",
+            # 2026-10-05 — 공급처가 상품 판매중단을 명시해 판매중지·미출고 주문
+            # 취소 처리를 시작/준비했을 때(supplier_stop_sale_service.py).
+            "SUPPLIER_STOP_SALE_CONFIRMED",
         }
         actual_wired = {code for code, row in by_code.items() if row.wired}
         self.assertEqual(actual_wired, expected_wired)
@@ -708,6 +711,8 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             # 2026-09-15 전면 감사 후속 Phase 9J —
             # RECALL_PRODUCT_BLOCKED가 실제로 발생하는 위치.
             Path("app/domains/recall_notice/service.py"),
+            # 2026-10-05 — SUPPLIER_STOP_SALE_CONFIRMED가 실제로 발생하는 위치.
+            Path("app/domains/purchase_task/supplier_stop_sale_service.py"),
         ]
         source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
         for event_code, definition in EVENT_CATALOG.items():

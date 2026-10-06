@@ -138,6 +138,18 @@ class ProductAttributeComparisonItem(Base):
         "ProductAttributeComparisonRun", back_populates="items",
     )
 
+    @property
+    def is_blocking_field(self) -> bool:
+        """자동 등록/발주를 막는 6개 필드인지(`REQUIRED_FOR_BLOCKING`). 저장되는
+        값이 아니라 상수에서 계산한다 — 비차단 필드는 미확인이어도 해소를
+        요구하지 않는다."""
+
+        from app.domains.product_attribute_match.constants import (
+            ProductAttributeField,
+        )
+
+        return self.field_name in ProductAttributeField.REQUIRED_FOR_BLOCKING
+
 
 __all__ = [
     "ProductAttributeComparisonRun",

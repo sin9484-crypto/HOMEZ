@@ -447,6 +447,41 @@ class PurchaseChannelConnectionService:
                 "가능합니다(과거 기록이 가리키는 계정 정보를 보존하기 위함).",
             )
 
+        # 2026-10-04 — 상품 속성 비교 기록과 판매신청 기록은 이 연결의 id로
+        # 조회된다(등록 직전 점검의 BLOCKED 판정, 발주 전 판매신청 게이트).
+        # 연결 행을 지우면 이 기록들이 조회 대상에서 조용히 빠져 미해소
+        # BLOCKED·NEEDS_REVIEW가 사라진 것처럼 보이므로, 이 기록이 있는
+        # 연결도 완전 삭제를 거부한다("연결 해제"는 가능).
+        from app.domains.product_attribute_match.model import (
+            ProductAttributeComparisonRun,
+        )
+        from app.domains.purchase_task.model import PurchaseSalesApplicationAttempt
+
+        comparison_ref_exists = (
+            self.db.query(ProductAttributeComparisonRun.id)
+            .filter(
+                ProductAttributeComparisonRun.company_id == company_id,
+                ProductAttributeComparisonRun.connection_id == connection.id,
+            )
+            .first()
+            is not None
+        )
+        application_ref_exists = (
+            self.db.query(PurchaseSalesApplicationAttempt.id)
+            .filter(
+                PurchaseSalesApplicationAttempt.company_id == company_id,
+                PurchaseSalesApplicationAttempt.connection_id == connection.id,
+            )
+            .first()
+            is not None
+        )
+        if comparison_ref_exists or application_ref_exists:
+            raise ConflictException(
+                "이 연결에는 상품 속성 비교 또는 판매신청 기록이 있어 완전히 "
+                "삭제할 수 없습니다 — 삭제하면 미해소 차단·검토 상태가 조회에서 "
+                "빠지게 됩니다. \"연결 해제\"만 가능합니다.",
+            )
+
         if connection.connection_method == ConnectionMethod.CREDENTIAL and connection.credential_reference:
             from app.core.windows_credential_store import (
                 CredentialNotFoundError, CredentialStoreError,

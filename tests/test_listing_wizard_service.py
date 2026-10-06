@@ -61,6 +61,7 @@ from app.domains.marketplace_listing.listing_wizard_schema import (
     WizardRevokeApprovalRequest,
 )
 from app.domains.marketplace_listing.category_metadata import notice_input_fingerprint
+from app.domains.store_connection.model import StoreConnection
 from app.domains.marketplace_listing.listing_wizard_approval_nonce import (
     clear_all_wizard_approval_nonces,
 )
@@ -136,6 +137,7 @@ from app.domains.channel_policy.service import ChannelPolicyService
 from app.domains.media_asset.model import MediaAsset
 from app.domains.product_attribute_match.model import ProductAttributeComparisonItem
 from app.domains.product_attribute_match.model import ProductAttributeComparisonRun
+from app.domains.purchase_task.model import PurchaseChannelConnection
 from app.domains.recall_notice.model import RecallProductBlock
 from app.domains.product_candidate.constants import CandidateStatus
 from app.domains.product_candidate.model import ProductCandidate
@@ -270,6 +272,7 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 ProductCandidateSelection.__table__,
                 MarketplaceChannel.__table__,
                 MarketplaceAccount.__table__,
+                StoreConnection.__table__,
                 MarketplaceFulfillmentCapability.__table__,
                 MarketplaceListingDraft.__table__,
                 MarketplaceListing.__table__,
@@ -290,6 +293,7 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 ProductAttributeComparisonRun.__table__,
                 ProductAttributeComparisonItem.__table__,
                 RecallProductBlock.__table__,
+                PurchaseChannelConnection.__table__,
             ],
         )
         with self.engine.begin() as conn:
@@ -1358,10 +1362,10 @@ class ListingWizardServiceTestCase(unittest.TestCase):
 
     def test_economics_below_target_margin_blocks_when_costs_fully_confirmed(self):
         """2026-09-29(49차) — 비용이 전부 확인됐고(is_provisional=False)
-        마진율이 기존 확정 정책 기본값(15%)에 못 미치면 별도로
+        마진율이 확정 정책 기본값(18%)에 못 미치면 별도로
         차단해야 한다 — "모든 비용 확인"이 "최소마진 충족"을 대신하지
         않는다는 것을 직접 검증한다. 원가 9000·판매가 10000·수수료
-        0% → margin_rate=10% < 15%."""
+        0% → margin_rate=10% < 18%."""
 
         candidate, channel, account, media = self._full_setup()
         wizard = self._setup_wizard_through_fulfillment(candidate, account, media)
@@ -1391,7 +1395,7 @@ class ListingWizardServiceTestCase(unittest.TestCase):
     def test_economics_below_target_margin_does_not_fire_while_provisional(self):
         """미확정 비용이 있는 동안(is_provisional=True)은 확인된
         비용만으로 계산한 마진율이 아무리 높아도(여기서는 90%)
-        "15% 충족"으로 판정해 통과시키면 안 된다 — 그 마진율 자체가
+        "18% 충족"으로 판정해 통과시키면 안 된다 — 그 마진율 자체가
         아직 신뢰할 수 없는 잔액이기 때문이다. ECONOMICS_PROVISIONAL이
         먼저 막고, ECONOMICS_BELOW_TARGET_MARGIN은 아예 평가되지
         않아야 한다(둘 다 뜨면 같은 상황을 두 번 판정하는 것)."""
@@ -1418,7 +1422,7 @@ class ListingWizardServiceTestCase(unittest.TestCase):
         self.assertNotIn("ECONOMICS_BELOW_TARGET_MARGIN", issue_codes)
 
     def test_economics_meets_target_margin_does_not_block(self):
-        """마진율이 기준(15%) 이상이고 비용이 전부 확인되면
+        """마진율이 기준(18%) 이상이고 비용이 전부 확인되면
         ECONOMICS_BELOW_TARGET_MARGIN이 뜨지 않아야 한다."""
 
         candidate, channel, account, media = self._full_setup()
@@ -1442,12 +1446,7 @@ class ListingWizardServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
 
-    def test_economics_exactly_at_target_margin_boundary_passes(self):
-        """2026-09-29(50차) — "최소 15%"는 15% 미만만 막는다는 뜻이다
-        (15% 자체는 통과). 원가 8500·판매가 10000 → margin_rate가
-        정확히 0.1500(반올림 오차 없이)이 되도록 구성해 경계값에서
-        차단되지 않는지 직접 확인한다."""
-
+    def _validate_with_cost(self, cost_of_goods):
         candidate, channel, account, media = self._full_setup()
         wizard = self._setup_wizard_through_fulfillment(candidate, account, media)
         wizard = self.service.update_economics(
@@ -1456,22 +1455,57 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                 expected_version=wizard.version,
                 items=[EconomicsInputItem(
                     marketplace_account_id=account.id,
-                    cost_of_goods="8500", sale_price="10000",
+                    cost_of_goods=cost_of_goods, sale_price="10000",
                     channel_fee_rate="0", payment_fee_rate="0",
                     shipping_cost="0", packaging_cost="0",
                     return_reserve_rate="0", tax_basis_rate="0",
                 )],
             ),
         )
-        stored_result = json.loads(wizard.economics_result_json)[0]
-        self.assertEqual(
-            Decimal(str(stored_result["margin_rate"])), Decimal("0.1500"),
+        stored_rate = Decimal(
+            str(json.loads(wizard.economics_result_json)[0]["margin_rate"]),
         )
-
         result = self.service.validate(
             wizard.id, self.company_id, wizard.version,
         )
+        return stored_rate, result
+
+    def test_economics_exactly_at_target_margin_boundary_passes(self):
+        """2026-10-04 — 최소마진 18%는 18% 미만만 막는다(18% 자체는
+        통과). 원가 8200·판매가 10000 → 마진 1800원 = 정확히 18.00%."""
+
+        stored_rate, result = self._validate_with_cost("8200")
+        self.assertEqual(stored_rate, Decimal("0.1800"))
         self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
+
+    def test_economics_just_below_target_blocks_even_when_display_rounds_up(self):
+        """17.995%는 화면용 반올림(소수 4자리)으로 0.1800이 되지만
+        실제로는 기준 미달이다 — 승인 판정은 반올림 전 값으로 해야
+        하므로 차단돼야 한다."""
+
+        stored_rate, result = self._validate_with_cost("8200.50")
+        self.assertEqual(stored_rate, Decimal("0.1800"))  # 화면 표시만 18.00%
+        self.assertEqual(result.status, "NEEDS_CORRECTION")
+        self.assertTrue(any(
+            issue.code == "ECONOMICS_BELOW_TARGET_MARGIN"
+            for issue in result.issues
+        ), result.issues)
+
+    def test_economics_just_above_target_passes(self):
+        """18.005% (원가 8199.50)는 기준을 넘으므로 통과한다."""
+
+        _stored_rate, result = self._validate_with_cost("8199.50")
+        self.assertEqual(result.status, "READY_FOR_APPROVAL", result.issues)
+
+    def test_economics_one_won_below_target_blocks(self):
+        """판매가 10,000원 기준 마진 1,799원(17.99%)은 차단된다."""
+
+        _stored_rate, result = self._validate_with_cost("8201")
+        self.assertEqual(result.status, "NEEDS_CORRECTION")
+        self.assertTrue(any(
+            issue.code == "ECONOMICS_BELOW_TARGET_MARGIN"
+            for issue in result.issues
+        ))
 
     def test_coupang_fulfillment_rejects_unverified_logistics_codes(self):
         candidate, _channel, account, media = self._full_setup()
@@ -1858,6 +1892,40 @@ class ListingWizardServiceTestCase(unittest.TestCase):
                     product_image_match_confirmed=True,
                 ),
             )
+
+    def test_approve_rechecks_min_margin_after_policy_change(self):
+        """2026-10-04 — 사전검사 통과(READY_FOR_APPROVAL) 이후 회사 최소마진
+        기준이 올라가면 승인 시점에 다시 판정해 막는다(기존 사전검사
+        결과가 새 기준을 우회하지 못한다)."""
+
+        from app.core.exceptions import BadRequestException
+        from app.domains.channel_policy.schema import (
+            UpdateCompanyChannelPolicySettingsRequest,
+        )
+        from app.domains.channel_policy.service import ChannelPolicyService
+
+        candidate, channel, account, media = self._full_setup()
+        wizard = self._advance_to_ready_for_approval(candidate, account, media)
+        preview = self.service.approval_preview(wizard.id, self.company_id)
+
+        ChannelPolicyService(self.db).upsert_settings(
+            self.company_id, updated_by=1,
+            data=UpdateCompanyChannelPolicySettingsRequest(
+                expected_version=0, min_target_margin_rate="0.99",
+            ),
+        )
+        with self.assertRaises(BadRequestException) as ctx:
+            self.service.approve(
+                wizard.id, self.company_id, approved_by=99,
+                recent_auth_token=self._recent_auth_token(99),
+                data=WizardApproveRequest(
+                    expected_version=preview.version,
+                    approval_nonce=preview.approval_nonce,
+                    expected_fingerprint=preview.fingerprint,
+                    product_image_match_confirmed=True,
+                ),
+            )
+        self.assertIn("MIN_MARGIN_POLICY_NOT_MET", str(ctx.exception))
 
     def test_approve_rejects_reused_nonce(self):
 

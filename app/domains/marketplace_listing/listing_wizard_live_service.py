@@ -17,16 +17,28 @@ from app.core.audit_db import write_audit_log
 from app.core.windows_credential_store import WindowsCredentialStore
 from app.domains.automation_safety.constants import AutomationMode
 from app.domains.automation_safety.service import SafetyService
+from app.domains.channel_policy.service import ChannelPolicyService
 from app.domains.marketplace_listing.approval_service import ApprovalService
+from app.domains.marketplace_listing.margin_gate import BELOW_TARGET as MARGIN_BELOW_TARGET
+from app.domains.marketplace_listing.margin_gate import MISSING as MARGIN_MISSING
+from app.domains.marketplace_listing.margin_gate import PROVISIONAL as MARGIN_PROVISIONAL
+from app.domains.marketplace_listing.margin_gate import evaluate_margin_gate
 from app.domains.marketplace_listing.constants import SubmissionStatus
 from app.domains.marketplace_listing.coupang_image_autofill import (
     autofill_coupang_images,
 )
 from app.domains.marketplace_listing.coupang_live_payload import (
     build_coupang_live_payload,
+    extract_registration_attribute_values,
 )
 from app.domains.marketplace_listing.coupang_live_provider import (
     CoupangProductProvider, LiveSubmissionResult,
+)
+from app.domains.marketplace_listing.coupang_seller_connection import (
+    SELLER_CONNECTION_CHANGED_AFTER_APPROVAL,
+    SellerConnectionError,
+    binding_fingerprint,
+    resolve_seller_connection,
 )
 from app.domains.marketplace_listing.listing_wizard_repository import (
     ListingWizardRepository,
@@ -89,9 +101,19 @@ class ListingWizardLiveService:
 
         return self._context(wizard_id, submission_id, company_id)
 
-    def _build(self, wizard, submission, selection) -> tuple[dict | None, list[str]]:
+    def _build(
+        self, wizard, submission, selection, *, autofill_images: bool = True,
+    ) -> tuple[dict | None, list[str]]:
+        return self._build_for_account(
+            wizard, submission.marketplace_account_id,
+            autofill_images=autofill_images,
+        )
+
+    def _build_for_account(
+        self, wizard, marketplace_account_id: int, *, autofill_images: bool = True,
+    ) -> tuple[dict | None, list[str]]:
         entries = json.loads(wizard.channel_selections_json or "[]")
-        entry = next((x for x in entries if x.get("marketplace_account_id") == submission.marketplace_account_id), None)
+        entry = next((x for x in entries if x.get("marketplace_account_id") == marketplace_account_id), None)
         if entry is None:
             return None, ["CHANNEL_SELECTION_REQUIRED"]
         required_fields = dict(entry.get("required_fields") or {})
@@ -101,7 +123,7 @@ class ListingWizardLiveService:
         # 아니라) 위저드 2단계(선택 media_asset_ids)에서 자동으로
         # 채운다 — R2 공개 업로드 포함(idempotent, 이미 업로드된
         # 자산은 media_assets.public_url을 그대로 재사용한다).
-        if not required_fields.get("images"):
+        if autofill_images and not required_fields.get("images"):
             try:
                 selected_media_asset_ids = json.loads(
                     wizard.selected_media_asset_ids_json or "[]",
@@ -139,6 +161,19 @@ class ListingWizardLiveService:
             wizard, self.db, company_id, approved_precheck,
         )
         return current_fingerprint == wizard.approval_fingerprint
+
+    @staticmethod
+    def _approved_seller_connection(wizard, marketplace_account_id: int) -> dict | None:
+        """승인 패키지에 기록된, 이 판매계정의 판매 연결 식별 정보."""
+
+        try:
+            package = json.loads(wizard.approval_package_json or "{}")
+        except (TypeError, ValueError):
+            return None
+        for row in package.get("seller_connections") or []:
+            if row.get("marketplace_account_id") == marketplace_account_id:
+                return row
+        return None
 
     def preflight(
         self, wizard_id: int, submission_id: int, company_id: int,
@@ -195,6 +230,43 @@ class ListingWizardLiveService:
             blockers.append("VALID_APPROVAL_REQUIRED")
         if not self._approval_payload_unchanged(wizard, company_id):
             blockers.append("APPROVED_PAYLOAD_CHANGED")
+        # 2026-10-05 — 실제 전송에 쓸 판매 연결은 승인한 판매계정에서 명시적으로 해석한다.
+        # 해석할 수 없으면(없음·둘 이상·연결 안 됨·다른 회사) 외부 호출 전에 막고, 승인
+        # 당시와 다른 연결(또는 교체된 자격증명)이면 재승인이 필요하다.
+        try:
+            connection = resolve_seller_connection(
+                self.db, company_id, submission.marketplace_account_id,
+            )
+        except SellerConnectionError as exc:
+            blockers.append(exc.code)
+        else:
+            approved = self._approved_seller_connection(
+                wizard, submission.marketplace_account_id,
+            )
+            if (
+                approved is None
+                or approved.get("store_connection_id") != connection.id
+                or approved.get("connection_revision") != connection.credential_version
+                or approved.get("connection_binding_fingerprint")
+                != binding_fingerprint(connection)
+            ):
+                blockers.append(SELLER_CONNECTION_CHANGED_AFTER_APPROVAL)
+        # 2026-10-04 — 최소마진 기준이 승인 이후에 바뀌어도(15%→18%)
+        # 이미 받은 승인이 새 기준을 우회하지 못하도록, 실제 전송 직전에
+        # 비용 완결성과 최소마진을 현재 기준으로 다시 판정한다(사전검사와
+        # 같은 margin_gate 함수 — 반올림 전 값으로 판정).
+        margin_gate = evaluate_margin_gate(
+            wizard.economics_input_json, submission.marketplace_account_id,
+            ChannelPolicyService(self.db).get_effective_min_target_margin_rate(
+                company_id,
+            ),
+        )
+        if margin_gate.status == MARGIN_MISSING:
+            blockers.append("ECONOMICS_REQUIRED")
+        elif margin_gate.status == MARGIN_PROVISIONAL:
+            blockers.append("ECONOMICS_PROVISIONAL")
+        elif margin_gate.status == MARGIN_BELOW_TARGET:
+            blockers.append("MIN_MARGIN_POLICY_NOT_MET")
         # 2026-09-15 전면 감사 후속(Phase 9G, HOMEZ_USER_OPERATION_
         # SETTINGS.md 10-4) — 이 후보(candidate)에 대한 가장 최근
         # 상품 속성 비교(이름/옵션/수량/사이즈/제조사/원산지)가
@@ -202,15 +274,48 @@ class ListingWizardLiveService:
         # 실제 쿠팡 전송을 막는다. 비교를 실행한 적이 없으면(레코드
         # 없음) 통과한다 — 이 블로커는 "비교를 실행하라"는 요구가
         # 아니라 "이미 실행된 비교 결과를 무시하지 않는다"는 게이트다.
+        supplier_source_reference: str | None = None  # 속성 비교 점검이 CLEAR일 때만 채움
+        match_service = None
         if wizard.product_candidate_id is not None:
             from app.domains.product_attribute_match.service import (
                 ProductAttributeMatchService,
             )
 
-            if ProductAttributeMatchService(self.db).has_blocking_attribute_mismatch(
+            match_service = ProductAttributeMatchService(self.db)
+            # 비교 기록은 (a) 후보 자체의 식별자("candidate:{id}")나 (b) 후보가
+            # 나온 공급처 상품 코드+매입처 연결로 저장된다. 이전에는 (a)만
+            # 조회해 실제 기록이 저장되는 (b)를 놓쳤다. (b)는 후보의
+            # source_reference에서 매입처·상품 코드를 읽어 같은 회사의 해당
+            # 매입처 연결에 묶인 기록만 본다(다른 공급처 코드 혼입 없음).
+            from app.domains.product_candidate.model import ProductCandidate
+
+            candidate = self.db.get(ProductCandidate, wizard.product_candidate_id)
+            visible = candidate is not None and (
+                candidate.visibility == "GLOBAL"
+                or candidate.owner_company_id == company_id
+            )
+            from app.domains.product_attribute_match.constants import (
+                SupplierSourceCheck,
+            )
+
+            source_check = (
+                match_service.check_supplier_source(
+                    company_id, candidate.source_reference,
+                ) if visible else SupplierSourceCheck.NOT_APPLICABLE
+            )
+            if match_service.has_blocking_attribute_mismatch(
                 company_id, f"candidate:{wizard.product_candidate_id}",
-            ):
+            ) or source_check == SupplierSourceCheck.BLOCKED:
                 blockers.append("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED")
+            elif source_check == SupplierSourceCheck.CLEAR:
+                supplier_source_reference = candidate.source_reference
+            elif source_check in (
+                SupplierSourceCheck.IDENTIFIER_UNREADABLE,
+                SupplierSourceCheck.IDENTIFIER_AMBIGUOUS,
+            ):
+                # 공급처 상품인데 식별자를 확정할 수 없다 — "차단 기록 없음"으로
+                # 보지 않고 등록을 막는다(후보의 source_reference를 바로잡아야 함).
+                blockers.append("SUPPLIER_SOURCE_IDENTIFIER_UNCLEAR")
 
             # 2026-09-15 전면 감사 후속(Phase 9J, HOMEZ_USER_OPERATION_
             # SETTINGS.md 10-18) — 이 후보에 대해 리콜/판매중지가
@@ -225,10 +330,70 @@ class ListingWizardLiveService:
             wizard, submission, selection,
         )
         blockers.extend(payload_blockers)
+        # 2026-10-05 — 속성 비교가 통과·해소로 서 있어도, 그 근거에 기록된 HOMEZ 값이
+        # 지금 실제로 등록할 payload의 값(상품명·옵션·구성수량·용량·제조사·원산지)과
+        # 같아야 한다. 공급처 조회만 해소한 기록(HOMEZ 값 없음)이나, 해소 뒤 위저드를
+        # 고쳐 다시 승인한 경우는 현재 등록 내용을 검토한 것이 아니므로 막는다. 이
+        # 점검은 어떤 비교도 저장하지 않는다(승인 지문은 위저드 내용만 보고 이 비교를
+        # 보지 않는다).
+        if (
+            supplier_source_reference is not None and _payload is not None
+            and not payload_blockers and match_service is not None
+        ):
+            from app.domains.product_attribute_match.constants import (
+                RegistrationBinding,
+            )
+
+            binding, _fields = match_service.check_registration_binding(
+                company_id, supplier_source_reference,
+                extract_registration_attribute_values(_payload),
+            )
+            if binding == RegistrationBinding.UNBOUND:
+                blockers.append("ATTRIBUTE_RESOLUTION_NOT_BOUND_TO_REGISTRATION")
         blockers = sorted(set(blockers))
         return LivePreflight(
             ready=not blockers, blockers=blockers,
             submission_id=submission.id, listing_id=listing.id,
+        )
+
+    def record_registration_comparison(
+        self, wizard_id: int, marketplace_account_id: int, company_id: int,
+        *, triggered_by: int | None = None,
+    ):
+        """지금 등록하려는 내용(최종 payload의 상품명·옵션·구성수량·용량·제조사·원산지)과
+        이미 저장된 공급처 조회 값을 한 속성 비교 run으로 새로 기록한다. 사람이 이
+        run을 해소해야 최종 점검이 통과한다. 외부 조회·이미지 업로드를 하지 않고,
+        과거 run은 수정하지 않는다."""
+
+        wizard = self.wizards.get_for_company(wizard_id, company_id)
+        if wizard is None:
+            raise NotFoundException("상품등록 작업을 찾을 수 없습니다.")
+        if wizard.product_candidate_id is None:
+            raise BadRequestException("공급처 후보가 연결되지 않은 위저드입니다.")
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+        from app.domains.product_candidate.model import ProductCandidate
+
+        candidate = self.db.get(ProductCandidate, wizard.product_candidate_id)
+        if candidate is None or not (
+            candidate.visibility == "GLOBAL"
+            or candidate.owner_company_id == company_id
+        ):
+            raise NotFoundException("후보를 찾을 수 없습니다.")
+
+        payload, blockers = self._build_for_account(
+            wizard, marketplace_account_id, autofill_images=False,
+        )
+        if payload is None:
+            raise BadRequestException(
+                "등록 payload가 아직 준비되지 않아 등록 내용을 비교할 수 없습니다: "
+                + ", ".join(blockers),
+            )
+        return ProductAttributeMatchService(self.db).record_registration_comparison(
+            company_id, candidate.source_reference,
+            extract_registration_attribute_values(payload),
+            triggered_by=triggered_by,
         )
 
     def send(

@@ -84,16 +84,8 @@ def _confirmed(value: Decimal | None) -> Decimal:
     return value if value is not None else Decimal("0")
 
 
-def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
-
-    missing_cost_fields = [
-        name for name in _ASSUMPTION_FIELDS
-        if name not in _POLICY_EXCLUDED_FIELDS and getattr(item, name) is None
-    ]
-    excluded_cost_fields = [
-        name for name in _POLICY_EXCLUDED_FIELDS
-        if getattr(item, name) is None
-    ]
+def _raw_amounts(item: EconomicsInputItem) -> tuple[Decimal, Decimal, Decimal]:
+    """(예상매출, 총비용, 마진금액) — 반올림 전 정확한 Decimal 값."""
 
     channel_fee_rate = _confirmed(item.channel_fee_rate)
     payment_fee_rate = _confirmed(item.payment_fee_rate)
@@ -120,7 +112,43 @@ def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
     )
 
     expected_revenue = item.sale_price
-    margin_amount = expected_revenue - total_cost
+    return expected_revenue, total_cost, expected_revenue - total_cost
+
+
+def min_margin_shortfall(
+    item: EconomicsInputItem, target_margin_rate: Decimal,
+) -> Decimal:
+    """최소마진 기준에 모자란 금액(반올림 전). 0 이하면 기준 충족, 양수면
+    미달이다. 나눗셈이나 반올림을 거치지 않고 `기준율 × 판매가 −
+    마진금액`을 Decimal로 직접 비교하므로, 화면에 반올림된 마진율이
+    기준과 같아 보여도(예: 17.995% → 18.00%) 실제 미달이면 양수가
+    나온다. 승인·실행 판정은 반드시 이 값으로 하고, 반올림된
+    margin_rate는 화면 표시에만 쓴다."""
+
+    expected_revenue, _total_cost, margin_amount = _raw_amounts(item)
+    return target_margin_rate * expected_revenue - margin_amount
+
+
+def calculate_economics(item: EconomicsInputItem) -> EconomicsResultItem:
+
+    missing_cost_fields = [
+        name for name in _ASSUMPTION_FIELDS
+        if name not in _POLICY_EXCLUDED_FIELDS and getattr(item, name) is None
+    ]
+    excluded_cost_fields = [
+        name for name in _POLICY_EXCLUDED_FIELDS
+        if getattr(item, name) is None
+    ]
+
+    channel_fee_rate = _confirmed(item.channel_fee_rate)
+    payment_fee_rate = _confirmed(item.payment_fee_rate)
+    shipping_cost = _confirmed(item.shipping_cost)
+    packaging_cost = _confirmed(item.packaging_cost)
+    ad_cost = _confirmed(item.ad_cost)
+    return_reserve_rate = _confirmed(item.return_reserve_rate)
+    tax_basis_rate = _confirmed(item.tax_basis_rate)
+
+    expected_revenue, total_cost, margin_amount = _raw_amounts(item)
 
     if expected_revenue == 0:
         margin_rate = Decimal("0")

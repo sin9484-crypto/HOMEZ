@@ -32,6 +32,9 @@ from app.domains.ai_governance.constants import CapabilityCode
 from app.domains.ai_governance.service import require_active_capability
 from app.core.exceptions import UnauthorizedException
 from app.core.recent_auth import consume_recent_auth_token
+from app.domains.channel_policy.service import ChannelPolicyService
+from app.domains.marketplace_listing.margin_gate import MET as MARGIN_MET
+from app.domains.marketplace_listing.margin_gate import evaluate_margin_gate
 from app.domains.marketplace_listing.constants import MAX_BULK_ARCHIVE_COUNT
 from app.domains.marketplace_listing.constants import MAX_BULK_MARGIN_APPLY_COUNT
 from app.domains.marketplace_listing.constants import MAX_BULK_SUBMIT_COUNT
@@ -912,6 +915,26 @@ class ListingWizardService:
                 "승인 대상 내용이 미리보기를 본 뒤 바뀌었습니다 — 승인 "
                 "미리보기를 다시 불러온 뒤 시도하세요.",
             )
+
+        # 2026-10-04 — 사전검사(READY_FOR_APPROVAL) 이후에 최소마진 기준이
+        # 바뀌었거나 비용 입력이 바뀐 경우에도 승인이 새 기준을 우회하지
+        # 못하도록, 승인 시점에 같은 margin_gate로 다시 판정한다.
+        target_rate = ChannelPolicyService(
+            self.db,
+        ).get_effective_min_target_margin_rate(company_id)
+        for entry in json.loads(wizard.channel_selections_json or "[]"):
+            gate = evaluate_margin_gate(
+                wizard.economics_input_json,
+                entry.get("marketplace_account_id"), target_rate,
+            )
+            if gate.status != MARGIN_MET:
+                raise BadRequestException(
+                    f"MIN_MARGIN_POLICY_NOT_MET: 비용 입력이 완결되지 "
+                    f"않았거나 최소마진 기준({target_rate * 100:.2f}%)에 "
+                    f"미달이라 승인할 수 없습니다(상태 {gate.status}). "
+                    "가격·마진 단계를 확인한 뒤 사전검사를 다시 "
+                    "실행하세요.",
+                )
 
         if not data.product_image_match_confirmed:
             raise BadRequestException(

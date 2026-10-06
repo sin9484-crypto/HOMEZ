@@ -41,6 +41,11 @@ from app.domains.marketplace_listing.listing_wizard_schema import (
     WizardSubmitRequest,
 )
 from app.domains.marketplace_listing.constants import FulfillmentMode
+from app.domains.product_attribute_match.model import ProductAttributeComparisonRun
+from app.domains.marketplace_listing.coupang_seller_connection import (
+    binding_fingerprint,
+)
+from app.domains.store_connection.model import StoreConnection
 from tests.test_listing_wizard_service import (
     ListingWizardServiceTestCase,
     VALID_CHANNEL_POLICY_ATTRIBUTES,
@@ -961,7 +966,36 @@ class _FakeProvider:
 
 
 class ListingWizardLiveServiceTestCase(ListingWizardServiceTestCase):
+    def _store_connection(
+        self, seller_identifier, *, company_id=None, status="CONNECTED",
+        reference="test-credential-ref-1", version=1,
+    ):
+        """판매계정(account_code)에 해당하는 쿠팡 판매 연결 — 자격증명 값은 없다(참조 문자열뿐)."""
+
+        connection = StoreConnection(
+            company_id=company_id or self.company_id, marketplace_code="COUPANG",
+            display_name="테스트 연결", seller_identifier=seller_identifier,
+            credential_reference=reference, connection_status=status,
+            credential_version=version, created_by=1,
+            creation_idempotency_key=f"conn-{seller_identifier}-{company_id}-{reference}",
+            creation_request_fingerprint="f" * 64,
+        )
+        self.db.add(connection)
+        self.db.commit()
+        return connection
+
+    def _full_setup(self):
+        candidate, channel, account, media = super()._full_setup()
+        self._store_connection(account.account_code)
+        return candidate, channel, account, media
+
     def _submitted_wizard(self, live_ready=False):
+        wizard = self._prepare_wizard(live_ready)
+        return self._approve_and_submit(wizard)
+
+    def _prepare_wizard(self, live_ready=False):
+        """승인 직전까지 준비한 위저드(사전검사 통과, 아직 승인·제출 전)."""
+
         candidate, _channel, account, media = self._full_setup()
         wizard = self._advance_to_ready_for_approval(candidate, account, media)
         if live_ready:
@@ -988,7 +1022,9 @@ class ListingWizardLiveServiceTestCase(ListingWizardServiceTestCase):
             fields["brand"] = "HOMEZ"
             wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
             self.db.commit()
+        return wizard
 
+    def _approve_and_submit(self, wizard):
         preview = self.service.approval_preview(wizard.id, self.company_id)
         approved = self.service.approve(
             wizard.id, self.company_id, approved_by=99,
@@ -1105,6 +1141,669 @@ class ListingWizardLiveServiceTestCase(ListingWizardServiceTestCase):
         )
         blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
         self.assertIn("ESTOP_ACTIVE", blocked.blockers)
+
+    # ---- 속성 비교 점검: 후보가 나온 공급처 상품의 비교 기록을 본다 ----
+
+    def _supplier_sourced_wizard(self, source_reference="ONCHANNEL:CH-LIVE-1"):
+        from app.domains.product_candidate.model import ProductCandidate
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        candidate = self.db.get(ProductCandidate, wizard.product_candidate_id)
+        candidate.source_reference = source_reference
+        self.db.commit()
+        return wizard, result
+
+    def _blocked_comparison(self, company_id, code="CH-LIVE-1", mall="ONCHANNEL"):
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+        from app.domains.purchase_task.model import PurchaseChannelConnection
+
+        conn = PurchaseChannelConnection(
+            company_id=company_id, mall_code=mall, connection_method="CREDENTIAL",
+            account_label="속성 비교 테스트", status="CONNECTED",
+        )
+        self.db.add(conn)
+        self.db.commit()
+        # 값을 주지 않으면 필수 항목이 UNCONFIRMED라 BLOCKED로 기록된다.
+        return ProductAttributeMatchService(self.db).run_comparison(
+            company_id=company_id, product_identifier=code,
+            connection_id=conn.id, supplier_values={},
+            sales_channel_values={}, homez_current_values={},
+        )
+
+    def test_unresolved_blocked_comparison_of_the_suppliers_product_blocks_registration(self):
+        """비교 기록은 공급처 상품 코드+매입처 연결로 저장된다. 후보의
+        source_reference로 그 기록을 찾아 미해소 BLOCKED면 등록 직전에
+        막고, 그때 쿠팡 Provider는 한 번도 호출되지 않는다."""
+
+        wizard, result = self._supplier_sourced_wizard()
+        live = ListingWizardLiveService(self.db)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+
+        run = self._blocked_comparison(self.company_id)
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+        self.assertFalse(blocked.ready)
+
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [], "차단되면 쿠팡 Provider는 호출되지 않아야 한다.")
+        self.assertIsNone(run.resolved_at)  # 이 점검은 기록을 임의로 해소하지 않는다
+
+    def test_resolving_the_comparison_reopens_registration_with_one_provider_call(self):
+        """2026-10-05: 공급처 조회만 한 기록의 해소가 아니라, 지금 등록할 내용과 이어진
+        비교(`record_registration_comparison`)를 해소해야 등록이 다시 열린다."""
+
+        wizard, result = self._supplier_sourced_wizard()
+        self._blocked_comparison(self.company_id)
+
+        live = ListingWizardLiveService(self.db)
+        self._record_and_resolve(wizard)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+        provider = _FakeProvider()
+        live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(len(provider.calls), 1)
+    def test_another_companys_comparison_for_the_same_code_does_not_block(self):
+
+        wizard, result = self._supplier_sourced_wizard()
+        self._blocked_comparison(self.other_company_id)
+
+        blocked = ListingWizardLiveService(self.db).preflight(
+            wizard.id, result.submission_id, self.company_id,
+        )
+        self.assertNotIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+
+    def test_a_different_suppliers_comparison_for_the_same_code_does_not_block(self):
+
+        wizard, result = self._supplier_sourced_wizard("ONCHANNEL:CH-LIVE-1")
+        self._blocked_comparison(self.company_id, mall="NAVER_SHOPPING")
+
+        blocked = ListingWizardLiveService(self.db).preflight(
+            wizard.id, result.submission_id, self.company_id,
+        )
+        self.assertNotIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+
+    def test_candidate_without_a_supplier_identity_is_not_subject_to_the_supplier_check(self):
+
+        wizard, result = self._supplier_sourced_wizard("no-supplier-identity")
+        self._blocked_comparison(self.company_id)
+
+        blocked = ListingWizardLiveService(self.db).preflight(
+            wizard.id, result.submission_id, self.company_id,
+        )
+        self.assertNotIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+
+    # ---- 2026-10-05: 해소 유지·재검토, 식별자 형식 문제 ----
+
+    def _set_source_reference(self, wizard, source_reference):
+        from app.domains.product_candidate.model import ProductCandidate
+
+        candidate = self.db.get(ProductCandidate, wizard.product_candidate_id)
+        candidate.source_reference = source_reference
+        self.db.commit()
+
+    def _account_id(self, wizard):
+        return json.loads(wizard.channel_selections_json)[0]["marketplace_account_id"]
+
+    def _record_and_resolve(self, wizard):
+        """지금 위저드의 등록 내용을 공급처 조회 값과 한 비교로 기록하고(실제 서비스
+        경로) 사람이 해소한 것으로 처리한다."""
+
+        run = ListingWizardLiveService(self.db).record_registration_comparison(
+            wizard.id, self._account_id(wizard), self.company_id, triggered_by=1,
+        )
+        return self._resolve_comparison(run)
+
+    def _resolve_comparison(self, run):
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        selections = {
+            item.id: "사람이 확인한 값" for item in run.items
+            if item.match_status != "MATCHED" and item.is_blocking_field
+        }
+        return ProductAttributeMatchService(self.db).resolve_run(
+            run.id, run.company_id, is_admin=True, resolved_by=1,
+            resolution_note="사람이 확인함", selected_values=selections,
+        )
+
+    def _requery(self, run, **supplier_overrides):
+        """같은 연결·같은 상품으로 다시 조회한 것처럼 새 비교를 기록한다(실제
+        조회처럼 상품명만 있는 단일 소스. overrides로 값을 바꾼다)."""
+
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+
+        values = {"NAME": ("공급처 상품명", "매입처 실제 조회", None)}
+        for field, value in supplier_overrides.items():
+            values[field] = (value, "매입처 실제 조회", None)
+        return ProductAttributeMatchService(self.db).run_comparison(
+            company_id=run.company_id, product_identifier=run.product_identifier,
+            connection_id=run.connection_id, supplier_values=values,
+            sales_channel_values={}, homez_current_values={},
+        )
+
+    def _first_lookup(self, company_id):
+        from app.domains.product_attribute_match.service import (
+            ProductAttributeMatchService,
+        )
+        from app.domains.purchase_task.model import PurchaseChannelConnection
+
+        conn = PurchaseChannelConnection(
+            company_id=company_id, mall_code="ONCHANNEL",
+            connection_method="CREDENTIAL", account_label="재조회 테스트",
+            status="CONNECTED",
+        )
+        self.db.add(conn)
+        self.db.commit()
+        return ProductAttributeMatchService(self.db).run_comparison(
+            company_id=company_id, product_identifier="CH-LIVE-1",
+            connection_id=conn.id,
+            supplier_values={"NAME": ("공급처 상품명", "매입처 실제 조회", None)},
+            sales_channel_values={}, homez_current_values={},
+        )
+
+    def test_same_content_requery_after_resolution_keeps_registration_open(self):
+
+        wizard, result = self._supplier_sourced_wizard()
+        live = ListingWizardLiveService(self.db)
+        first = self._first_lookup(self.company_id)
+        self.assertIn(
+            "PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED",
+            live.preflight(wizard.id, result.submission_id, self.company_id).blockers,
+        )
+
+        resolved = self._record_and_resolve(wizard)
+        self._requery(first)  # 같은 비교 내용으로 다시 조회(공급처 조회만 한 run)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+
+        provider = _FakeProvider()
+        live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(len(provider.calls), 1)
+        # 과거 해소 기록은 그대로다.
+        self.db.refresh(resolved)
+        self.assertEqual(resolved.resolved_by, 1)
+        self.assertEqual(resolved.resolution_note, "사람이 확인함")
+    def test_changed_content_requery_after_resolution_blocks_again_with_zero_provider_calls(self):
+
+        wizard, result = self._supplier_sourced_wizard()
+        live = ListingWizardLiveService(self.db)
+        first = self._first_lookup(self.company_id)
+        self._record_and_resolve(wizard)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+
+        self._requery(first, MANUFACTURER="유레카코스")  # 공급처가 새 값을 알려 줌
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [])
+    def test_mall_code_case_in_source_reference_does_not_bypass_a_blocked_comparison(self):
+
+        wizard, result = self._supplier_sourced_wizard("onchannel:CH-LIVE-1")
+        self._first_lookup(self.company_id)
+
+        live = ListingWizardLiveService(self.db)
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [])
+
+    def test_unreadable_supplier_reference_blocks_instead_of_counting_as_no_record(self):
+
+        live = ListingWizardLiveService(self.db)
+        wizard, result = self._supplier_sourced_wizard("ONCHANNEL CH-LIVE-1")
+        for reference in ("ONCHANNEL CH-LIVE-1", "ONCHANNEL", "ONCHANNEL:"):
+            self._set_source_reference(wizard, reference)
+            blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+            self.assertIn("SUPPLIER_SOURCE_IDENTIFIER_UNCLEAR", blocked.blockers, reference)
+            self.assertFalse(blocked.ready, reference)
+            provider = _FakeProvider()
+            with self.assertRaises(ForbiddenException):
+                live.send(wizard.id, result.submission_id, self.company_id, provider)
+            self.assertEqual(provider.calls, [], reference)
+
+    def test_product_code_case_variant_is_reported_not_merged(self):
+        """상품 코드의 대소문자는 구분한다 — 소문자 표기를 같은 상품으로 합쳐 차단하지도,
+        기록이 없다고 통과시키지도 않고 식별자가 불명확하다고 막는다."""
+
+        wizard, result = self._supplier_sourced_wizard("ONCHANNEL:ch-live-1")
+        self._first_lookup(self.company_id)  # 기록은 정확한 코드 "CH-LIVE-1"
+
+        live = ListingWizardLiveService(self.db)
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("SUPPLIER_SOURCE_IDENTIFIER_UNCLEAR", blocked.blockers)
+        self.assertNotIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", blocked.blockers)
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [])
+
+    def test_non_supplier_candidate_is_not_blocked_by_identifier_check(self):
+
+        live = ListingWizardLiveService(self.db)
+        wizard, result = self._supplier_sourced_wizard("no-supplier-identity")
+        for reference in ("no-supplier-identity", "", "Other brand sample"):
+            self._set_source_reference(wizard, reference)
+            blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+            self.assertNotIn("SUPPLIER_SOURCE_IDENTIFIER_UNCLEAR", blocked.blockers, reference)
+
+    # ---- 2026-10-05: 실제 워크플로(조회 → 비교 → 해소 → 위저드 승인 → 최종 점검) ----
+
+    def test_workflow_resolving_a_supplier_only_lookup_does_not_review_the_registration_content(self):
+        """공급처 조회만 한 기록(HOMEZ 값 없음)을 해소했다고 해서 지금 등록하려는
+        내용(상품명·옵션·수량·용량·제조사·원산지)까지 검토된 것은 아니다. 승인 지문은
+        위저드 내용이 바뀌지 않았는지만 보고 속성 비교를 보지 않는다 — 이 흐름이
+        통과하면 해소가 등록 내용과 무관하게 재사용되는 것이다."""
+
+        wizard = self._prepare_wizard(live_ready=True)
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        self._resolve_comparison(self._first_lookup(self.company_id))
+        wizard, result = self._approve_and_submit(wizard)
+
+        live = ListingWizardLiveService(self.db)
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("ATTRIBUTE_RESOLUTION_NOT_BOUND_TO_REGISTRATION", blocked.blockers)
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [])
+
+    def test_workflow_registration_comparison_resolved_then_final_check_passes_once(self):
+        """조회 → 등록 내용 비교 기록 → 사람이 해소 → 위저드 승인·제출 → 최종 점검 통과."""
+
+        wizard = self._prepare_wizard(live_ready=True)
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        self._first_lookup(self.company_id)
+        run = ListingWizardLiveService(self.db).record_registration_comparison(
+            wizard.id, self._account_id(wizard), self.company_id, triggered_by=1,
+        )
+        homez = {i.field_name: i.homez_current_value for i in run.items}
+        draft = json.loads(wizard.draft_json)
+        self.assertEqual(homez["NAME"], draft["product_name"])
+        self.assertIn("[", homez["OPTIONS"])  # itemName [externalVendorSku]
+        self.assertIsNone(homez["QUANTITY"], "구성수량 속성이 없으면 비어 있다(unitCount로 채우지 않음)")
+        self._resolve_comparison(run)
+
+        wizard, result = self._approve_and_submit(wizard)
+        live = ListingWizardLiveService(self.db)
+        runs_before = self.db.query(ProductAttributeComparisonRun).count()
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+        provider = _FakeProvider()
+        live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(len(provider.calls), 1)
+        # 점검·전송이 몰래 새 비교를 저장하지 않는다.
+        self.assertEqual(self.db.query(ProductAttributeComparisonRun).count(), runs_before)
+
+    def _assert_edit_after_resolution_is_blocked(self, mutate, expected_field=None):
+        """비교를 해소한 뒤 위저드를 고쳐(승인 전) 다시 승인·제출하면, 승인 지문은
+        새 내용으로 통과하더라도 속성 비교 해소는 새 등록 내용과 이어져 있지 않다."""
+
+        wizard = self._prepare_wizard(live_ready=True)
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        self._first_lookup(self.company_id)
+        self._record_and_resolve(wizard)
+
+        mutate(wizard)
+        wizard, result = self._approve_and_submit(wizard)
+
+        live = ListingWizardLiveService(self.db)
+        runs_before = self.db.query(ProductAttributeComparisonRun).count()
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("ATTRIBUTE_RESOLUTION_NOT_BOUND_TO_REGISTRATION", blocked.blockers)
+        self.assertNotIn("APPROVED_PAYLOAD_CHANGED", blocked.blockers)  # 승인 지문은 통과한 상태
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(self.db.query(ProductAttributeComparisonRun).count(), runs_before)
+
+    def _edit_draft(self, **changes):
+        def mutate(wizard):
+            draft = json.loads(wizard.draft_json)
+            draft.update(changes)
+            wizard.draft_json = json.dumps(draft, ensure_ascii=False)
+            self.db.commit()
+        return mutate
+
+    def _edit_entry(self, function):
+        def mutate(wizard):
+            entries = json.loads(wizard.channel_selections_json)
+            function(entries[0])
+            wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
+            self.db.commit()
+        return mutate
+
+    def test_workflow_product_name_change_after_resolution_requires_review(self):
+
+        self._assert_edit_after_resolution_is_blocked(
+            self._edit_draft(product_name="해소 뒤에 바꾼 상품명"),
+        )
+
+    def test_workflow_option_change_after_resolution_requires_review(self):
+
+        def change(entry):
+            entry["required_fields"]["items"][0]["itemName"] = "해소 뒤에 바꾼 옵션"
+
+        self._assert_edit_after_resolution_is_blocked(self._edit_entry(change))
+
+    def test_workflow_composition_quantity_change_after_resolution_requires_review(self):
+        """구성수량은 구매옵션 "수량"이다 — 해소 뒤에 그 값이 새로 생기거나 바뀌면 재검토."""
+
+        def change(entry):
+            entry["channel_policy_attributes"]["purchase_options"] = {"opt": "1", "수량": "2"}
+
+        self._assert_edit_after_resolution_is_blocked(self._edit_entry(change))
+
+    def test_workflow_manufacturer_and_origin_notice_changes_after_resolution_require_review(self):
+
+        def change(entry):
+            entry["required_fields"]["notices"] = [{
+                "noticeCategoryName": "기타 재화",
+                "noticeCategoryDetailNames": [
+                    {"noticeCategoryDetailName": "품명 및 모델명", "content": "테스트 상품"},
+                    {"noticeCategoryDetailName": "제조자(수입자)", "content": "다른 제조사"},
+                    {"noticeCategoryDetailName": "제조국(원산지)", "content": "미국"},
+                ],
+            }]
+
+        self._assert_edit_after_resolution_is_blocked(self._edit_entry(change))
+
+    def test_workflow_unit_count_and_order_quantity_do_not_stand_in_for_composition_quantity(self):
+        """unitCount·maximumBuyCount를 바꿔도 구성수량(구매옵션 수량) 비교값은 바뀌지 않는다
+        — 서로 대체되지 않는다. 비교 기록에는 구매옵션 "수량"만 들어간다."""
+
+        from app.domains.marketplace_listing.coupang_live_payload import (
+            extract_registration_attribute_values,
+        )
+
+        wizard = self._prepare_wizard(live_ready=True)
+        live = ListingWizardLiveService(self.db)
+        entries = json.loads(wizard.channel_selections_json)
+        entries[0]["required_fields"]["items"][0]["unitCount"] = 7
+        entries[0]["required_fields"]["items"][0]["maximumBuyCount"] = 9
+        wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
+        self.db.commit()
+        payload, blockers = live._build_for_account(
+            wizard, self._account_id(wizard), autofill_images=False,
+        )
+        self.assertEqual(blockers, [])
+        self.assertIsNone(extract_registration_attribute_values(payload)["QUANTITY"])
+
+        entries[0]["channel_policy_attributes"]["purchase_options"] = {"opt": "1", "수량": "3"}
+        wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
+        self.db.commit()
+        payload, _ = live._build_for_account(
+            wizard, self._account_id(wizard), autofill_images=False,
+        )
+        self.assertEqual(extract_registration_attribute_values(payload)["QUANTITY"], "수량=3")
+
+    def test_workflow_non_blocking_changes_do_not_reopen_the_review(self):
+        """검색 태그·브랜드처럼 비교 대상이 아닌 값이 바뀌거나, 공급처가 모델명(비차단)을
+        새로 알려 줘도 불필요한 재검토를 만들지 않는다."""
+
+        wizard = self._prepare_wizard(live_ready=True)
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        first = self._first_lookup(self.company_id)
+        self._record_and_resolve(wizard)
+
+        self._edit_draft(keywords=["새 검색어", "또 다른 검색어"])(wizard)
+        entries = json.loads(wizard.channel_selections_json)
+        entries[0]["required_fields"]["brand"] = "다른 브랜드 표기"
+        wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
+        self.db.commit()
+        wizard, result = self._approve_and_submit(wizard)
+        self._requery(first, MODEL_NAME="RP-200")  # 공급처가 모델명을 새로 알려 줌(비차단)
+
+        live = ListingWizardLiveService(self.db)
+        ready = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertNotIn("ATTRIBUTE_RESOLUTION_NOT_BOUND_TO_REGISTRATION", ready.blockers)
+        self.assertNotIn("PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED", ready.blockers)
+        self.assertTrue(ready.ready, ready.blockers)
+
+    def test_workflow_resolution_of_another_company_connection_or_product_is_not_reused(self):
+
+        wizard = self._prepare_wizard(live_ready=True)
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        wizard, result = self._approve_and_submit(wizard)
+        live = ListingWizardLiveService(self.db)
+
+        # 이 회사에는 아직 조회만 한 미해소 기록이 있다.
+        mine = self._first_lookup(self.company_id)
+        self.assertIn(
+            "PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED",
+            live.preflight(wizard.id, result.submission_id, self.company_id).blockers,
+        )
+
+        # (1) 다른 회사가 같은 코드·같은 내용으로 해소했어도 쓰지 못한다.
+        theirs = self._first_lookup(self.other_company_id)
+        self._resolve_comparison(theirs)
+        self.assertIn(
+            "PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED",
+            live.preflight(wizard.id, result.submission_id, self.company_id).blockers,
+        )
+
+        # (2) 같은 회사의 다른 상품 코드를 해소해도 쓰지 못한다.
+        other_product = self._blocked_comparison(self.company_id, code="CH-OTHER-9")
+        self._resolve_comparison(other_product)
+        self.assertIn(
+            "PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED",
+            live.preflight(wizard.id, result.submission_id, self.company_id).blockers,
+        )
+
+        # (3) 이 상품을 해소(등록 내용과 이어서)하면 열리지만, 같은 매입처의 다른 연결에
+        # 미해소 조회가 새로 생기면 어느 연결인지 불명확해 다시 막힌다.
+        self.db.refresh(mine)
+        self.assertTrue(
+            ListingWizardLiveService(self.db).record_registration_comparison(
+                wizard.id, self._account_id(wizard), self.company_id, triggered_by=1,
+            ) is not None,
+        )
+        latest = self.db.query(ProductAttributeComparisonRun).filter_by(
+            company_id=self.company_id, product_identifier="CH-LIVE-1",
+        ).order_by(ProductAttributeComparisonRun.id.desc()).first()
+        self._resolve_comparison(latest)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+        self._first_lookup(self.company_id)  # 새 연결 + 미해소 조회
+        self.assertIn(
+            "PRODUCT_ATTRIBUTE_MISMATCH_BLOCKED",
+            live.preflight(wizard.id, result.submission_id, self.company_id).blockers,
+        )
+
+    def test_recording_a_registration_comparison_needs_a_stored_lookup_and_ready_payload(self):
+
+        wizard = self._prepare_wizard(live_ready=True)
+        live = ListingWizardLiveService(self.db)
+        account_id = self._account_id(wizard)
+
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        with self.assertRaises(BadRequestException):  # 저장된 공급처 조회 기록이 없다
+            live.record_registration_comparison(wizard.id, account_id, self.company_id)
+
+        self._first_lookup(self.company_id)
+        self._set_source_reference(wizard, "ONCHANNEL")  # 식별자를 읽을 수 없다
+        with self.assertRaises(BadRequestException):
+            live.record_registration_comparison(wizard.id, account_id, self.company_id)
+
+        self._set_source_reference(wizard, "ONCHANNEL:CH-LIVE-1")
+        entries = json.loads(wizard.channel_selections_json)
+        entries[0]["required_fields"]["images"] = []  # payload 미완성 → 이미지 자동 채움(업로드)도 하지 않는다
+        wizard.channel_selections_json = json.dumps(entries, ensure_ascii=False)
+        self.db.commit()
+        with patch(
+            "app.domains.marketplace_listing.listing_wizard_live_service.autofill_coupang_images",
+            side_effect=AssertionError("비교 기록이 이미지 업로드를 시도했다"),
+        ):
+            with self.assertRaises(BadRequestException):
+                live.record_registration_comparison(wizard.id, account_id, self.company_id)
+
+        with self.assertRaises(NotFoundException):
+            live.record_registration_comparison(wizard.id, account_id, self.other_company_id)
+
+    # ---- 2026-10-05: 승인 대상 판매계정과 실제 전송 연결 ----
+
+    def _my_connection(self):
+        return self.db.query(StoreConnection).filter_by(company_id=self.company_id).first()
+
+    def _assert_blocked_without_provider_call(self, wizard, result, blocker):
+        live = ListingWizardLiveService(self.db)
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn(blocker, blocked.blockers)
+        self.assertFalse(blocked.ready)
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [], "차단되면 쿠팡 Provider는 한 번도 호출되지 않아야 한다.")
+
+    def test_seller_connection_is_recorded_in_the_approval_package_and_ready_when_unchanged(self):
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        connection = self._my_connection()
+        package = json.loads(wizard.approval_package_json)
+        self.assertEqual(
+            package["seller_connections"],
+            [{
+                "marketplace_account_id": json.loads(wizard.channel_selections_json)[0]["marketplace_account_id"],
+                "store_connection_id": connection.id,
+                "connection_revision": connection.credential_version,
+                "connection_binding_fingerprint": binding_fingerprint(connection),
+            }],
+        )
+        self.assertNotIn("test-credential-ref-1", wizard.approval_package_json)  # 참조·비밀은 담지 않는다
+        live = ListingWizardLiveService(self.db)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+
+    def test_another_coupang_connection_in_the_company_does_not_change_the_target(self):
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        designated = self._my_connection()
+        self._store_connection("other-seller", reference="test-credential-ref-2")  # 더 늦은 id
+        live = ListingWizardLiveService(self.db)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+        from app.domains.marketplace_listing.coupang_seller_connection import (
+            resolve_seller_connection,
+        )
+        account_id = json.loads(wizard.channel_selections_json)[0]["marketplace_account_id"]
+        self.assertEqual(
+            resolve_seller_connection(self.db, self.company_id, account_id).id, designated.id,
+        )
+
+    def test_connection_belonging_to_another_company_is_not_a_target(self):
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        connection = self._my_connection()
+        label = connection.seller_identifier
+        self.db.delete(connection)
+        self.db.commit()
+        self._store_connection(label, company_id=self.other_company_id, reference="foreign-ref")
+        self._assert_blocked_without_provider_call(wizard, result, "SELLER_CONNECTION_NOT_FOUND")
+
+    def test_disabling_or_disconnecting_the_connection_after_approval_blocks(self):
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        connection = self._my_connection()
+        for status in ("DISABLED", "ERROR"):
+            connection.connection_status = status
+            self.db.commit()
+            self._assert_blocked_without_provider_call(wizard, result, "SELLER_CONNECTION_NOT_CONNECTED")
+        # 다시 연결되면(같은 연결·같은 자격증명 버전) 통과한다.
+        connection.connection_status = "CONNECTED"
+        self.db.commit()
+        self.assertTrue(
+            ListingWizardLiveService(self.db).preflight(
+                wizard.id, result.submission_id, self.company_id,
+            ).ready,
+        )
+
+    def test_replacing_the_connection_or_rotating_the_credential_after_approval_requires_reapproval(self):
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        connection = self._my_connection()
+        live = ListingWizardLiveService(self.db)
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+
+        # 자격증명 교체(credential_version 증가) — 같은 연결이어도 승인 당시와 다르다.
+        connection.credential_version += 1
+        self.db.commit()
+        self._assert_blocked_without_provider_call(wizard, result, "SELLER_CONNECTION_CHANGED_AFTER_APPROVAL")
+        self.assertIn(
+            "APPROVED_PAYLOAD_CHANGED",
+            live.preflight(wizard.id, result.submission_id, self.company_id).blockers,
+        )
+
+        # 연결을 지우고 같은 식별자로 새 연결을 만들어도(다른 id) 승인 당시 연결이 아니다.
+        connection.credential_version -= 1
+        self.db.commit()
+        self.assertTrue(live.preflight(wizard.id, result.submission_id, self.company_id).ready)
+        label = connection.seller_identifier
+        self.db.delete(connection)
+        self.db.commit()
+        self._store_connection(label, reference="test-credential-ref-9")
+        self._assert_blocked_without_provider_call(wizard, result, "SELLER_CONNECTION_CHANGED_AFTER_APPROVAL")
+
+    def test_seller_identifier_change_unlinks_the_account_from_its_connection(self):
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        connection = self._my_connection()
+        connection.seller_identifier = "다른 판매자 식별자"
+        self.db.commit()
+        self._assert_blocked_without_provider_call(wizard, result, "SELLER_CONNECTION_NOT_FOUND")
+
+    def test_preflight_rechecks_min_margin_after_policy_change(self):
+        """2026-10-04 — 승인 이후 최소마진 기준이 바뀌어도(예: 15%→18%) 이미
+        받은 승인이 새 기준을 우회하지 못한다: 실제 전송 직전 점검이
+        현재 기준으로 다시 판정하고, 막히면 provider는 한 번도
+        호출되지 않는다."""
+
+        from app.domains.channel_policy.schema import (
+            UpdateCompanyChannelPolicySettingsRequest,
+        )
+        from app.domains.channel_policy.service import ChannelPolicyService
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        live = ListingWizardLiveService(self.db)
+        self.assertTrue(live.preflight(
+            wizard.id, result.submission_id, self.company_id,
+        ).ready)
+
+        ChannelPolicyService(self.db).upsert_settings(
+            self.company_id, updated_by=1,
+            data=UpdateCompanyChannelPolicySettingsRequest(
+                expected_version=0, min_target_margin_rate="0.99",
+            ),
+        )
+        blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
+        self.assertIn("MIN_MARGIN_POLICY_NOT_MET", blocked.blockers)
+        self.assertFalse(blocked.ready)
+
+        provider = _FakeProvider()
+        with self.assertRaises(ForbiddenException):
+            live.send(wizard.id, result.submission_id, self.company_id, provider)
+        self.assertEqual(provider.calls, [])
+
+    def test_preflight_blocks_when_costs_became_unconfirmed(self):
+        """저장된 비용 입력에 미확정(None) 항목이 있으면 최소마진
+        기준 이전에 비용 완결성으로 막힌다(잔액만으로 통과시키지 않음)."""
+
+        wizard, result = self._submitted_wizard(live_ready=True)
+        stored = json.loads(wizard.economics_input_json)
+        stored[0]["packaging_cost"] = None
+        wizard.economics_input_json = json.dumps(stored)
+        self.db.commit()
+
+        blocked = ListingWizardLiveService(self.db).preflight(
+            wizard.id, result.submission_id, self.company_id,
+        )
+        self.assertIn("ECONOMICS_PROVISIONAL", blocked.blockers)
+        self.assertNotIn("MIN_MARGIN_POLICY_NOT_MET", blocked.blockers)
 
     def test_success_persists_external_reference_and_duplicate_is_blocked(self):
         wizard, result = self._submitted_wizard(live_ready=True)

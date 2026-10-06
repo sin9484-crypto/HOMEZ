@@ -36,7 +36,10 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +50,169 @@ I18N_DIR = os.path.join(WEB_DIR, "i18n")
 def _read(path):
     with open(path, encoding="utf-8") as f:
         return f.read()
+
+
+# ---------------------------------------------------------------------------
+# Node 자식 프로세스 실행 + 실패 시 원인 보존 (2026-10-05 66차 전체 회귀 진단 보강)
+#
+# 전체 회귀(5,111건)에서 이 파일의 Node 실행 9건이 "returncode != 0 + 빈 stderr"로 실패했는데
+# 기존 코드는 stderr만 남겨 종료코드·stdout·실행 환경이 사라졌고 원인을 확정할 수 없었다.
+# 아래 헬퍼는 **판정 조건을 바꾸지 않는다**(returncode != 0이면 그대로 실패, 시간초과도 실패) —
+# 실패 메시지에 종료코드(십진·16진), stdout/stderr, 시간초과 여부, 실행 경로·존재·크기, 작업
+# 디렉터리, 소요 시간, 환경 존재 여부(값은 기록하지 않음), 프로세스 자원(메모리·핸들·스레드),
+# 그리고 같은 시점의 Node 단순 실행 탐침 결과를 담는다. 환경변수 `HOMEZ_NODE_DIAG_LOG`에
+# 파일 경로를 주면 성공 호출을 포함한 모든 Node 호출을 한 줄씩(JSON) 추가로 기록한다 —
+# 시간에 따른 자원 변화(핸들 누수 등)를 관측하기 위한 선택 기능이다. 비밀값은 기록하지 않는다.
+# 이 파일의 종료코드(전체 테스트 실행의 종료코드)와 Node 자식의 종료코드는 서로 다른 값이다.
+# ---------------------------------------------------------------------------
+
+_NODE_DIAG_TEXT_LIMIT = 600
+
+
+def _clip(value):
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value if len(value) <= _NODE_DIAG_TEXT_LIMIT else value[:_NODE_DIAG_TEXT_LIMIT] + "…(잘림)"
+
+
+def _process_resource_snapshot():
+    snapshot = {"python_threads": threading.active_count()}
+    if sys.platform != "win32":
+        return snapshot
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatus()
+        status.dwLength = ctypes.sizeof(_MemoryStatus)
+        kernel32 = ctypes.windll.kernel32
+        # 인자 타입을 지정하지 않으면 의사 핸들(-1)이 변환 오류를 낸다(66차 진단 헬퍼의 초기 결함).
+        kernel32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_MemoryStatus)]
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessHandleCount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetProcessHandleCount.restype = wintypes.BOOL
+        if kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            snapshot["memory_load_percent"] = int(status.dwMemoryLoad)
+            snapshot["avail_phys_mb"] = int(status.ullAvailPhys // (1024 * 1024))
+            snapshot["avail_pagefile_mb"] = int(status.ullAvailPageFile // (1024 * 1024))
+        handles = wintypes.DWORD(0)
+        if kernel32.GetProcessHandleCount(kernel32.GetCurrentProcess(), ctypes.byref(handles)):
+            snapshot["process_handle_count"] = int(handles.value)
+    except Exception as exc:  # noqa: BLE001 — 진단 수집 실패가 원래 실패를 가리지 않게 한다
+        snapshot["snapshot_error"] = repr(exc)
+    return snapshot
+
+
+def _environment_presence():
+    """값은 기록하지 않고 존재·형태만 기록한다."""
+
+    tmp = os.environ.get("TEMP") or os.environ.get("TMP") or ""
+    path_entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e]
+    return {
+        "SystemRoot_set": bool(os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")),
+        "windir_set": bool(os.environ.get("windir") or os.environ.get("WINDIR")),
+        "TEMP_set": bool(tmp), "TEMP_dir_exists": bool(tmp) and os.path.isdir(tmp),
+        "tempfile_gettempdir_exists": os.path.isdir(tempfile.gettempdir()),
+        "PATH_entry_count": len(path_entries),
+        "NODE_OPTIONS_set": "NODE_OPTIONS" in os.environ,
+        "NODE_PATH_set": "NODE_PATH" in os.environ,
+        "env_var_count": len(os.environ),
+    }
+
+
+def _probe_node(node_path, args, timeout=15):
+    try:
+        probe = subprocess.run(
+            [node_path, *args], capture_output=True, text=True, timeout=timeout)
+        return {"returncode": probe.returncode, "stdout": _clip(probe.stdout),
+                "stderr": _clip(probe.stderr)}
+    except subprocess.TimeoutExpired:
+        return {"timed_out": True, "timeout": timeout}
+    except OSError as exc:
+        return {"spawn_error": repr(exc)}
+
+
+def _node_failure_report(label, node_path, args, *, timeout, elapsed, timed_out,
+                         returncode, stdout, stderr, spawn_error=None):
+    script_path = args[-1] if args else None
+    report = {
+        "label": label, "returncode": returncode,
+        "returncode_hex": (f"0x{returncode & 0xFFFFFFFF:08X}" if isinstance(returncode, int) else None),
+        "timed_out": timed_out, "timeout_s": timeout, "elapsed_s": round(elapsed, 3),
+        "spawn_error": spawn_error, "stdout": _clip(stdout), "stderr": _clip(stderr),
+        "node_path": node_path, "node_exists": bool(node_path) and os.path.isfile(node_path),
+        "node_size": (os.path.getsize(node_path) if node_path and os.path.isfile(node_path) else None),
+        "cwd": os.getcwd(),
+        "script_path": script_path,
+        "script_exists": bool(script_path) and os.path.isfile(script_path),
+        "script_size": (os.path.getsize(script_path)
+                        if script_path and os.path.isfile(script_path) else None),
+        "python": sys.version.split()[0], "platform": sys.platform,
+        "environment": _environment_presence(),
+        "resources": _process_resource_snapshot(),
+        # 같은 시점에 Node 자체가 일반적으로 실행되는가 — 전역 문제(환경·자원)와 스크립트별 문제를 가른다
+        "probe_node_version": _probe_node(node_path, ["--version"]) if node_path else None,
+        "probe_node_trivial": _probe_node(node_path, ["-e", "process.stdout.write('ok')"]) if node_path else None,
+    }
+    return json.dumps(report, ensure_ascii=False, indent=2, default=str)
+
+
+def _append_node_diag_log(entry):
+    path = os.environ.get("HOMEZ_NODE_DIAG_LOG", "").strip()
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        pass
+
+
+def _run_node(node_path, args, *, label, timeout=30):
+    """Node를 실행하고 returncode != 0·시간초과·실행 실패는 **그대로 AssertionError**로 올린다
+    (판정 완화 없음). 실패 메시지에 원인 진단을 담는다."""
+
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            [node_path, *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _append_node_diag_log({"label": label, "timed_out": True,
+                               "elapsed_s": round(time.monotonic() - started, 3)})
+        raise AssertionError(
+            "Node 실행 시간초과\n" + _node_failure_report(
+                label, node_path, args, timeout=timeout, elapsed=time.monotonic() - started,
+                timed_out=True, returncode=None, stdout=exc.stdout, stderr=exc.stderr),
+        ) from exc
+    except OSError as exc:
+        raise AssertionError(
+            "Node 실행 시작 실패\n" + _node_failure_report(
+                label, node_path, args, timeout=timeout, elapsed=time.monotonic() - started,
+                timed_out=False, returncode=None, stdout=None, stderr=None,
+                spawn_error=repr(exc)),
+        ) from exc
+    elapsed = time.monotonic() - started
+    _append_node_diag_log({
+        "label": label, "returncode": result.returncode, "elapsed_s": round(elapsed, 3),
+        "resources": _process_resource_snapshot(), "time": time.strftime("%H:%M:%S"),
+    })
+    if result.returncode != 0:
+        raise AssertionError(
+            "Node 실행 실패(종료코드가 0이 아님)\n" + _node_failure_report(
+                label, node_path, args, timeout=timeout, elapsed=elapsed, timed_out=False,
+                returncode=result.returncode, stdout=result.stdout, stderr=result.stderr))
+    return result
 
 
 def _load_js_object_literal(path, var_name):
@@ -119,15 +285,11 @@ class TourManifestNodeParsedTestCase(unittest.TestCase):
                 "const arr = eval(src);"
                 "process.stdout.write(JSON.stringify(arr));"
             )
-            result = subprocess.run(
-                [node_path, "-e", script, tmp_path],
-                capture_output=True, text=True, timeout=30,
+            result = _run_node(
+                node_path, ["-e", script, tmp_path], label="HOMEZ_TOURS 매니페스트 평가",
             )
         finally:
             os.unlink(tmp_path)
-
-        if result.returncode != 0:
-            raise AssertionError(f"HOMEZ_TOURS 배열을 node로 평가하지 못했습니다: {result.stderr}")
 
         cls.tours = json.loads(result.stdout)
         cls.tours_by_id = {t["id"]: t for t in cls.tours}
@@ -344,13 +506,11 @@ class TourProgressStorageBehaviorTestCase(unittest.TestCase):
             tmp.write(script)
             tmp_path = tmp.name
         try:
-            result = subprocess.run(
-                [self.node_path, tmp_path], capture_output=True, text=True, timeout=30,
+            result = _run_node(
+                self.node_path, [tmp_path], label=f"진행 상태 시나리오 {self._testMethodName}",
             )
         finally:
             os.unlink(tmp_path)
-        if result.returncode != 0:
-            raise AssertionError(f"Node 시나리오 실행 실패: {result.stderr}")
         return json.loads(result.stdout)
 
     def test_v1_raw_object_migrates_to_v2_scopes_without_loss(self):
@@ -770,6 +930,82 @@ class TourAccessibilityTestCase(unittest.TestCase):
         body = self.js[start:end]
         self.assertIn('"Tab"', body)
         self.assertIn("focusable", body)
+
+
+class NodeDiagnosticsTestCase(unittest.TestCase):
+    """66차 — Node 실행 실패 시 원인이 보존되는지(판정은 완화되지 않는지) 검증한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.node_path = shutil.which("node")
+        if cls.node_path is None:
+            raise unittest.SkipTest("Node.js를 찾을 수 없어 진단 검증을 건너뜁니다.")
+
+    def _failure_report(self, args, **kwargs):
+        with self.assertRaises(AssertionError) as caught:
+            _run_node(self.node_path, args, label="진단 시험", **kwargs)
+        return str(caught.exception)
+
+    def test_nonzero_exit_is_still_a_failure_and_keeps_code_stdout_stderr_and_context(self):
+        message = self._failure_report([
+            "-e", "process.stdout.write('OUT-MARK'); process.stderr.write('ERR-MARK'); process.exit(7)",
+        ])
+        report = json.loads(message[message.index("{"):])
+        self.assertEqual(report["returncode"], 7)
+        self.assertEqual(report["returncode_hex"], "0x00000007")
+        self.assertEqual(report["stdout"], "OUT-MARK")
+        self.assertEqual(report["stderr"], "ERR-MARK")
+        self.assertFalse(report["timed_out"])
+        self.assertEqual(report["label"], "진단 시험")
+        self.assertTrue(report["node_exists"])
+        self.assertIn("cwd", report)
+        self.assertIn("python_threads", report["resources"])
+        if sys.platform == "win32":
+            # 자원 수집 실패가 조용히 빈 값으로 남지 않아야 한다(핸들 수·가용 메모리가 실제 값)
+            self.assertNotIn("snapshot_error", report["resources"])
+            self.assertGreater(report["resources"]["process_handle_count"], 0)
+            self.assertGreater(report["resources"]["avail_phys_mb"], 0)
+        self.assertIn("SystemRoot_set", report["environment"])
+        # 같은 시점의 Node 단순 실행 탐침(전역 문제와 스크립트별 문제를 가른다)
+        self.assertEqual(report["probe_node_trivial"]["returncode"], 0)
+        self.assertEqual(report["probe_node_trivial"]["stdout"], "ok")
+        self.assertEqual(report["probe_node_version"]["returncode"], 0)
+
+    def test_empty_stderr_failure_is_distinguishable_from_a_timeout(self):
+        silent = json.loads(
+            (lambda m: m[m.index("{"):])(self._failure_report(["-e", "process.exit(3)"])))
+        self.assertEqual((silent["returncode"], silent["stderr"], silent["timed_out"]), (3, "", False))
+        slow = self._failure_report(["-e", "setTimeout(() => {}, 20000)"], timeout=1)
+        self.assertIn("시간초과", slow)
+        report = json.loads(slow[slow.index("{"):])
+        self.assertTrue(report["timed_out"])
+        self.assertIsNone(report["returncode"])
+
+    def test_missing_executable_is_reported_as_a_spawn_failure(self):
+        with self.assertRaises(AssertionError) as caught:
+            _run_node(os.path.join(tempfile.gettempdir(), "no-such-node.exe"), ["-e", "1"],
+                      label="없는 실행 파일")
+        self.assertIn("실행 시작 실패", str(caught.exception))
+        self.assertIn("spawn_error", str(caught.exception))
+
+    def test_success_is_returned_and_optionally_logged_without_secrets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "node_diag.jsonl")
+            previous = os.environ.get("HOMEZ_NODE_DIAG_LOG")
+            os.environ["HOMEZ_NODE_DIAG_LOG"] = log_path
+            try:
+                result = _run_node(self.node_path, ["-e", "process.stdout.write('{}')"], label="성공 호출")
+            finally:
+                if previous is None:
+                    os.environ.pop("HOMEZ_NODE_DIAG_LOG", None)
+                else:
+                    os.environ["HOMEZ_NODE_DIAG_LOG"] = previous
+            self.assertEqual((result.returncode, result.stdout), (0, "{}"))
+            entry = json.loads(open(log_path, encoding="utf-8").read().splitlines()[-1])
+            self.assertEqual((entry["label"], entry["returncode"]), ("성공 호출", 0))
+            self.assertIn("python_threads", entry["resources"])
+            for forbidden in ("access_key", "secret", "password", "token"):
+                self.assertNotIn(forbidden, json.dumps(entry).lower())
 
 
 if __name__ == "__main__":

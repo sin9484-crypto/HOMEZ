@@ -58,6 +58,9 @@ from app.domains.purchase_task.schema import ReactivateOrderFunctionRequest
 from app.domains.purchase_task.schema import SupplierIncidentAutoPauseSettingRequest
 from app.domains.purchase_task.schema import SupplierIncidentAutoPauseSettingResponse
 from app.domains.purchase_task.schema import SupplierIncidentRecordRequest
+from app.domains.purchase_task.schema import SupplierStopSaleReconcileRequest
+from app.domains.purchase_task.schema import SupplierStopSaleReExecuteRequest
+from app.domains.purchase_task.schema import SupplierStopSaleReportResponse
 from app.domains.purchase_task.schema import SupplierIncidentResponse
 from app.domains.purchase_task.schema import MemberPointCheckResponse
 from app.domains.purchase_task.schema import SaveTaskSupplierLinkRequest
@@ -157,29 +160,11 @@ def update_policy(
             "변경하려면 현재 비밀번호를 다시 확인해야 합니다.",
         )
 
-    service = PurchaseTaskPolicyService(db)
-    setting = service.get_or_create_default_settings(current_user.company_id)
-
-    if if_unmodified_since:
-        from datetime import datetime as _dt
-        try:
-            expected = _dt.fromisoformat(if_unmodified_since)
-        except ValueError:
-            raise BadRequestException(
-                "X-If-Unmodified-Since 형식이 올바르지 않습니다.",
-            )
-        if setting.updated_at != expected:
-            from app.core.exceptions import ConflictException
-            raise ConflictException(
-                "다른 곳에서 이미 정책이 변경되었습니다 — 새로고침 후 "
-                "다시 시도하세요.",
-            )
-
-    update_data = data.model_dump(exclude_unset=True)
-    for field_name, value in update_data.items():
-        setattr(setting, field_name, value)
-
-    db.commit()
+    setting = PurchaseTaskPolicyService(db).update_settings(
+        current_user.company_id, current_user.id,
+        data.model_dump(exclude_unset=True),
+        if_unmodified_since=if_unmodified_since,
+    )
     return _policy_to_response(setting)
 
 
@@ -979,6 +964,78 @@ def reactivate_order_function(
 # --------------------------------------------------
 # 구매 작업(단건, 동적 경로)
 # --------------------------------------------------
+
+# --------------------------------------------------
+# 공급처 판매중단 처리 — 운영자 재처리(정적 경로, 동적 {task_id}보다 먼저 등록)
+# --------------------------------------------------
+
+def _stop_sale_report_response(report) -> SupplierStopSaleReportResponse:
+
+    return SupplierStopSaleReportResponse(
+        product_code=report.product_code, confirmed=report.confirmed,
+        summary=report.summary(), incomplete_count=len(report.incomplete()),
+        results=[
+            {"step": r.step, "target": r.target, "outcome": r.outcome, "detail": r.detail}
+            for r in report.results
+        ],
+    )
+
+
+@router.post(
+    "/supplier-stop-sale/reconcile", response_model=SupplierStopSaleReportResponse,
+)
+def reconcile_supplier_stop_sale(
+    data: SupplierStopSaleReconcileRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """이전 판매중지·고객 주문 취소 요청의 결과를 **읽기 조회로만** 대조한다. 외부 변경
+    요청은 이 경로에서 보내지 않는다(미적용이 확인돼도 재요청하지 않는다)."""
+
+    from app.domains.purchase_task.supplier_stop_sale_operator_service import (
+        SupplierStopSaleOperatorService,
+    )
+
+    report = SupplierStopSaleOperatorService(db).reconcile(
+        company_id=current_user.company_id, connection_id=data.connection_id,
+        product_code=data.product_code, operator_user_id=current_user.id,
+    )
+    return _stop_sale_report_response(report)
+
+
+@router.post(
+    "/supplier-stop-sale/re-execute", response_model=SupplierStopSaleReportResponse,
+)
+def re_execute_supplier_stop_sale(
+    data: SupplierStopSaleReExecuteRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    recent_auth_token: str | None = Header(
+        default=None, alias="X-Recent-Auth-Token",
+    ),
+):
+    """쿠팡 판매중지·고객 주문 취소를 **다시 실행**한다(외부 변경). 관리자 + 최근 인증 +
+    승인된 업체코드가 필요하고, 현재 공급처 상태·기능 모드·재시도 한도를 다시 검사한다."""
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise UnauthorizedException(
+            "SUPPLIER_STOP_SALE_RECENT_AUTH_REQUIRED: 쿠팡 판매중지·주문 취소를 다시 "
+            "실행하려면 현재 비밀번호를 다시 확인해야 합니다.",
+        )
+
+    from app.domains.purchase_task.supplier_stop_sale_operator_service import (
+        SupplierStopSaleOperatorService,
+    )
+
+    report = SupplierStopSaleOperatorService(db).re_execute(
+        company_id=current_user.company_id, connection_id=data.connection_id,
+        product_code=data.product_code, operator_user_id=current_user.id,
+        expected_vendor_id=data.expected_vendor_id,
+        source_wizard_id=data.source_wizard_id,
+        retry_action_required=data.retry_action_required,
+    )
+    return _stop_sale_report_response(report)
+
 
 @router.get("/{task_id}", response_model=PurchaseTaskResponse)
 def get_task(

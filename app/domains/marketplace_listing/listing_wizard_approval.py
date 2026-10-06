@@ -33,6 +33,9 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.domains.marketplace_listing.coupang_seller_connection import (
+    seller_connection_descriptor,
+)
 from app.domains.marketplace_listing.fingerprint import canonical_json
 from app.domains.marketplace_listing.fingerprint import sha256_hex
 from app.domains.marketplace_listing.model import ListingWizard
@@ -73,6 +76,14 @@ def build_approval_package(
         "channel_selections": channel_selections,
         "economics_input": economics_input,
         "economics_result": economics_result,
+        # 2026-10-05 — 승인한 판매계정이 실제 전송에서 쓰는 판매 연결(비밀 없는 식별 정보).
+        # 승인 뒤 연결이 바뀌거나 자격증명이 교체되면 지문이 달라져 재승인이 필요하다.
+        "seller_connections": [
+            seller_connection_descriptor(
+                db, company_id, entry.get("marketplace_account_id"),
+            )
+            for entry in channel_selections
+        ],
         "precheck_status": precheck_status,
         "precheck_policy_version": PRECHECK_POLICY_VERSION,
     }

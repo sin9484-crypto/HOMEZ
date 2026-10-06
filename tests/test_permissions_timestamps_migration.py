@@ -388,6 +388,15 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 영구 대응 테이블 1개(supplier_option_links, 추가형). 동일한 이유로
             # 추가. 실제 운영 DB에는 아직 미적용이다(별도 승인 대상).
             "20260921_00_create_supplier_option_link_schema.sql",
+            # 2026-09-24(13차, 커밋 2787b1f) — 결과불명 이후 중복 상품등록 차단용 부분
+            # 유니크 인덱스 1개. 이 목록에 반영되지 않은 채로 남아 있어(이번 작업 이전부터)
+            # 이 테스트가 실패 상태였다 — 같은 갱신 규칙으로 함께 추가한다. 실제 운영 DB에는
+            # 아직 미적용이다(별도 승인 대상).
+            "20260924_00_add_marketplace_submissions_live_claim_index.sql",
+            # 2026-10-05 판매채널 외부 변경(쿠팡 옵션 판매중지·고객 주문 취소) 작업 장부
+            # 테이블 1개(channel_action_requests, 추가형). 동일한 이유로 추가. 실제 운영 DB에는
+            # 미적용이다(별도 승인 대상 — 이 테이블이 없으면 외부 요청을 보내지 않는다).
+            "20261005_00_create_channel_action_request_schema.sql",
         ]
 
         all_files = sorted(

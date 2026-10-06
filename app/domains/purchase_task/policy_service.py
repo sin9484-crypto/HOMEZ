@@ -20,8 +20,12 @@ from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from app.core.audit_db import write_audit_log
+from app.core.exceptions import BadRequestException
+from app.core.exceptions import ConflictException
 from app.domains.automation_safety.service import SafetyService
 from app.domains.purchase_task.model import PurchaseTaskPolicySetting
 from app.domains.purchase_task.repository import PurchaseTaskRepository
@@ -75,6 +79,13 @@ class PurchaseTaskPolicyCheckResult:
     reasons: tuple[str, ...]
 
 
+def _describe_policy_changes(changes: list[tuple[str, object, object]]) -> str:
+    """변경 항목과 전후 값(없음은 None). 500자 컬럼에 맞게 자른다."""
+
+    text = "; ".join(f"{name}: {before!r} -> {after!r}" for name, before, after in changes)
+    return text if len(text) <= 480 else text[:477] + "..."
+
+
 class PurchaseTaskPolicyService:
 
     def __init__(self, db: Session):
@@ -82,6 +93,92 @@ class PurchaseTaskPolicyService:
         self.db = db
         self.repository = PurchaseTaskRepository(db)
         self.safety = SafetyService(db)
+
+    def update_settings(
+        self, company_id: int, user_id: int, update_data: dict,
+        if_unmodified_since: str | None = None,
+    ) -> PurchaseTaskPolicySetting:
+        """정책 저장(전체 폼 저장 계약).
+
+        `update_data`는 `PolicySettingUpdate.model_dump(exclude_unset=True)`다 —
+        **생략**(키 없음)은 기존 값 유지, **명시적 null**은 "미설정"으로
+        되돌림(권장 기본값 적용), **명시적 숫자**는 그 값 저장이다. 셋은
+        서로 다르며 여기서 섞지 않는다.
+
+        동시 수정 보호: `if_unmodified_since`(마지막으로 조회한 updated_at)는
+        **필수**다 — 생략을 허용하면 오래된 화면이나 동시 요청이 다른
+        관리자의 변경을 조용히 덮어쓴다. 비교는 "읽고 비교한 뒤 쓰기"가
+        아니라 `UPDATE ... WHERE updated_at = :기대값` 조건부 UPDATE 한 번으로
+        한다(ListingWizard.version과 같은 패턴) — 같은 이전 값을 읽은 두
+        요청 중 하나만 성공하고 나머지는 0행이라 충돌로 거부된다. 정책
+        테이블에는 version 컬럼이 없어(Migration 없이) updated_at을 토큰으로
+        쓴다.
+
+        변경된 항목의 전후 값과 변경자·회사는 같은 Transaction의 감사
+        로그로 남긴다(감사 실패 시 설정도 롤백, 충돌이면 감사도 없음).
+        비밀번호·토큰은 이 함수에 들어오지 않는다."""
+
+        if not if_unmodified_since:
+            raise BadRequestException(
+                "PURCHASE_TASK_POLICY_VERSION_REQUIRED: 정책을 저장하려면 "
+                "마지막으로 조회한 수정 시각(X-If-Unmodified-Since)이 필요합니다 "
+                "— 화면을 새로고침한 뒤 다시 시도하세요.",
+            )
+        try:
+            expected = datetime.fromisoformat(if_unmodified_since)
+        except ValueError:
+            raise BadRequestException(
+                "X-If-Unmodified-Since 형식이 올바르지 않습니다.",
+            )
+
+        setting = self.get_or_create_default_settings(company_id)
+        conflict = ConflictException(
+            "다른 곳에서 이미 정책이 변경되었습니다 — 새로고침 후 "
+            "다시 시도하세요.",
+        )
+        if setting.updated_at != expected:
+            raise conflict
+
+        changes = [
+            (name, getattr(setting, name), value)
+            for name, value in update_data.items()
+            if getattr(setting, name) != value
+        ]
+        if not update_data:
+            return setting
+
+        new_stamp = max(
+            datetime.utcnow(), expected + timedelta(microseconds=1),
+        )
+        try:
+            result = self.db.execute(
+                update(PurchaseTaskPolicySetting)
+                .where(
+                    PurchaseTaskPolicySetting.id == setting.id,
+                    PurchaseTaskPolicySetting.company_id == company_id,
+                    PurchaseTaskPolicySetting.updated_at == expected,
+                )
+                .values(**update_data, updated_at=new_stamp),
+            )
+            if result.rowcount != 1:
+                self.db.rollback()
+                raise conflict
+            if changes:
+                write_audit_log(
+                    self.db, user_id=user_id,
+                    action="PURCHASE_TASK_POLICY_UPDATED",
+                    entity="purchase_task_policy", entity_id=str(setting.id),
+                    company_id=company_id,
+                    description=_describe_policy_changes(changes),
+                )
+            self.db.commit()
+        except ConflictException:
+            raise
+        except Exception:
+            self.db.rollback()
+            raise
+        self.db.refresh(setting)
+        return setting
 
     def get_or_create_default_settings(
         self, company_id: int,

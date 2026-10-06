@@ -36,6 +36,15 @@ def get_product_attribute_match_service(
     return ProductAttributeMatchService(db)
 
 
+def _present(service: ProductAttributeMatchService, run):
+    """저장된 run에 계산한 해소 유효성 정보를 덧붙여 응답으로 만든다."""
+
+    response = ProductAttributeComparisonRunResponse.model_validate(run)
+    for key, value in service.describe_run(run).items():
+        setattr(response, key, value)
+    return response
+
+
 def _to_tuples(values):
 
     return {
@@ -53,7 +62,7 @@ def run_comparison(
     ),
 ):
 
-    return service.run_comparison(
+    return _present(service, service.run_comparison(
         company_id=current_user.company_id,
         product_identifier=data.product_identifier,
         connection_id=data.connection_id,
@@ -61,7 +70,7 @@ def run_comparison(
         sales_channel_values=_to_tuples(data.sales_channel_values),
         homez_current_values=_to_tuples(data.homez_current_values),
         triggered_by=current_user.id,
-    )
+    ))
 
 
 @router.get("", response_model=list[ProductAttributeComparisonRunResponse])
@@ -73,7 +82,10 @@ def list_comparisons(
     ),
 ):
 
-    return service.list_runs(current_user.company_id, status=status_filter)
+    return [
+        _present(service, run)
+        for run in service.list_runs(current_user.company_id, status=status_filter)
+    ]
 
 
 @router.get("/{run_id}", response_model=ProductAttributeComparisonRunResponse)
@@ -85,7 +97,7 @@ def get_comparison(
     ),
 ):
 
-    return service.get_run(run_id, current_user.company_id)
+    return _present(service, service.get_run(run_id, current_user.company_id))
 
 
 @router.post(
@@ -99,12 +111,12 @@ def resolve_comparison(
     ),
 ):
 
-    return service.resolve_run(
+    return _present(service, service.resolve_run(
         run_id, current_user.company_id, is_admin=True,
         resolved_by=current_user.id,
         resolution_note=data.resolution_note,
         selected_values=data.selected_values,
-    )
+    ))
 
 
 __all__ = ["router"]

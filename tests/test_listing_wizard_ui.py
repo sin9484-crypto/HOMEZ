@@ -323,6 +323,29 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
         self.assertIn("res.sale_price_mismatch_reference != null", body)
         self.assertIn('"lw.econ_sale_price_mismatch"', body)
 
+    def test_economics_step_keeps_the_purchase_fee_opt_in_on_every_save(self):
+        """발주 예상비용 사용 선택은 입력칸이 아니라 체크박스라, 저장 항목에
+        따로 담지 않으면 저장할 때마다 선택이 사라진다. 렌더·저장·문구가
+        함께 있는지 확인한다."""
+
+        source = self.js
+        render = source.index("function lwRenderEconomicsStep(content)")
+        body = source[render:render + 9000]
+        self.assertIn("lw-econ-use-fee-for-purchase", body)
+        self.assertIn("inp.use_channel_fee_for_purchase_estimate", body)
+        self.assertIn(
+            "item.use_channel_fee_for_purchase_estimate = !!block.querySelector(",
+            body,
+        )
+        for catalog in ("ko-KR.js", "en-US.js"):
+            with open(
+                os.path.join(REPO_ROOT, "app", "web", "i18n", catalog),
+                encoding="utf-8",
+            ) as f:
+                text = f.read()
+            self.assertIn('"lw.econ_use_fee_for_purchase"', text)
+            self.assertIn('"purchase_task.field_coupang_fee_amount"', text)
+
     def test_contents_build_confirm_dialog_appears_before_upload_call_in_source(self):
         """2026-09-29(49차) — 실제 재현으로 확인된 결함: "선택한
         이미지로 상세설명 구성" 버튼이 클릭 전 아무 안내 없이 선택된
@@ -423,7 +446,13 @@ async function runScenario(confirmReturns) {
             self.assertEqual(result.returncode, 0, result.stderr)
             output = json.loads(result.stdout.strip().splitlines()[-1])
         finally:
-            os.remove(harness_path)
+            # 임시 파일 삭제가 PermissionError로 거부된 적이 있다(Windows 파일
+            # 잠금으로 추정, 원인은 확정하지 못함). 정리 실패는 검증 결과가
+            # 아니므로 삭제 오류만 무시한다 — 위 returncode/출력 단언은 그대로다.
+            try:
+                os.remove(harness_path)
+            except OSError:
+                pass
 
         self.assertEqual(
             output["cancelled"]["fetchCallCount"], 0,

@@ -187,6 +187,28 @@ class PurchaseTaskOrderSyncService:
         product_title = item.product_name_snapshot or ""
         needs_review = not product_title.strip()
 
+        sale_amount = (
+            item.unit_price * item.quantity
+            if item.unit_price is not None else None
+        )
+        # 2026-10-04 — 수수료를 비워 두면 후보 평가·최종 승인이 영원히
+        # 막힌다. 기존 연결(주문 상품→채널 매핑→listing→승인된 위저드의
+        # 승인 당시 수수료율)이 정확히 하나로 이어질 때만 예상 수수료
+        # 금액을 채운다. 끊기거나 모호하면 이전처럼 None(0 가정 안 함).
+        # 운영자가 해당 판매계정에서 "발주 예상비용에도 사용"을 선택하고 8단계
+        # 승인을 받기 전에는 이 함수가 None을 돌려준다(channel_fee_resolver
+        # 모듈 설명 참고).
+        from app.domains.purchase_task.channel_fee_resolver import (
+            resolve_channel_fee,
+        )
+
+        resolved_fee = resolve_channel_fee(
+            self.db, order.company_id,
+            inventory_sku_id=item.inventory_sku_id,
+            channel_code=order.channel_code,
+            channel_sku=item.channel_sku, sale_amount=sale_amount,
+        )
+
         task = self.service.create_task(
             order.company_id, source_order_id=order.id,
             source_order_item_id=item.id,
@@ -194,11 +216,10 @@ class PurchaseTaskOrderSyncService:
             brand=brand_hint, manufacturer=None, model_name=None,
             gtin=None, capacity=None, quantity=item.quantity,
             color_or_scent=None,
-            coupang_sale_amount=(
-                item.unit_price * item.quantity
-                if item.unit_price is not None else None
+            coupang_sale_amount=sale_amount,
+            coupang_fee_amount=(
+                resolved_fee.fee_amount if resolved_fee is not None else None
             ),
-            coupang_fee_amount=None,
             idempotency_key=idempotency_key,
             correlation_id=f"order:{order.id}",
             created_by=triggered_by,
@@ -210,6 +231,19 @@ class PurchaseTaskOrderSyncService:
                 "PRODUCT_MAPPING_INSUFFICIENT" if needs_review else None
             ),
         )
+
+        if resolved_fee is not None:
+            _order_sync_audit(
+                self.db, company_id=order.company_id, user_id=triggered_by,
+                action="PURCHASE_TASK_FEE_FROM_APPROVED_WIZARD",
+                entity="purchase_task", entity_id=task.id,
+                description=(
+                    f"예상 수수료 {resolved_fee.fee_amount}원을 승인된 위저드 "
+                    f"#{resolved_fee.wizard_id}의 채널수수료율 "
+                    f"{resolved_fee.fee_rate}로 산출(정산 검증 전 예상값)"
+                ),
+            )
+            self.db.commit()
 
         if needs_review:
             _order_sync_audit(

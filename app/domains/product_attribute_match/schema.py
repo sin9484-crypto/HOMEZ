@@ -39,6 +39,8 @@ class ProductAttributeComparisonItemResponse(BaseModel):
 
     match_status: str
     selected_value: Optional[str] = None
+    # 자동 등록/발주를 막는 6개 필드인지 — 아니면 미확인이어도 해소를 요구하지 않는다.
+    is_blocking_field: bool = False
 
 
 class ProductAttributeComparisonRunResponse(BaseModel):
@@ -54,6 +56,11 @@ class ProductAttributeComparisonRunResponse(BaseModel):
     resolved_at: Optional[datetime] = None
     resolution_note: Optional[str] = None
     items: list[ProductAttributeComparisonItemResponse] = []
+    # 저장된 값이 아니라 계산한 값: 같은 비교 내용의 이전 해소 run(있으면 그 id),
+    # 지금 실제로 차단 중인지, 해소와 별개로 미확인인 비차단 필드.
+    covered_by_run_id: Optional[int] = None
+    blocking_active: bool = False
+    non_blocking_unconfirmed_fields: list[str] = []
 
 
 class AttributeSourceValueInput(BaseModel):

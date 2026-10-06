@@ -451,6 +451,27 @@ class PurchaseOrderSubmissionService:
             credential_store=self._credential_store,
         )
 
+        # 2026-10-05 사용자 확정(HOMEZ_USER_OPERATION_SETTINGS.md) — 공급처가
+        # 이 상품의 **명시적 판매중단**을 돌려주면 이번 발주는 공급 불가가 확정이다.
+        # 이 검사는 읽기 전용 조회이고 발주를 허용하지 않는다 — 그래서 발주 허용 게이트
+        # (판매신청 확인·가상재고 0 제안·속성 비교·리콜·포인트 조회)에 막혀 감지 자체가
+        # 실행되지 않는 경로가 없도록 그보다 앞에 둔다. 통신·인증 오류·미지원·판매중단이
+        # 아닌 상태는 아무것도 하지 않고(None) 기존 게이트가 평소처럼 판단한다. 비상정지·
+        # 매입 발주 기능 일시중지/오류·연결 미준비는 이 지점 앞에서 이미 막힌다.
+        from app.domains.purchase_task.supplier_stop_sale_service import (
+            SupplierStopSaleService,
+        )
+
+        stop_report = SupplierStopSaleService(self.db).detect_and_handle(
+            adapter, company_id=company_id, connection_id=connection.id,
+            product_code=product_code, triggered_by=triggered_by,
+        )
+        if stop_report is not None:
+            raise ConflictException(
+                f"공급처가 상품({product_code})의 판매중단을 명시해 발주하지 "
+                f"않습니다. 처리 결과: {stop_report.summary()}",
+            )
+
         # 2026-09-10 후속(온채널 공식 답변 — "발주 전 판매신청 필수"
         # 확정) — 이 게이트는 발주 시도 행(PurchaseOrderSubmissionAttempt)
         # 을 만들기 전에 막는다. 판매신청이 접수 확인(SUBMITTED)되지
