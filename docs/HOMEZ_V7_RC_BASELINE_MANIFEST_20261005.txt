@@ -1,0 +1,101 @@
+# HOMEZ V7 출시 후보 검증 기준선 목록 (67차, 커밋 없이 고정)
+# 이 파일은 기록이다. 내용 일치의 증명은 아래 sha256이며 mtime은 참고용이다.
+# 제외: docs/research/20261005_BIGBUY_API_FEASIBILITY.md(다른 작업자의 조사 문서), 이 목록 자신, DB·자격증명·venv·로그
+
+생성 시각: 2026-10-06 00:29:10 (로컬)
+HEAD: 36f970f5af98ee55552b185d8b7c904a3d2666db
+origin/main: 36f970f5af98ee55552b185d8b7c904a3d2666db
+branch: main
+
+## 실행 환경
+OS: Windows-10-10.0.19045-SP0
+Python: 3.13.14 (C:\Users\Daum pc\Homez-OS\venv\Scripts\python.exe)
+Node: v24.18.0 (C:\Program Files\nodejs\node.EXE)
+git: git version 2.55.0.windows.2
+SQLAlchemy: 2.0.42
+fastapi: 0.116.1
+starlette: 0.47.3
+uvicorn: 0.35.0
+pydantic: 2.11.7
+requests: 2.34.2
+httpx: (미설치)
+PyInstaller: 6.16.0
+pip freeze 항목 수: 89 / sha256: 0253c383156d30baa137406d18938a85606f8cc6ba104c97b5e460b9c3097802
+requirements.txt sha256: 38b8905b2f06579bf3427246db8d4770406e513356b478b05041fdfa62218a38
+회귀 가드 sitecustomize.py sha256: 4122c5c2fc10ab218f520608cc672537d7e41e5589ec764fd33ca11f1d420434
+HOMEZ_* 환경변수(이름만, 값 미기록): (없음)
+DATABASE_URL 설정 여부: 미설정
+
+## 데이터베이스 지문(읽기 전용 해시, 내용 미열람)
+repo DB: size=3899392 sha256=34c5002a054537cb45f6ac82bb5a21a37a1f7fd15321b6b1b2364219e8b5913d
+installed DB: size=2953216 sha256=c28eaf57616876fa034bf1bffb4fa87ac2dd630bf4057686b8dcfcd09d322913
+
+## 대상 파일 64개 (코드·테스트·Migration·프런트·스킬 60개 + 문서 4개)
+코드 집계 sha256 (문서 제외): b48cfb13089b8faa948a1c8f25ce98d71857dc9e7864dee1334fbea157229f97
+전체 집계 sha256 (문서 포함, 이 목록 시점): 273ffd4d76e1b3d9a851f8902caffb038f28c82b26362e9d8a3fcd8cc5143199
+
+flag	size	sha256	mtime(참고)	path
+??	6377	13f7be89222006bbf87839f84b69d2806b0ffc3e62fea80458e2e6c51f689bb5	14:21:11	.claude/skills/homez-action-briefing/SKILL.md
+??	8452	0fe21ce78ce581c99eb0d13e02ef08ddb82fc29f55aa63fdc81b1df829144958	13:09:47	app/domains/marketplace_listing/coupang_seller_connection.py
+??	2965	645d31636e32a99ddcd0afcae9748246c3a2ab9ac729dd02e683167d72b9ee18	17:40:22	app/domains/marketplace_listing/margin_gate.py
+??	26001	6a831126e01eda75f679a36cfd560242dcb85f31dc71aa08dea243dda959a4a4	17:28:44	app/domains/purchase_task/channel_action_service.py
+??	7420	3274bf3737522884e176b1f79a7ef724c4b2b339a14d1dd26eb5835cbb0c5cfa	19:52:03	app/domains/purchase_task/channel_fee_resolver.py
+??	18492	9e5e69a1da911e28f51d7d05c0356e24adc6402e5ceb62b7c8a965e003f78267	16:42:48	app/domains/purchase_task/coupang_channel_control_provider.py
+??	10599	9587da1580f326bd86b7f8709f1a7588c82845ac3fffa8580ef7d76a16fc242d	20:33:16	app/domains/purchase_task/supplier_stop_sale_operator_service.py
+??	49526	1847f8ff8a6f62cf2f059fb90ffdcd8ee18dd0e99ff35b7d92f0b0516ca18963	20:35:41	app/domains/purchase_task/supplier_stop_sale_service.py
+??	7148	b1b2617c1e5cebab51a53aacb07a5b11230e1d9081ca266b40af0b0654af13b6	15:47:06	docs/HOMEZ_V7_NORMAL_REGISTRATION_FLOW_20261005.md
+??	43752	a909c162f87b1c2a5a8125a5ef2b8f8d75abcf05021d53843c5014cad449c4dd	20:35:57	docs/HOMEZ_V7_RELEASE_CANDIDATE_PREP_20261005.md
+??	1904	18ae61f41df72af90d20d2e95c4110b8baf0e3aefd6ca67b689e76f87b1b8b55	16:26:12	migrations/20261005_00_create_channel_action_request_schema.sql
+??	4475	e025673f62af576c91fd53512d13242883bc09c0f3e7b9a178948527a77b4f36	16:41:33	tests/test_channel_action_migration.py
+??	23015	60f682de3fb9871fb75d08db9d2ba5f88099b9c12d83bf794f73a73d189d46f0	17:06:32	tests/test_channel_action_service.py
+??	10759	2998f5117f950920c32f5a427718d2424a77f1e181165dc866ef7872aff07feb	16:32:21	tests/test_coupang_channel_control_provider.py
+??	15549	fd093a2c82e2d201b582a6c4fffc942c624e99e06e1026208a7cd6cb283eaadd	12:04:34	tests/test_coupang_seller_connection_routing.py
+??	5425	36061d8656954d65c2761b6c63af349eaf93502ecfe0d9e19f29516fb4fd668a	19:54:02	tests/test_listing_wizard_margin_gate.py
+??	36633	49d69628ea456c147e726f64d4ebe9af8ab61b927cfb2a57c0c43dbd14f3424b	11:29:30	tests/test_product_attribute_resolution_contract.py
+??	21863	94a54daac6af7e92d975b76634aade330f0581715e07f50486357e177cd2f102	21:50:35	tests/test_purchase_order_margin_policy_gate.py
+??	16180	31ba0746c4d3ba3e0f32b8f171e856ddfdae08f6801e82e5fffa17e804dce808	19:53:46	tests/test_purchase_task_channel_fee_link.py
+??	14800	5b0af4fbe86a5b7756f0bad9511f2c4dec2054410cec76099a040195554e5c7e	21:49:42	tests/test_purchase_task_policy_update.py
+??	45213	54404cc640c10d558fb2e634d30cf5fe46db682174434cb0bc8c09c590fbfd17	17:08:18	tests/test_supplier_stop_sale.py
+??	22490	ebfae9ed13655b6aa95a415cacd9642e9478c83b833ea62ef33f1319ce43b192	20:33:16	tests/test_supplier_stop_sale_operator.py
+M	30171	1ac42f0f466f5e9b9e8a674b6bb9aa1c44c5e272cff2d7a4955cd75b94901d5e	17:40:47	app/domains/channel_policy/service.py
+M	13351	f94f50948ef94ffda605f21458b0b3ec1b5883442768643a6d838577de3c99a0	11:15:21	app/domains/marketplace_listing/coupang_live_payload.py
+M	5769	94a26988a1359c296d366b1aec7857f3714758d84bb2418a146aa5be9457bebc	12:02:04	app/domains/marketplace_listing/listing_wizard_approval.py
+M	33014	f14e75561a9bae4150ff7406184a6d8f4d5a7a3e635df1516cbba109f9c23650	13:09:47	app/domains/marketplace_listing/listing_wizard_live_service.py
+M	18315	a78b8ddd48ec4586fb5095c9f49c3fee485a87ce8643900e12e0db7c2bca9f33	17:40:59	app/domains/marketplace_listing/listing_wizard_precheck.py
+M	64359	cdd1e5255e49c82fe1a9eaa4e5afc569cd213f3425648fe3748bd3d92692b827	12:01:23	app/domains/marketplace_listing/listing_wizard_router.py
+M	25210	98398bd8076b76dbd1bb8393a5c308086755fab74d6be416b463a2a56d5f2789	19:51:50	app/domains/marketplace_listing/listing_wizard_schema.py
+M	72633	d320de3846606b6fd96a6296a76753eafe6a06c19958cf061c192b49099cb59f	17:41:44	app/domains/marketplace_listing/listing_wizard_service.py
+M	9372	52e7912ae936c77f5e3429636f7314b2315642a552ccebb4db79362e540b9118	17:40:13	app/domains/marketplace_listing/margin_calculator.py
+M	21993	bb1166ddf842c7cf92ffacc378d3dae8d9c28c728c8327fe8c9059ed620d346a	15:15:56	app/domains/notification_center/event_catalog.py
+M	4732	3b0a14ae0339d56ed0c4163f00b084492e427b07644464ff4af63bbd331eb962	11:16:05	app/domains/product_attribute_match/constants.py
+M	6690	3a20d65dd755a3a53ef195e9c6e204f8f879a3e7670632adff2437b8bc06c0ef	01:46:12	app/domains/product_attribute_match/model.py
+M	7095	ad72c1526eae86fe842d48e25015ef7c87204505c90de56be27b5a121e547592	01:46:25	app/domains/product_attribute_match/repository.py
+M	3693	8bb65518e58f12dbd8f320167349d4445e6f5bc455a482c87189fe14c399ff14	01:48:17	app/domains/product_attribute_match/router.py
+M	2606	5e1b7589d4e6e23c2ad4a623557e24f19622ac3838ad57d0bc5e31de16cec691	01:48:17	app/domains/product_attribute_match/schema.py
+M	33670	7006b1778a6ec4540555d60d199ee99eeea373497dccbd6576a822c01e68ecbc	11:16:05	app/domains/product_attribute_match/service.py
+M	66392	bbd535661c1ddefe8e18c4fd851609afcec2c8e58c53312548753977f7afe068	22:53:01	app/domains/purchase_task/channel_connection_service.py
+M	45422	8a4079253aa5873250aef7354a03fc72142e736d3df9e7303ffeb77dfe7f4105	16:26:01	app/domains/purchase_task/constants.py
+M	5945	d789603584c04772de1a89714bc1fce398099b6c38f6a1ac4362a6090e91fce8	18:52:57	app/domains/purchase_task/margin_calculator.py
+M	60443	0810d7b013afcb0ddc7c90ae18efc546c30ee4e4c75bd71f8555c0788ff9bfb6	16:26:01	app/domains/purchase_task/model.py
+M	38600	3652f925b699fb1ab9df32a1f10ad1caa51bd8669763adade66a4fb72d5a2971	21:48:50	app/domains/purchase_task/order_approval_service.py
+M	50697	196cc0103fe961794cbeea12da94cc2eddbec71436edae6e56c7a18f01f2a99f	16:42:41	app/domains/purchase_task/order_submission_service.py
+M	24224	5dc2d8244ce501f1ced231927ba3ac79de56f84dc4439e539fe8d488dbf6c533	19:52:57	app/domains/purchase_task/order_sync_service.py
+M	15800	b60d974bd355a355da8e55fba6607d9b4899b633d4bf1de3c2fbd933b3d91a4d	21:48:36	app/domains/purchase_task/policy_service.py
+M	74115	72e0d92df58e3bd27ab49452a0d3eda84b73cdf7ec094d3c9318e7e8534ceb10	17:28:44	app/domains/purchase_task/router.py
+M	32362	29f84ae43312bb9c9bfd47e103e5a69e9cd0a6b0cb5fdecc3b48c4a3cec9266a	17:28:44	app/domains/purchase_task/schema.py
+M	1107448	7f5c82fccf1d0847eb92272adc39a260a1cd317a9aadb7c50ff489b8315a9588	12:06:36	app/web/console.js
+M	232251	132b35b8e841783beef22531604214f5591a892bafd9f45b586fe5f6fcc9e14b	12:06:36	app/web/i18n/en-US.js
+M	256775	f6dad58de85d641ac4b65e4daf1dc377c2aaf6312c525ef5df5bfe347ef9017e	12:06:36	app/web/i18n/ko-KR.js
+M	1066487	e6747d674c8d26e260484f24c73e6eabe4c20585c6dc912cc1983aaaba8848c1	20:27:25	docs/HOMEZ_PROJECT_STATE.md
+M	27176	a493d7fabba6e0e7d14b21937dd26aa404364170ad9232f96582ffc322b02a70	15:03:28	docs/HOMEZ_USER_OPERATION_SETTINGS.md
+M	38845	a01107bd9f4361ddf56c4229614e86ea2a2a234abd53953a7a5e6160693de03e	17:43:12	tests/test_channel_policy_engine.py
+M	103778	74635e8dddba2c0c80e17000b09b5577e6a3386de5c6d41b7511684c63ee14bb	13:09:47	tests/test_coupang_live_submission.py
+M	21787	229c3267b4cbec67e2653c7e45daccab5fa87592d0a63d8ba6ccba04d6a59e3d	13:10:41	tests/test_listing_wizard_option_links.py
+M	111581	95257ec79b5d63ec4a5b94bfe582d63e2d4a4689f762fcab1d45c0a5b5db991c	12:03:03	tests/test_listing_wizard_service.py
+M	33320	4d08a5f4d304829fbb554290f2b2624574cdc22b25bf99f192f9786f81363766	19:54:16	tests/test_listing_wizard_ui.py
+M	34289	b46565fe4824d1c033ce417d92cc44b570d14298c921aa1866a819a7eb6436f2	15:42:31	tests/test_notification_delivery_pt3.py
+M	45522	a143b79cc868d5d39c65f02e9df00b131e1e92d035aae428e501f07c6d145e5c	16:41:38	tests/test_permissions_timestamps_migration.py
+M	23440	aae6c5f2a755193b98e21a1f486fbd46dc4a5a36367104b2966cd7bacd1fec6e	01:51:48	tests/test_product_attribute_match_service.py
+M	114061	80694b17fc0a4c8ab91a0398882d27cbc28edc578c87a54823219ffeced03176	22:53:30	tests/test_purchase_channel_connection_service.py
+M	145414	0e346abcb5caa44bbf68d9054729ef193bcdf853fd093e8098f59b323dd2a39e	16:40:15	tests/test_purchase_order_submission_service.py
+M	49719	3d55e118a7d362444b720582015300607ecba4867229fc4481da7a7325722ad3	22:04:47	tests/test_tour_mode.py
