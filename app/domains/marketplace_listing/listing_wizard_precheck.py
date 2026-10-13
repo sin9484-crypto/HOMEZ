@@ -71,6 +71,68 @@ def _issue(
     )
 
 
+def _candidate_company_status(
+    db: Session, company_id: int, candidate_id: int,
+) -> str | None:
+    """이 회사 관점의 상품 후보 상태. 후보를 볼 수 없으면 None.
+
+    제출 단계(`require_approved_for_company`)가 쓰는 판정과 같은 함수를 읽기만 한다."""
+
+    from app.core.exceptions import NotFoundException
+    from app.domains.product_candidate.service import ProductCandidateService
+
+    try:
+        return ProductCandidateService(db).get_effective_status_for_company(
+            candidate_id, company_id,
+        )
+    except NotFoundException:
+        return None
+
+
+def _compact(text: object) -> str:
+    return "".join(str(text or "").split()).lower()
+
+
+def product_name_option_overlaps(
+    product_name: str, purchase_options: dict, field_definitions: list[dict],
+) -> list[str]:
+    """상품명에 구매옵션 값이 그대로 들어 있으면 그 값들을 돌려준다. 쿠팡은 고객에게 상품명 뒤에
+    옵션 정보를 함께 노출하므로 상품명의 "500ml"가 옵션 "500ml"와 겹치면 심사에서 반려된다
+    (상품 16411745286: '상품명에서 옵션과 중복된 단어를 지워주세요'). 공백·대소문자는 무시하고,
+    순수 숫자 옵션은 기본 단위가 붙은 값(`500`→`500ml`)으로 비교한다. 값이 비어 있거나 한 글자뿐이면
+    우연한 일치가 많아 비교하지 않는다."""
+
+    from app.domains.marketplace_listing.coupang_live_payload import (
+        _purchase_option_value,
+    )
+
+    name = _compact(product_name)
+    found: list[str] = []
+    for option_name, raw_value in (purchase_options or {}).items():
+        value = _purchase_option_value(option_name, raw_value, field_definitions or [])
+        key = _compact(value)
+        if len(key) >= 2 and key in name and value not in found:
+            found.append(value)
+    return found
+
+
+def entries_missing_brand_uid(channel_selections: list[dict]) -> list[dict]:
+    """공식 브랜드(`brandState == OFFICIAL_BRAND`)인데 GTIN과 MPN이 모두 비어 있는 판매채널
+    선택만 돌려준다. 무브랜드·미확정 브랜드는 대상이 아니다(브랜드 미확정은 다른 점검이 막는다)."""
+
+    missing: list[dict] = []
+    for entry in channel_selections or []:
+        fields = entry.get("required_fields") or {}
+        if fields.get("brandState") != "OFFICIAL_BRAND":
+            continue
+        if not (
+            str(fields.get("globalTradeItemNumber") or "").strip()
+            or str(fields.get("manufacturerPartNumber") or "").strip()
+        ):
+            missing.append(entry)
+    return missing
+
+
 def run_precheck(
     wizard: ListingWizard, db: Session, company_id: int,
 ) -> WizardValidateResponse:
@@ -79,6 +141,21 @@ def run_precheck(
     repo = MarketplaceListingRepository(db)
     eligibility = EligibilityService(db)
     channel_policy_service = ChannelPolicyService(db)
+
+    # --- 1단계: 상품 후보 승인 ---
+    # 후보가 이 회사 기준으로 승인되지 않으면 제출 단계에서야 실패해, 8단계 승인과
+    # 비밀번호 재인증을 마친 뒤에 막혔다. 같은 조건을 8단계 승인 전에 알려 준다.
+    if wizard.product_candidate_id is not None:
+        candidate_status = _candidate_company_status(
+            db, company_id, wizard.product_candidate_id,
+        )
+        if candidate_status != "APPROVED":
+            issues.append(_issue(
+                "CANDIDATE_NOT_APPROVED", WizardStep.SOURCE, True,
+                "listing_wizard.precheck.candidate_not_approved",
+                field="product_candidate_id",
+                params={"status": candidate_status or "UNKNOWN"},
+            ))
 
     # --- 2단계: 상품 초안 ---
     draft = json.loads(wizard.draft_json) if wizard.draft_json else None
@@ -101,6 +178,39 @@ def run_precheck(
                             "option_name": opt_name,
                         },
                     ))
+
+    # --- 상품명과 구매옵션 중복(쿠팡 심사 반려 사유) ---
+    product_name = str((draft or {}).get("product_name") or "")
+    if product_name:
+        for entry in json.loads(wizard.channel_selections_json or "[]"):
+            attrs = entry.get("channel_policy_attributes") or {}
+            overlaps = product_name_option_overlaps(
+                product_name, attrs.get("purchase_options") or {},
+                attrs.get("purchase_option_field_definitions") or [],
+            )
+            if overlaps:
+                issues.append(_issue(
+                    "PRODUCT_NAME_REPEATS_OPTION", WizardStep.DRAFT, True,
+                    "listing_wizard.precheck.product_name_repeats_option",
+                    field="product_name",
+                    channel=str(entry.get("marketplace_account_id")),
+                    params={"values": ", ".join(overlaps)},
+                ))
+                break
+
+    # --- 브랜드 상품의 식별번호(UID: GTIN 또는 MPN) ---
+    # 쿠팡은 브랜드가 있는 상품의 attributes에서 Global Trade Item Number /
+    # Manufacturer Part Number를 검증한다(백산수 제출 #7 거절: "MPN/GTIN 속성이 누락되었거나
+    # 유효하지 않습니다"). 무브랜드 상품은 빈 값으로 통과한다(주방행주 16364645696 상세 조회).
+    for entry in entries_missing_brand_uid(
+        json.loads(wizard.channel_selections_json or "[]"),
+    ):
+        issues.append(_issue(
+            "BRAND_UID_REQUIRED", WizardStep.FULFILLMENT, True,
+            "listing_wizard.precheck.brand_uid_required",
+            field="required_fields.globalTradeItemNumber",
+            channel=str(entry.get("marketplace_account_id")),
+        ))
 
     # --- 3단계: 이미지 ---
     media_ids = json.loads(wizard.selected_media_asset_ids_json or "[]")

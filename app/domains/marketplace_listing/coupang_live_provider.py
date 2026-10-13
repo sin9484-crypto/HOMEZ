@@ -46,9 +46,14 @@ STATUS_NAMES = frozenset({
 # (임의 추가 금지). 이 매핑에 없는 값은 전부 UNKNOWN으로 남는다
 # (fail-closed) — 원본 문자열은 raw_status_name에 항상 별도로
 # 보존하므로 매핑이 틀렸거나 모자라도 원문을 잃지 않는다.
+# 2026-10-12 — 백산수 등록 제출 #11(상품 16411745286)이 쿠팡 심사에서 반려됐고, 상품 목록
+# 조회 응답의 statusName이 한글 "승인반려"로 관측됐다(CONFIRMED_LIVE, 읽기 전용 GET 1회).
+# 영문 DENIED와 같은 상태로만 추가한다. 나머지 한글 표기는 여전히 관측된 바 없어 추측하지
+# 않는다(원문은 raw_status_name에 항상 보존).
 CANONICAL_STATUS_MAP: dict[str, str] = {
     **{name: name for name in STATUS_NAMES},
     "승인완료": "APPROVED",  # CONFIRMED_LIVE 2026-08-30
+    "승인반려": "DENIED",  # CONFIRMED_LIVE 2026-10-12
 }
 
 
@@ -129,7 +134,37 @@ class ProductOptionIdentifiersResult:
     error_summary: str | None = None
 
 
+@dataclass(frozen=True)
+class RegisteredProductSummary:
+    """상품 목록 조회 `data[]` 한 줄. 이름·상태·카테고리만 담고(allowlist), 연락처·주소 등
+    다른 필드는 옮기지 않는다."""
+
+    seller_product_id: str
+    seller_product_name: str | None = None
+    status_name: str | None = None  # 쿠팡이 준 원문 그대로(영문/한글)
+    display_category_code: str | None = None
+
+
+@dataclass(frozen=True)
+class ProductListResult:
+    """상품 목록 조회(읽기 전용 GET 1회) 결과. 등록 여부를 사람이 WING에서 보지 않고도
+    HOMEZ가 확인하기 위한 것이다.
+
+    outcome: FOUND(1건 이상) | NOT_FOUND(응답이 정상이고 목록이 비어 있으며 다음 페이지도
+    없음) | UNKNOWN(오류·형식 이탈·시간 초과 — 어떤 결론도 내리지 않는다)."""
+
+    outcome: str
+    products: tuple[RegisteredProductSummary, ...] = ()
+    has_more: bool = False
+    http_status: int | None = None
+    error_code: str | None = None
+    error_summary: str | None = None
+
+
 class CoupangProductProvider(Protocol):
+    def list_products(
+        self, seller_product_name: str | None = None, max_per_page: int = 20,
+    ) -> ProductListResult: ...
     def create_product(self, payload: dict[str, Any]) -> LiveSubmissionResult: ...
     def get_product_status(self, seller_product_id: str) -> ProductStatusResult: ...
     def get_product_option_identifiers(
@@ -153,7 +188,9 @@ class CoupangLiveProductProvider:
         self._session = session or requests.Session()
         self._now = now_factory or (lambda: datetime.now(timezone.utc))
 
-    def _headers(self, method: str, path: str) -> dict[str, str]:
+    def _headers(
+        self, method: str, path: str, query: str = "",
+    ) -> dict[str, str]:
         # 2026-08-29 Phase 4(V7-COUPANG-SIGN-001 수정) — 2026-08-28
         # 감사에서 이 Provider가 공식 문서 계약을 별도로 손으로 재구현해
         # coupang_signing.py와 중복됐던 것을 확인했다(query 이어붙이기
@@ -163,7 +200,7 @@ class CoupangLiveProductProvider:
         # 없다.
         return {
             "Authorization": build_authorization_header(
-                self._access_key, self._secret_key, method, path, "",
+                self._access_key, self._secret_key, method, path, query,
                 now=self._now(),
             ),
             "Content-Type": "application/json;charset=UTF-8",
@@ -541,6 +578,111 @@ class CoupangLiveProductProvider:
             http_status=response.status_code,
             warning_summary=warning_summary,
             provider_response_code=str(outer_code),
+        )
+
+    def list_products(
+        self, seller_product_name: str | None = None, max_per_page: int = 20,
+    ) -> ProductListResult:
+        """상품 목록 페이징 조회 — 공식 `GET .../seller-products`(vendorId 필수,
+        maxPerPage 최대 100, sellerProductName 선택). **읽기 전용 GET 정확히 1회**, 자동
+        재시도·다음 페이지 자동 순회 없음(다음 페이지가 있으면 `has_more`로만 알린다).
+        서명에는 실제로 보내는 query string을 그대로 쓴다.
+
+        NOT_FOUND는 "HTTP 200이고 data가 빈 목록이며 다음 페이지 토큰도 없을 때"만이다.
+        그 외 어떤 이상(오류 코드·형식 이탈·시간 초과)도 UNKNOWN이며, 호출자는 등록
+        없음으로 결론 내리지 않는다."""
+
+        from urllib.parse import quote, urlencode
+
+        per_page = max(1, min(int(max_per_page), 100))
+        params: list[tuple[str, str]] = [
+            ("vendorId", self.vendor_id), ("maxPerPage", str(per_page)),
+        ]
+        name = (seller_product_name or "").strip()
+        if name:
+            params.append(("sellerProductName", name))
+        query = urlencode(params, quote_via=quote)
+        try:
+            response = self._session.get(
+                f"{BASE_URL}{CREATE_PRODUCT_PATH}?{query}",
+                headers=self._headers("GET", CREATE_PRODUCT_PATH, query),
+                timeout=self._timeout,
+            )
+        except requests.Timeout:
+            return ProductListResult(
+                outcome="UNKNOWN", error_code="TIMEOUT",
+                error_summary="응답 시간 초과로 등록 상품을 확인할 수 없습니다.",
+            )
+        except requests.RequestException:
+            return ProductListResult(
+                outcome="UNKNOWN", error_code="NETWORK_ERROR",
+                error_summary="네트워크 오류로 등록 상품을 확인할 수 없습니다.",
+            )
+
+        if response.status_code >= 400:
+            code, summary = self._safe_error(response)
+            return ProductListResult(
+                outcome="UNKNOWN", error_code=code, error_summary=summary,
+                http_status=response.status_code,
+            )
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            return ProductListResult(
+                outcome="UNKNOWN", error_code="INVALID_RESPONSE",
+                error_summary="쿠팡 응답 형식을 해석할 수 없어 등록 여부를 확인할 수 없습니다.",
+                http_status=response.status_code,
+            )
+
+        products: list[RegisteredProductSummary] = []
+        for row in data:
+            if not isinstance(row, dict):
+                return ProductListResult(
+                    outcome="UNKNOWN", error_code="INVALID_RESPONSE",
+                    error_summary="쿠팡 응답의 상품 항목 형식이 예상과 달라 확인할 수 없습니다.",
+                    http_status=response.status_code,
+                )
+            raw_id = row.get("sellerProductId")
+            if isinstance(raw_id, bool) or not isinstance(raw_id, (int, str)):
+                continue
+            seller_product_id = str(raw_id).strip()
+            if not seller_product_id.isdigit():
+                continue
+            status_name = row.get("statusName")
+            category = row.get("displayCategoryCode")
+            products.append(RegisteredProductSummary(
+                seller_product_id=seller_product_id,
+                seller_product_name=self._safe_identifier_text(
+                    row.get("sellerProductName"),
+                ),
+                status_name=status_name if isinstance(status_name, str) else None,
+                display_category_code=(
+                    str(category)
+                    if isinstance(category, (str, int)) and not isinstance(category, bool)
+                    else None
+                ),
+            ))
+
+        next_token = body.get("nextToken") if isinstance(body, dict) else None
+        has_more = bool(str(next_token).strip()) if next_token not in (None, "") else False
+        if data and not products:
+            return ProductListResult(
+                outcome="UNKNOWN", error_code="INVALID_RESPONSE",
+                error_summary="쿠팡 응답의 상품 번호를 해석할 수 없어 확인할 수 없습니다.",
+                http_status=response.status_code,
+            )
+        if not products:
+            return ProductListResult(
+                outcome="UNKNOWN" if has_more else "NOT_FOUND",
+                has_more=has_more, http_status=response.status_code,
+                error_code="HAS_MORE_PAGES" if has_more else None,
+            )
+        return ProductListResult(
+            outcome="FOUND", products=tuple(products), has_more=has_more,
+            http_status=response.status_code,
         )
 
     def get_product_status(self, seller_product_id: str) -> ProductStatusResult:

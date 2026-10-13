@@ -1508,6 +1508,14 @@
     wirePasswordToggle("recovery-email-confirm-password-confirm-toggle", "recovery-email-confirm-new-password-confirm");
   }
 
+  // 전역 자동화 모드 이름(RECOMMEND_ONLY 등)을 화면용 한글로 바꾼다. 번역이 없는 값(새로 추가된
+  // 모드)은 코드 이름 그대로 보여 준다 — 사라지거나 빈칸이 되지 않게 한다.
+  function safetyModeLabel(mode) {
+    const key = `safety.mode_label.${String(mode ?? "").toLowerCase()}`;
+    const label = HomezI18n.t(key);
+    return label && label !== key ? label : String(mode ?? "");
+  }
+
   // --------------------------------------------------
   // 확인 Dialog
   // --------------------------------------------------
@@ -7478,7 +7486,11 @@
       return;
     }
 
-    const decidable = ["ANALYZED", "RECOMMENDED", "HELD"].includes(candidate.status);
+    // 결정 가능 여부와 상태 표시는 "이 회사 관점" 상태(company_status)를 우선한다.
+    // 전역 status는 ANALYZED로 남으므로, 그것만 쓰면 이미 승인한 후보가 분석됨으로
+    // 보이고 승인·보류·거절 버튼이 계속 눌려 "현재: APPROVED" 오류만 나온다.
+    const effectiveStatus = candidate.company_status || candidate.status;
+    const decidable = ["ANALYZED", "RECOMMENDED", "HELD"].includes(effectiveStatus);
 
     container.innerHTML = `
       <div class="detail-grid">
@@ -7491,7 +7503,7 @@
               <dt>${HomezI18n.t("candidate_detail.market_label")}</dt><dd>${escapeHtml(candidate.market)}</dd>
               <dt>${HomezI18n.t("candidate_detail.discovered_at_label")}</dt><dd>${fmtDate(candidate.discovered_at)}</dd>
               <dt>${HomezI18n.t("candidate_detail.release_date_label")}</dt><dd>${candidate.release_date || HomezI18n.t("candidate_detail.unknown")}</dd>
-              <dt>${HomezI18n.t("candidates.col_status")}</dt><dd><span class="status-tag status-${candidate.status}">${escapeHtml(candidateStatusLabel(candidate.status))}</span></dd>
+              <dt>${HomezI18n.t("candidates.col_status")}</dt><dd><span class="status-tag status-${effectiveStatus}">${escapeHtml(candidateStatusLabel(effectiveStatus))}</span></dd>
             </dl>
           </div>
 
@@ -7555,7 +7567,7 @@
               <button class="btn" id="btn-hold" ${decidable ? "" : "disabled"}>${HomezI18n.t("common.hold")}</button>
               <button class="btn btn-danger" id="btn-reject" ${decidable ? "" : "disabled"}>${HomezI18n.t("common.reject")}</button>
             </div>
-            ${!decidable ? `<p class="stat-sub">${HomezI18n.t("candidate_detail.not_decidable", { status: candidate.status })}</p>` : ""}
+            ${!decidable ? `<p class="stat-sub">${HomezI18n.t("candidate_detail.not_decidable", { status: candidateStatusLabel(effectiveStatus) })}</p>` : ""}
           </div>
 
           <div class="detail-panel">
@@ -7889,11 +7901,11 @@
       <div class="detail-panel">
         <h2>${HomezI18n.t("safety.mode_title")}</h2>
         <dl class="kv-list">
-          <dt>${HomezI18n.t("safety.current_mode_label")}</dt><dd>${escapeHtml(data.mode)}</dd>
+          <dt>${HomezI18n.t("safety.current_mode_label")}</dt><dd>${escapeHtml(safetyModeLabel(data.mode))}</dd>
         </dl>
         <div class="decision-actions">
           <select id="mode-select">
-            ${data.mode_all.map((m) => `<option value="${m}" ${m === data.mode ? "selected" : ""}>${m}</option>`).join("")}
+            ${data.mode_all.map((m) => `<option value="${m}" ${m === data.mode ? "selected" : ""}>${escapeHtml(safetyModeLabel(m))}</option>`).join("")}
           </select>
           <button class="btn btn-primary" id="btn-set-mode">${HomezI18n.t("safety.change_mode_btn")}</button>
         </div>
@@ -7964,7 +7976,9 @@
       }
       const { confirmed, value } = await confirmDialog({
         title: HomezI18n.t("safety.mode_change_confirm_title"),
-        body: HomezI18n.t("safety.mode_change_confirm_body", { from: data.mode, to: newMode }),
+        body: HomezI18n.t("safety.mode_change_confirm_body", {
+          from: safetyModeLabel(data.mode), to: safetyModeLabel(newMode),
+        }),
       });
       if (!confirmed) return;
       try {
@@ -10388,6 +10402,19 @@
         </div>`).join("")}</div>`;
   }
 
+  // 같은 원본에서 만들어진 조각(source_asset_id)을 원본 바로 뒤에 모으고, 원본끼리·조각끼리는 id 순으로 둔다.
+  function lwOrderMediaAssets(list) {
+    const rootOf = (a) => a.source_asset_id || a.id;
+    return [...list].sort((x, y) => {
+      const rx = rootOf(x);
+      const ry = rootOf(y);
+      if (rx !== ry) return rx - ry;
+      if (x.id === rx) return -1;
+      if (y.id === ry) return 1;
+      return x.id - y.id;
+    });
+  }
+
   async function lwRenderMediaStep(content) {
     const w = lwState.wizard;
     lwRevokeMediaObjectUrls();
@@ -10408,6 +10435,9 @@
       return;
     }
 
+    // 긴 상세이미지를 여러 장 올리면 조각이 생성 시각 순으로 섞여 나온다(원본 #7 조각 #8~#13과 원본 #14 조각
+    // #15~#22가 번갈아 표시) — 선택 순서가 곧 상세페이지 순서라, 원본 뒤에 그 조각들이 이어지게 정렬한다.
+    assets = lwOrderMediaAssets(assets);
     const selected = new Set(w.selected_media_asset_ids || []);
     content.innerHTML = `
       <h2>${HomezI18n.t("lw.step.media")}</h2>
@@ -10993,6 +11023,7 @@
             <input type="text" class="lw-brand-no-brand-input" placeholder="${HomezI18n.t("lw.brand_no_brand_input_placeholder")}" value="${state.brandState === "NO_BRAND" ? escapeHtml(state.brand) : ""}">
           </label>
           <button type="button" class="btn btn-secondary btn-sm" data-lw-brand-no-brand-confirm>${HomezI18n.t("lw.brand_no_brand_confirm_btn")}</button>
+          <p class="field-error lw-brand-no-brand-error" role="alert"></p>
           ${state.brandState === "NO_BRAND" && state.brand ? `<p class="stat-sub">${HomezI18n.t("lw.brand_no_brand_confirmed_badge", { value: state.brand })}</p>` : ""}
         </div>
         <div class="lw-brand-official-panel" ${state.brandState === "OFFICIAL_BRAND" ? "" : "hidden"}>
@@ -11038,7 +11069,12 @@
       if (confirmBtn) {
         confirmBtn.addEventListener("click", () => {
           const value = panel.querySelector(".lw-brand-no-brand-input")?.value.trim() || "";
-          if (!value) return;
+          if (!value) {
+            // 빈 칸이면 예전에는 아무 반응 없이 무시되어 "눌렀는데 저장 안 됨"이 반복됐다 — 이유를 보여 준다.
+            const errEl = panel.querySelector(".lw-brand-no-brand-error");
+            if (errEl) errEl.textContent = HomezI18n.t("lw.brand_no_brand_input_required");
+            return;
+          }
           lwSetBrandState(panel, {
             brandState: "NO_BRAND", brand: value,
             brandId: "", officialBrandName: "", brandEnrollmentStatus: "",
@@ -11123,7 +11159,7 @@
     ".lw-delivery-charge-on-return", ".lw-return-charge",
     ".lw-max-buy-count", ".lw-delivery-company", ".lw-vendor-user-id",
     ".lw-policy-origin-country", ".lw-policy-brand",
-    ".lw-policy-product-identifier",
+    ".lw-policy-product-identifier", ".lw-uid-gtin", ".lw-uid-mpn",
   ];
 
   function lwFulfillmentDraftKey(wizardId, accountId) {
@@ -11493,6 +11529,7 @@
                 <select class="lw-policy-origin-country">
                   <option value="">${HomezI18n.t("common.select_placeholder")}</option>
                   <option value="KOREA" ${policyAttrs.origin_country === "KOREA" ? "selected" : ""}>${HomezI18n.t("lw.policy_origin_korea")}</option>
+                  <option value="CHINA" ${policyAttrs.origin_country === "CHINA" ? "selected" : ""}>${HomezI18n.t("lw.policy_origin_china")}</option>
                 </select>
               </label>
               <label class="field"><span class="field-label">${HomezI18n.t("lw.policy_brand")}</span>
@@ -11501,11 +11538,25 @@
               <label class="field"><span class="field-label">${HomezI18n.t("lw.policy_product_identifier")}</span>
                 <input type="text" class="lw-policy-product-identifier" value="${escapeHtml(policyAttrs.product_identifier || "")}">
               </label>
+              <label class="field"><span class="field-label">${HomezI18n.t("lw.uid_gtin")}</span>
+                <input type="text" class="lw-uid-gtin" inputmode="numeric" value="${escapeHtml(sel.required_fields?.globalTradeItemNumber || "")}" placeholder="${HomezI18n.t("lw.uid_gtin_placeholder")}">
+                <span class="field-hint">${HomezI18n.t("lw.uid_hint")}</span>
+              </label>
+              <label class="field"><span class="field-label">${HomezI18n.t("lw.uid_mpn")}</span>
+                <input type="text" class="lw-uid-mpn" maxlength="30" value="${escapeHtml(sel.required_fields?.manufacturerPartNumber || "")}">
+              </label>
               <label class="field"><span class="field-label">${HomezI18n.t("lw.policy_official_category_code")}</span>
                 <div class="field-inline">
                   <input type="text" class="lw-policy-official-category" value="${escapeHtml(policyAttrs.official_category_code || "")}" readonly>
                   <button type="button" class="btn btn-secondary btn-sm" data-lw-category-recommend>${HomezI18n.t("lw.category_recommend")}</button>
                 </div>
+              </label>
+              <label class="field"><span class="field-label">${HomezI18n.t("lw.category_code_lookup_label")}</span>
+                <div class="field-inline">
+                  <input type="text" class="lw-category-code-input" inputmode="numeric" maxlength="9" placeholder="${HomezI18n.t("lw.category_code_lookup_placeholder")}">
+                  <button type="button" class="btn btn-secondary btn-sm" data-lw-category-lookup>${HomezI18n.t("lw.category_code_lookup_btn")}</button>
+                </div>
+                <p class="stat-sub">${HomezI18n.t("lw.category_code_lookup_hint")}</p>
               </label>
             </div>
             <div class="lw-purchase-options" data-lw-purchase-option-fields></div>
@@ -11554,10 +11605,21 @@
         await lwRunChannelPolicyEvaluate(block, w.product_candidate_id, selection);
       }));
     });
-    content.querySelectorAll("[data-lw-category-recommend]").forEach((btn) => {
+    // 카테고리 추천(쿠팡 POST 1회 + 메타데이터 GET 1회)과 "코드로 조회"(메타데이터 GET 1회만)가
+    // 같은 반영 로직을 쓴다. 코드를 이미 아는 경우(WING에서 확인) 추천 POST 없이 조회할 수 있다.
+    content.querySelectorAll("[data-lw-category-recommend], [data-lw-category-lookup]").forEach((btn) => {
+      const byCode = btn.hasAttribute("data-lw-category-lookup");
       btn.addEventListener("click", () => withButtonGuard(btn, async () => {
         const block = btn.closest(".lw-channel-block");
         const detail = block.querySelector("[data-lw-policy-detail]");
+        const typedCode = (block.querySelector(".lw-category-code-input")?.value || "").trim();
+        if (byCode && !/^\d{3,9}$/.test(typedCode)) {
+          if (detail) {
+            detail.textContent = HomezI18n.t("lw.category_code_lookup_needs_code");
+            detail.classList.add("field-error");
+          }
+          return;
+        }
         if (detail) detail.textContent = HomezI18n.t("common.loading");
         // 실제 재현으로 확인된 결함 — 이 버튼은 "같은 카테고리를 다시
         // 조회"한 경우와 "다른 카테고리로 바뀐" 경우를 구분하지 않고
@@ -11571,7 +11633,9 @@
           );
         } catch (_err) { prevComboItems = []; }
         try {
-          const recommendation = await apiFetch(`/listing-wizards/${w.id}/category-recommendation`, { method: "POST" });
+          const recommendation = byCode
+            ? { display_category_code: typedCode }
+            : await apiFetch(`/listing-wizards/${w.id}/category-recommendation`, { method: "POST" });
           const metadata = await apiFetch(`/listing-wizards/${w.id}/category-metadata/${encodeURIComponent(recommendation.display_category_code)}`);
           block.querySelector(".lw-policy-official-category").value = recommendation.display_category_code;
           block.querySelector(".lw-category-metadata-version").value = metadata.metadata_version;
@@ -11723,7 +11787,14 @@
         // 내부적으로 수행한다 — 사용자가 이 사실을 클릭 전에 알 수
         // 없었다. 취소하면 아래 apiFetch가 아예 호출되지 않는다(외부
         // 전송 0회).
-        if (!window.confirm(HomezI18n.t("lw.contents_build_upload_confirm"))) {
+        // window.confirm은 내장 패널에서 보이지 않아 클릭이 그대로 취소되는 결함이 있었다(2026-10-13) —
+        // 앱 안 확인창(confirmDialog)으로 바꿔 어느 화면에서도 보이게 한다. 취소하면 아래 외부 업로드는 0회다.
+        const { confirmed } = await confirmDialog({
+          title: HomezI18n.t("lw.contents_build_upload_confirm_title"),
+          body: HomezI18n.t("lw.contents_build_upload_confirm"),
+          okLabel: HomezI18n.t("lw.contents_build_upload_confirm_ok"),
+        });
+        if (!confirmed) {
           return;
         }
         status.textContent = HomezI18n.t("common.loading");
@@ -11848,6 +11919,19 @@
           const vendorUserId = block.querySelector(".lw-vendor-user-id")?.value.trim();
           if (vendorUserId) requiredFields.vendorUserId = vendorUserId;
           else delete requiredFields.vendorUserId;
+
+          // 상품 식별번호(UID) — 브랜드 상품은 쿠팡이 GTIN 또는 MPN을 attributes로 검증한다.
+          // 값이 있을 때만 저장하고, GTIN을 입력하면 바코드 칸도 같은 값으로 맞춘다(비어 있을 때만).
+          const uidGtin = block.querySelector(".lw-uid-gtin")?.value.trim();
+          if (uidGtin) {
+            requiredFields.globalTradeItemNumber = uidGtin;
+            if (!requiredFields.barcode) requiredFields.barcode = uidGtin;
+          } else {
+            delete requiredFields.globalTradeItemNumber;
+          }
+          const uidMpn = block.querySelector(".lw-uid-mpn")?.value.trim();
+          if (uidMpn) requiredFields.manufacturerPartNumber = uidMpn;
+          else delete requiredFields.manufacturerPartNumber;
 
           // 브랜드 3상태 — 패널 자신의 data 속성에 보관된 현재 상태를
           // 그대로 병합한다(coupang_submission_contract.py가 요구하는
@@ -13716,6 +13800,11 @@
                 (c.status === "PENDING" || c.status === "SUBMITTING" || c.status === "UNKNOWN") && c.submission_id
                 ? lwRenderReconciliationBlock(c.submission_id)
                 : ""
+              }${c.submission_id
+                ? `<div><button class="btn btn-secondary btn-sm lw-regcheck-btn"
+                     data-submission-id="${c.submission_id}">${HomezI18n.t("lw.regcheck_btn")}</button>
+                   <div class="field-hint lw-regcheck-message" data-submission-id="${c.submission_id}"></div></div>`
+                : ""
               }${!c.submission_id ? "—" : ""}</td>
             </tr>`).join("")}</tbody>
           </table>
@@ -13796,7 +13885,14 @@
 
       content.querySelectorAll(".lw-live-send-btn").forEach((button) => {
         button.addEventListener("click", () => withButtonGuard(button, async () => {
-          if (!window.confirm(HomezI18n.t("lw.live_send_confirm"))) return;
+          // 브라우저 기본 팝업(window.confirm)은 내장 창·패널에서 표시되지 않으면 "취소"처럼
+          // 조용히 끝나 버튼이 무응답으로 보였다. 앱 안의 확인 대화상자로 같은 확인을 받는다.
+          const { confirmed: sendConfirmed } = await confirmDialog({
+            title: HomezI18n.t("lw.live_send_btn"),
+            body: HomezI18n.t("lw.live_send_confirm"),
+            okLabel: HomezI18n.t("lw.live_send_btn"),
+          });
+          if (!sendConfirmed) return;
           const recentAuthToken = await promptRecentAuthToken();
           if (recentAuthToken === null) return;
           const submissionId = button.dataset.submissionId;
@@ -13853,6 +13949,46 @@
             }
           } catch (err) {
             message.textContent = err.message || HomezI18n.t("lw.live_status_check_failed");
+            message.classList.add("field-error");
+          }
+        }));
+      });
+
+      // 쿠팡 등록 확인 — 쿠팡 상품 목록 API(읽기 전용 GET 1회)로 이 제출의 상품이 쿠팡에 실제로
+      // 있는지 HOMEZ 안에서 확인한다. WING 화면을 따로 보지 않아도 결과불명·실패 제출의
+      // 외부 상품 존재 여부를 알 수 있다. 아무것도 저장·연결하지 않는다.
+      content.querySelectorAll(".lw-regcheck-btn").forEach((button) => {
+        button.addEventListener("click", () => withButtonGuard(button, async () => {
+          const submissionId = button.dataset.submissionId;
+          const message = content.querySelector(
+            `.lw-regcheck-message[data-submission-id="${submissionId}"]`,
+          );
+          message.textContent = HomezI18n.t("common.loading");
+          message.classList.remove("field-error");
+          try {
+            const r = await apiFetch(
+              `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/registration-lookup`,
+            );
+            if (r.outcome === "FOUND") {
+              message.textContent = HomezI18n.t("lw.regcheck_found", {
+                ids: r.matches.map((m) => `${m.seller_product_id}(${m.status_name || "?"})`).join(", "),
+              });
+              // 쿠팡 심사에서 반려된 상품이면 사유를 어디서 보는지 알려 준다. 쿠팡 공식 API는
+              // 반려 사유를 제공하지 않아 HOMEZ가 보여 줄 수 없다(WING에서만 확인 가능).
+              if (r.matches.some((m) => /반려|denied/i.test(String(m.status_name || "")))) {
+                message.textContent += ` ${HomezI18n.t("lw.regcheck_denied_hint")}`;
+                message.classList.add("field-error");
+              }
+            } else if (r.outcome === "NOT_FOUND") {
+              message.textContent = HomezI18n.t("lw.regcheck_not_found");
+            } else {
+              message.textContent = HomezI18n.t("lw.regcheck_unknown", {
+                reason: r.error_summary || (r.has_more ? HomezI18n.t("lw.regcheck_more_pages") : ""),
+              });
+              message.classList.add("field-error");
+            }
+          } catch (err) {
+            message.textContent = err.message || HomezI18n.t("lw.regcheck_failed");
             message.classList.add("field-error");
           }
         }));
@@ -23127,7 +23263,7 @@
       const modeBadge = el("badge-mode");
       const estopBadge = el("badge-estop");
       if (safety.schema_ready) {
-        modeBadge.textContent = HomezI18n.t("topbar.mode_prefix", { mode: safety.mode });
+        modeBadge.textContent = HomezI18n.t("topbar.mode_prefix", { mode: safetyModeLabel(safety.mode) });
         modeBadge.className = "pill ok";
         const active = safety.emergency_stop && safety.emergency_stop.is_active;
         estopBadge.textContent = HomezI18n.t(active ? "topbar.estop_active" : "topbar.estop_inactive");

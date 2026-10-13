@@ -26,8 +26,8 @@ from app.domains.marketplace_listing.category_metadata import (
     PurchaseOptionAttribute,
 )
 from app.domains.marketplace_listing.coupang_live_provider import (
-    LiveSubmissionResult, ProductOptionIdentifier, ProductOptionIdentifiersResult,
-    ProductStatusResult,
+    LiveSubmissionResult, ProductListResult, ProductOptionIdentifier,
+    ProductOptionIdentifiersResult, ProductStatusResult, RegisteredProductSummary,
 )
 from app.domains.marketplace_listing.coupang_logistics_provider import (
     LogisticsLocation,
@@ -49,6 +49,21 @@ class FakeCoupangLiveProductProvider:
     # 상품명에 FAKE_OPTION_ID_PENDING → 모든 옵션번호 null(승인 전), 
     # FAKE_OPTION_ID_PARTIAL → 첫 옵션만 번호 있음. 합성 값만 쓴다.
     _registered: dict = {}
+
+    def list_products(self, seller_product_name=None, max_per_page=20):
+        # 합성 목록 조회: create_product()로 "등록"한 상품명이 앞 20자로 일치하면 찾는다.
+        key = (seller_product_name or "").strip()[:20]
+        found = tuple(
+            RegisteredProductSummary(
+                seller_product_id=str(ref).replace("FAKE-PACKAGED-SELLER-PRODUCT-", "9000"),
+                seller_product_name=str(name)[:20], status_name="APPROVED",
+            )
+            for ref, name in getattr(type(self), "_registered_names", {}).items()
+            if key and str(name)[:20] == key
+        )
+        return ProductListResult(
+            outcome="FOUND" if found else "NOT_FOUND", products=found,
+        )
 
     def create_product(self, payload):
         name = str(payload.get("sellerProductName", ""))

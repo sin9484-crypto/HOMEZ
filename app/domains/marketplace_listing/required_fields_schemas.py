@@ -188,6 +188,12 @@ class CoupangSellerFulfilledFields(_StrictModel):
     barcode: str | None = None
     emptyBarcodeReason: str | None = None
     modelNo: str | None = None
+    # 상품 식별번호(UID) — 쿠팡은 브랜드 상품 등록 시 MPN/GTIN을 `attributes`의 속성
+    # ("Global Trade Item Number", "Manufacturer Part Number")으로 검증한다. 무브랜드
+    # 상품은 이 속성이 빈 값으로 통과한다(2026-10-11 성공 상품 상세 조회로 확인). 값이
+    # 있을 때만 payload의 각 item attributes에 넣고, 없으면 만들어 넣지 않는다.
+    globalTradeItemNumber: str | None = None
+    manufacturerPartNumber: str | None = None
     certifications: list[dict] = Field(default_factory=list)
     # 2026-08-29 — 공식 문서로 확인한 정확한 구조로 교체(이전에는
     # `list[dict]`로만 선언해 어떤 모양이든 통과시켰다 — Phase 3 감사
@@ -240,6 +246,37 @@ class CoupangSellerFulfilledFields(_StrictModel):
         if not normalized or (normalized.startswith("<") and normalized.endswith(">")):
             raise ValueError("실제 출고·반품 정보를 입력해야 합니다.")
         return normalized
+
+    @field_validator("globalTradeItemNumber")
+    @classmethod
+    def validate_gtin(cls, value: str | None) -> str | None:
+        """GTIN은 숫자 8·12·13·14자리이고 GS1 체크디지트가 맞아야 한다. 형식 검증일 뿐이며
+        그 번호가 이 상품(묶음 포함)의 번호라는 뜻은 아니다 — 상품 일치는 사람이 확인한다."""
+        if value is None:
+            return value
+        text = value.strip()
+        if not text:
+            return None
+        if not text.isdigit() or len(text) not in (8, 12, 13, 14):
+            raise ValueError("GTIN은 숫자 8·12·13·14자리여야 합니다.")
+        digits = [int(c) for c in text]
+        body, check = digits[:-1], digits[-1]
+        total = sum(d * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(body)))
+        if (10 - total % 10) % 10 != check:
+            raise ValueError("GTIN 체크디지트가 맞지 않습니다.")
+        return text
+
+    @field_validator("manufacturerPartNumber")
+    @classmethod
+    def validate_mpn(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        text = value.strip()
+        if not text:
+            return None
+        if len(text) > 30:  # 쿠팡 attributeValueName 최대 30자(공식 문서)
+            raise ValueError("제조사 모델번호(MPN)는 30자 이하여야 합니다.")
+        return text
 
     @model_validator(mode="after")
     def reject_duplicate_item_sku(self) -> "CoupangSellerFulfilledFields":

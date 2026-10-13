@@ -375,8 +375,8 @@ class CoupangLiveProviderTestCase(unittest.TestCase):
         self.assertEqual(result.raw_status_name, "APPROVED")
 
     def test_status_query_unrecognized_korean_status_stays_unknown_fail_closed(self):
-        # 이 지시의 명시적 금지 — "승인완료" 외 나머지 6개 상태의 실제
-        # 한글 표기는 관측된 바 없으므로 추측해서 매핑하지 않는다. 이
+        # 이 지시의 명시적 금지 — 실제로 관측된 "승인완료"·"승인반려" 외 나머지
+        # 상태의 한글 표기는 관측된 바 없으므로 추측해서 매핑하지 않는다. 이
         # 테스트의 "배송준비중"은 실제 관측값이 아니라 "추측 매핑이
         # 없으면 UNKNOWN으로 fail-closed 된다"만 증명하기 위한 가상의
         # 미인식 문자열이다. 다만 미인식이어도 원본 문자열
@@ -395,9 +395,23 @@ class CoupangLiveProviderTestCase(unittest.TestCase):
     def test_canonical_status_map_only_adds_confirmed_korean_value(self):
         # 회귀 방지 — 이후 누군가 나머지 6개 상태의 한글 표기를 실사
         # 없이 "추정"으로 채워 넣으면 이 테스트가 실패해야 한다.
+        # 2026-10-12 — "승인반려"가 실제 쿠팡 응답(상품 16411745286, 상품 목록 조회)에서
+        # 관측돼 추가했다. 관측된 값만 허용한다는 원칙은 그대로다.
         korean_keys = [k for k in CANONICAL_STATUS_MAP if k not in STATUS_NAMES]
-        self.assertEqual(korean_keys, ["승인완료"])
+        self.assertEqual(korean_keys, ["승인완료", "승인반려"])
         self.assertEqual(CANONICAL_STATUS_MAP["승인완료"], "APPROVED")
+        self.assertEqual(CANONICAL_STATUS_MAP["승인반려"], "DENIED")
+
+    def test_status_query_maps_observed_korean_denied_status(self):
+        provider, _session = self._provider(
+            _Response(200, {"code": "SUCCESS", "message": "", "data": {
+                "sellerProductId": 123456, "statusName": "승인반려",
+            }}),
+        )
+        result = provider.get_product_status("123456")
+        self.assertEqual(result.outcome, "FOUND")
+        self.assertEqual(result.status_name, "DENIED")
+        self.assertEqual(result.raw_status_name, "승인반려")
 
     # 2026-08-30 상태 응답 개인정보 마스킹 수정 — denylist(정규식으로
     # "그럴듯한 패턴"을 추측해 지우는 방식)가 아니라 allowlist(code/

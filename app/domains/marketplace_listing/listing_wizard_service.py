@@ -194,10 +194,31 @@ _VERSION_CONFLICT = (
 _DELETE_BLOCK_REASON_BY_STATUS = {
     WizardStatus.APPROVED: "승인된 항목입니다 — 먼저 승인을 취소해야 삭제할 수 있습니다.",
     WizardStatus.SUBMITTING: "현재 쿠팡에 상품을 등록하고 있습니다.",
-    WizardStatus.PARTIALLY_SUCCEEDED: "쿠팡에 이미 등록된 상품입니다.",
-    WizardStatus.SUCCEEDED: "쿠팡에 이미 등록된 상품입니다.",
     WizardStatus.ARCHIVED: "이미 삭제(보관)된 항목입니다.",
 }
+
+
+def _submission_record_reason(materialized: list[dict]) -> str:
+    """제출 기록이 남은 위저드를 삭제할 수 없는 이유를 **실제 제출 상태**로 설명한다. 이전에는
+    위저드가 SUCCEEDED(제출 처리 끝)이거나 제출 행이 하나라도 있으면 항상 "쿠팡에 이미 등록된
+    상품입니다"라고 했는데, 쿠팡 전송 전(PENDING)이나 쿠팡이 거절한(FAILED) 상품에도 그렇게
+    보여 사용자가 오해했다. 삭제 차단 자체(fail-closed)는 그대로다."""
+
+    statuses = {str(entry.get("status") or "") for entry in materialized}
+    if "SUBMITTED" in statuses:
+        return (
+            "쿠팡에 등록 요청이 접수된 상품입니다. 심사 상태는 '쿠팡 등록 확인'으로 "
+            "확인하세요."
+        )
+    if statuses & {"UNKNOWN", "SUBMITTING"}:
+        return (
+            "쿠팡 전송 결과가 확인되지 않았습니다. 삭제하기 전에 '쿠팡 등록 확인'으로 "
+            "등록 여부를 먼저 확인하세요."
+        )
+    return (
+        "제출 기록이 있어 삭제할 수 없습니다. 쿠팡에는 아직 등록되지 않았을 수 있습니다"
+        "('쿠팡 등록 확인'으로 확인하세요)."
+    )
 
 
 def deletion_eligibility(wizard: ListingWizard) -> tuple[bool, str | None]:
@@ -214,16 +235,21 @@ def deletion_eligibility(wizard: ListingWizard) -> tuple[bool, str | None]:
     방어).
     """
 
+    materialized = json.loads(wizard.materialized_listing_ids_json or "[]")
+
     if wizard.status not in WizardStatus.DELETABLE_FROM:
+        if wizard.status in (
+            WizardStatus.SUCCEEDED, WizardStatus.PARTIALLY_SUCCEEDED,
+        ):
+            return False, _submission_record_reason(materialized)
         reason = _DELETE_BLOCK_REASON_BY_STATUS.get(
             wizard.status,
             "상품 상태를 확인할 수 없어 안전을 위해 삭제하지 않았습니다.",
         )
         return False, reason
 
-    materialized = json.loads(wizard.materialized_listing_ids_json or "[]")
     if materialized:
-        return False, "쿠팡에 이미 등록된 상품입니다."
+        return False, _submission_record_reason(materialized)
 
     return True, None
 

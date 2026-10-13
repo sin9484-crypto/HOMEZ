@@ -357,6 +357,15 @@ def _coupang_live_product_provider(db: Session, company_id: int, account_id_reso
         ) from exc
 
 
+def _coupang_call_failed_message(what: str, exc: Exception) -> str:
+    """쿠팡 호출이 예기치 않게 실패했을 때 화면에 보일 안내. 예외 원문은 자격증명·주소가 섞일 수 있어
+    유형 이름만 쓴다. (예전에는 이런 실패가 'Internal Server Error (500)'로만 보였다.)"""
+    return (
+        f"쿠팡 {what} 요청이 결과를 받기 전에 실패했습니다(오류 유형: {type(exc).__name__}). "
+        "네트워크·인증·호출 제한을 확인한 뒤 다시 시도해 주세요."
+    )
+
+
 @router.get("/{wizard_id}/coupang/outbound-shipping-places")
 def list_coupang_outbound_shipping_places(
     wizard_id: int,
@@ -375,6 +384,10 @@ def list_coupang_outbound_shipping_places(
         ).list_outbound_shipping_places()
     except CoupangLogisticsProviderError as exc:
         raise ServiceUnavailableException(str(exc)) from exc
+    except ServiceUnavailableException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 500 대신 원인을 알려 주는 503(예외 원문은 노출하지 않는다)
+        raise ServiceUnavailableException(_coupang_call_failed_message("출고지 조회", exc)) from exc
     cache_locations(current_user.company_id, wizard_id, "outbound", items)
     return [item.public_dict("outbound_shipping_place_code") for item in items]
 
@@ -397,6 +410,10 @@ def list_coupang_return_shipping_centers(
         ).list_return_shipping_centers()
     except CoupangLogisticsProviderError as exc:
         raise ServiceUnavailableException(str(exc)) from exc
+    except ServiceUnavailableException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ServiceUnavailableException(_coupang_call_failed_message("반품지 조회", exc)) from exc
     cache_locations(current_user.company_id, wizard_id, "return", items)
     return [item.public_dict("return_center_code") for item in items]
 
@@ -472,6 +489,10 @@ def search_coupang_brand(
         results = provider.search_brand(query)
     except CoupangBrandProviderError as exc:
         raise ServiceUnavailableException(str(exc)) from exc
+    except ServiceUnavailableException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ServiceUnavailableException(_coupang_call_failed_message("브랜드 검색", exc)) from exc
 
     return {
         "connected": not is_fake,
@@ -1452,6 +1473,34 @@ def live_submission_status(
         _submission_account_resolver(db, current_user.company_id, submission_id),
     )
     return service.check_status(
+        wizard_id, submission_id, current_user.company_id, provider,
+    )
+
+
+@router.get("/{wizard_id}/submissions/{submission_id}/registration-lookup")
+def lookup_submission_registration(
+    wizard_id: int,
+    submission_id: int,
+    current_user: User = Depends(
+        ListingWizardPermissionGuard(LISTING_WIZARD_SUBMIT),
+    ),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 상품 목록 API로 이 제출의 상품이 쿠팡에 등록돼 있는지 확인한다.
+
+    읽기 전용(쿠팡 GET 1회). 결과불명·실패 제출도 조회할 수 있다 — 등록 여부를 WING
+    화면에 의존하지 않고 HOMEZ에서 확인하기 위한 기능이다. 아무것도 저장하지 않는다."""
+
+    from app.domains.marketplace_listing.listing_wizard_live_service import (
+        ListingWizardLiveService,
+    )
+
+    service = ListingWizardLiveService(db)
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
+    return service.lookup_registration(
         wizard_id, submission_id, current_user.company_id, provider,
     )
 

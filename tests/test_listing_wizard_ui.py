@@ -361,7 +361,9 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
             idx,
         )
         body = self.js[idx:end]
-        confirm_pos = body.index('window.confirm(HomezI18n.t("lw.contents_build_upload_confirm"))')
+        confirm_pos = body.index('body: HomezI18n.t("lw.contents_build_upload_confirm")')
+        self.assertIn("await confirmDialog({", body[:confirm_pos])
+        self.assertNotIn("window.confirm(", body)
         fetch_pos = body.index("coupang/contents-from-media")
         self.assertLess(
             confirm_pos, fetch_pos,
@@ -387,7 +389,7 @@ class ListingWizardGateJAutosaveTestCase(unittest.TestCase):
         start = self.js.index(start_marker, anchor)
         end = self.js.index("\n      }));\n    });", start)
         handler_body = self.js[start:end]
-        self.assertIn("window.confirm(", handler_body)
+        self.assertIn("await confirmDialog(", handler_body)
         self.assertIn("coupang/contents-from-media", handler_body)
 
         harness = """
@@ -414,15 +416,16 @@ async function runScenario(confirmReturns) {
   const btn = { closest: () => fakeBlock };
   const w = { id: 1 };
   const HomezI18n = { t: (k) => k };
-  const windowMock = { confirm: () => confirmReturns };
+  // 앱 안 확인창(confirmDialog)을 모킹한다 — 사용자가 취소하면 { confirmed: false }.
+  const confirmDialog = async () => ({ confirmed: confirmReturns });
   const apiFetch = async () => { fetchCallCount++; return { contents: [] }; };
   const lwScheduleAutosave = () => { scheduleAutosaveCalls++; };
 
   const fn = new AsyncFunction(
-    'btn', 'w', 'HomezI18n', 'window', 'apiFetch', 'lwScheduleAutosave',
+    'btn', 'w', 'HomezI18n', 'confirmDialog', 'apiFetch', 'lwScheduleAutosave',
     HANDLER_BODY,
   );
-  await fn(btn, w, HomezI18n, windowMock, apiFetch, lwScheduleAutosave);
+  await fn(btn, w, HomezI18n, confirmDialog, apiFetch, lwScheduleAutosave);
   return { fetchCallCount, scheduleAutosaveCalls };
 }
 

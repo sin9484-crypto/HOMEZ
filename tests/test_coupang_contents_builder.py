@@ -119,12 +119,14 @@ class CoupangContentsBuilderTestCase(unittest.TestCase):
             result = self._build([1])
 
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["contentsType"], "IMAGE")
+        # 2026-10-12 — 쿠팡 공식 예시(TEXT/TEXT + HTML)로 정정. IMAGE/IMAGE는 WING에서 빈
+        # 상세설명으로 보여 심사 반려됐다.
+        self.assertEqual(result[0]["contentsType"], "TEXT")
         self.assertEqual(len(result[0]["contentDetails"]), 1)
-        self.assertEqual(result[0]["contentDetails"][0]["detailType"], "IMAGE")
+        self.assertEqual(result[0]["contentDetails"][0]["detailType"], "TEXT")
         self.assertEqual(
             result[0]["contentDetails"][0]["content"],
-            '<img src="https://pub-x.r2.dev/1.jpg">',
+            "<html><div><img src='https://pub-x.r2.dev/1.jpg' /></div></html>",
         )
 
     def test_multiple_images_build_one_entry_each_in_order(self):
@@ -240,9 +242,9 @@ class CoupangContentsBuilderTestCase(unittest.TestCase):
             with self.assertRaises(BadRequestException):
                 self._build([1, 1, 2])
 
-    def test_no_arbitrary_html_beyond_img_tag(self):
-        """계약이 요구하는 정확히 `<img src="...">` 형태만 만든다 —
-        임의 HTML을 붙이지 않는다."""
+    def test_no_arbitrary_html_beyond_the_official_example_shape(self):
+        """쿠팡 공식 예시의 `<html><div><img src='…' /></div></html>` 형태만 만든다 —
+        그 밖의 임의 HTML을 붙이지 않는다."""
 
         with patch(_PATCH_TARGET) as service_cls:
             service_cls.return_value.ensure_public_url.return_value = (
@@ -251,7 +253,9 @@ class CoupangContentsBuilderTestCase(unittest.TestCase):
             result = self._build([1])
 
         content = result[0]["contentDetails"][0]["content"]
-        self.assertEqual(content, '<img src="https://pub-x.r2.dev/1.jpg">')
+        self.assertEqual(
+            content, "<html><div><img src='https://pub-x.r2.dev/1.jpg' /></div></html>",
+        )
 
     def test_built_contents_satisfies_real_submission_contract(self):
         """build_contents_from_media_assets()가 만든 결과를 실제

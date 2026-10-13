@@ -131,10 +131,18 @@ def build_contents_from_media_assets(
                 "이미지 공개 호스팅이 아직 설정되지 않아 상세설명을 "
                 "자동으로 구성할 수 없습니다.",
             ) from exc
+        # 2026-10-12 — 쿠팡 공식 상품 생성 예시는 상세설명을 contentsType "TEXT"·detailType
+        # "TEXT"에 HTML(`<html><div><img src='…' /></div></html>`)로 보낸다. 이전에는
+        # IMAGE/IMAGE에 `<img>` 태그만 보냈고(공식 문서에 그런 예시는 없다), 쿠팡 WING는
+        # 그 상세설명을 비어 있는 것으로 보여 "상세설명을 입력해주세요"로 심사 반려됐다
+        # (상품 16411745286). 실제로 통과한 이전 상품도 TEXT/TEXT였다.
         contents.append({
-            "contentsType": "IMAGE",
+            "contentsType": "TEXT",
             "contentDetails": [
-                {"detailType": "IMAGE", "content": f'<img src="{public_url}">'},
+                {
+                    "detailType": "TEXT",
+                    "content": f"<html><div><img src='{public_url}' /></div></html>",
+                },
             ],
         })
 

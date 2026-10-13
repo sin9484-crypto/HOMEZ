@@ -9,6 +9,7 @@ precheck.py)와 이 파일 양쪽에서 동일하게 호출된다. 이 파일은
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -30,6 +31,62 @@ def _coerce_outbound_shipping_place_code(raw: Any) -> int | None:
         return int(text)
     except ValueError:
         return None
+
+
+_PURE_NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def _purchase_option_value(
+    name: Any, value: Any, definitions: list[dict[str, Any]],
+) -> str:
+    """구매옵션 값을 쿠팡 계약에 맞춘다. 숫자 속성은 값에 단위가 붙어야 한다(공식 예시
+    `{"attributeTypeName":"수량","attributeValueName":"1개"}`, 실제 라이브 재현: "40"은
+    거부·"40개"는 통과). 값이 **순수 숫자**일 때만 카테고리 메타데이터의 기본 단위를 붙이고,
+    이미 단위가 있거나(숫자가 아님) 숫자 속성이 아니거나 기본 단위가 없거나 사용 가능한
+    단위 목록에 없으면 값을 그대로 둔다(단위를 추측하지 않는다)."""
+
+    text = str(value).strip()
+    if not _PURE_NUMBER.match(text):
+        return text
+    field = next(
+        (d for d in definitions if str(d.get("attribute_type_name")) == str(name)), None,
+    )
+    if not field or field.get("data_type") != "NUMBER":
+        return text
+    unit = str(field.get("basic_unit") or "").strip()
+    if not unit or unit == "없음":
+        return text
+    usable = field.get("usable_units") or []
+    if usable and unit not in usable:
+        return text
+    return f"{text}{unit}"
+
+
+# 상품 식별번호(UID) 속성 이름 — 공식 문서와 실제 등록 상품 상세 응답에서 확인한 철자.
+_UID_ATTRIBUTES = (
+    ("globalTradeItemNumber", "Global Trade Item Number"),
+    ("manufacturerPartNumber", "Manufacturer Part Number"),
+)
+
+
+def _with_identifier_attributes(
+    attributes: list[dict[str, Any]], required_fields: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """값이 있을 때만 GTIN/MPN을 attributes에 더한다. 공유 목록을 바꾸지 않고 새 목록을
+    돌려주며, 이미 같은 이름의 속성이 있으면 덮어쓰지 않는다. 값이 없으면 아무것도 만들지
+    않는다(없는 번호를 추측해 넣지 않는다)."""
+
+    existing = {str(a.get("attributeTypeName")) for a in attributes}
+    extra: list[dict[str, Any]] = []
+    for field_name, attribute_name in _UID_ATTRIBUTES:
+        value = str(required_fields.get(field_name) or "").strip()
+        if value and attribute_name not in existing:
+            extra.append({
+                "attributeTypeName": attribute_name,
+                "attributeValueName": value,
+                "exposed": "NONE",
+            })
+    return [*attributes, *extra] if extra else attributes
 
 
 def build_coupang_live_payload(
@@ -67,7 +124,12 @@ def build_coupang_live_payload(
         brand = str(required_fields.get("officialBrandName") or "").strip()
         brand_id = str(required_fields.get("brandId") or "").strip() or None
     else:
-        brand = str(required_fields.get("brand") or "").strip()
+        # 2026-10-13 쿠팡 실제 거절 사유(러닝 무릎보호대): "브랜드 ID가 필요합니다. 브랜드 ID 없이
+        # 브랜드명을 사용하려면 WING 브랜드 관리에서 브랜드를 등록해 주세요." — 무브랜드 확인 문구
+        # ("브랜드 없음" 등)를 브랜드명으로 보내면 쿠팡이 상표명으로 보고 거절한다. WING 화면도 무브랜드를
+        # 글자가 아니라 "브랜드 없음(또는 자체제작)" 체크로 처리한다. 그래서 NO_BRAND는 브랜드를 비워
+        # 보내고, 사용자가 확인한 문구(required_fields.brand)는 확인 기록으로만 남긴다.
+        brand = ""
     general_name = product_name[:100]
     now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
     end = min(now + timedelta(days=3650), datetime(2099, 1, 1))
@@ -76,8 +138,14 @@ def build_coupang_live_payload(
     # enum values, not invented product facts.
     live_items: list[dict[str, Any]] = []
     purchase_options = channel_policy_attributes.get("purchase_options") or {}
+    option_definitions = (
+        channel_policy_attributes.get("purchase_option_field_definitions") or []
+    )
     shared_attributes = [
-        {"attributeTypeName": str(name), "attributeValueName": str(value)}
+        {
+            "attributeTypeName": str(name),
+            "attributeValueName": _purchase_option_value(name, value, option_definitions),
+        }
         for name, value in purchase_options.items() if str(value).strip()
     ]
     for item in items:
@@ -87,11 +155,17 @@ def build_coupang_live_payload(
         item_option_attrs = item.get("optionAttributes")
         if isinstance(item_option_attrs, dict) and item_option_attrs:
             attributes = [
-                {"attributeTypeName": str(name), "attributeValueName": str(value)}
+                {
+                    "attributeTypeName": str(name),
+                    "attributeValueName": _purchase_option_value(
+                        name, value, option_definitions,
+                    ),
+                }
                 for name, value in item_option_attrs.items() if str(value).strip()
             ]
         else:
             attributes = shared_attributes
+        attributes = _with_identifier_attributes(attributes, required_fields)
         # 2026-08-29 쿠팡 상품등록 핵심 차단 해결 — 공식 문서 확인
         # 결과 originalPrice/salePrice/maximumBuyCount/unitCount는
         # 전부 items[] 각 항목(옵션 조합) 레벨 필드다. 옵션 조합별로

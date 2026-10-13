@@ -32,7 +32,7 @@ from app.domains.marketplace_listing.coupang_live_payload import (
     extract_registration_attribute_values,
 )
 from app.domains.marketplace_listing.coupang_live_provider import (
-    CoupangProductProvider, LiveSubmissionResult,
+    CoupangProductProvider, LiveSubmissionResult, ProductListResult,
 )
 from app.domains.marketplace_listing.coupang_seller_connection import (
     SELLER_CONNECTION_CHANGED_AFTER_APPROVAL,
@@ -58,6 +58,76 @@ class LivePreflight:
     blockers: list[str]
     submission_id: int
     listing_id: int
+
+
+_LOOKUP_NAME_LENGTH = 20  # 쿠팡 상품 목록 조회의 이름 검색·응답 길이 한도(공식 문서)
+
+
+def safe_list_products(
+    provider: "CoupangProductProvider", name: str,
+) -> "ProductListResult":
+    """제공자의 목록 조회를 부르되, 제공자가 처리하지 못한 **예기치 않은 예외**는 500이 아니라
+    "확인불가(UNKNOWN)"로 돌려준다. 등록 여부를 확인하지 못했다는 사실이 서버 오류로
+    가려지면 안 된다(예: 쿠팡 호출이 호출 전에 차단된 경우). 예외 원문은 노출하지 않는다."""
+
+    try:
+        return provider.list_products(name[:_LOOKUP_NAME_LENGTH])
+    except Exception as exc:  # noqa: BLE001 — 어떤 예외든 "없음"이 아니라 "확인불가"다.
+        # 예외 원문은 노출하지 않고 유형 이름만 남긴다(자격증명·주소가 섞일 수 있다).
+        return ProductListResult(
+            outcome="UNKNOWN", error_code="LOOKUP_FAILED",
+            error_summary=(
+                "쿠팡 등록 조회 요청이 쿠팡에서 결과를 받기 전에 실패했습니다"
+                f"(오류 유형: {type(exc).__name__}). 네트워크·인증·호출 제한을 확인한 뒤 "
+                "'쿠팡 등록 확인'을 다시 눌러 주세요. 이 결과는 '등록되지 않음'이 아닙니다."
+            ),
+        )
+
+
+def evaluate_registration_lookup(
+    expected_name: str, result: "ProductListResult",
+    submission_external_ref: str | None = None,
+) -> dict:
+    """상품 목록 조회 결과를 "이 상품이 쿠팡에 등록돼 있는가"로 판정한다(읽기 전용).
+
+    * FOUND: 이름(앞 20자)이 같은 등록 상품이 있다. 같은 이름이 여러 건이면 전부 돌려주고
+      사용자가 판단한다(HOMEZ가 하나를 골라 연결하지 않는다).
+    * NOT_FOUND: 조회가 정상이고 같은 이름이 없으며 다음 페이지도 없다.
+    * UNKNOWN: 조회 오류·형식 이탈, 또는 같은 이름이 없지만 다음 페이지가 남아 결론을
+      낼 수 없다. 이때는 "없음"으로 취급하지 않는다."""
+
+    key = (expected_name or "").strip()[:_LOOKUP_NAME_LENGTH]
+    matches = [
+        {
+            "seller_product_id": p.seller_product_id,
+            "seller_product_name": p.seller_product_name,
+            "status_name": p.status_name,
+            "display_category_code": p.display_category_code,
+            "is_recorded_reference": (
+                submission_external_ref is not None
+                and p.seller_product_id == str(submission_external_ref)
+            ),
+        }
+        for p in result.products
+        if key and (p.seller_product_name or "").strip()[:_LOOKUP_NAME_LENGTH] == key
+    ]
+    if result.outcome == "UNKNOWN":
+        outcome = "UNKNOWN"
+    elif matches:
+        outcome = "FOUND"
+    elif result.has_more:
+        outcome = "UNKNOWN"  # 이 페이지에는 없지만 다음 페이지가 있어 없다고 단정할 수 없다.
+    else:
+        outcome = "NOT_FOUND"
+    return {
+        "outcome": outcome,
+        "checked_name": key,
+        "matches": matches,
+        "scanned_count": len(result.products),
+        "has_more": result.has_more,
+        "error_code": result.error_code,
+        "error_summary": result.error_summary,
+    }
 
 
 class ListingWizardLiveService:
@@ -590,6 +660,34 @@ class ListingWizardLiveService:
                 entity_summary=f"상품등록 제출 #{submission.id}",
             )
         return result
+
+    def lookup_registration(
+        self,
+        wizard_id: int,
+        submission_id: int,
+        company_id: int,
+        provider: CoupangProductProvider,
+    ) -> dict:
+        """이 제출의 상품이 쿠팡에 실제로 등록돼 있는지 쿠팡 상품 목록 API로 확인한다.
+
+        **읽기 전용** — 쿠팡 GET 1회뿐이고 제출·위저드·상품 상태를 바꾸지 않는다. 결과불명
+        (UNKNOWN)·실패 제출의 "쿠팡에 상품이 있는가"를 WING 화면 없이 HOMEZ에서 확인하기
+        위한 것이다. 연결(정합화)은 하지 않는다 — 찾은 상품 번호는 사람이 보고 판단한다."""
+
+        wizard, submission, _listing, _selection = self._context(
+            wizard_id, submission_id, company_id,
+        )
+        draft = json.loads(wizard.draft_json or "{}")
+        name = str(draft.get("product_name") or "").strip()
+        if not name:
+            raise BadRequestException("상품명이 없어 쿠팡 등록 여부를 조회할 수 없습니다.")
+        result = safe_list_products(provider, name)
+        outcome = evaluate_registration_lookup(
+            name, result, submission.external_submission_ref,
+        )
+        outcome["submission_id"] = submission.id
+        outcome["submission_status"] = submission.status
+        return outcome
 
     def check_status(
         self,
