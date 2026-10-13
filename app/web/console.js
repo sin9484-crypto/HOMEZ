@@ -1565,6 +1565,28 @@
     });
   }
 
+  // 브라우저 기본 팝업(window.confirm/prompt)은 내장 패널·임베디드 창에서 보이지 않아 클릭이 그대로 취소되는
+  // 결함이 있었다(2026-10-13~14, 쿠팡 실등록 중 발견). 같은 용도의 앱 안 확인창 도우미 — 반환값 의미는 동일하다.
+  async function askConfirm(message, { title, okLabel } = {}) {
+    const { confirmed } = await confirmDialog({
+      title: title || HomezI18n.t("common.confirm"),
+      body: String(message),
+      okLabel: okLabel || HomezI18n.t("common.confirm"),
+    });
+    return confirmed;
+  }
+
+  // 한 줄 입력(사유 등). 취소하거나 비워 두면 null — window.prompt가 취소 시 null을 주던 것과 같다.
+  async function askText(message, { title, okLabel } = {}) {
+    const { confirmed, value } = await confirmDialog({
+      title: title || HomezI18n.t("common.confirm"),
+      body: String(message),
+      requireReason: true,
+      okLabel: okLabel || HomezI18n.t("common.confirm"),
+    });
+    return confirmed ? value : null;
+  }
+
   // --------------------------------------------------
   // Migration 승인 UX(2026-08-05 CTO 재검증 지시 Gate E)
   //
@@ -6034,7 +6056,7 @@
       btn.onclick = async () => {
         let newLabel;
         try {
-          newLabel = window.prompt(HomezI18n.t("purchase_task.cc_rename_prompt"));
+          newLabel = await askText(HomezI18n.t("purchase_task.cc_rename_prompt"));
         } catch (err) {
           toast(HomezI18n.t("purchase_task.os_onchannel_prompt_unsupported"), "error");
           return;
@@ -6096,7 +6118,7 @@
     el("pt-cc-bulk-delete-btn").onclick = async () => {
       const ids = [...ptCcSelectedForDelete];
       if (ids.length === 0) return;
-      const confirmed = window.confirm(
+      const confirmed = await askConfirm(
         HomezI18n.t("purchase_task.cc_bulk_delete_confirm", { count: ids.length }),
       );
       if (!confirmed) return;
@@ -6241,7 +6263,7 @@
             + `${!!ptCurrentPolicy.require_return_allowed} → ${el("pt-pol-require-return").checked}`,
           );
         }
-        if (changedLines.length && !window.confirm(
+        if (changedLines.length && !await askConfirm(
           HomezI18n.t("purchase_task.policy_confirm_changes", { changes: changedLines.join("\n") }),
         )) {
           return;
@@ -8798,7 +8820,7 @@
           body: JSON.stringify({ expires_at: expiresAt, idempotency_key: idempotencyKey }),
         });
       } else {
-        const reason = window.prompt(action === "reject" ? HomezI18n.t("ml.reject_reason_prompt") : HomezI18n.t("ml.revoke_reason_prompt"));
+        const reason = await askText(action === "reject" ? HomezI18n.t("ml.reject_reason_prompt") : HomezI18n.t("ml.revoke_reason_prompt"));
         if (!reason || !reason.trim()) {
           toast(HomezI18n.t("ml.reason_required"), "error");
           return;
@@ -9539,7 +9561,13 @@
         status: lwStatusLabel(row.status),
         note: HomezI18n.t("lw.delete_confirm_note"),
       });
-      if (!window.confirm(message)) return;
+      // window.confirm은 내장 패널에서 보이지 않아 삭제 아이콘이 무반응이었다(2026-10-14) — 앱 안 확인창으로 교체.
+      const { confirmed } = await confirmDialog({
+        title: HomezI18n.t("lw.delete_confirm_title"),
+        body: message,
+        okLabel: HomezI18n.t("lw.delete_confirm_ok"),
+      });
+      if (!confirmed) return;
 
       try {
         await apiFetch(`/listing-wizards/${id}`, {
@@ -9587,7 +9615,12 @@
         total: ids.length, deletable: deletableCount, excluded: excludedCount,
         note: HomezI18n.t("lw.delete_confirm_note"),
       });
-      if (!window.confirm(message)) return;
+      const { confirmed } = await confirmDialog({
+        title: HomezI18n.t("lw.delete_confirm_title"),
+        body: message,
+        okLabel: HomezI18n.t("lw.delete_confirm_ok"),
+      });
+      if (!confirmed) return;
 
       try {
         const response = await apiFetch("/listing-wizards/bulk-archive", {
@@ -9621,7 +9654,7 @@
       const message = HomezI18n.t("lw.bulk_margin_apply_confirm_message", {
         count: ids.length, rate: ratePercent,
       });
-      if (!window.confirm(message)) return;
+      if (!await askConfirm(message)) return;
 
       try {
         const response = await apiFetch("/listing-wizards/bulk-margin-apply", {
@@ -9647,7 +9680,7 @@
       const message = HomezI18n.t("lw.bulk_submit_confirm_message", {
         count: ids.length,
       });
-      if (!window.confirm(message)) return;
+      if (!await askConfirm(message)) return;
 
       try {
         const response = await apiFetch("/listing-wizards/bulk-submit", {
@@ -9672,11 +9705,23 @@
       const confirmMessage = HomezI18n.t("lw.bulk_delete_all_confirm_message", {
         count: total, note: HomezI18n.t("lw.delete_confirm_note"),
       });
-      if (!window.confirm(confirmMessage)) {
+      const first = await confirmDialog({
+        title: HomezI18n.t("lw.delete_confirm_title"),
+        body: confirmMessage,
+        okLabel: HomezI18n.t("lw.delete_confirm_ok"),
+      });
+      if (!first.confirmed) {
         return;
       }
-      const typed = window.prompt(HomezI18n.t("lw.bulk_delete_all_type_confirm_prompt"));
-      if (typed === null) return;
+      // 두 번째 확인: "삭제"를 직접 입력해야 진행한다(window.prompt도 내장 패널에서 보이지 않아 앱 안 확인창을 쓴다).
+      const second = await confirmDialog({
+        title: HomezI18n.t("lw.delete_confirm_title"),
+        body: HomezI18n.t("lw.bulk_delete_all_type_confirm_prompt"),
+        requireReason: true,
+        okLabel: HomezI18n.t("lw.delete_confirm_ok"),
+      });
+      if (!second.confirmed) return;
+      const typed = second.value;
       if (typed !== "삭제") {
         toast(HomezI18n.t("lw.bulk_delete_all_confirm_mismatch"), "error");
         return;
@@ -13555,7 +13600,7 @@
       olWirePicker("ol-task", async (v) => {
         let replace = false;
         if (state === "ACTIVE") {
-          if (!window.confirm(olT("replace_confirm"))) return;
+          if (!await askConfirm(olT("replace_confirm"))) return;
           replace = true;
         }
         await apiFetch(`/purchase-tasks/${task.id}/supplier-option-link`, {
@@ -13576,7 +13621,7 @@
     const disableBtn = el("ol-task-disable-btn");
     if (disableBtn) {
       disableBtn.addEventListener("click", () => withButtonGuard(disableBtn, async () => {
-        if (!window.confirm(olT("disable_confirm"))) return;
+        if (!await askConfirm(olT("disable_confirm"))) return;
         try {
           await apiFetch(`/supplier-option-links/${info.link_id}/disable`, {
             method: "POST", body: JSON.stringify({ reason: olT("disable_reason") }),
@@ -13668,7 +13713,7 @@
     const syncBtn = el(`ol-w-sync-btn-${submissionId}`);
     if (syncBtn) {
       syncBtn.addEventListener("click", () => withButtonGuard(syncBtn, async () => {
-        if (!window.confirm(olT("wiz_sync_confirm"))) return;
+        if (!await askConfirm(olT("wiz_sync_confirm"))) return;
         try {
           const result = await apiFetch(
             `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/option-links/sync-identifiers`,
@@ -13702,7 +13747,7 @@
           });
         olWirePicker(`ol-w-${submissionId}`, async (v) => {
           const changing = Boolean(option.link_id) && option.link_state === "ACTIVE";
-          if (changing && !window.confirm(olT("replace_confirm"))) return;
+          if (changing && !await askConfirm(olT("replace_confirm"))) return;
           const fresh = await apiFetch(
             `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/option-links`,
             {
@@ -13723,7 +13768,7 @@
     panel.querySelectorAll(".ol-w-disable-btn").forEach((btn) => {
       btn.addEventListener("click", () => withButtonGuard(btn, async () => {
         const option = view.options[Number(btn.dataset.index)];
-        if (!window.confirm(olT("disable_confirm"))) return;
+        if (!await askConfirm(olT("disable_confirm"))) return;
         try {
           await apiFetch(`/supplier-option-links/${option.link_id}/disable`, {
             method: "POST", body: JSON.stringify({ reason: olT("disable_reason") }),
@@ -13739,7 +13784,7 @@
     panel.querySelectorAll(".ol-w-clear-btn").forEach((btn) => {
       btn.addEventListener("click", () => withButtonGuard(btn, async () => {
         const option = view.options[Number(btn.dataset.index)];
-        if (!window.confirm(olT("clear_confirm"))) return;
+        if (!await askConfirm(olT("clear_confirm"))) return;
         try {
           await apiFetch(`/supplier-option-links/${option.link_id}/clear-coupang-identifiers`, {
             method: "POST", body: JSON.stringify({ reason: olT("clear_reason") }),
@@ -14071,7 +14116,7 @@
 
       content.querySelectorAll(".lw-recon-apply-btn").forEach((button) => {
         button.addEventListener("click", () => withButtonGuard(button, async () => {
-          if (!window.confirm(HomezI18n.t("lw.reconciliation_apply_confirm"))) return;
+          if (!await askConfirm(HomezI18n.t("lw.reconciliation_apply_confirm"))) return;
           const submissionId = button.dataset.submissionId;
           const input = content.querySelector(
             `.lw-recon-seller-product-id[data-submission-id="${submissionId}"]`,
@@ -14922,7 +14967,7 @@
 
   async function lpRejectPackage() {
     if (!lpState.packageId) return;
-    const reason = window.prompt(HomezI18n.t("listing_package.reject_reason_prompt"));
+    const reason = await askText(HomezI18n.t("listing_package.reject_reason_prompt"));
     if (!reason) return;
 
     try {

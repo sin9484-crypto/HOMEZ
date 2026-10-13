@@ -1162,6 +1162,8 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.delete_success": "대기 상품을 삭제했습니다.",
   "lw.delete_error": "삭제 중 오류가 발생했습니다.",
   "lw.delete_confirm_note": "삭제한 항목은 \"삭제된 대기 상품\"에서 다시 복원할 수 있습니다.\n쿠팡에 등록된 상품은 삭제되지 않습니다.\n원본 이미지와 권리 증빙자료는 삭제되지 않습니다.\n등록 중이거나 등록 결과를 확인할 수 없는 상품은 삭제할 수 없습니다.",
+  "lw.delete_confirm_title": "대기 상품 삭제 확인",
+  "lw.delete_confirm_ok": "삭제",
   "lw.delete_confirm_message": "대기 상품을 삭제할까요?\n\n상품명: {name}\n현재 단계: {step}\n상태: {status}\n\n{note}",
   "lw.bulk_selected_count": "{count}건 선택됨",
   "lw.bulk_delete_selected_btn": "선택 항목 삭제",

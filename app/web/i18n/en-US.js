@@ -1151,6 +1151,8 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.delete_success": "Deleted the pending item.",
   "lw.delete_error": "An error occurred while deleting.",
   "lw.delete_confirm_note": "Deleted items can be restored from \"Deleted pending items.\"\nItems already registered on Coupang are not deleted.\nOriginal images and rights evidence are not deleted.\nItems currently submitting or awaiting a submission result cannot be deleted.",
+  "lw.delete_confirm_title": "Confirm deletion",
+  "lw.delete_confirm_ok": "Delete",
   "lw.delete_confirm_message": "Delete this pending item?\n\nProduct: {name}\nCurrent step: {step}\nStatus: {status}\n\n{note}",
   "lw.bulk_selected_count": "{count} selected",
   "lw.bulk_delete_selected_btn": "Delete Selected Items",

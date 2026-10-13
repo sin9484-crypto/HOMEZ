@@ -2686,3 +2686,6 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 @media (min-width: 720px) {
   .ol-picker .field { flex: 1 1 200px; }
 }
+
+/* 확인창 본문의 줄바꿈(삭제 안내 등 여러 줄 문구)을 그대로 보여 준다 — 없으면 한 줄로 합쳐진다. */
+#confirm-body { white-space: pre-line; }
