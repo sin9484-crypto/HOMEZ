@@ -1160,6 +1160,7 @@
         <div class="view-header">
           <h1 data-i18n="lw.title">상품 등록</h1>
           <button class="btn btn-secondary" id="lw-csv-btn" data-i18n="lw.csv_btn">CSV 내보내기</button>
+          <button class="btn btn-secondary" id="lw-url-import-btn" data-i18n="lw.urlimp.open_btn">URL로 가져오기</button>
           <button class="btn btn-primary" id="lw-new-btn" data-i18n="lw.new_btn">새 상품 등록</button>
         </div>
         <p class="view-desc" data-i18n="lw.desc">기존 상품 후보·이미지·판매채널·판매방식·승인 도메인을 그대로 이어 붙인 상품 등록 흐름이다. 실제 등록은 8단계 승인을 통과한 뒤 9단계에서만 실행된다.</p>
@@ -1180,6 +1181,20 @@
             <button class="btn btn-secondary" id="lw-bulk-delete-all-btn" hidden></button>
           </div>
           <div class="table-wrap" id="lw-list-table-wrap" aria-live="polite"></div>
+        </div>
+
+        <!-- 2026-10-14 URL 상품 가져오기 — URL 검색 → 기재 내용 확인 → 수익 계산 → 후보·위저드 초안 생성 -->
+        <div id="lw-url-import-panel" class="detail-panel lw-urlimp" hidden>
+          <h2 data-i18n="lw.urlimp.title">URL로 상품 가져오기</h2>
+          <p class="stat-sub" data-i18n="lw.urlimp.desc">상품 페이지 주소를 넣으면 이름·이미지·가격을 읽어 오고, 수익을 계산한 뒤 위저드 초안까지 만듭니다. 읽은 값은 제안일 뿐이며 브랜드·원산지·사용권·정보고시 확인과 승인·전송은 직접 합니다.</p>
+          <div class="field-inline">
+            <input type="url" id="lw-ui-url" inputmode="url" autocomplete="off" placeholder="https://">
+            <button class="btn btn-primary" id="lw-ui-search-btn" data-i18n="lw.urlimp.search_btn">URL 검색</button>
+            <button class="btn" id="lw-ui-close-btn" data-i18n="lw.close_btn">목록으로</button>
+          </div>
+          <p class="field-error" id="lw-ui-error" role="alert"></p>
+          <p class="loading-text" id="lw-ui-loading" hidden data-i18n="common.loading">불러오는 중…</p>
+          <div id="lw-ui-result" hidden></div>
         </div>
 
         <div id="lw-wizard-panel" class="detail-panel" hidden>

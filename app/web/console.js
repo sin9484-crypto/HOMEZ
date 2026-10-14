@@ -6922,6 +6922,10 @@
     el("ml-finalize-btn").addEventListener("click", mlFinalizeStep);
 
     el("lw-new-btn").addEventListener("click", lwCreateNew);
+    el("lw-url-import-btn").addEventListener("click", lwUrlImportOpen);
+    el("lw-ui-search-btn").addEventListener("click", lwUrlImportSearch);
+    el("lw-ui-close-btn").addEventListener("click", lwUrlImportClose);
+    el("lw-ui-url").addEventListener("keydown", (ev) => { if (ev.key === "Enter") lwUrlImportSearch(); });
     el("lw-csv-btn").addEventListener("click", lwDownloadCsv);
     el("lw-prev-btn").addEventListener("click", lwPrevStep);
     el("lw-next-btn").addEventListener("click", lwHandleNext);
@@ -9383,6 +9387,7 @@
 
   async function loadListingWizardView() {
     lwState.wizard = null;
+    el("lw-url-import-panel").hidden = true;
     el("lw-wizard-panel").hidden = true;
     el("lw-list-panel").hidden = false;
     await lwRenderList();
@@ -9779,6 +9784,271 @@
       btn.disabled = false;
       btn.textContent = originalText;
     }
+  }
+
+  // ---- URL로 상품 가져오기 (2026-10-14) ----
+  // URL 검색 → 기재 내용 확인 → 수익 계산 → 상품 후보·위저드 초안 생성. 읽은 값은 전부 제안이고, 브랜드·원산지·
+  // 사용권·정보고시 확인과 후보 승인·8단계 승인·쿠팡 전송은 이 화면이 하지 않는다(쿠팡 호출 없음).
+
+  const lwUrlImportState = { search: null, proposal: null, idempotencyKey: null };
+
+  function lwUiT(key, vars) {
+    return HomezI18n.t(`lw.urlimp.${key}`, vars);
+  }
+
+  function lwUiMoney(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toLocaleString("ko-KR") : "-";
+  }
+
+  function lwUiPercent(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${(n * 100).toFixed(2)}%` : "-";
+  }
+
+  function lwUrlImportOpen() {
+    el("lw-list-panel").hidden = true;
+    el("lw-wizard-panel").hidden = true;
+    el("lw-url-import-panel").hidden = false;
+    el("lw-ui-error").textContent = "";
+    el("lw-ui-url").focus();
+  }
+
+  function lwUrlImportClose() {
+    el("lw-url-import-panel").hidden = true;
+    el("lw-list-panel").hidden = false;
+    lwRenderList();
+  }
+
+  async function lwUrlImportSearch() {
+    const errEl = el("lw-ui-error");
+    errEl.textContent = "";
+    const url = el("lw-ui-url").value.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      errEl.textContent = lwUiT("url_required");
+      return;
+    }
+    await withButtonGuard(el("lw-ui-search-btn"), async () => {
+      el("lw-ui-result").hidden = true;
+      el("lw-ui-loading").hidden = false;
+      try {
+        const data = await apiFetch("/product-import/search", {
+          method: "POST", body: JSON.stringify({ url }),
+        });
+        lwUrlImportState.search = data;
+        lwUrlImportState.proposal = null;
+        lwUrlImportState.idempotencyKey = `console-urlimp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        lwUrlImportRender(data);
+      } catch (err) {
+        errEl.textContent = err.message || lwUiT("search_failed");
+      } finally {
+        el("lw-ui-loading").hidden = true;
+      }
+    });
+  }
+
+  function lwUrlImportRender(data) {
+    const offer = data.offer || null;
+    const infoRows = [
+      [lwUiT("info_kind"), data.source_kind === "ONCHANNEL" ? lwUiT("info_kind_onchannel") : lwUiT("info_kind_generic")],
+      [lwUiT("info_reference"), data.source_reference],
+      [lwUiT("info_supplier"), data.supplier_name],
+      [lwUiT("info_origin"), data.origin_text],
+      [lwUiT("info_manufacturer"), data.manufacturer_text],
+      [lwUiT("info_model"), data.model_name],
+      [lwUiT("info_price_text"), data.price_text],
+    ].filter(([, value]) => value);
+
+    const warnings = (data.warnings || []).map((w) => `<li>${escapeHtml(w)}</li>`).join("");
+    const notices = (data.notice_rows || []);
+    const images = (data.images || []);
+
+    el("lw-ui-result").innerHTML = `
+      <h3>${lwUiT("step_content")}</h3>
+      ${warnings ? `<div class="lw-ui-warnings"><strong>${lwUiT("warnings_title")}</strong><ul>${warnings}</ul></div>` : ""}
+      <label class="field"><span class="field-label">${lwUiT("name_label")}</span>
+        <input type="text" id="lw-ui-name" maxlength="200" value="${escapeHtml(data.suggested_product_name || "")}"></label>
+      <label class="field"><span class="field-label">${lwUiT("category_label")}</span>
+        <input type="text" id="lw-ui-category" maxlength="100"></label>
+      <label class="field"><span class="field-label">${lwUiT("keywords_label")}</span>
+        <input type="text" id="lw-ui-keywords"></label>
+      <label class="field"><span class="field-label">${lwUiT("desc_label")}</span>
+        <textarea id="lw-ui-desc" rows="4">${escapeHtml(data.suggested_description || "")}</textarea></label>
+      <dl class="lw-ui-info"><dt>${lwUiT("source_info")}</dt>${infoRows.map(([k, v]) => `<dd><span>${escapeHtml(k)}</span> ${escapeHtml(v)}</dd>`).join("")}</dl>
+      ${notices.length ? `<details><summary>${lwUiT("notice_summary", { count: notices.length })}</summary>
+        <table class="data-table"><tbody>${notices.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${escapeHtml(r.value)}</td></tr>`).join("")}</tbody></table></details>` : ""}
+
+      <h3>${lwUiT("images_title")}</h3>
+      ${images.length ? `<div class="lw-ui-images">${images.map((img, i) => `
+        <div class="lw-ui-image">
+          <label><input type="checkbox" class="lw-ui-image-check" data-index="${i}" ${img.selected_by_default ? "checked" : ""}>
+            <img src="${escapeHtml(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'"></label>
+          <select class="lw-ui-image-purpose" data-index="${i}">
+            <option value="MAIN" ${img.suggested_purpose === "MAIN" ? "selected" : ""}>${lwUiT("image_main")}</option>
+            <option value="DETAIL" ${img.suggested_purpose === "DETAIL" ? "selected" : ""}>${lwUiT("image_detail")}</option>
+          </select>
+          ${img.note ? `<small class="stat-sub">${escapeHtml(img.note)}</small>` : ""}
+        </div>`).join("")}</div>` : `<p class="empty-text">${lwUiT("images_none")}</p>`}
+
+      <h3>${lwUiT("step_margin")}</h3>
+      <div class="lw-ui-grid">
+        <label class="field"><span class="field-label">${lwUiT("cost_label")}</span>
+          <input type="number" id="lw-ui-cost" min="0" step="1" value="${offer && offer.supply_price != null ? escapeHtml(String(Math.round(Number(offer.supply_price)))) : ""}"></label>
+        <label class="field"><span class="field-label">${lwUiT("shipping_label")}</span>
+          <input type="number" id="lw-ui-shipping" min="0" step="1" value="${offer && offer.base_shipping_cost != null ? escapeHtml(String(offer.base_shipping_cost)) : "0"}"></label>
+        <label class="field"><span class="field-label">${lwUiT("fee_label")}</span>
+          <input type="number" id="lw-ui-fee" min="0" max="100" step="0.1" value="10.8"></label>
+        <label class="field"><span class="field-label">${lwUiT("reserve_label")}</span>
+          <input type="number" id="lw-ui-reserve" min="0" max="100" step="0.1" value="3"></label>
+        <label class="field"><span class="field-label">${lwUiT("target_label")}</span>
+          <input type="number" id="lw-ui-target" min="0" max="90" step="0.1" value="18"></label>
+        <label class="field"><span class="field-label">${lwUiT("price_label")}</span>
+          <input type="number" id="lw-ui-price" min="0" step="10"></label>
+      </div>
+      <div class="field-inline">
+        <button class="btn btn-secondary" id="lw-ui-calc-btn">${lwUiT("calc_btn")}</button>
+        <button class="btn btn-ghost" id="lw-ui-apply-btn" hidden>${lwUiT("apply_proposal_btn")}</button>
+      </div>
+      <div id="lw-ui-margin-result" aria-live="polite"></div>
+
+      <h3>${lwUiT("step_create")}</h3>
+      <p class="stat-sub">${lwUiT("create_hint")}</p>
+      <button class="btn btn-primary" id="lw-ui-create-btn">${lwUiT("create_btn")}</button>
+      <p class="field-error" id="lw-ui-create-error" role="alert"></p>
+      <div id="lw-ui-created" aria-live="polite"></div>`;
+    el("lw-ui-result").hidden = false;
+
+    el("lw-ui-calc-btn").addEventListener("click", lwUrlImportCalc);
+    el("lw-ui-apply-btn").addEventListener("click", () => {
+      const proposal = lwUrlImportState.proposal;
+      if (proposal && proposal.proposed_sale_price != null) {
+        el("lw-ui-price").value = Math.round(Number(proposal.proposed_sale_price));
+        lwUrlImportCalc();
+      }
+    });
+    el("lw-ui-create-btn").addEventListener("click", lwUrlImportCreate);
+  }
+
+  function lwUrlImportMarginBody() {
+    const num = (id) => el(id).value.trim();
+    const body = {
+      cost_of_goods: num("lw-ui-cost"),
+      shipping_cost: num("lw-ui-shipping") || "0",
+      channel_fee_rate: String(Number(num("lw-ui-fee") || 0) / 100),
+      return_reserve_rate: String(Number(num("lw-ui-reserve") || 0) / 100),
+      target_margin_rate: String(Number(num("lw-ui-target") || 0) / 100),
+    };
+    if (num("lw-ui-price")) body.sale_price = num("lw-ui-price");
+    return body;
+  }
+
+  async function lwUrlImportCalc() {
+    const out = el("lw-ui-margin-result");
+    out.innerHTML = "";
+    if (!el("lw-ui-cost").value.trim()) {
+      out.innerHTML = `<p class="field-error">${lwUiT("calc_needs_cost")}</p>`;
+      return null;
+    }
+    try {
+      const result = await apiFetch("/product-import/margin-proposal", {
+        method: "POST", body: JSON.stringify(lwUrlImportMarginBody()),
+      });
+      lwUrlImportState.proposal = result;
+      const meets = result.meets_min_margin;
+      out.innerHTML = `
+        <table class="data-table"><tbody>
+          <tr><td>${lwUiT("result_proposed")}</td><td>${lwUiMoney(result.proposed_sale_price)}원</td></tr>
+          <tr><td>${lwUiT("result_price")}</td><td>${lwUiMoney(result.sale_price)}원</td></tr>
+          <tr><td>${lwUiT("result_margin")}</td><td>${lwUiMoney(result.margin_amount)}원</td></tr>
+          <tr><td>${lwUiT("result_rate")}</td><td>${lwUiPercent(result.margin_rate)}
+            <span class="pill ${meets ? "ok" : "warn"}">${meets ? lwUiT("result_ok") : lwUiT("result_low")}</span></td></tr>
+        </tbody></table>
+        ${(result.warnings || []).length ? `<ul class="lw-ui-warnings">${result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>` : ""}`;
+      el("lw-ui-apply-btn").hidden = result.proposed_sale_price == null;
+      return result;
+    } catch (err) {
+      out.innerHTML = `<p class="field-error">${escapeHtml(err.message || lwUiT("calc_failed"))}</p>`;
+      return null;
+    }
+  }
+
+  async function lwUrlImportCreate() {
+    const errEl = el("lw-ui-create-error");
+    errEl.textContent = "";
+    const data = lwUrlImportState.search;
+    const name = el("lw-ui-name").value.trim();
+    if (!data || !name) {
+      errEl.textContent = lwUiT("create_name_required");
+      return;
+    }
+    await withButtonGuard(el("lw-ui-create-btn"), async () => {
+      let margin = null;
+      if (el("lw-ui-cost").value.trim()) {
+        const proposal = await lwUrlImportCalc();
+        if (!proposal) return;
+        if (proposal.meets_min_margin === false) {
+          errEl.textContent = lwUiT("create_low_margin");
+          return;
+        }
+        margin = lwUrlImportMarginBody();
+        if (!margin.sale_price && proposal.proposed_sale_price != null) {
+          margin.sale_price = String(Math.round(Number(proposal.proposed_sale_price)));
+        }
+      }
+
+      const picks = (purpose) => Array.from(document.querySelectorAll(".lw-ui-image-check"))
+        .filter((c) => c.checked)
+        .map((c) => ({ img: data.images[Number(c.dataset.index)], purpose: document.querySelector(`.lw-ui-image-purpose[data-index="${c.dataset.index}"]`).value }))
+        .filter((x) => x.purpose === purpose)
+        .map((x) => x.img.url);
+      const mainUrls = picks("MAIN");
+      const detailUrls = picks("DETAIL");
+
+      const confirmed = await askConfirm(
+        lwUiT("create_confirm_body", {
+          images: mainUrls.length + detailUrls.length, name,
+          price: margin && margin.sale_price ? lwUiMoney(margin.sale_price) : "-",
+        }),
+        { title: lwUiT("create_confirm_title"), okLabel: lwUiT("create_confirm_ok") },
+      );
+      if (!confirmed) return;
+
+      const keywords = el("lw-ui-keywords").value.split(",").map((k) => k.trim()).filter(Boolean);
+      try {
+        const result = await apiFetch("/product-import/create-draft", {
+          method: "POST",
+          body: JSON.stringify({
+            source_kind: data.source_kind, source_url: data.source_url, source_reference: data.source_reference,
+            product_name: name, description: el("lw-ui-desc").value.trim() || null,
+            category_hint: el("lw-ui-category").value.trim() || null, keywords,
+            image_urls_main: mainUrls, image_urls_detail: detailUrls, margin,
+            creation_idempotency_key: lwUrlImportState.idempotencyKey,
+          }),
+        });
+        lwUrlImportRenderCreated(result);
+      } catch (err) {
+        errEl.textContent = err.message || lwUiT("create_failed");
+      }
+    });
+  }
+
+  function lwUrlImportRenderCreated(result) {
+    const images = result.images || [];
+    const okCount = images.filter((i) => i.success).length;
+    const failed = images.filter((i) => !i.success);
+    el("lw-ui-created").innerHTML = `
+      <div class="banner banner-success"><strong>${lwUiT("created_title")}</strong>
+        <p>${lwUiT("created_summary", { candidate: result.candidate_id, wizard: result.wizard_id, ok: okCount, total: images.length })}</p></div>
+      ${failed.length ? `<p class="field-error">${lwUiT("created_images_failed")}</p><ul>${failed.map((i) => `<li>${escapeHtml(i.source_url)} — ${escapeHtml(i.error_message || "")}</li>`).join("")}</ul>` : ""}
+      ${(result.warnings || []).length ? `<ul class="lw-ui-warnings">${result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>` : ""}
+      <h4>${lwUiT("created_next")}</h4>
+      <ol>${(result.next_steps || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ol>
+      <button class="btn btn-primary" id="lw-ui-open-wizard-btn">${lwUiT("open_wizard_btn")}</button>`;
+    el("lw-ui-create-btn").disabled = true;
+    el("lw-ui-open-wizard-btn").addEventListener("click", async () => {
+      el("lw-url-import-panel").hidden = true;
+      await lwOpenWizard(result.wizard_id);
+    });
   }
 
   async function lwCreateNew() {

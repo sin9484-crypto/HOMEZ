@@ -75,6 +75,7 @@ from app.domains.media_asset.router import (
 from app.domains.marketplace_listing.router import (
     router as marketplace_listing_router,
 )
+from app.domains.product_import.router import router as product_import_router
 from app.domains.marketplace_listing.listing_wizard_router import (
     router as listing_wizard_router,
 )
@@ -631,6 +632,11 @@ app.include_router(
 
 app.include_router(
     listing_wizard_router,
+)
+
+# 2026-10-14 URL 상품 가져오기 — 새 테이블 없음(기존 후보·위저드·이미지 서비스 재사용).
+app.include_router(
+    product_import_router,
 )
 
 # 2026-08-15 V7 Gate 6 — 후보 선택→초안 생성→이미지 생성 통합

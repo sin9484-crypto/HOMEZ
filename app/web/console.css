@@ -2689,3 +2689,14 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 
 /* 확인창 본문의 줄바꿈(삭제 안내 등 여러 줄 문구)을 그대로 보여 준다 — 없으면 한 줄로 합쳐진다. */
 #confirm-body { white-space: pre-line; }
+
+/* 2026-10-14 URL로 상품 가져오기 */
+.lw-urlimp h3 { margin: 18px 0 6px; }
+.lw-ui-warnings { margin: 8px 0; padding: 8px 12px; border-left: 3px solid #b26a00; background: rgba(178, 106, 0, 0.08); }
+.lw-ui-warnings ul { margin: 4px 0 0 16px; padding: 0; }
+.lw-ui-info dd { margin: 2px 0 2px 0; word-break: break-all; }
+.lw-ui-info dd span { color: var(--text-muted); margin-right: 6px; }
+.lw-ui-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.lw-ui-image { display: flex; flex-direction: column; gap: 4px; }
+.lw-ui-image img { width: 100%; max-height: 120px; object-fit: contain; background: rgba(128, 128, 128, 0.12); }
+.lw-ui-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
