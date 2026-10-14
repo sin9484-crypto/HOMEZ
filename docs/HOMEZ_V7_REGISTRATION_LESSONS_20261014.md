@@ -98,8 +98,8 @@
 | 모듈 | 분류 | 내용 |
 |---|---|---|
 | `test_listing_fulfillment_draft_ui` (1건) | **이번 변경의 회귀 → 수정 완료** | 5단계 "코드로 조회" 추가로 핸들러 선택자를 `[data-lw-category-recommend], [data-lw-category-lookup]`로 합치면서, 소스 문자열로 자르는 테스트가 깨짐. 조합표 보존 단언은 그대로 두고 선택자·구간 끝만 갱신. 재실행 20건 통과 |
-| `test_company_supplier_relation` (7건) | 기존 문제 | 모듈 단독 실행 시 `Product` 모델이 로드되지 않아 `Supplier` 매퍼 초기화 실패. 세션 전 커밋에서도 동일. 다른 테스트가 먼저 모델을 불러와야 통과하는 의존 |
-| `test_regression_guard_selftest` (1/8건) | 기존 문제 | 가드 자체 시험 `...does_not_use_sql_attach_or_vacuum_into`가 `tests/test_db_logical_compare.py:63`의 `VACUUM INTO`(10-06 커밋 `20303c0`)를 잡음. 가드 유무와 무관. 가드를 고칠지 그 시험을 고칠지는 미결정 |
+| `test_company_supplier_relation` (7건) | 기존 문제 → **수정 완료(2026-10-14)** | 모듈 단독 실행 시 `Product` 모델이 로드되지 않아 `Supplier` 매퍼 초기화 실패. 세션 전 커밋에서도 동일. 다른 테스트가 먼저 모델을 불러와야 통과하는 의존. 테스트에 `Product` import 추가(`test_source_service.py`와 같은 방식, 단언 변경 없음) → 7/7 통과 |
+| `test_regression_guard_selftest` (1/8건) | 기존 문제 | 가드 자체 시험 `...does_not_use_sql_attach_or_vacuum_into`가 `tests/test_db_logical_compare.py:63`의 `VACUUM INTO`(10-06 커밋 `20303c0`)를 잡음. 가드 유무와 무관. → **수정 완료(2026-10-14)**: 가드가 막지 못하는 기능이므로 시험 쪽을 고침 — `backup` API 복사 후 사본에만 일반 `VACUUM`으로 "내용 같고 바이트 다른" 사본 생성(단언·정적 검사 그대로). 3개 모듈 가드 켠 채 7/7·8/8·8/8 통과 |
 | `test_packaged_guard_hook` (1/3건) | 가드 환경 영향 | "환경변수 없으면 훅은 비활성" 시험이 회귀 가드의 `PYTHONPATH`와 충돌. 가드 없이 3건 모두 통과 |
 
 교훈: 모듈별 프로세스 실행은 서로 의존하는 기존 시험을 드러내므로, 이후 회귀 보고에서는 "세션 전 커밋 대조"로 회귀와 기존 문제를 구분한다. 러너: scratch `run_full_regression.py`(저장소 밖).

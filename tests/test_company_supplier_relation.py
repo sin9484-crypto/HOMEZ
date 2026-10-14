@@ -21,6 +21,7 @@ from app.core.exceptions import ConflictException
 from app.core.exceptions import NotFoundException
 from app.database.base import Base
 from app.domains.company.model import Company
+from app.domains.product.model import Product  # noqa: F401 (Supplier.relationship 해석용)
 from app.domains.source.model import CompanySupplierRelation
 from app.domains.source.model import SupplierProductLink
 from app.domains.source.schema import CompanySupplierRelationCreate

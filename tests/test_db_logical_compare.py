@@ -59,12 +59,15 @@ class LogicalCompareTestCase(unittest.TestCase):
     def _copy_with(self, name, sql=None, method="vacuum"):
         dst = self.dir / name
         src = sqlite3.connect(self.src)
+        out = sqlite3.connect(dst)
+        src.backup(out)
+        out.close()
         if method == "vacuum":
-            src.execute(f"VACUUM INTO '{dst.as_posix()}'")
-        else:
-            out = sqlite3.connect(dst)
-            src.backup(out)
-            out.close()
+            # 내용은 같고 바이트만 다른 사본 — 사본에만 일반 VACUUM(원본은 건드리지 않는다).
+            # 대상 지정형 VACUUM은 회귀 가드가 막지 못해 저장소 전체에서 쓰지 않는 규칙이다.
+            packed = sqlite3.connect(dst)
+            packed.execute("VACUUM")
+            packed.close()
         src.close()
         if sql:
             conn = sqlite3.connect(dst)
