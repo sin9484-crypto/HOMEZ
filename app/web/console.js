@@ -3908,6 +3908,10 @@
   let ptCurrentEstopActive = false;
   let ptCurrentPolicy = null;
   let ptDetailCurrentId = null;
+  // 진행 기록 카드 — 발주 전송이 끝난 직후 맨 위에 크게 보여 줄 완료 알림(작업 번호로 한정)과
+  // 마지막으로 읽은 송장 정보(중간 조작 뒤 기록만 다시 읽을 때 재사용).
+  let ptProgressNotice = null;
+  let ptProgressLastTracking = null;
 
   async function loadPurchaseTask(opts = {}) {
     wirePurchaseTaskToolbarOnce();
@@ -4346,6 +4350,11 @@
         <h1>${escapeHtml(task.product_title)}</h1>
         <span>${escapeHtml(ptStatusLabel(task.status))}</span>
       </div>
+      <div class="dash-card" id="pt-progress-card">
+        <div class="dash-card-head"><h2>${escapeHtml(HomezI18n.t("purchase_task.progress_title"))}</h2></div>
+        <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.progress_intro"))}</p>
+        <div id="pt-progress-body"><p class="loading-text">${HomezI18n.t("common.loading")}</p></div>
+      </div>
       <div class="dash-card">
         <dl class="detail-grid">
           <dt>${escapeHtml(HomezI18n.t("purchase_task.field_source_order_id"))}</dt><dd>${escapeHtml(String(task.source_order_id))} <button type="button" class="btn btn-ghost btn-sm" id="pt-goto-source-order-btn">${escapeHtml(HomezI18n.t("purchase_task.action_goto_source_order"))}</button></dd>
@@ -4407,6 +4416,7 @@
     wireIfExists("pt-request-return-btn", () => ptOpenCancelReturnDialog(task, "return"));
 
     wireIfExists("pt-review-run-btn", () => ptRunOrderSubmissionReview(task));
+    ptLoadProgressRecord(task, null, tracking);
     if (el("pt-link-panel")) olLoadTaskPanel(task);
     wireIfExists("pt-tracking-refresh-btn", () => ptRefreshTracking(task));
 
@@ -4591,6 +4601,7 @@
   // 오직 GET 조회 성격의 POST(부수효과 없음, 서버 쪽 주석 참고)만
   // 호출한다 — 실제 발주 API는 어디에도 연결돼 있지 않다.
   async function ptRunOrderSubmissionReview(task, recentAuthToken) {
+    if (!recentAuthToken) ptProgressNotice = null;
     const resultEl = el("pt-review-result");
     const productCode = el("pt-review-product-code").value.trim();
     const optionId = el("pt-review-option-id").value.trim();
@@ -4856,9 +4867,10 @@
       <div class="detail-panel">
         <h3>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_form_heading"))}</h3>
         <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.review_shipping_form_hint"))}</p>
+        ${a && a.shipping_cost_amount !== null && a.shipping_cost_amount !== undefined ? `<p class="field-error" id="pt-shipping-reentry-hint">${escapeHtml(HomezI18n.t("purchase_task.progress_shipping_reentry_hint", { amount: fmtMoney(a.shipping_cost_amount) }))}</p>` : ""}
         <form id="pt-shipping-cost-form" class="pt-cc-inline-form" style="display:flex">
           <label>${escapeHtml(HomezI18n.t("purchase_task.review_shipping_amount_label"))}
-            <input type="number" class="pt-cc-form-input" id="pt-shipping-amount" min="0" step="1" required>
+            <input type="number" class="pt-cc-form-input" id="pt-shipping-amount" min="0" step="1" required value="${a && a.shipping_cost_amount !== null && a.shipping_cost_amount !== undefined ? escapeHtml(String(a.shipping_cost_amount)) : ""}">
           </label>
           <label style="display:flex;align-items:center;gap:6px;">
             <input type="checkbox" id="pt-shipping-free"> ${escapeHtml(HomezI18n.t("purchase_task.review_shipping_free_label"))}
@@ -4959,8 +4971,9 @@
               external_product_id: productCode, connection_id: review.connection_id,
             }),
           });
-          toast(HomezI18n.t("purchase_task.review_shipping_submit_success"), "success");
+          toast(HomezI18n.t("purchase_task.progress_toast_shipping", { amount: fmtMoney(Number(amountRaw)) }), "success");
           await ptRunOrderSubmissionReview(task, null);
+          await ptLoadProgressRecord(task, "shipping");
         } catch (err) {
           errEl.textContent = err.message || HomezI18n.t("purchase_task.cc_action_error");
         }
@@ -4981,6 +4994,7 @@
           });
           toast(HomezI18n.t("purchase_task.review_finalize_success"), "success");
           await ptRunOrderSubmissionReview(task, null);
+          await ptLoadProgressRecord(task, "approval");
         } catch (err) {
           toast(err.message || HomezI18n.t("purchase_task.cc_action_error"), "error");
         }
@@ -5038,10 +5052,154 @@
           });
           ptRenderOrderSubmissionAttemptResult(resultEl, attempt);
           toast(HomezI18n.t("purchase_task.review_submit_success", { status: attempt.status }), "success");
+          // 조작이 끝나면 이 단계의 처음 대기 화면으로 돌아가고, 처리 결과는 맨 위 진행 기록에서
+          // 확인한다. 성공이 아닌 결과(실패·결과불명)는 사용자가 그 문구를 보고 판단해야 하므로
+          // 화면을 되돌리지 않고 기록만 갱신한다.
+          ptProgressNotice = { taskId: task.id, attempt };
+          if (attempt.status === "SUCCEEDED") {
+            await loadPurchaseTaskDetail({ id: task.id });
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          } else {
+            await ptLoadProgressRecord(task, "submit");
+          }
         } catch (err) {
           renderErrorState(resultEl, err);
         }
       }));
+    }
+  }
+
+
+  // ---------------------------------------------------------------------
+  // 진행 기록 — 구매 작업에서 지금까지 처리된 내용을 서버에 저장된 값으로 보여 준다.
+  // 토스트 한 줄로는 "끝났는지" 알 수 없다는 사용자 지적(2026-10-14)에 따라, 어떤 조작이
+  // 언제 어떤 값으로 끝났는지를 새로고침해도 남는 체크리스트로 항상 맨 위에 둔다.
+  // ---------------------------------------------------------------------
+  function ptProgressRows(task, approval, attempts, tracking) {
+    const t = (key, params) => HomezI18n.t(`purchase_task.${key}`, params);
+    const money = (value) => (value === null || value === undefined ? "—" : fmtMoney(value));
+    const latest = attempts && attempts.length ? attempts[attempts.length - 1] : null;
+    const approvalDone = Boolean(approval) && ["ACTIVE", "CONSUMED"].includes(approval.status);
+    const rows = [];
+
+    rows.push({
+      key: "order", label: t("progress_row_order"), done: Boolean(task.source_order_id),
+      detail: task.source_order_id
+        ? t("progress_detail_order", { order: task.source_order_id, amount: money(task.coupang_sale_amount) }) : "",
+    });
+    rows.push({
+      key: "fee", label: t("progress_row_fee"),
+      done: task.coupang_fee_amount !== null && task.coupang_fee_amount !== undefined,
+      detail: task.coupang_fee_amount !== null && task.coupang_fee_amount !== undefined
+        ? t("progress_detail_fee", { amount: `${Number(task.coupang_fee_amount).toLocaleString(undefined, { maximumFractionDigits: 2 })} KRW` }) : "",
+    });
+    rows.push({
+      key: "connection", label: t("progress_row_connection"), done: Boolean(task.channel_connection_id),
+      detail: task.channel_connection_id ? t("progress_detail_connection", { id: task.channel_connection_id }) : "",
+    });
+    const shippingKnown = Boolean(approval) && approval.shipping_cost_amount !== null && approval.shipping_cost_amount !== undefined;
+    rows.push({
+      key: "shipping", label: t("progress_row_shipping"), done: shippingKnown,
+      detail: shippingKnown
+        ? t("progress_detail_shipping", {
+          amount: money(approval.shipping_cost_amount), source: approval.shipping_cost_source || "—",
+          when: fmtDate(approval.shipping_cost_confirmed_at),
+        }) : "",
+    });
+    rows.push({
+      key: "approval", label: t("progress_row_approval"), done: approvalDone,
+      detail: approval && approvalDone
+        ? t("progress_detail_approval", {
+          status: HomezI18n.t(`purchase_task.approval_status.${approval.status.toLowerCase()}`),
+          points: money(approval.required_points_snapshot), margin: money(approval.margin_amount_snapshot),
+          rate: approval.margin_rate_snapshot === null || approval.margin_rate_snapshot === undefined
+            ? "—" : (approval.margin_rate_snapshot * 100).toFixed(1),
+          expires: fmtDate(approval.expires_at),
+        })
+        : (approval ? HomezI18n.t(`purchase_task.approval_status.${approval.status.toLowerCase()}`) : ""),
+    });
+    const submitDone = Boolean(latest) && latest.status === "SUCCEEDED";
+    const submitWarn = Boolean(latest) && !submitDone;
+    rows.push({
+      key: "submit", label: t("progress_row_submit"), done: submitDone, warn: submitWarn,
+      detail: latest
+        ? t("progress_detail_submit", {
+          status: latest.status, code: latest.external_order_code || latest.unknown_resolved_order_code || "—",
+          when: fmtDate(latest.finished_at || latest.started_at),
+        }) : "",
+    });
+    const trackingDone = Boolean(tracking) && Boolean(tracking.tracking_number);
+    rows.push({
+      key: "tracking", label: t("progress_row_tracking"), done: trackingDone,
+      detail: trackingDone
+        ? t("progress_detail_tracking", { courier: tracking.courier || "—", number: tracking.tracking_number }) : "",
+    });
+    return rows;
+  }
+
+  function ptRenderProgressRecord(task, approval, attempts, tracking, highlightKey) {
+    const host = el("pt-progress-body");
+    if (!host) return;
+    const t = (key, params) => HomezI18n.t(`purchase_task.${key}`, params);
+    const rows = ptProgressRows(task, approval, attempts, tracking);
+    let notice = ptProgressNotice && ptProgressNotice.taskId === task.id ? ptProgressNotice : null;
+    // 완료 알림은 처음 보여 준 뒤 화면을 다시 열면(처음 불러오기) 닫는다 — 낡은 완료 문구가 남지 않게.
+    if (notice && highlightKey === null && notice.shown) {
+      ptProgressNotice = null;
+      notice = null;
+    }
+    if (notice) notice.shown = true;
+
+    let bannerHtml = "";
+    if (notice && notice.attempt) {
+      const code = notice.attempt.external_order_code || notice.attempt.unknown_resolved_order_code || "—";
+      if (notice.attempt.status === "SUCCEEDED") {
+        const points = approval && approval.required_points_snapshot !== null && approval.required_points_snapshot !== undefined
+          ? fmtMoney(approval.required_points_snapshot) : "—";
+        bannerHtml = `<div class="pt-progress-banner ok" role="status" style="border:3px solid #15803d;background:#ecfdf3;color:#14532d;border-radius:10px;padding:12px 14px;margin:8px 0;font-weight:700;font-size:1.05em">${escapeHtml(t("progress_completed_banner", { code, points }))}</div>`;
+      } else {
+        bannerHtml = `<div class="pt-progress-banner warn" role="alert" style="border:3px solid #b45309;background:#fffbeb;color:#78350f;border-radius:10px;padding:12px 14px;margin:8px 0;font-weight:700">${escapeHtml(t("progress_not_completed_banner", { status: notice.attempt.status }))}</div>`;
+      }
+    }
+
+    host.innerHTML = bannerHtml + `<ul class="pt-progress-list" style="list-style:none;margin:0;padding:0;display:grid;gap:6px">${rows.map((row) => {
+      const tone = row.done ? "done" : (row.warn ? "warn" : "pending");
+      const color = row.done ? "#15803d" : (row.warn ? "#b45309" : "#6b7280");
+      const mark = row.done ? "✔" : (row.warn ? "⚠" : "○");
+      const stateLabel = row.done ? t("progress_done") : (row.warn ? t("progress_warn") : t("progress_pending"));
+      const flash = row.key === highlightKey ? "background:#fef9c3;outline:2px solid #ca8a04;" : "";
+      return `<li class="pt-progress-row ${tone}${row.key === highlightKey ? " pt-progress-flash" : ""}" data-progress-key="${row.key}" style="display:grid;grid-template-columns:1.6em 1fr auto;gap:2px 8px;align-items:baseline;padding:6px 8px;border-radius:8px;${flash}">
+        <span style="color:${color};font-weight:800">${mark}</span>
+        <span style="font-weight:600">${escapeHtml(row.label)}</span>
+        <span style="color:${color};font-weight:700">${escapeHtml(stateLabel)}</span>
+        <span></span>
+        <span style="grid-column:2 / span 2;color:#4b5563;font-size:0.92em">${escapeHtml(row.detail || "")}</span>
+      </li>`;
+    }).join("")}</ul>`;
+  }
+
+  async function ptLoadProgressRecord(task, highlightKey, trackingOverride) {
+    // 세 번째 인자: 값(없으면 null)을 주면 그 송장 정보로 갱신하고, 생략하면 마지막으로 읽은 값을 유지한다.
+    if (trackingOverride !== undefined) ptProgressLastTracking = trackingOverride;
+    const host = el("pt-progress-body");
+    if (!host) return;
+    let latestTask = task;
+    let approval = null;
+    let attempts = [];
+    try {
+      latestTask = await apiFetch(`/purchase-tasks/${task.id}`);
+      if (latestTask.channel_connection_id) {
+        approval = await apiFetch(`/purchase-tasks/${task.id}/order-approval?connection_id=${latestTask.channel_connection_id}`);
+        attempts = await apiFetch(`/purchase-tasks/${task.id}/order-approval/attempts`);
+      }
+    } catch (err) {
+      host.innerHTML = `<p class="field-error">${escapeHtml((err && err.message) || HomezI18n.t("purchase_task.cc_action_error"))}</p>`;
+      return;
+    }
+    ptRenderProgressRecord(latestTask, approval, attempts || [], ptProgressLastTracking, highlightKey);
+    if (highlightKey === null && ptProgressNotice && ptProgressNotice.taskId === task.id) {
+      const card = el("pt-progress-card");
+      if (card) card.scrollIntoView({ block: "start" });
     }
   }
 

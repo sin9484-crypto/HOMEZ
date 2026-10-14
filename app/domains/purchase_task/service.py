@@ -1825,6 +1825,133 @@ class PurchaseTaskService:
         )
         return task
 
+    def refresh_missing_channel_fee(
+        self, task_id: int, company_id: int, *, triggered_by: int | None = None,
+        confirm_use_of_approved_rate: bool = False,
+        approved_wizard_id: int | None = None,
+    ) -> PurchaseTask:
+        """2026-10-14 — 작업이 만들어진 **뒤에** 운영자가 "발주 예상비용에도 사용"을
+        선택하고 8단계 승인을 받은 경우를 위한 최소 보완. 작업 생성 시점에만 채워지던
+        예상 수수료를 같은 규칙(`resolve_channel_fee`)으로 한 번 더 구한다.
+
+        `channel_fee_resolver`의 원칙("이미 만들어진 작업의 수수료 금액을 소급 변경하지
+        않는다")을 지키려고 **비어 있는 값을 채우는 경우로만** 좁힌다: 자동 생성(ORDER_AUTO)
+        작업, 수수료 없음, 아직 후보도 예산 예약도 없는 `SEARCH_REQUIRED`일 때만 동작하고,
+        이미 값이 있으면 절대 덮어쓰지 않는다. 규칙이 만족되지 않으면 아무것도 바꾸지 않고
+        이유를 알린다(0으로 가정하지 않는다). 금액은 서버가 `판매 줄 합계 × 승인된 수수료율`로
+        계산하며 사람이 값을 넣는 경로가 아니다. 외부 호출은 없다.
+
+        `confirm_use_of_approved_rate=True`는 위저드의 "발주 예상비용에도 사용" 선택이 없는
+        **이미 등록된 상품**을 위한 사용자 확인이다 — 그 한 가지 조건만 이 확인(호출자·시각이
+        감사 로그에 남는다)으로 대신하고, 승인된 위저드·승인 후 입력 불변·매핑 하나로
+        특정·위저드 정확히 하나 같은 나머지 검사는 그대로 적용된다.
+
+        `approved_wizard_id`는 같은 상품에 승인된 위저드가 여럿이라 "정확히 하나"가 모호할 때
+        사용자가 근거 위저드를 직접 지정하는 값이다(확인값과 함께만 허용 — 서버가 임의로 고르지
+        않는다). 지정된 위저드도 나머지 검사를 전부 통과해야 한다."""
+
+        if approved_wizard_id is not None and not confirm_use_of_approved_rate:
+            raise BadRequestException(
+                "근거 위저드를 지정하려면 승인된 수수료율 사용 확인(confirm_use_of_approved_rate)도 "
+                "함께 보내야 합니다.",
+            )
+
+        from app.domains.order.model import Order
+        from app.domains.order.model import OrderItem
+        from app.domains.purchase_task.channel_fee_resolver import (
+            ResolvedChannelFee,
+            resolve_channel_fee,
+        )
+
+        task = self._get_task_required(task_id, company_id)
+
+        if task.creation_source != PurchaseTaskCreationSource.ORDER_AUTO:
+            raise BadRequestException(
+                "주문에서 자동으로 만들어진 작업만 수수료를 다시 구할 수 있습니다.",
+            )
+        if task.coupang_fee_amount is not None:
+            raise ConflictException(
+                "이미 예상 수수료가 있어 덮어쓰지 않습니다(이미 만들어진 작업의 "
+                "수수료는 소급 변경하지 않습니다).",
+            )
+        if task.status != PurchaseTaskStatus.SEARCH_REQUIRED:
+            raise ConflictException(
+                "후보 검색 전(SEARCH_REQUIRED) 작업만 수수료를 채울 수 있습니다 — "
+                f"이미 진행된 작업의 평가·승인 기준을 바꾸지 않습니다. (현재: {task.status})",
+            )
+        if (
+            task.budget_reservation_id is not None
+            or self.repository.list_candidates(task.id, company_id)
+        ):
+            raise ConflictException(
+                "후보나 예산 예약이 이미 있는 작업은 수수료를 바꾸지 않습니다.",
+            )
+        if task.coupang_sale_amount is None:
+            raise ConflictException(
+                "판매 금액이 없어 수수료를 계산할 수 없습니다.",
+            )
+
+        item = (
+            self.db.query(OrderItem)
+            .filter(
+                OrderItem.id == task.source_order_item_id,
+                OrderItem.company_id == company_id,
+            )
+            .first()
+        )
+        order = (
+            self.db.query(Order)
+            .filter(Order.id == task.source_order_id, Order.company_id == company_id)
+            .first()
+        )
+        if item is None or order is None or item.order_id != order.id:
+            raise ConflictException(
+                "작업의 원본 주문·품목을 확인할 수 없어 수수료를 구하지 않았습니다.",
+            )
+
+        resolved: ResolvedChannelFee | None = resolve_channel_fee(
+            self.db, company_id, inventory_sku_id=item.inventory_sku_id,
+            channel_code=order.channel_code, channel_sku=item.channel_sku,
+            sale_amount=task.coupang_sale_amount,
+            require_opt_in=not confirm_use_of_approved_rate,
+            only_wizard_id=approved_wizard_id,
+        )
+        if resolved is None:
+            raise ConflictException(
+                "수수료를 구할 수 없습니다 — "
+                + (
+                    "승인된 위저드가 정확히 하나여야 하고(승인 후 입력이 바뀌지 않아야 하며)"
+                    if confirm_use_of_approved_rate
+                    else "이 판매계정에서 \"발주 예상비용에도 사용\"을 선택하고 8단계 승인을 받은 "
+                    "위저드가 정확히 하나여야 하고"
+                )
+                + ", 채널 매핑이 하나로 특정돼야 합니다. 아무것도 바꾸지 않았습니다.",
+            )
+
+        self._advance_version(task, task.version)
+        task.coupang_fee_amount = resolved.fee_amount
+        _audit(
+            self.db, company_id=company_id, user_id=triggered_by,
+            action="PURCHASE_TASK_FEE_FROM_APPROVED_WIZARD",
+            entity_id=task.id,
+            description=(
+                f"예상 수수료 {resolved.fee_amount}원을 승인된 위저드 "
+                f"#{resolved.wizard_id}의 채널수수료율 {resolved.fee_rate}로 산출"
+                "(정산 검증 전 예상값, 작업 생성 후 빈 값을 채움)"
+                + (
+                    f" — 위저드 옵션 대신 사용자(#{triggered_by})의 명시적 확인으로 사용"
+                    + (
+                        f"(사용자가 근거 위저드 #{approved_wizard_id} 지정)"
+                        if approved_wizard_id is not None else ""
+                    )
+                    if confirm_use_of_approved_rate else ""
+                )
+            ),
+        )
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
     def build_order_submission_review(
         self, task_id: int, company_id: int, *,
         external_product_id: str, options: list[dict],

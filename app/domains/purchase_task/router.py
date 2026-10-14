@@ -24,6 +24,7 @@ from fastapi import Header
 from fastapi import Query
 from fastapi import UploadFile
 from fastapi import status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
@@ -1075,6 +1076,39 @@ def assign_channel_connection(
     return service.assign_channel_connection(
         task_id, current_user.company_id, data.connection_id,
         triggered_by=current_user.id,
+    )
+
+
+class RefreshChannelFeeRequest(BaseModel):
+    """`confirm_use_of_approved_rate`: 위저드의 "발주 예상비용에도 사용" 선택이 없는 이미
+    등록된 상품에서, 사용자가 승인된 수수료율 사용을 이 작업에 한해 직접 확인한다는 뜻."""
+
+    confirm_use_of_approved_rate: bool = False
+    # 같은 상품에 승인된 위저드가 여럿일 때 사용자가 근거 위저드를 직접 지정(확인값과 함께만).
+    approved_wizard_id: int | None = None
+
+
+@router.post(
+    "/{task_id}/refresh-channel-fee", response_model=PurchaseTaskResponse,
+)
+def refresh_missing_channel_fee(
+    task_id: int,
+    data: RefreshChannelFeeRequest | None = None,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """작업이 만들어진 뒤에 "발주 예상비용에도 사용" 선택과 8단계 승인이 이루어졌을 때,
+    **비어 있는** 예상 수수료만 서버가 승인된 수수료율로 채운다. 이미 값이 있는 작업은
+    덮어쓰지 않고, 후보·예산 예약이 있는 작업도 바꾸지 않는다. 외부 호출 없음 — 사람이
+    금액을 넣는 경로가 아니다."""
+
+    service = PurchaseTaskService(db)
+    return service.refresh_missing_channel_fee(
+        task_id, current_user.company_id, triggered_by=current_user.id,
+        confirm_use_of_approved_rate=bool(
+            data.confirm_use_of_approved_rate if data is not None else False
+        ),
+        approved_wizard_id=data.approved_wizard_id if data is not None else None,
     )
 
 

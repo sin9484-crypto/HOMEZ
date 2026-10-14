@@ -70,9 +70,21 @@ def resolve_channel_fee(
     db: Session, company_id: int, *, inventory_sku_id: int | None,
     channel_code: str | None, channel_sku: str | None,
     sale_amount: Decimal | float | int | None,
+    require_opt_in: bool = True,
+    only_wizard_id: int | None = None,
 ) -> ResolvedChannelFee | None:
     """`sale_amount`는 이미 수량이 곱해진 주문 줄 합계다 — 여기서 수량을
-    다시 곱하지 않는다."""
+    다시 곱하지 않는다.
+
+    `require_opt_in=False`는 위저드의 "발주 예상비용에도 사용" 선택 **한 가지 조건만**
+    건너뛴다 — 호출부가 사용자의 명시적 확인(감사 로그에 확인자 기록)으로 그 선택을
+    대신할 때만 쓴다. 승인된 위저드·승인 후 입력 불변·매핑 하나로 특정·위저드 정확히
+    하나·수수료율 범위 같은 나머지 조건은 그대로 적용된다. 기본값(True)은 기존 동작이다.
+
+    `only_wizard_id`는 사용자가 근거 위저드를 **직접 지정**한 경우에만 쓴다(같은 상품에 승인된
+    위저드가 여럿이라 "정확히 하나" 규칙으로는 모호할 때). 서버가 임의로 고르는 것이 아니며,
+    지정된 위저드도 승인 상태·승인 당시 입력 불변·해당 상품 기록·수수료율 범위 검사를 모두
+    통과해야 한다. None이면 기존 규칙 그대로다."""
 
     if (
         inventory_sku_id is None or not channel_code or not channel_sku
@@ -126,6 +138,8 @@ def resolve_channel_fee(
         )
         .all()
     )
+    if only_wizard_id is not None:
+        wizards = [w for w in wizards if w.id == only_wizard_id]
 
     candidates: list[tuple[ListingWizard, Decimal]] = []
     for wizard in wizards:
@@ -154,7 +168,10 @@ def resolve_channel_fee(
                 continue
             # 운영자가 이 판매계정 항목에 대해 명시적으로 선택하고 승인한
             # 경우만(승인 당시 패키지의 값, 정확히 True).
-            if entry.get("use_channel_fee_for_purchase_estimate") is not True:
+            if (
+                require_opt_in
+                and entry.get("use_channel_fee_for_purchase_estimate") is not True
+            ):
                 continue
             try:
                 rate = Decimal(str(entry["channel_fee_rate"]))
