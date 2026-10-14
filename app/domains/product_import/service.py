@@ -531,6 +531,7 @@ class ProductImportService:
                         owner_type=MediaAssetOwnerType.PRODUCT_CANDIDATE, owner_id=candidate_id,
                         image_bytes=fetched.image_bytes, original_filename=f"detail-{index}",
                         segment_height=_LONG_SEGMENT_HEIGHT, requested_by=user_id, company_id=company_id,
+                        mode="SECTION",  # 섹션 경계에서 자른다(글자·표가 중간에서 잘리지 않게)
                     )
                     results.append(schema.ImageImportResult(
                         source_url=url, purpose="DETAIL", success=True, asset_id=original.id,

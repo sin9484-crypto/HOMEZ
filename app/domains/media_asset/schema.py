@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from typing import Literal
+
 
 class ImageGenerationItemRequest(BaseModel):
 
@@ -86,6 +88,8 @@ class LongDetailImageUploadRequest(BaseModel):
     image_base64: str = Field(..., min_length=1)
     original_filename: str | None = Field(default=None, max_length=255)
     segment_height: int = Field(default=1200, ge=600, le=1500)
+    # FIXED: 고정 높이 분할(기존), SECTION: 섹션 경계 분할(글자·표가 중간에서 잘리지 않음)
+    mode: Literal["FIXED", "SECTION"] = "FIXED"
 
 
 class LongDetailImageUploadResponse(BaseModel):
@@ -98,6 +102,7 @@ class ImageSplitRequestSchema(BaseModel):
 
     source_asset_id: int
     segment_height: int = Field(default=1200, ge=600, le=1500)
+    mode: Literal["FIXED", "SECTION"] = "FIXED"
 
 
 class BackgroundCompositionRequestSchema(BaseModel):
@@ -108,6 +113,29 @@ class BackgroundCompositionRequestSchema(BaseModel):
     )
     color_hex: str | None = None
     color_hex_end: str | None = None
+    # 컨셉을 고르면 위 배경 값 대신 컨셉의 배경을 쓴다(대표 이미지는 흰 배경 컨셉만 허용).
+    concept_code: str | None = None
+    purpose: Literal["MAIN", "ADDITIONAL"] = "ADDITIONAL"
+
+
+class BackgroundSuggestionRequestSchema(BaseModel):
+    """제품 색에 맞춘 배경 제안 요청(읽기 전용). variation을 바꾸면 같은 제품의 다른 색조 묶음."""
+
+    cutout_asset_id: int
+    purpose: Literal["MAIN", "ADDITIONAL", "DETAIL"] = "ADDITIONAL"
+    count: int = Field(default=6, ge=1, le=8)
+    variation: int = Field(default=0, ge=0, le=11)
+
+
+class AdaptiveCompositionRequestSchema(BaseModel):
+    cutout_asset_id: int
+    suggestion_code: str
+    purpose: Literal["MAIN", "ADDITIONAL", "DETAIL"] = "ADDITIONAL"
+    variation: int = Field(default=0, ge=0, le=11)
+    shadow: bool = False
+    fill_ratio: float = Field(default=0.86, ge=0.3, le=1.0)
+    # 크롭이 작아 제품이 작게 나올 때만 확대를 허용한다(1.0 = 확대 없음, 최대 2.5배).
+    max_upscale: float = Field(default=1.0, ge=1.0, le=2.5)
 
 
 class FeatureHighlightInput(BaseModel):
@@ -136,6 +164,9 @@ class DetailPageGenerationRequestSchema(BaseModel):
     spec_rows: list[SpecRowInput] = Field(default_factory=list)
     usage_text: str | None = Field(default=None, max_length=1000)
     accent_color_hex: str = "#2D6CDF"
+    # 페이지 전체 컨셉과 섹션별 컨셉(BRAND·HERO·FEATURES·SPECS·USAGE). 없으면 기존과 같은 흰 배경.
+    concept_code: str | None = None
+    section_concepts: dict[str, str] = Field(default_factory=dict)
 
 
 class ImageSearchQueryRequest(BaseModel):
@@ -425,3 +456,18 @@ class WizardImageAutoUploadResponse(BaseModel):
     동일한 REPRESENTATION+DETAIL 배정 규칙을 그대로 반환한다."""
 
     images: list[dict]
+
+
+class ImageConceptResponse(BaseModel):
+    """화면에서 컨셉을 고를 때 쓰는 목록 항목."""
+
+    code: str
+    label_ko: str
+    description: str
+    usable_for: list[str]
+    preview: dict
+
+
+class DetailSectionResponse(BaseModel):
+    key: str
+    label_ko: str

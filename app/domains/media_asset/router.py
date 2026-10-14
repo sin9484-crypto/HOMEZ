@@ -38,6 +38,10 @@ from app.domains.media_asset.schema import ImageGenerationJobSubmitRequest
 from app.domains.media_asset.schema import ImageGenerationResultResponse
 from app.domains.media_asset.schema import MediaAssetResponse
 from app.domains.media_asset.composition import BackgroundSpec
+from app.domains.media_asset.detail_page_generator import DETAIL_SECTION_KEYS
+from app.domains.media_asset.detail_page_generator import DETAIL_SECTION_LABELS_KO
+from app.domains.media_asset.image_concepts import list_concepts
+from app.domains.media_asset.image_concepts import require_usable
 from app.domains.media_asset.image_search_providers import ImageSearchQuery
 from app.domains.media_asset.image_search_providers import (
     ImageSearchProviderError,
@@ -48,7 +52,9 @@ from app.domains.media_asset.image_search_providers import (
 from app.domains.media_asset.image_search_providers import (
     get_image_search_provider,
 )
+from app.domains.media_asset.schema import AdaptiveCompositionRequestSchema
 from app.domains.media_asset.schema import BackgroundCompositionRequestSchema
+from app.domains.media_asset.schema import BackgroundSuggestionRequestSchema
 from app.domains.media_asset.schema import BackgroundRemovalRequestSchema
 from app.domains.media_asset.schema import DetailPageGenerationRequestSchema
 from app.domains.media_asset.schema import ImageSearchQueryRequest
@@ -75,6 +81,23 @@ from app.core.windows_credential_store import WindowsCredentialStore
 from app.domains.user.model import User
 
 router = APIRouter(prefix="/media-assets", tags=["Media Asset"])
+
+
+@router.get("/concepts")
+def list_image_concepts(
+    purpose: str | None = None,
+    current_user: User = Depends(admin_guard),
+):
+    """화면에서 고를 수 있는 이미지 컨셉 목록(읽기 전용, 외부 호출 없음). purpose=MAIN이면 흰 배경 컨셉만."""
+
+    return [c.to_summary() for c in list_concepts(purpose)]
+
+
+@router.get("/detail-sections")
+def list_detail_sections(current_user: User = Depends(admin_guard)):
+    """상세 페이지를 이루는 섹션 목록 — 섹션마다 컨셉을 따로 고를 수 있다."""
+
+    return [{"key": key, "label_ko": DETAIL_SECTION_LABELS_KO[key]} for key in DETAIL_SECTION_KEYS]
 
 
 @router.post("/image-jobs", response_model=ImageGenerationJobResponse)
@@ -274,6 +297,7 @@ def upload_and_split_long_detail_image(
         segment_height=data.segment_height,
         requested_by=current_user.id,
         company_id=current_user.company_id,
+        mode=data.mode,
     )
 
     return LongDetailImageUploadResponse(original=original, segments=segments)
@@ -293,6 +317,7 @@ def split_long_image(
         segment_height=data.segment_height,
         requested_by=current_user.id,
         company_id=current_user.company_id,
+        mode=data.mode,
     )
 
 
@@ -321,17 +346,54 @@ def compose_background(
 ):
 
     service = ImageGenerationJobQueueService(db)
-    spec = BackgroundSpec(
-        kind=data.background_kind,
-        color_hex=data.color_hex,
-        color_hex_end=data.color_hex_end,
-    )
+    label = None
+    if data.concept_code is not None:
+        # 컨셉을 고르면 컨셉의 배경을 쓴다 — 대표 이미지(MAIN)는 흰 배경 컨셉만 허용한다.
+        spec = require_usable(data.concept_code, data.purpose).background_spec()
+        label = f"concept-{data.concept_code}-{data.purpose}.png"
+    else:
+        spec = BackgroundSpec(
+            kind=data.background_kind,
+            color_hex=data.color_hex,
+            color_hex_end=data.color_hex_end,
+        )
 
     return service.compose_background(
         cutout_asset_id=data.cutout_asset_id,
         background_spec=spec,
         requested_by=current_user.id,
         company_id=current_user.company_id,
+        label=label,
+    )
+
+
+@router.post("/background-suggestions")
+def suggest_background(
+    data: BackgroundSuggestionRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """제품(누끼) 색을 분석해 제품이 돋보이는 배경을 제안한다. 읽기 전용 — 이미지를 만들거나 저장하지 않는다.
+    배경을 고정하지 않고 제품마다 다른 후보를 대비가 큰 순서로 돌려준다(대표 이미지는 흰 배경만)."""
+
+    return ImageGenerationJobQueueService(db).suggest_adaptive_backgrounds(
+        cutout_asset_id=data.cutout_asset_id, purpose=data.purpose, count=data.count,
+        variation=data.variation, company_id=current_user.company_id,
+    )
+
+
+@router.post("/adaptive-composition", response_model=MediaAssetResponse)
+def compose_adaptive_background(
+    data: AdaptiveCompositionRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """고른 적응형 배경 제안으로 이미지를 만든다(제품은 다시 그리지 않고 배경·그림자만 그린다)."""
+
+    return ImageGenerationJobQueueService(db).compose_adaptive(
+        cutout_asset_id=data.cutout_asset_id, suggestion_code=data.suggestion_code, purpose=data.purpose,
+        variation=data.variation, shadow=data.shadow, fill_ratio=data.fill_ratio, max_upscale=data.max_upscale,
+        requested_by=current_user.id, company_id=current_user.company_id,
     )
 
 
@@ -359,6 +421,8 @@ def generate_detail_page(
         accent_color_hex=data.accent_color_hex,
         requested_by=current_user.id,
         company_id=current_user.company_id,
+        concept_code=data.concept_code,
+        section_concepts=data.section_concepts,
     )
 
 

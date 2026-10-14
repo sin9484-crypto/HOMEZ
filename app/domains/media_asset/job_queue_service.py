@@ -66,6 +66,10 @@ from app.domains.media_asset.constants import MediaAssetOwnerType
 from app.domains.media_asset.constants import MediaAssetRole
 from app.domains.media_asset.fingerprint import canonical_json
 from app.domains.media_asset.fingerprint import sha256_hex
+from app.domains.media_asset.background_designer import analyze_product
+from app.domains.media_asset.background_designer import get_suggestion
+from app.domains.media_asset.background_designer import render_suggestion
+from app.domains.media_asset.background_designer import suggest_backgrounds
 from app.domains.media_asset.composition import BackgroundSpec
 from app.domains.media_asset.composition import compose_with_background
 from app.domains.media_asset.detail_page_generator import DetailPageContent
@@ -86,7 +90,10 @@ from app.domains.media_asset.image_processing_providers import (
 from app.domains.media_asset.image_processing_providers import (
     get_background_removal_provider,
 )
+from app.domains.media_asset.image_concepts import PURPOSE_ADDITIONAL
+from app.domains.media_asset.image_concepts import require_usable
 from app.domains.media_asset.image_split import split_tall_image
+from app.domains.media_asset.section_split import split_by_sections
 from app.domains.media_asset.image_validation import build_storage_path
 from app.domains.media_asset.image_validation import validate_image_bytes
 from app.domains.media_asset.image_validation import (
@@ -116,6 +123,20 @@ def _today_kst(now: datetime | None = None) -> str:
     now = now or datetime.utcnow()
 
     return (now.replace(tzinfo=timezone.utc)).astimezone(_KST).strftime("%Y-%m-%d")
+
+
+SPLIT_MODE_FIXED = "FIXED"      # 고정 높이로 자른다(기존 동작, 기본값)
+SPLIT_MODE_SECTION = "SECTION"  # 섹션 사이 빈 여백에서 자른다(글자·표가 중간에서 잘리지 않는다)
+
+
+def _split_segments(image_bytes: bytes, segment_height: int, mode: str) -> list[bytes]:
+    """긴 상세 이미지를 분할 방식에 따라 PNG 조각 바이트 목록으로 나눈다."""
+
+    if mode == SPLIT_MODE_FIXED:
+        return split_tall_image(image_bytes, segment_height=segment_height)
+    if mode == SPLIT_MODE_SECTION:
+        return [seg.image_bytes for seg in split_by_sections(image_bytes, segment_height=segment_height)]
+    raise BadRequestException(f"알 수 없는 분할 방식입니다: {mode}")
 
 
 class ImageGenerationJobQueueService:
@@ -895,6 +916,7 @@ class ImageGenerationJobQueueService:
         self, owner_type: str, owner_id: int, image_bytes: bytes,
         original_filename: str | None, segment_height: int,
         requested_by: int, company_id: int,
+        mode: str = SPLIT_MODE_FIXED,
     ) -> tuple[MediaAsset, list[MediaAsset]]:
         """
         "상세페이지용 긴 이미지"로 사용자가 명시적으로 선택한 업로드
@@ -982,9 +1004,7 @@ class ImageGenerationJobQueueService:
 
         # (2) 헤더 검증을 통과한 것만 실제 PIL 디코딩한다(메모리 안전
         # 순서 — 픽셀 수 상한을 이미 확인한 뒤에만 전체 디코드).
-        segment_bytes_list = split_tall_image(
-            image_bytes, segment_height=segment_height,
-        )
+        segment_bytes_list = _split_segments(image_bytes, segment_height, mode)
 
         created: list[MediaAsset] = []
         last_digest: str | None = None
@@ -1015,7 +1035,7 @@ class ImageGenerationJobQueueService:
 
     def split_long_image(
         self, source_asset_id: int, segment_height: int, requested_by: int,
-        company_id: int,
+        company_id: int, mode: str = SPLIT_MODE_FIXED,
     ) -> list[MediaAsset]:
         """긴 상세 이미지(원본) 1장을 고정 높이 조각 여러 장(파생
         자산, GENERATED)으로 나눈다. 원본은 수정하지 않는다 — 의미
@@ -1029,7 +1049,7 @@ class ImageGenerationJobQueueService:
             raise NotFoundException("원본 이미지를 찾을 수 없습니다.")
 
         source_bytes = read_media_file(self.media_root, source.storage_path)
-        segments = split_tall_image(source_bytes, segment_height=segment_height)
+        segments = _split_segments(source_bytes, segment_height, mode)
 
         created = []
         for index, segment_bytes in enumerate(segments):
@@ -1052,7 +1072,7 @@ class ImageGenerationJobQueueService:
 
     def compose_background(
         self, cutout_asset_id: int, background_spec: BackgroundSpec,
-        requested_by: int, company_id: int,
+        requested_by: int, company_id: int, label: str | None = None,
     ) -> MediaAsset:
         """누끼(GENERATED, 배경 제거 결과) 위에 배경을 합성한 파생
         자산을 만든다. Pillow 기반 순수 로컬 연산 — 네트워크 없음."""
@@ -1101,6 +1121,9 @@ class ImageGenerationJobQueueService:
         )
         asset.source_asset_id = cutout.id
         asset.rights_status = cutout.rights_status
+        if label:
+            # 대표·추가 이미지가 모두 MAIN 용도라, 어떤 컨셉으로 만든 이미지인지 파일 이름에 남긴다.
+            asset.original_filename = label[:255]
         self.db.commit()
 
         self._finish_processing_job(
@@ -1108,6 +1131,69 @@ class ImageGenerationJobQueueService:
             model_version=background_spec.kind, media_asset_id=asset.id,
         )
 
+        return asset
+
+    def _read_cutout(self, cutout_asset_id: int, company_id: int):
+        cutout = self.repository.get_media_asset_for_company(cutout_asset_id, company_id)
+        if cutout is None:
+            raise NotFoundException("누끼 이미지를 찾을 수 없습니다.")
+        return cutout, read_media_file(self.media_root, cutout.storage_path)
+
+    def suggest_adaptive_backgrounds(
+        self, cutout_asset_id: int, purpose: str, count: int, variation: int, company_id: int,
+    ) -> dict:
+        """제품 색을 분석해 제품이 돋보이는 배경을 제안한다 — 읽기 전용(저장·외부 호출 없음)."""
+
+        _cutout, cutout_bytes = self._read_cutout(cutout_asset_id, company_id)
+        profile = analyze_product(cutout_bytes)
+        suggestions = suggest_backgrounds(profile, purpose, count=count, variation=variation)
+        return {"product": profile.to_dict(), "suggestions": [x.to_dict() for x in suggestions]}
+
+    def compose_adaptive(
+        self, cutout_asset_id: int, suggestion_code: str, purpose: str, variation: int,
+        shadow: bool, fill_ratio: float, requested_by: int, company_id: int, max_upscale: float = 1.0,
+    ) -> MediaAsset:
+        """제안한 적응형 배경 위에 제품을 올린 파생 자산을 만든다(제품은 다시 그리지 않는다)."""
+
+        cutout, cutout_bytes = self._read_cutout(cutout_asset_id, company_id)
+        job = self._record_processing_job(
+            operation="ADAPTIVE_BACKGROUND_COMPOSITION", provider_code="PILLOW_LOCAL",
+            model_name=suggestion_code, source_asset_id=cutout.id, requested_by=requested_by,
+            company_id=company_id,
+            product_candidate_id=(
+                cutout.owner_id if cutout.owner_type == MediaAssetOwnerType.PRODUCT_CANDIDATE else 0
+            ),
+        )
+        try:
+            profile = analyze_product(cutout_bytes)
+            suggestion = get_suggestion(profile, suggestion_code, purpose, variation)
+            composed = render_suggestion(
+                cutout_bytes, suggestion, shadow=shadow, fill_ratio=fill_ratio, max_upscale=max_upscale,
+            )
+        except BadRequestException as exc:
+            self._finish_processing_job(
+                job.id, company_id, success=False, error_reason=f"적응형 배경 합성 실패: {exc}",
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._finish_processing_job(
+                job.id, company_id, success=False,
+                error_reason=f"적응형 배경 합성 실패: {type(exc).__name__}",
+            )
+            raise BadRequestException("배경 합성에 실패했습니다(원본은 그대로 유지됩니다).") from exc
+
+        asset = self._persist_generated_asset(
+            company_id=company_id, owner_type=cutout.owner_type, owner_id=cutout.owner_id,
+            purpose=cutout.purpose, display_order=cutout.display_order, image_bytes=composed,
+            self_reported_mime_type="image/png",
+        )
+        asset.source_asset_id = cutout.id
+        asset.rights_status = cutout.rights_status
+        asset.original_filename = f"adaptive-{suggestion_code}-{purpose}.png"[:255]
+        self.db.commit()
+        self._finish_processing_job(
+            job.id, company_id, success=True, model_version=suggestion_code, media_asset_id=asset.id,
+        )
         return asset
 
     def generate_detail_page(
@@ -1121,6 +1207,8 @@ class ImageGenerationJobQueueService:
         accent_color_hex: str,
         requested_by: int,
         company_id: int,
+        concept_code: str | None = None,
+        section_concepts: dict[str, str] | None = None,
     ) -> MediaAsset:
         """실제 상품 사진(hero_asset_id) + 텍스트를 조합해 쿠팡
         상세이미지를 자동 생성한다. Pillow 기반 순수 로컬 연산 —
@@ -1161,6 +1249,8 @@ class ImageGenerationJobQueueService:
                 spec_rows=[SpecRow(k, v) for k, v in spec_rows],
                 usage_text=usage_text,
                 accent_color_hex=accent_color_hex,
+                concept_code=concept_code,
+                section_concepts=dict(section_concepts or {}),
             )
             detail_bytes = generate_detail_page_image(content)
         except (BadRequestException, DetailPageFontUnavailableError) as exc:

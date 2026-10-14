@@ -10927,6 +10927,141 @@
   }
 
   // 같은 원본에서 만들어진 조각(source_asset_id)을 원본 바로 뒤에 모으고, 원본끼리·조각끼리는 id 순으로 둔다.
+  // 2026-10-14 — 제품 색에 맞춘 배경 고르기. 배경을 고정하지 않고, 서버가 제품(누끼)의 색을 분석해 대비가 큰 순서로
+  // 제안한 배경 중에서 고른다(대표 이미지는 흰 배경만). 제품은 다시 그리지 않고 배경·그림자만 바뀐다.
+  let lwBgNotice = null;
+
+  function lwBgSwatchCss(suggestion) {
+    const ok = (value) => typeof value === "string" && /^#[0-9A-Fa-f]{6}$/.test(value);
+    const start = ok(suggestion.color_hex) ? suggestion.color_hex : "#FFFFFF";
+    const end = ok(suggestion.color_hex_end) ? suggestion.color_hex_end : start;
+    if (suggestion.kind === "GRADIENT") return `linear-gradient(to bottom, ${start}, ${end})`;
+    if (suggestion.kind === "RADIAL") return `radial-gradient(circle, ${start}, ${end})`;
+    return start;
+  }
+
+  function lwBgTileHtml(suggestion) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const warn = suggestion.low_contrast
+      ? `<p class="field-error lw-bg-warn">${escapeHtml(t("bg_low_contrast"))}</p>`
+      : (suggestion.shadow_recommended ? `<p class="stat-sub lw-bg-tip">${escapeHtml(t("bg_shadow_tip"))}</p>` : "");
+    return `
+      <div class="lw-bg-tile" data-code="${escapeHtml(suggestion.code)}">
+        <div class="lw-bg-swatch" style="height:72px;border-radius:8px;border:1px solid #d0d5dd;background:${lwBgSwatchCss(suggestion)}"></div>
+        <strong>${escapeHtml(suggestion.label_ko)}</strong>
+        <span class="stat-sub">${escapeHtml(t("bg_contrast_label", { score: suggestion.contrast }))}</span>
+        <p class="stat-sub">${escapeHtml(suggestion.reason_ko)}</p>
+        ${warn}
+        <button type="button" class="btn btn-primary btn-sm lw-bg-make-btn" data-code="${escapeHtml(suggestion.code)}">${escapeHtml(t("bg_make_btn"))}</button>
+      </div>`;
+  }
+
+  function lwBgNoticeHtml() {
+    if (!lwBgNotice) return "";
+    const notice = lwBgNotice;
+    lwBgNotice = null;
+    return `<div class="banner banner-success" role="status" id="lw-bg-created-banner">${escapeHtml(HomezI18n.t("lw.bg_created", { label: notice.label, id: notice.id }))}</div>`;
+  }
+
+  async function lwOpenBackgroundPanel(assetId, content) {
+    const panel = el(`lw-bg-panel-${assetId}`);
+    if (!panel) return;
+    // 제안 타일이 들어갈 폭이 나오도록 열린 카드는 그리드 한 줄 전체를 쓴다(좁은 카드 안에서는 글자가 세로로 쪼개진다).
+    const card = panel.closest(".lw-media-card");
+    if (panel.dataset.open === "1") {
+      panel.innerHTML = "";
+      panel.dataset.open = "";
+      if (card) card.style.gridColumn = "";
+      return;
+    }
+    panel.dataset.open = "1";
+    if (card) card.style.gridColumn = "1 / -1";
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const state = { purpose: "ADDITIONAL", variation: 0, shadow: false, upscale: false };
+
+    async function load() {
+      panel.innerHTML = `<p class="loading-text">${escapeHtml(t("bg_loading"))}</p>`;
+      let data;
+      try {
+        data = await apiFetch("/media-assets/background-suggestions", {
+          method: "POST",
+          body: JSON.stringify({
+            cutout_asset_id: Number(assetId), purpose: state.purpose, count: 8, variation: state.variation,
+          }),
+        });
+      } catch (err) {
+        panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
+        return;
+      }
+      render(data);
+    }
+
+    function render(data) {
+      const chips = (data.product.colors || []).map(([hex]) => (
+        /^#[0-9A-Fa-f]{6}$/.test(hex)
+          ? `<span class="lw-bg-chip" style="display:inline-block;width:18px;height:18px;border-radius:50%;border:1px solid #d0d5dd;background:${hex}"></span>` : ""
+      )).join("");
+      panel.innerHTML = `
+        <div class="detail-panel lw-bg-panel-box">
+          <h3>${escapeHtml(t("bg_panel_title"))}</h3>
+          <p class="stat-sub">${escapeHtml(t("bg_panel_hint"))}</p>
+          <p class="stat-sub">${escapeHtml(t("bg_product_colors"))} ${chips}</p>
+          <div class="lw-bg-controls">
+            <label><input type="radio" name="lw-bg-purpose-${assetId}" value="ADDITIONAL" ${state.purpose === "ADDITIONAL" ? "checked" : ""}> ${escapeHtml(t("bg_purpose_additional"))}</label>
+            <label><input type="radio" name="lw-bg-purpose-${assetId}" value="MAIN" ${state.purpose === "MAIN" ? "checked" : ""}> ${escapeHtml(t("bg_purpose_main"))}</label>
+            <label><input type="checkbox" id="lw-bg-shadow-${assetId}" ${state.shadow ? "checked" : ""}> ${escapeHtml(t("bg_shadow_label"))}</label>
+            <label><input type="checkbox" id="lw-bg-upscale-${assetId}" ${state.upscale ? "checked" : ""}> ${escapeHtml(t("bg_upscale_label"))}</label>
+          </div>
+          <div class="lw-bg-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">
+            ${(data.suggestions || []).map(lwBgTileHtml).join("") || `<p class="empty-text">${escapeHtml(t("bg_none"))}</p>`}
+          </div>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="lw-bg-more-${assetId}" ${state.purpose === "MAIN" ? "disabled" : ""}>${escapeHtml(t("bg_more_btn"))}</button>
+          </div>
+          <p class="stat-sub">${escapeHtml(t("bg_rights_note"))}</p>
+          <p class="field-error" id="lw-bg-error-${assetId}"></p>
+        </div>`;
+
+      panel.querySelectorAll(`input[name="lw-bg-purpose-${assetId}"]`).forEach((radio) => {
+        radio.addEventListener("change", () => {
+          state.purpose = radio.value;
+          state.variation = 0;
+          load();
+        });
+      });
+      el(`lw-bg-shadow-${assetId}`).addEventListener("change", (ev) => { state.shadow = ev.target.checked; });
+      el(`lw-bg-upscale-${assetId}`).addEventListener("change", (ev) => { state.upscale = ev.target.checked; });
+      el(`lw-bg-more-${assetId}`).addEventListener("click", () => {
+        state.variation = (state.variation + 1) % 12;
+        load();
+      });
+      panel.querySelectorAll(".lw-bg-make-btn").forEach((btn) => {
+        btn.addEventListener("click", () => withButtonGuard(btn, async () => {
+          const errEl = el(`lw-bg-error-${assetId}`);
+          errEl.textContent = "";
+          const suggestion = (data.suggestions || []).find((x) => x.code === btn.dataset.code);
+          try {
+            const asset = await apiFetch("/media-assets/adaptive-composition", {
+              method: "POST",
+              body: JSON.stringify({
+                cutout_asset_id: Number(assetId), suggestion_code: btn.dataset.code, purpose: state.purpose,
+                variation: state.variation, shadow: state.shadow, fill_ratio: 0.86, max_upscale: state.upscale ? 2.0 : 1.0,
+              }),
+            });
+            // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 만든 이미지 번호를 알린다.
+            lwBgNotice = { id: asset.id, label: suggestion ? suggestion.label_ko : btn.dataset.code };
+            await lwRenderMediaStep(content);
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          } catch (err) {
+            errEl.textContent = err.message || HomezI18n.t("common.load_error");
+          }
+        }));
+      });
+    }
+
+    await load();
+  }
+
   function lwOrderMediaAssets(list) {
     const rootOf = (a) => a.source_asset_id || a.id;
     return [...list].sort((x, y) => {
@@ -10965,6 +11100,7 @@
     const selected = new Set(w.selected_media_asset_ids || []);
     content.innerHTML = `
       <h2>${HomezI18n.t("lw.step.media")}</h2>
+      ${lwBgNoticeHtml()}
       <p class="stat-sub">${HomezI18n.t("lw.media_add_hint")}</p>
 
       <div class="lw-media-search-panel">
@@ -11022,6 +11158,7 @@
           </div>
           <div class="lw-rights-action-panel" id="lw-rights-panel-${a.id}"></div>
           <div class="lw-rights-action-panel" id="lw-detail-page-panel-${a.id}"></div>
+          <div class="lw-bg-panel" id="lw-bg-panel-${a.id}"></div>
         </div>`;
       }).join("")}</div>`}
       <p class="field-error" id="lw-media-error"></p>`;
@@ -11177,22 +11314,7 @@
     });
 
     content.querySelectorAll(".lw-compose-btn").forEach((btn) => {
-      btn.addEventListener("click", () => withButtonGuard(btn, async () => {
-        const errEl = el("lw-media-error");
-        errEl.textContent = "";
-        try {
-          await apiFetch("/media-assets/background-composition", {
-            method: "POST",
-            body: JSON.stringify({
-              cutout_asset_id: Number(btn.dataset.assetId),
-              background_kind: "WHITE",
-            }),
-          });
-          await lwRenderMediaStep(content);
-        } catch (err) {
-          errEl.textContent = escapeHtml(err.message || HomezI18n.t("common.load_error"));
-        }
-      }));
+      btn.addEventListener("click", () => lwOpenBackgroundPanel(btn.dataset.assetId, content));
     });
 
     content.querySelectorAll(".lw-manual-edit-btn").forEach((btn) => {
