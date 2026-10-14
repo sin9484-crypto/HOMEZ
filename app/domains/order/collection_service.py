@@ -17,6 +17,8 @@ from app.domains.order.collection_model import OrderCollectionCursor
 
 INITIAL_LOOKBACK = timedelta(hours=1)
 OVERLAP = timedelta(minutes=5)
+# 쿠팡 분단위 주문 조회는 24시간 미만만 허용한다 — 쉬었던 기간이 더 길면 이 크기로 나눠 순서대로 따라잡는다(건너뛰어 주문을 놓치지 않는다).
+CATCH_UP_CHUNK = timedelta(hours=23)
 STALE_LOCK_AFTER = timedelta(minutes=15)
 
 
@@ -38,6 +40,14 @@ def _utc_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _bounded_window(start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    """조회 구간이 24시간 미만이 되도록 끝을 줄인다. 성공하면 커서가 이 끝까지 전진하므로 다음 실행이 이어서 따라잡는다."""
+
+    if end - start >= CATCH_UP_CHUNK:
+        return start, start + CATCH_UP_CHUNK
+    return start, end
 
 
 class OrderCollectionCursorService:
@@ -124,7 +134,8 @@ class OrderCollectionCursorService:
                 self.fail(cursor.id, token, "FUTURE_CURSOR")
                 raise ValueError("FUTURE_ORDER_COLLECTION_CURSOR")
             start = last - OVERLAP
-        return CollectionLease(cursor.id, token, start, now_aware)
+        start, end = _bounded_window(start, now_aware)
+        return CollectionLease(cursor.id, token, start, end)
 
     def preview_window(
         self,
@@ -144,7 +155,7 @@ class OrderCollectionCursorService:
         last = _utc_aware(position.last_successful_to)
         if last > end:
             raise ValueError("FUTURE_ORDER_COLLECTION_CURSOR")
-        return last - OVERLAP, end
+        return _bounded_window(last - OVERLAP, end)
 
     def succeed(
         self, cursor_id: int, lock_token: str, successful_to: datetime,

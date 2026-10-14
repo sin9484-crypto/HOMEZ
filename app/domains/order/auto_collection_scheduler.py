@@ -741,6 +741,13 @@ class _BudgetGuardedProvider:
         self._channel_status = channel_status
 
     def collect(self, **kwargs):
+        # 2026-10-14 — 쿠팡을 부르기 전에 로컬에서 거부되는 요청(구간이 24시간 이상 등)은 외부 호출이 아니므로
+        # 시험 예산을 쓰지 않는다(실제로 겪은 일: 호출 0회인데 예산 1회가 소모됨).
+        precheck = getattr(self._inner, "precheck", None)
+        if callable(precheck):
+            rejected = precheck(**kwargs)
+            if rejected is not None:
+                return rejected
         if not _reserve_test_budget_call(
             self._db, self._company_id, self._store_connection_id, self._channel_status,
         ):

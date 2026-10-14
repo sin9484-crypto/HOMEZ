@@ -176,13 +176,16 @@ class CoupangOrderCollectionProvider:
             next_token = str(next_token).strip() or None
         return CoupangOrderPage(tuple(data), next_token)
 
-    def collect(
+    def precheck(
         self,
         *,
         created_at_from: datetime,
         created_at_to: datetime,
         status: str,
-    ) -> CoupangOrderCollectionResult:
+    ) -> CoupangOrderCollectionResult | None:
+        """쿠팡을 부르기 **전에** 로컬에서 거부되는 입력(시간대·구간 폭·상태)을 검사한다. 거부되면 그 결과를, 통과하면 None을 돌려준다.
+        호출 예산을 쓰는 래퍼가 "네트워크에 나가지 않은 거부"까지 예산으로 세지 않도록 같은 검사를 공유한다."""
+
         if created_at_from.tzinfo is None or created_at_to.tzinfo is None:
             return CoupangOrderCollectionResult(
                 False, error_code="TIMEZONE_REQUIRED",
@@ -210,6 +213,20 @@ class CoupangOrderCollectionProvider:
                 False, error_code="INVALID_STATUS",
                 error_summary="지원하지 않는 쿠팡 발주서 상태입니다.",
             )
+        return None
+
+    def collect(
+        self,
+        *,
+        created_at_from: datetime,
+        created_at_to: datetime,
+        status: str,
+    ) -> CoupangOrderCollectionResult:
+        rejected = self.precheck(
+            created_at_from=created_at_from, created_at_to=created_at_to, status=status,
+        )
+        if rejected is not None:
+            return rejected
 
         path = ORDER_SHEETS_PATH.format(vendor_id=quote(self.vendor_id, safe=""))
         base_query = {
