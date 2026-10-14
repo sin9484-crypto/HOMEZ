@@ -41,11 +41,16 @@ from app.domains.media_asset.url_import import UrlImportError
 from app.domains.media_asset.url_import import fetch_image_safely
 from app.domains.media_asset.url_import import validate_fetchable_url
 from app.domains.media_asset.url_import_service import UrlImageImportService
+from app.domains.product_candidate.constants import EvidenceType
+from app.domains.product_candidate.model import ProductCandidateEvidence
 from app.domains.product_candidate.schema import ProductCandidatePrivateCreate
 from app.domains.product_candidate.service import ProductCandidateService
 from app.domains.product_import import schema
 from app.domains.product_import.generic_extractor import claim_words_in
 from app.domains.product_import.generic_extractor import extract_generic
+from app.domains.product_import.notice_suggestions import decode_notice_rows
+from app.domains.product_import.notice_suggestions import encode_notice_rows
+from app.domains.product_import.notice_suggestions import suggest_notice_values
 from app.domains.product_import.onchannel_page import is_onchannel_product_url
 from app.domains.product_import.onchannel_page import parse_onchannel_page
 from app.domains.product_import.onchannel_page import suggest_description
@@ -360,6 +365,25 @@ class ProductImportService:
         )
 
     # ------------------------------------------------------------------
+    # 정보고시 제안(개선 A9) — 5단계에서 빈 칸에만 채울 "제안"
+    # ------------------------------------------------------------------
+
+    def notice_suggestions(
+        self, candidate_id: int, labels: list[str], company_id: int,
+    ) -> schema.NoticeSuggestionResponse:
+        evidence = ProductCandidateService(self.db).list_evidence(candidate_id, company_id)
+        newest = None
+        for row in evidence:
+            rows = decode_notice_rows(row.payload_summary)
+            if rows and (newest is None or row.id > newest[0]):
+                newest = (row.id, rows)
+        if newest is None:
+            return schema.NoticeSuggestionResponse(suggestions={}, source_found=False)
+        return schema.NoticeSuggestionResponse(
+            suggestions=suggest_notice_values(newest[1], labels), source_found=True,
+        )
+
+    # ------------------------------------------------------------------
     # 3) 후보 + 위저드 초안 생성
     # ------------------------------------------------------------------
 
@@ -398,6 +422,12 @@ class ProductImportService:
         )
         # 이미 있던 후보(같은 source_reference)는 이벤트 없이 그대로 돌려준다(register_private_candidate의 멱등 계약).
         candidate_created = bool(candidate_events)
+        if request.notice_rows:
+            self.db.add(ProductCandidateEvidence(
+                candidate_id=candidate.id, evidence_type=EvidenceType.RAW_SOURCE,
+                payload_summary=encode_notice_rows([(r.label, r.value) for r in request.notice_rows]),
+            ))
+            self.db.commit()
 
         wizard_service = ListingWizardService(self.db)
         wizard, duplicate = wizard_service.create(

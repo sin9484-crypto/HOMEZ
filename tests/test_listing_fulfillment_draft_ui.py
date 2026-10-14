@@ -208,8 +208,10 @@ class FulfillmentDraftUiTestCase(unittest.TestCase):
         Metadata 지문이 재조회 전후로 같으면(축 정의가 그대로임을
         뜻함) 조합 생성 행까지 포함해 그대로 유지해야 한다."""
 
-        idx = self.js.index('content.querySelectorAll("[data-lw-category-recommend]")')
-        end = self.js.index("if (detail) {", idx)
+        # 2026-10-14 — "카테고리 추천"과 "코드로 조회"가 같은 핸들러를 쓰도록 선택자가 합쳐졌다(추천 POST 없이 코드로 조회).
+        # 조합표 보존 로직은 그대로이고, 핸들러 끝은 로컬 초안 복원 호출까지로 잡는다.
+        idx = self.js.index('content.querySelectorAll("[data-lw-category-recommend], [data-lw-category-lookup]")')
+        end = self.js.index("lwRestoreFulfillmentDraftOptionsAndNotice(block, w.id);", idx)
         body = self.js[idx:end]
         self.assertIn(
             'const prevFingerprint = block.querySelector(".lw-category-metadata-fingerprint")?.value || "";',

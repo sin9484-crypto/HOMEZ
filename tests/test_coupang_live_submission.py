@@ -9,6 +9,7 @@ import requests
 from sqlalchemy import text
 
 from app.core.exceptions import BadRequestException
+from app.core.exceptions import ConflictException
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.domains.automation_safety.constants import AutomationMode
 from app.domains.automation_safety.service import SafetyService
@@ -19,6 +20,8 @@ from app.domains.marketplace_listing.coupang_live_payload import (
     build_coupang_live_payload,
 )
 from app.domains.marketplace_listing.coupang_live_provider import (
+    ProductListResult,
+    RegisteredProductSummary,
     CANONICAL_STATUS_MAP,
     STATUS_NAMES,
     CoupangLiveProductProvider,
@@ -1155,6 +1158,128 @@ class ListingWizardLiveServiceTestCase(ListingWizardServiceTestCase):
         )
         blocked = live.preflight(wizard.id, result.submission_id, self.company_id)
         self.assertIn("ESTOP_ACTIVE", blocked.blockers)
+
+    # ---- 결과불명(UNKNOWN) → "쿠팡에 없음 확인 후 실패로 정정"(DB 직접 수정을 앱 기능으로, 2026-10-14) ----
+
+    class _ListProvider:
+        def __init__(self, result=None, error=None, before=None):
+            self.result = result
+            self.error = error
+            self.before = before
+            self.calls = []
+
+        def list_products(self, seller_product_name=None, max_per_page=20):
+            self.calls.append(seller_product_name)
+            if self.before:
+                self.before()
+            if self.error:
+                raise self.error
+            return self.result
+
+    def _unknown_submission(self):
+        wizard, result = self._submitted_wizard(live_ready=True)
+        changed = self.live_repo_update(result.submission_id, ("PENDING", "SUBMITTED"), "UNKNOWN")
+        self.assertEqual(changed, 1)
+        return wizard, result.submission_id
+
+    def live_repo_update(self, submission_id, expected, new_status, **kwargs):
+        live = ListingWizardLiveService(self.db)
+        changed = live.marketplace.update_submission_status_conditional(
+            submission_id, self.company_id, expected, new_status, **kwargs,
+        )
+        self.db.commit()
+        return changed
+
+    def _submission_status(self, submission_id):
+        return ListingWizardLiveService(self.db).marketplace.get_submission_for_company(
+            submission_id, self.company_id,
+        )
+
+    def _audit_count(self):
+        return self.db.execute(text(
+            "select count(*) from audit_logs where action='MARKETPLACE_SUBMISSION_UNKNOWN_RESOLVED_NOT_SENT'",
+        )).scalar()
+
+    def test_not_found_on_coupang_resolves_unknown_to_failed_with_audit(self):
+        wizard, submission_id = self._unknown_submission()
+        provider = self._ListProvider(ProductListResult(outcome="NOT_FOUND"))
+        out = ListingWizardLiveService(self.db).resolve_not_registered(
+            wizard.id, submission_id, self.company_id, provider, actor_user_id=1, reason="전송 시 예산 0으로 차단됨",
+        )
+        self.assertEqual(out["outcome"], "RESOLVED_NOT_REGISTERED")
+        submission = self._submission_status(submission_id)
+        self.db.refresh(submission)
+        self.assertEqual(submission.status, "FAILED")
+        self.assertIn("NOT_FOUND", submission.error_reason)
+        self.assertIn("전송 시 예산 0으로 차단됨", submission.error_reason)
+        self.assertEqual(self._audit_count(), 1)
+        self.assertEqual(len(provider.calls), 1)  # 쿠팡 조회는 정확히 1회
+
+    def test_found_or_unconfirmed_lookup_changes_nothing(self):
+        wizard, submission_id = self._unknown_submission()
+        # 쿠팡 목록에 "같은 이름(앞 20자)" 상품이 있어야 FOUND다 — 위저드 초안의 상품명 그대로 만든다.
+        draft_name = json.loads(wizard.draft_json)["product_name"]
+        found = ProductListResult(outcome="FOUND", products=(
+            RegisteredProductSummary(seller_product_id="1", seller_product_name=draft_name, status_name="승인완료"),
+        ))
+        for provider in (
+            self._ListProvider(found),
+            self._ListProvider(error=RuntimeError("boom")),
+            self._ListProvider(ProductListResult(outcome="UNKNOWN", error_code="TIMEOUT")),
+        ):
+            with self.subTest(provider=provider.result):
+                with self.assertRaises(ConflictException):
+                    ListingWizardLiveService(self.db).resolve_not_registered(
+                        wizard.id, submission_id, self.company_id, provider, actor_user_id=1, reason="사유",
+                    )
+                submission = self._submission_status(submission_id)
+                self.db.refresh(submission)
+                self.assertEqual(submission.status, "UNKNOWN")
+        self.assertEqual(self._audit_count(), 0)
+
+    def test_only_unknown_without_a_coupang_product_number_can_be_resolved(self):
+        wizard, result = self._submitted_wizard(live_ready=True)
+        provider = self._ListProvider(ProductListResult(outcome="NOT_FOUND"))
+        live = ListingWizardLiveService(self.db)
+        # 이미 SUBMITTED(또는 PENDING) — 정정 대상이 아니다
+        with self.assertRaises(ConflictException):
+            live.resolve_not_registered(wizard.id, result.submission_id, self.company_id, provider, 1, "사유")
+        self.assertEqual(provider.calls, [])  # 대상이 아니면 쿠팡 조회도 하지 않는다
+        # UNKNOWN이어도 쿠팡 상품번호가 기록돼 있으면 정합화 대상이다
+        self.live_repo_update(
+            result.submission_id, ("PENDING", "SUBMITTED"), "UNKNOWN", external_submission_ref="CP-777",
+        )
+        with self.assertRaises(ConflictException):
+            live.resolve_not_registered(wizard.id, result.submission_id, self.company_id, provider, 1, "사유")
+        self.assertEqual(provider.calls, [])
+
+    def test_reason_is_required_and_other_companies_cannot_resolve(self):
+        wizard, submission_id = self._unknown_submission()
+        provider = self._ListProvider(ProductListResult(outcome="NOT_FOUND"))
+        live = ListingWizardLiveService(self.db)
+        for blank in ("", "   "):
+            with self.assertRaises(BadRequestException):
+                live.resolve_not_registered(wizard.id, submission_id, self.company_id, provider, 1, blank)
+        with self.assertRaises(NotFoundException):
+            live.resolve_not_registered(wizard.id, submission_id, self.other_company_id, provider, 1, "사유")
+        self.assertEqual(provider.calls, [])
+
+    def test_a_status_change_during_the_lookup_is_not_overwritten(self):
+        wizard, submission_id = self._unknown_submission()
+        provider = self._ListProvider(
+            ProductListResult(outcome="NOT_FOUND"),
+            before=lambda: self.live_repo_update(
+                submission_id, ("UNKNOWN",), "SUBMITTED", external_submission_ref="CP-9",
+            ),
+        )
+        with self.assertRaises(ConflictException):
+            ListingWizardLiveService(self.db).resolve_not_registered(
+                wizard.id, submission_id, self.company_id, provider, actor_user_id=1, reason="사유",
+            )
+        submission = self._submission_status(submission_id)
+        self.db.refresh(submission)
+        self.assertEqual(submission.status, "SUBMITTED")
+        self.assertEqual(self._audit_count(), 0)
 
     # ---- 속성 비교 점검: 후보가 나온 공급처 상품의 비교 기록을 본다 ----
 

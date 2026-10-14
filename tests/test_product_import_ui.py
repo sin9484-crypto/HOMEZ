@@ -83,7 +83,8 @@ class UrlImportScreenTests(unittest.TestCase):
     def test_untrusted_page_text_is_always_escaped_before_it_reaches_innerhtml(self):
         # 읽어 온 문자열(상품명·설명·경고·이미지 주소 등)은 전부 escapeHtml을 거쳐야 한다.
         self.assertIn('src="${escapeHtml(img.url)}"', URLIMP_JS)
-        for needle in ("data.suggested_product_name", "data.suggested_description", "w)}</li>", "r.label", "i.error_message"):
+        self.assertIn("escapeHtml(r.label)", URLIMP_JS)
+        for needle in ("data.suggested_product_name", "data.suggested_description", "w)}</li>", "i.error_message"):
             with self.subTest(needle=needle):
                 for match in re.finditer(re.escape(needle), URLIMP_JS):
                     window = URLIMP_JS[max(0, match.start() - 40):match.end() + 5]

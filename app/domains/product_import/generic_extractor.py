@@ -21,14 +21,10 @@ from dataclasses import field
 from urllib.parse import urljoin
 from urllib.parse import urlparse
 
+from app.domains.marketplace_listing.listing_wizard_precheck import claim_words_in  # noqa: F401 (재노출)
 from app.domains.product_import.html_tree import Node
 from app.domains.product_import.html_tree import label_value_pairs
 from app.domains.product_import.html_tree import parse_html
-
-# 쿠팡이 의료기기·효능 표현으로 오인할 수 있는 단어 — 상품명에 있으면 경고만 한다(자동으로 지우지 않는다).
-CLAIM_WORDS = (
-    "치료", "예방", "완화", "개선", "재생", "연골", "관절염", "통증", "디스크", "교정", "효능", "의료", "질환",
-)
 
 _PRICE_RE = re.compile(r"(\d{1,3}(?:,\d{3})+|\d{3,})\s*원")
 
@@ -51,10 +47,6 @@ class ExtractedPage:
     pairs: list[tuple[str, str]] = field(default_factory=list)
     images: list[ExtractedImage] = field(default_factory=list)
     root: Node | None = None
-
-
-def claim_words_in(name: str | None) -> list[str]:
-    return [w for w in CLAIM_WORDS if name and w in name]
 
 
 def _meta(root: Node) -> dict[str, str]:
@@ -105,6 +97,16 @@ def _offer_price(product: dict) -> str | None:
     return None
 
 
+_DECORATION_TOKENS = ("footer", "logo", "icon", "sprite", "blank.", "spacer", "pixel", "tracking")
+
+
+def _is_decoration(path: str) -> bool:
+    """상품 사진이 아닌 장식 이미지(SVG, 푸터·로고·아이콘 등)는 후보에서 뺀다 — 실제 CJ The Market 확인에서 푸터 SVG 4개가 섞였다."""
+
+    lowered = path.lower()
+    return lowered.endswith(".svg") or any(token in lowered for token in _DECORATION_TOKENS)
+
+
 def _image_sources(root: Node, base_url: str) -> list[ExtractedImage]:
     seen: set[str] = set()
     images: list[ExtractedImage] = []
@@ -114,9 +116,13 @@ def _image_sources(root: Node, base_url: str) -> list[ExtractedImage]:
             return
         absolute = urljoin(base_url, raw.strip())
         parsed = urlparse(absolute)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or absolute in seen:
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
             return
-        seen.add(absolute)
+        # 같은 사진의 크기·형식만 다른 변형(?SF=webp&RS=550 등)은 한 장으로 본다.
+        identity = f"{parsed.hostname}{parsed.path}"
+        if identity in seen or _is_decoration(parsed.path):
+            return
+        seen.add(identity)
         images.append(ExtractedImage(absolute, classes, representative))
 
     meta = _meta(root)

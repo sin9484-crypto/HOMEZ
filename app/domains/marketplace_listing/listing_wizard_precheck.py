@@ -93,6 +93,17 @@ def _compact(text: object) -> str:
     return "".join(str(text or "").split()).lower()
 
 
+# 쿠팡이 의료기기·효능 표현으로 오인해 심사에서 반려할 수 있는 단어(러닝 무릎보호대 "무릎연골보호" 사례에서 확인한 위험).
+# 단어가 있다고 곧 반려는 아니므로 차단하지 않고 경고만 한다. URL 가져오기(product_import)도 같은 목록을 쓴다.
+CLAIM_WORDS = (
+    "치료", "예방", "완화", "개선", "재생", "연골", "관절염", "통증", "디스크", "교정", "효능", "의료", "질환",
+)
+
+
+def claim_words_in(name: str | None) -> list[str]:
+    return [word for word in CLAIM_WORDS if name and word in name]
+
+
 def product_name_option_overlaps(
     product_name: str, purchase_options: dict, field_definitions: list[dict],
 ) -> list[str]:
@@ -197,6 +208,15 @@ def run_precheck(
                     params={"values": ", ".join(overlaps)},
                 ))
                 break
+
+    # --- 상품명의 의료·효능 표현(경고만, 차단하지 않는다) ---
+    claim_words = claim_words_in(product_name)
+    if claim_words:
+        issues.append(_issue(
+            "PRODUCT_NAME_CLAIM_WORDS", WizardStep.DRAFT, False,
+            "listing_wizard.precheck.product_name_claim_words",
+            field="product_name", params={"words": ", ".join(claim_words)},
+        ))
 
     # --- 브랜드 상품의 식별번호(UID: GTIN 또는 MPN) ---
     # 쿠팡은 브랜드가 있는 상품의 attributes에서 Global Trade Item Number /

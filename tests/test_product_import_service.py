@@ -338,6 +338,39 @@ class CreateDraftTests(unittest.TestCase):
         self.assertFalse(result.economics_saved)
         self.assertIsNone(self.db.get(ListingWizard, result.wizard_id).economics_input_json)
 
+    def test_notice_rows_are_kept_as_candidate_evidence_and_come_back_as_suggestions(self):
+        rows = [
+            schema.NoticeRow(label="제조국", value="중국"),
+            schema.NoticeRow(label="크기/중량", value="약 15x15cm"),
+            schema.NoticeRow(label="A/S 책임자와 전화번호", value="070-8983-8490"),
+        ]
+        result = self._service().create_draft(self._request(notice_rows=rows), self.company_id, user_id=1)
+        evidence = self.db.query(ProductCandidateEvidence).filter(
+            ProductCandidateEvidence.candidate_id == result.candidate_id,
+            ProductCandidateEvidence.payload_summary.like("URL_IMPORT_NOTICE:%"),
+        ).all()
+        self.assertEqual(len(evidence), 1)
+        self.assertNotIn("070-8983-8490", evidence[0].payload_summary)  # 공급처 연락처는 저장하지 않는다
+
+        suggestion = self._service().notice_suggestions(
+            result.candidate_id, ["크기, 중량", "제조국", "A/S 책임자와 전화번호", "색상"], self.company_id,
+        )
+        self.assertTrue(suggestion.source_found)
+        self.assertEqual(suggestion.suggestions, {"크기, 중량": "약 15x15cm", "제조국": "중국"})
+
+    def test_candidate_without_imported_notice_reports_no_source(self):
+        result = self._service().create_draft(self._request(), self.company_id, user_id=1)
+        suggestion = self._service().notice_suggestions(result.candidate_id, ["제조국"], self.company_id)
+        self.assertFalse(suggestion.source_found)
+        self.assertEqual(suggestion.suggestions, {})
+
+    def test_other_companies_cannot_read_the_suggestions(self):
+        result = self._service().create_draft(
+            self._request(notice_rows=[schema.NoticeRow(label="제조국", value="중국")]), self.company_id, user_id=1,
+        )
+        with self.assertRaises(Exception):
+            self._service().notice_suggestions(result.candidate_id, ["제조국"], company_id=self.company_id + 999)
+
     def test_main_images_are_imported_and_failures_are_reported_per_image(self):
         good = "https://onimg.onch3.co.kr/products/ok.png"
         bad = "https://onimg.onch3.co.kr/products/missing.png"

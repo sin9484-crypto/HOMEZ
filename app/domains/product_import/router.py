@@ -75,3 +75,15 @@ def create_draft_from_import(
         return service.create_draft(data, current_user.company_id, current_user.id)
     except ProductImportError as exc:
         raise BadRequestException(str(exc)) from exc
+
+
+@router.post("/notice-suggestions", response_model=schema.NoticeSuggestionResponse)
+def suggest_notice_information(
+    data: schema.NoticeSuggestionRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+):
+    """URL 가져오기 때 보관한 공급처 고시로 5단계 정보고시 칸의 제안값을 돌려준다(읽기 전용, 외부 호출 없음)."""
+
+    service = ProductImportService(db, transport=None)
+    return service.notice_suggestions(data.candidate_id, data.labels, current_user.company_id)

@@ -689,6 +689,66 @@ class ListingWizardLiveService:
         outcome["submission_status"] = submission.status
         return outcome
 
+    def resolve_not_registered(
+        self,
+        wizard_id: int,
+        submission_id: int,
+        company_id: int,
+        provider: CoupangProductProvider,
+        actor_user_id: int,
+        reason: str,
+    ) -> dict:
+        """결과불명(UNKNOWN) 제출을 "쿠팡에 등록되지 않음"이 **확인된 뒤에만** 실패(FAILED)로 정정한다.
+
+        이전에는 이 정정을 DB 직접 수정으로 해야 했다(제출 #8·#9·#12, 승인·백업·감사를 사람이 수작업). 같은 규칙을 앱 안에서:
+          1) UNKNOWN이고 쿠팡 상품번호(external_submission_ref)가 없을 때만 대상이다 — 번호가 있으면 정합화로 연결해야 한다.
+          2) 서버가 지금 직접 쿠팡 상품 목록을 읽어(GET 1회) NOT_FOUND일 때만 진행한다. 화면 값을 믿지 않는다.
+          3) 조건부 UPDATE(상태가 아직 UNKNOWN일 때만)로 한 행만 바꾸고, 감사 로그를 남긴다.
+        찾음(FOUND)·확인불가(UNKNOWN)이면 아무것도 바꾸지 않고 이유를 알려 준다. 쿠팡에는 쓰기 요청을 하지 않는다."""
+
+        reason = (reason or "").strip()
+        if not reason:
+            raise BadRequestException("정정 사유를 입력해 주세요.")
+
+        _wizard, submission, _listing, _selection = self._context(wizard_id, submission_id, company_id)
+        if submission.status != SubmissionStatus.UNKNOWN:
+            raise ConflictException(
+                f"결과불명(UNKNOWN) 상태의 제출만 정정할 수 있습니다(현재 {submission.status}).",
+            )
+        if submission.external_submission_ref:
+            raise ConflictException(
+                "쿠팡 상품번호가 이미 기록되어 있어 '등록되지 않음'으로 정정할 수 없습니다 — 정합화로 확인하세요.",
+            )
+
+        lookup = self.lookup_registration(wizard_id, submission_id, company_id, provider)
+        if lookup["outcome"] != "NOT_FOUND":
+            messages = {
+                "FOUND": "쿠팡에 같은 이름의 상품이 있습니다 — 등록되지 않은 것이 아니므로 정정하지 않았습니다. 정합화로 연결을 확인하세요.",
+                "UNKNOWN": "쿠팡 등록 여부를 확인하지 못해 정정하지 않았습니다 — 확인이 끝난 뒤 다시 시도하세요.",
+            }
+            raise ConflictException(messages.get(lookup["outcome"], "쿠팡 등록 여부를 확인하지 못해 정정하지 않았습니다."))
+
+        stored_reason = (
+            f"쿠팡 미도달 확인(결과불명 정정): 쿠팡 상품 목록에서 같은 이름 상품 없음(NOT_FOUND). 운영자 사유: {reason}"
+        )[:500]
+        changed = self.marketplace.update_submission_status_conditional(
+            submission_id, company_id, (SubmissionStatus.UNKNOWN,), SubmissionStatus.FAILED,
+            error_reason=stored_reason,
+        )
+        if changed != 1:
+            self.db.rollback()
+            raise ConflictException("다른 요청이 먼저 이 제출 상태를 바꿨습니다 — 화면을 새로고침해 확인하세요.")
+        write_audit_log(
+            self.db, user_id=actor_user_id,
+            action="MARKETPLACE_SUBMISSION_UNKNOWN_RESOLVED_NOT_SENT",
+            entity="marketplace_submission", entity_id=str(submission_id), company_id=company_id,
+            description=(
+                f"제출 #{submission_id} 결과불명→실패 정정: 쿠팡 목록 NOT_FOUND 확인(서버 조회), 운영자 사유 기록. 쿠팡 쓰기 호출 없음."
+            ),
+        )
+        self.db.commit()
+        return {"outcome": "RESOLVED_NOT_REGISTERED", "submission_id": submission_id, "status": SubmissionStatus.FAILED}
+
     def check_status(
         self,
         wizard_id: int,

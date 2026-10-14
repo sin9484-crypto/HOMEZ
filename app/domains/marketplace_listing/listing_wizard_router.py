@@ -96,6 +96,9 @@ from app.domains.marketplace_listing.listing_wizard_schema import (
     WizardApproveRequest,
 )
 from app.domains.marketplace_listing.listing_wizard_schema import (
+    ResolveNotRegisteredRequest,
+)
+from app.domains.marketplace_listing.listing_wizard_schema import (
     WizardBulkArchivePreviewResponse,
 )
 from app.domains.marketplace_listing.listing_wizard_schema import (
@@ -1731,6 +1734,31 @@ def apply_submission_reconciliation(
         external_submission_ref=result.external_submission_ref,
         observed_status_name=result.observed_status_name,
         detail=result.detail,
+    )
+
+
+@router.post("/{wizard_id}/submissions/{submission_id}/resolve-not-registered")
+def resolve_submission_not_registered(
+    wizard_id: int,
+    submission_id: int,
+    data: ResolveNotRegisteredRequest,
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명 제출을 "쿠팡에 없음 확인 후 실패로 정정"한다(SuperAdmin). 서버가 쿠팡 목록을 직접 읽어(GET 1회)
+    NOT_FOUND일 때만 정정하고, 찾음·확인불가이면 아무것도 바꾸지 않는다. 쿠팡 쓰기 호출은 없다."""
+
+    from app.domains.marketplace_listing.listing_wizard_live_service import (
+        ListingWizardLiveService,
+    )
+
+    provider = _coupang_live_product_provider(
+        db, current_user.company_id,
+        _submission_account_resolver(db, current_user.company_id, submission_id),
+    )
+    return ListingWizardLiveService(db).resolve_not_registered(
+        wizard_id, submission_id, current_user.company_id, provider,
+        actor_user_id=current_user.id, reason=data.reason,
     )
 
 

@@ -118,6 +118,8 @@ class DraftCreateRequest(BaseModel):
     description: str | None = None
     category_hint: str | None = Field(default=None, max_length=100)
     keywords: list[str] = Field(default_factory=list)
+    # 검색 결과의 고시 표 — 5단계 정보고시 칸의 '제안'으로만 쓰이도록 후보 근거에 보관한다(연락처류는 저장하지 않는다).
+    notice_rows: list[NoticeRow] = Field(default_factory=list, max_length=60)
     image_urls_main: list[str] = Field(default_factory=list)
     image_urls_detail: list[str] = Field(default_factory=list)
     # 원가·판매가·비율을 모두 주면 위저드 6단계 경제성 입력까지 채운다(없으면 건너뛴다).
@@ -147,3 +149,18 @@ class DraftCreateResponse(BaseModel):
     # 사용자가 직접 해야 하는 남은 확인 목록(후보 승인, 사용권·브랜드·정보고시 확인, 8단계 승인, 전송).
     next_steps: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class NoticeSuggestionRequest(BaseModel):
+
+    candidate_id: int
+    labels: list[str] = Field(default_factory=list, max_length=80)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NoticeSuggestionResponse(BaseModel):
+    """쿠팡 정보고시 칸 라벨 → 제안 값. 못 맞춘 칸은 들어 있지 않다."""
+
+    suggestions: dict[str, str] = Field(default_factory=dict)
+    source_found: bool = False

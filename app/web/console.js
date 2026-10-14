@@ -1587,6 +1587,51 @@
     return confirmed ? value : null;
   }
 
+  // 비밀값(Client ID/Secret) 입력 — window.prompt는 내장 패널에서 보이지 않고 비밀값이 평문으로 보여서(2026-10-14, A14)
+  // 비밀번호 입력칸(마스킹)이 있는 전용 창으로 바꿨다. 값은 이 함수 밖으로 로그·화면에 남기지 않고, 창을 닫을 때 입력칸을 비운다.
+  // 반환: { id, secret } 또는 취소 시 null.
+  function askCredentialPair({ title, body, idLabel, secretLabel }) {
+    return new Promise((resolve) => {
+      const dialog = el("credential-dialog");
+      el("credential-title").textContent = title;
+      el("credential-body").textContent = body || "";
+      el("credential-id-label").textContent = idLabel;
+      el("credential-secret-label").textContent = secretLabel;
+      el("credential-id").value = "";
+      el("credential-secret").value = "";
+      el("credential-error").textContent = "";
+      const okBtn = el("credential-ok");
+      const cancelBtn = el("credential-cancel");
+
+      function finish(result) {
+        okBtn.removeEventListener("click", onOk);
+        cancelBtn.removeEventListener("click", onCancel);
+        dialog.removeEventListener("cancel", onCancel);
+        el("credential-id").value = "";
+        el("credential-secret").value = "";
+        dialog.close();
+        resolve(result);
+      }
+      function onOk() {
+        const id = el("credential-id").value.trim();
+        const secret = el("credential-secret").value;
+        if (!id || !secret) {
+          el("credential-error").textContent = HomezI18n.t("candidate_detail.credential_dialog_required");
+          return;
+        }
+        finish({ id, secret });
+      }
+      function onCancel() {
+        finish(null);
+      }
+      okBtn.addEventListener("click", onOk);
+      cancelBtn.addEventListener("click", onCancel);
+      dialog.addEventListener("cancel", onCancel);
+      dialog.showModal();
+      el("credential-id").focus();
+    });
+  }
+
   // --------------------------------------------------
   // Migration 승인 UX(2026-08-05 CTO 재검증 지시 Gate E)
   //
@@ -7659,10 +7704,15 @@
       }).catch(() => {});
 
       naverCredentialBtn.addEventListener("click", () => withButtonGuard(naverCredentialBtn, async () => {
-        const clientId = window.prompt(HomezI18n.t("candidate_detail.naver_credential_client_id_prompt"));
-        if (!clientId) return;
-        const clientSecret = window.prompt(HomezI18n.t("candidate_detail.naver_credential_client_secret_prompt"));
-        if (!clientSecret) return;
+        const entered = await askCredentialPair({
+          title: HomezI18n.t("candidate_detail.naver_credential_setup_btn"),
+          body: HomezI18n.t("candidate_detail.naver_credential_client_id_prompt"),
+          idLabel: "Client ID",
+          secretLabel: HomezI18n.t("candidate_detail.naver_credential_client_secret_prompt"),
+        });
+        if (!entered) return;
+        const clientId = entered.id;
+        const clientSecret = entered.secret;
 
         try {
           await apiFetch("/product-candidates/system/naver-datalab-credential", {
@@ -10022,6 +10072,7 @@
             product_name: name, description: el("lw-ui-desc").value.trim() || null,
             category_hint: el("lw-ui-category").value.trim() || null, keywords,
             image_urls_main: mainUrls, image_urls_detail: detailUrls, margin,
+            notice_rows: (data.notice_rows || []).map((r) => ({ label: r.label, value: r.value })),
             creation_idempotency_key: lwUrlImportState.idempotencyKey,
           }),
         });
@@ -12426,6 +12477,52 @@
     });
   }
 
+  // A9(2026-10-14) — URL로 가져온 공급처의 상품정보제공고시를 이 칸들의 "제안"으로 채운다. 빈 칸에만 채우고(덮어쓰지 않음),
+  // 연락처류는 제안하지 않으며(서버가 걸러 준다), "정보고시 확인" 체크는 사용자가 직접 한다.
+  function lwAttachNoticeFillButton(host, grid) {
+    host.querySelector("[data-lw-notice-fill]")?.remove();
+    const candidateId = lwState.wizard && lwState.wizard.product_candidate_id;
+    if (!candidateId || !grid.querySelector("[data-lw-notice-key]")) return;
+    const bar = document.createElement("div");
+    bar.setAttribute("data-lw-notice-fill", "");
+    bar.innerHTML = `<button type="button" class="btn btn-ghost btn-sm">${HomezI18n.t("lw.notice_fill_btn")}</button>
+      <small class="stat-sub" data-lw-notice-fill-status></small>`;
+    grid.before(bar);
+    const status = bar.querySelector("[data-lw-notice-fill-status]");
+    bar.querySelector("button").addEventListener("click", async () => {
+      const empty = Array.from(grid.querySelectorAll("[data-lw-notice-key]")).filter((input) => !input.value.trim());
+      if (!empty.length) {
+        status.textContent = HomezI18n.t("lw.notice_fill_nothing_empty");
+        return;
+      }
+      try {
+        const result = await apiFetch("/product-import/notice-suggestions", {
+          method: "POST",
+          body: JSON.stringify({
+            candidate_id: candidateId,
+            labels: empty.map((input) => input.dataset.lwNoticeLabel),
+          }),
+        });
+        let filled = 0;
+        empty.forEach((input) => {
+          const value = (result.suggestions || {})[input.dataset.lwNoticeLabel];
+          if (value && !input.value.trim()) {
+            input.value = value;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            filled += 1;
+          }
+        });
+        status.textContent = !result.source_found
+          ? HomezI18n.t("lw.notice_fill_no_source")
+          : filled
+            ? HomezI18n.t("lw.notice_fill_done", { count: filled })
+            : HomezI18n.t("lw.notice_fill_none_matched");
+      } catch (err) {
+        status.textContent = err.message || HomezI18n.t("lw.notice_fill_failed");
+      }
+    });
+  }
+
   function lwRenderNoticeFields(block, definitions, values) {
     const host = block.querySelector("[data-lw-notice-fields]");
     const checkbox = block.querySelector(".lw-policy-notice-confirmed");
@@ -12474,6 +12571,7 @@
       // 매번 다시 그린 직후 로컬 초안 값을 즉시 채워 넣는다.
       if (lwState.wizard) lwRestoreFulfillmentDraftOptionsAndNotice(block, lwState.wizard.id);
       refresh();
+      lwAttachNoticeFillButton(host, grid);
     };
     host.querySelector("[data-lw-notice-category]")?.addEventListener("change", () => {
       renderGroup();
@@ -13263,6 +13361,10 @@
       const margin = economics.find(
         (e) => e.marketplace_account_id === sel.marketplace_account_id,
       );
+      // A11(2026-10-14) — 승인자가 "발주 예상비용에 채널 수수료율 사용" 선택을 눈으로 확인하고 승인하게 한다.
+      const marginInput = (pkg.economics_input || []).find(
+        (e) => e.marketplace_account_id === sel.marketplace_account_id,
+      );
 
       const itemRows = items.map((item) => `
         <tr>
@@ -13322,6 +13424,7 @@
           <dt>${HomezI18n.t("lw.submission_review_expected_revenue")}</dt><dd>${escapeHtml(String(margin.expected_revenue))}</dd>
           <dt>${HomezI18n.t("lw.submission_review_margin_amount")}</dt><dd>${escapeHtml(String(margin.margin_amount))}</dd>
           <dt>${HomezI18n.t("lw.submission_review_margin_rate")}</dt><dd>${escapeHtml(String(margin.margin_rate))}</dd>
+          ${marginInput ? `<dt>${HomezI18n.t("lw.submission_review_use_fee_for_purchase")}</dt><dd>${marginInput.use_channel_fee_for_purchase_estimate ? HomezI18n.t("common.yes") : HomezI18n.t("common.no")}</dd>` : ""}
         </dl>` : ""}
 
         <details class="lw-advanced-fields">
@@ -13601,6 +13704,11 @@
         <button class="btn btn-primary btn-sm lw-recon-apply-btn"
           data-submission-id="${submissionId}" disabled>${HomezI18n.t("lw.reconciliation_apply_btn")}</button>
         <div class="field-hint lw-recon-apply-result" data-submission-id="${submissionId}"></div>
+        <hr>
+        <p class="stat-sub">${HomezI18n.t("lw.notreg_hint")}</p>
+        <button class="btn btn-secondary btn-sm lw-recon-notreg-btn"
+          data-submission-id="${submissionId}">${HomezI18n.t("lw.notreg_btn")}</button>
+        <div class="field-hint lw-recon-notreg-result" data-submission-id="${submissionId}"></div>
       </div>`;
   }
 
@@ -14422,6 +14530,32 @@
           } catch (err) {
             applyResult.textContent = err.message || HomezI18n.t("lw.reconciliation_apply_failed");
             applyResult.classList.add("field-error");
+          }
+        }));
+      });
+
+      // 결과불명(UNKNOWN) 제출을 "쿠팡에 없음 확인 후 실패로 정정" — 서버가 쿠팡 목록을 직접 읽어(GET 1회) NOT_FOUND일 때만
+      // 바꾼다(DB 직접 수정을 대체, 2026-10-14). 찾음·확인불가이면 서버가 거절하고 아무것도 바꾸지 않는다.
+      content.querySelectorAll(".lw-recon-notreg-btn").forEach((button) => {
+        button.addEventListener("click", () => withButtonGuard(button, async () => {
+          const submissionId = button.dataset.submissionId;
+          const resultEl = content.querySelector(`.lw-recon-notreg-result[data-submission-id="${submissionId}"]`);
+          resultEl.textContent = "";
+          resultEl.classList.remove("field-error");
+          const reason = await askText(HomezI18n.t("lw.notreg_reason_prompt"), {
+            title: HomezI18n.t("lw.notreg_confirm_title"), okLabel: HomezI18n.t("lw.notreg_confirm_ok"),
+          });
+          if (!reason) return;
+          try {
+            await apiFetch(
+              `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}/resolve-not-registered`,
+              { method: "POST", body: JSON.stringify({ reason }) },
+            );
+            toast(HomezI18n.t("lw.notreg_success"), "success");
+            await lwRenderResultsStep(content);
+          } catch (err) {
+            resultEl.textContent = err.message || HomezI18n.t("lw.notreg_failed");
+            resultEl.classList.add("field-error");
           }
         }));
       });

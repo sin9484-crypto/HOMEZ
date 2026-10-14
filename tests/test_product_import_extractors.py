@@ -126,6 +126,17 @@ class GenericExtractorTests(unittest.TestCase):
         )
         self.assertTrue(page.images[0].declared_representative)
 
+    def test_decoration_images_and_size_variants_are_not_listed_as_product_photos(self):
+        # 실제 CJ The Market(2026-10-14): 푸터 SVG 4개와 같은 사진의 webp 변형이 후보에 섞였다.
+        html = (
+            "<meta property='og:image' content='https://img.example.test/p/987/main.jpg'>"
+            "<img src='https://img.example.test/p/987/main.jpg?SF=webp&RS=550'>"
+            "<img src='https://img.example.test/p/107/other.jpg?SF=webp&RS=1080'>"
+            "<img src='/the/_nuxt/img_footer_ccm_pc1.abc.svg'><img src='/assets/logo.png'><img src='/a/icon-cart.png'>"
+        )
+        urls = [i.url for i in extract_generic(html, GENERIC_URL).images]
+        self.assertEqual(urls, ["https://img.example.test/p/987/main.jpg", "https://img.example.test/p/107/other.jpg?SF=webp&RS=1080"])
+
     def test_falls_back_to_meta_and_title_when_there_is_no_json_ld(self):
         page = extract_generic(
             "<title>제목만</title><meta property='og:description' content='설명'>"

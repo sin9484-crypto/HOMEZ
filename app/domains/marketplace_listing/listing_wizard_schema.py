@@ -526,6 +526,14 @@ class WizardDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ResolveNotRegisteredRequest(BaseModel):
+    """결과불명 제출을 "쿠팡에 등록되지 않음"으로 정정할 때의 운영자 사유(감사 기록에 남는다)."""
+
+    reason: str = Field(min_length=1, max_length=300)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class WizardRestoreRequest(BaseModel):
 
     expected_version: int

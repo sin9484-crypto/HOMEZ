@@ -8,8 +8,8 @@ File : tests/test_console_no_browser_popups.py
 
 내장 패널·임베디드 창에서는 이 팝업이 보이지 않아 버튼이 무반응이 되었다(쿠팡 전송·상세설명 구성·위저드 삭제에서
 실제로 겪음). 같은 용도의 앱 안 확인창 도우미(askConfirm / askText)로 바꾼 것이 유지되는지 검사한다.
-예외: Naver 자격증명(Client ID/Secret) 입력 prompt 2곳은 비밀값을 화면에 그대로 보이는 입력칸에 넣을 수 없어
-별도 마스킹 입력창이 생길 때까지 남긴다 — 그 외에 새로 늘어나면 실패한다.
+(2026-10-14 후속) Naver 자격증명 입력도 마스킹 전용 창(askCredentialPair)으로 바꿨으므로 예외 없이
+window.confirm / window.prompt가 한 곳도 없어야 한다.
 외부 호출·DB 없음.
 =========================================================
 """
@@ -25,12 +25,6 @@ from pathlib import Path
 
 CONSOLE = (Path(__file__).resolve().parents[1] / "app" / "web" / "console.js").read_text(encoding="utf-8")
 
-ALLOWED_PROMPT_KEYS = (
-    "candidate_detail.naver_credential_client_id_prompt",
-    "candidate_detail.naver_credential_client_secret_prompt",
-)
-
-
 def _code_lines():
     for number, line in enumerate(CONSOLE.splitlines(), start=1):
         if line.lstrip().startswith("//"):
@@ -44,12 +38,9 @@ class NoBrowserPopupTests(unittest.TestCase):
         offenders = [n for n, line in _code_lines() if "window.confirm(" in line]
         self.assertEqual(offenders, [], f"window.confirm 사용 줄: {offenders}")
 
-    def test_window_prompt_is_only_used_for_the_naver_credential_secret_entry(self):
-        offenders = [
-            (n, line.strip()) for n, line in _code_lines()
-            if "window.prompt(" in line and not any(key in line for key in ALLOWED_PROMPT_KEYS)
-        ]
-        self.assertEqual(offenders, [])
+    def test_no_window_prompt_remains(self):
+        offenders = [n for n, line in _code_lines() if "window.prompt(" in line]
+        self.assertEqual(offenders, [], f"window.prompt 사용 줄: {offenders}")
 
     def test_helpers_exist_and_use_the_in_app_dialog(self):
         self.assertIn("async function askConfirm(", CONSOLE)

@@ -2015,6 +2015,27 @@
   </form>
 </dialog>
 
+<!-- ============ 비밀값 입력 Dialog (Client ID/Secret) — window.prompt 대체, 비밀값은 마스킹 ============ -->
+<dialog id="credential-dialog" class="confirm-dialog" aria-labelledby="credential-title">
+  <form method="dialog" autocomplete="off">
+    <h2 id="credential-title"></h2>
+    <p id="credential-body" class="stat-sub"></p>
+    <label class="field">
+      <span class="field-label" id="credential-id-label"></span>
+      <input type="text" id="credential-id" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span class="field-label" id="credential-secret-label"></span>
+      <input type="password" id="credential-secret" autocomplete="new-password" spellcheck="false">
+    </label>
+    <p class="field-error" id="credential-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="credential-cancel" class="btn btn-ghost" data-i18n="dialog.confirm.cancel">취소</button>
+      <button type="button" id="credential-ok" class="btn btn-primary" data-i18n="candidate_detail.credential_dialog_save">저장</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- ============ 재인증(recent-auth) 프롬프트 — 고위험 AI 업무 제안 승인 전용 ============ -->
 <dialog id="recent-auth-dialog" class="confirm-dialog" aria-labelledby="ra-title">
   <form method="dialog">
