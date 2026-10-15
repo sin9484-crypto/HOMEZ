@@ -289,6 +289,11 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 10.5 12 4l9 6.5M5 9.5V20h14V9.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span data-i18n="nav.dashboard">대시보드</span>
       </button>
+      <!-- 2026-10-15 UI 개선 2단계 — 여러 화면의 할 일을 한 목록으로 모은 "전체 업무"(읽기 전용, 새 판정 없음). -->
+      <button class="nav-item" data-view="work-queue" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.work_queue">전체 업무</span>
+      </button>
     </div>
 
     <div class="nav-group">
@@ -716,6 +721,21 @@
         </div>
         <div id="aip-detail-body">
           <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 전체 업무(2026-10-15 UI 개선 2단계) -->
+      <section id="view-work-queue" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.work_queue">전체 업무</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="work-queue" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="field-hint" data-i18n="wq.desc">주문 예외·정산 차이·AI 제안·운영 우선순위·진행 중인 등록 작업을 한곳에 모았습니다. 새로 판단하지 않고 각 화면의 현재 상태를 그대로 보여 줍니다.</p>
+        <div id="wq-notice" role="status"></div>
+        <div id="wq-chips" class="wq-chips" role="group" data-i18n-attr="aria-label:wq.chips_aria"></div>
+        <div class="wq-layout">
+          <div class="table-wrap" id="wq-table-wrap" aria-live="polite"><p class="loading-text" data-i18n="common.loading">불러오는 중…</p></div>
+          <aside id="wq-panel" class="wq-panel" data-i18n-attr="aria-label:wq.panel_title" hidden></aside>
         </div>
       </section>
 
@@ -1180,7 +1200,10 @@
             </div>
             <button class="btn btn-secondary" id="lw-bulk-delete-all-btn" hidden></button>
           </div>
-          <div class="table-wrap" id="lw-list-table-wrap" aria-live="polite"></div>
+          <div class="lw-list-layout" id="lw-list-layout">
+            <div class="table-wrap" id="lw-list-table-wrap" aria-live="polite"></div>
+            <aside id="lw-progress-panel" class="lw-progress-panel" data-i18n-attr="aria-label:lw.list_progress_title" hidden></aside>
+          </div>
         </div>
 
         <!-- 2026-10-14 URL 상품 가져오기 — URL 검색 → 기재 내용 확인 → 수익 계산 → 후보·위저드 초안 생성 -->
@@ -1197,22 +1220,31 @@
           <div id="lw-ui-result" hidden></div>
         </div>
 
-        <div id="lw-wizard-panel" class="detail-panel" hidden>
-          <div class="sc-wizard-progress-track">
-            <div class="sc-wizard-progress-fill" id="lw-progress-fill"></div>
-          </div>
-          <div class="lw-step-row">
-            <span class="sc-wizard-step-indicator" id="lw-step-indicator"></span>
-            <span class="pill" id="lw-status-pill"></span>
-            <span class="lw-save-status" id="lw-save-status" aria-live="polite"></span>
-          </div>
+        <div id="lw-wizard-panel" class="detail-panel lw-shell" hidden>
+          <!-- 2026-10-15 UI 개선 4단계 — 상품 머리글·왼쪽 단계 목록·오른쪽 확인 패널은 화면 표시용이며 저장·승인 동작은 아래 기존 요소가 그대로 맡는다. -->
+          <div class="lw-product-bar" id="lw-product-bar"></div>
+          <div class="lw-shell-body">
+            <nav class="lw-stepper" id="lw-stepper" data-i18n-attr="aria-label:lw.stepper_aria"></nav>
+            <div class="lw-shell-main">
+              <div class="sc-wizard-progress-track">
+                <div class="sc-wizard-progress-fill" id="lw-progress-fill"></div>
+              </div>
+              <div class="lw-step-row">
+                <span class="sc-wizard-step-indicator" id="lw-step-indicator"></span>
+                <span class="pill" id="lw-status-pill"></span>
+                <span class="lw-save-status" id="lw-save-status" aria-live="polite"></span>
+              </div>
 
-          <div id="lw-step-content"></div>
+              <div id="lw-step-content"></div>
 
-          <div class="lw-wizard-nav">
-            <button class="btn btn-secondary" id="lw-prev-btn" data-i18n="lw.prev_btn">이전</button>
-            <button class="btn btn-primary" id="lw-next-btn" data-i18n="lw.next_btn">다음</button>
-            <button class="btn" id="lw-close-btn" data-i18n="lw.close_btn">목록으로</button>
+              <div class="lw-wizard-nav">
+                <button class="btn btn-secondary" id="lw-prev-btn" data-i18n="lw.prev_btn">이전</button>
+                <button class="btn" id="lw-close-btn" data-i18n="lw.close_btn">목록으로</button>
+                <button class="btn btn-secondary" id="lw-save-draft-btn" data-i18n="lw.save_draft_btn" hidden>초안 저장</button>
+                <button class="btn btn-primary" id="lw-next-btn" data-i18n="lw.next_btn">저장 후 다음</button>
+              </div>
+            </div>
+            <aside class="lw-check-panel" id="lw-check-panel" data-i18n-attr="aria-label:lw.check_panel_title"></aside>
           </div>
         </div>
       </section>

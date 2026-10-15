@@ -2734,3 +2734,134 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
   .nav-section-btn span { display: block; font-size: 11px; line-height: 1.2; }
   .nav-legacy-toggle { display: none; }
 }
+
+
+/* 2026-10-15 UI 개선 3단계 — 등록 목록(사진·상품명·n/10·확인사항)과 오른쪽 등록 진행 패널 */
+.lw-list-layout { display: block; }
+.lw-list-layout.panel-open { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.lw-product-cell { min-width: 220px; }
+.lw-product-link { display: flex; align-items: center; gap: 10px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; color: inherit; }
+.lw-product-link:focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; border-radius: 6px; }
+.lw-product-text { display: flex; flex-direction: column; min-width: 0; }
+.lw-product-text strong { overflow-wrap: anywhere; }
+.lw-product-text small { color: var(--text-faint); }
+.lw-thumb { flex: none; width: 48px; height: 48px; border-radius: 6px; background: #EEF1F4; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); }
+.lw-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lw-thumb-empty { background: repeating-linear-gradient(45deg, #F3F5F7, #F3F5F7 6px, #EBEEF1 6px, #EBEEF1 12px); }
+.lw-step-cell strong { font-variant-numeric: tabular-nums; margin-right: 4px; }
+tr[data-lw-row] { cursor: pointer; }
+tr.lw-row-selected { background: #EAF6F0; }
+.lw-attn { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin: 1px 2px 1px 0; }
+.lw-attn > span:first-child { font-weight: 700; }
+.lw-attn-warn { background: #FFF1E0; color: #8A5200; }
+.lw-attn-info { background: #E6F0FF; color: #1D4F9E; }
+.lw-progress-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: sticky; top: 8px; }
+.lw-progress-panel[hidden] { display: none; }
+.lw-prog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.lw-prog-head h3 { margin: 0 0 8px; font-size: 16px; overflow-wrap: anywhere; }
+.lw-prog-product { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.lw-prog-product .lw-thumb { width: 72px; height: 72px; }
+.lw-prog-count { color: var(--ok); font-variant-numeric: tabular-nums; margin-left: 6px; }
+.lw-prog-steps { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lw-prog-step { display: flex; align-items: center; gap: 10px; color: var(--text-muted); }
+.lw-prog-mark { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; background: #E1E5EA; color: var(--text-muted); flex: none; }
+.lw-prog-done .lw-prog-mark { background: var(--ok); color: #fff; }
+.lw-prog-done { color: var(--text); }
+.lw-prog-current { color: var(--ok); font-weight: 700; }
+.lw-prog-current .lw-prog-mark { background: #fff; color: var(--ok); border: 2px solid var(--ok); }
+.lw-prog-attn { margin-bottom: 12px; }
+@media (max-width: 1100px) {
+  .lw-list-layout.panel-open { grid-template-columns: 1fr; }
+  .lw-progress-panel { position: static; }
+}
+
+
+/* 2026-10-15 UI 개선 2단계 — 전체 업무: 요약 칩 + 표 + 오른쪽 선택 업무 패널 */
+.wq-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
+.wq-chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: 14px; }
+.wq-chip strong { font-variant-numeric: tabular-nums; }
+.wq-chip-check strong { color: #C62828; }
+.wq-chip-approval strong { color: #B26A00; }
+.wq-chip-progress strong { color: #1D4F9E; }
+.wq-chip[aria-pressed="true"] { border-color: var(--ok); background: #EAF6F0; }
+.wq-chip:focus-visible, .wq-table tr:focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+.wq-layout { display: block; }
+.wq-layout.panel-open { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.wq-table tr[data-wq-key] { cursor: pointer; }
+.wq-table tr.wq-row-selected { background: #EAF6F0; }
+.wq-target { display: flex; align-items: center; gap: 10px; }
+.wq-target-text { display: flex; flex-direction: column; min-width: 0; }
+.wq-target-text small { color: var(--text-faint); }
+.wq-state { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.wq-state-check { background: #FDE8E8; color: #B3261E; }
+.wq-state-approval { background: #FFF1D6; color: #8A5200; }
+.wq-state-progress { background: #E1ECFF; color: #1D4F9E; }
+.wq-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: sticky; top: 8px; }
+.wq-panel[hidden] { display: none; }
+.wq-panel-head { display: flex; justify-content: space-between; align-items: center; }
+.wq-panel-head h3 { margin: 0; font-size: 14px; color: var(--text-muted); }
+.wq-panel h4 { margin: 8px 0; font-size: 17px; overflow-wrap: anywhere; }
+.wq-detail { color: var(--text-muted); overflow-wrap: anywhere; }
+.wq-facts { margin: 12px 0; }
+.wq-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.wq-facts dt { color: var(--text-muted); }
+.wq-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .wq-layout.panel-open { grid-template-columns: 1fr; }
+  .wq-panel { position: static; }
+}
+
+
+/* 2026-10-15 UI 개선 4단계 — 등록 화면: 상품 머리글 + 왼쪽 단계 목록 + 오른쪽 확인 패널 + 하단 고정 버튼 + 5단계 탭 */
+.lw-shell { padding: 0; }
+.lw-product-bar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.lw-product-bar .lw-thumb { width: 56px; height: 56px; }
+.lw-product-bar-text { display: flex; flex-direction: column; min-width: 0; }
+.lw-product-bar-text strong { font-size: 17px; overflow-wrap: anywhere; }
+.lw-shell-body { display: grid; grid-template-columns: 200px minmax(0, 1fr) 280px; gap: 0; align-items: start; }
+.lw-stepper { padding: 14px 10px; border-right: 1px solid var(--border); position: sticky; top: 8px; }
+.lw-stepper ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.lw-stepper-item > button, .lw-stepper-static { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 8px; background: none; border: 0; text-align: left; color: var(--text-muted); font-size: 14px; }
+.lw-stepper-item > button { cursor: pointer; }
+.lw-stepper-item > button:hover { background: #F0F4F5; }
+.lw-stepper-item > button:focus-visible { outline: 2px solid var(--ok); outline-offset: 1px; }
+.lw-stepper-item.is-done > button, .lw-stepper-item.is-done .lw-stepper-static { color: var(--text); }
+.lw-stepper-item.is-done .lw-prog-mark { background: var(--ok); color: #fff; }
+.lw-stepper-item.is-current .lw-stepper-static { background: #EAF6F0; color: var(--ok); font-weight: 700; }
+.lw-stepper-item.is-current .lw-prog-mark { background: var(--ok); color: #fff; }
+.lw-shell-main { padding: 16px; min-width: 0; }
+.lw-check-panel { padding: 16px; border-left: 1px solid var(--border); position: sticky; top: 8px; }
+.lw-check-panel h3 { margin: 0 0 8px; font-size: 16px; }
+.lw-check-panel h4 { margin: 16px 0 6px; font-size: 14px; }
+.lw-check-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lw-check-list li { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; background: #EEF3FF; font-size: 13px; overflow-wrap: anywhere; }
+.lw-check-list li.is-blocking { background: #FFF1E0; color: #8A5200; }
+.lw-check-list li > span:first-child { font-weight: 700; flex: none; }
+.lw-source-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted); }
+.lw-source-chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-left: 6px; margin-right: 6px; background: #E8ECF0; color: var(--text-muted); }
+.lw-source-chip[hidden] { display: none; }
+.lw-source-default { background: #E1ECFF; color: #1D4F9E; }
+.lw-source-manual { background: #FFF1D6; color: #8A5200; }
+.lw-source-supplier { background: #E4F3EA; color: #1E6B47; }
+.lw-wizard-nav { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 10px 0; margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; z-index: 5; }
+.lw-wizard-nav #lw-save-draft-btn { margin-left: auto; }
+.lw-fulfillment-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 12px 0; flex-wrap: wrap; }
+.lw-fulfillment-tabs button { padding: 10px 14px; background: none; border: 0; border-bottom: 3px solid transparent; cursor: pointer; color: var(--text-muted); font-size: 14px; }
+.lw-fulfillment-tabs button[aria-selected="true"] { color: var(--ok); border-bottom-color: var(--ok); font-weight: 700; }
+.lw-fulfillment-tabs button.has-error::after { content: "!"; margin-left: 6px; color: #fff; background: #D93025; border-radius: 50%; padding: 0 6px; font-size: 11px; }
+.lw-fulfillment-tabs button:focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+.lw-tab-off { display: none !important; }
+@media (max-width: 1100px) {
+  .lw-shell-body { grid-template-columns: 170px minmax(0, 1fr); }
+  .lw-check-panel { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); position: static; }
+}
+@media (max-width: 760px) {
+  .lw-shell-body { grid-template-columns: 1fr; }
+  .lw-stepper { position: static; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .lw-stepper ol { flex-direction: row; }
+  .lw-stepper-item > button, .lw-stepper-static { white-space: nowrap; }
+}
+
+
+/* 2026-10-15 UI 개선 5단계 — 목록 위 상태별 건수 칩(전체 업무 칩과 같은 모양) */
+.detail-panel > .wq-chips, .wq-chips + .detail-panel { margin-top: 0; }

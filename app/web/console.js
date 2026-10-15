@@ -6979,6 +6979,7 @@
     "ai-proposals": loadAiProposals,
     "ai-proposal-detail": loadAiProposalDetail,
     "operations-priorities": loadOperationsPriorities,
+    "work-queue": loadWorkQueue,
     "order-exceptions": loadOrderExceptions,
     "settlement-differences": loadSettlementDifferences,
     "retail-purchase": loadRetailPurchase,
@@ -7006,6 +7007,232 @@
     guides: loadGuides,
   };
 
+  // ---- 오늘 할 일 > 전체 업무 (2026-10-15, UI 개선 시안 2단계) ----
+  // 주문 예외·정산 차이·AI 제안·운영 우선순위·진행 중인 등록 작업을 한 목록으로 모아 "확인 필요 / 승인 대기 / 처리 중"으로
+  // 보여 준다. 새 판정을 만들지 않는다 — 각 원본이 이미 계산한 값을 읽어 와 같은 말로 옮길 뿐이고, 원본 하나가 실패해도
+  // 나머지는 보여 주며 어느 원본을 못 읽었는지 알린다. 데이터가 없으면 비어 있다고 말하고 채워 넣지 않는다.
+  const WQ_STATE_ORDER = { CHECK: 0, APPROVAL: 1, PROGRESS: 2 };
+  const WQ_URGENCY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  // 운영 우선순위 중 아래 분류는 주문 예외·정산 차이 원본을 직접 읽어 항목별로 보여 주므로 건수 한 줄은 중복이다.
+  const WQ_PRIORITY_DUPLICATES = new Set(["ORDER_SHIPMENT_RETURN_EXCEPTIONS", "SETTLEMENT_DIFFERENCES"]);
+  const WQ_PRIORITY_VIEWS = { PRODUCT_INPUT_REQUIRED: "candidates" };
+  const WQ_OPEN_WIZARD_STATUS = {
+    DRAFT: "PROGRESS", NEEDS_CORRECTION: "CHECK", READY_FOR_APPROVAL: "APPROVAL", APPROVED: "PROGRESS",
+    FAILED: "CHECK", PARTIALLY_SUCCEEDED: "CHECK", SUBMITTING: "PROGRESS", VALIDATING: "PROGRESS",
+  };
+  const WQ_WIZARD_WARN = new Set(["NO_IMAGE_SELECTED", "NO_CHANNEL", "NO_ECONOMICS", "NEEDS_CORRECTION", "SUBMIT_FAILED", "PARTIALLY_SUCCEEDED"]);
+  const wqState = { items: [], filter: null, selectedKey: null, failed: [] };
+
+  function wqUrgency(value) {
+    return Object.prototype.hasOwnProperty.call(WQ_URGENCY_ORDER, value) ? value : "LOW";
+  }
+
+  // 원본 응답 → 업무 항목. 원본이 null이면(못 읽음) 그 종류는 항목 없음.
+  function wqBuildItems(src) {
+    const items = [];
+    ((src.exceptions && src.exceptions.exceptions) || []).forEach((x, i) => items.push({
+      key: `exception:${x.target_entity || i}:${x.exception_type || i}`, kind: "exception", state: "CHECK",
+      urgency: wqUrgency(x.urgency), title: x.exception_type || x.recommended_action || "", detail: x.evidence || "",
+      target: x.target_entity || "", elapsedHours: x.elapsed_hours, product: null,
+      next: { view: "order-exceptions", labelKey: "wq.next_exception" },
+    }));
+    ((src.differences && src.differences.differences) || []).forEach((x, i) => items.push({
+      key: `difference:${x.target_entity || i}:${x.difference_type || x.exception_type || i}`, kind: "difference", state: "CHECK",
+      urgency: wqUrgency(x.urgency), title: x.difference_type || x.exception_type || x.recommended_action || "", detail: x.evidence || "",
+      target: x.target_entity || "", elapsedHours: x.elapsed_hours, product: null,
+      next: { view: "settlement-differences", labelKey: "wq.next_difference" },
+    }));
+    (Array.isArray(src.proposals) ? src.proposals : []).forEach((r) => {
+      if (!AIP_OPEN_STATUSES.has(r.status)) return;
+      items.push({
+        key: `proposal:${r.id}`, kind: "proposal", state: r.status === "APPROVED" ? "PROGRESS" : "APPROVAL", urgency: "MEDIUM",
+        title: r.action_type || "", detail: aipStatusLabel(r.status), target: `#${r.id}`, product: null,
+        next: { view: "ai-proposal-detail", opts: { id: Number(r.id) }, labelKey: "wq.next_proposal" },
+      });
+    });
+    ((src.priorities && src.priorities.items) || []).forEach((p) => {
+      if (WQ_PRIORITY_DUPLICATES.has(p.category)) return;
+      items.push({
+        key: `priority:${p.category}`, kind: "priority", state: "CHECK", urgency: wqUrgency(p.urgency), title: p.label || p.category,
+        detail: "", target: "", product: null,
+        next: { view: WQ_PRIORITY_VIEWS[p.category] || "operations-priorities", labelKey: "wq.next_priority" },
+      });
+    });
+    (Array.isArray(src.wizards) ? src.wizards : []).forEach((w) => {
+      const base = WQ_OPEN_WIZARD_STATUS[w.status];
+      if (!base || w.deleted_at) return;
+      const warn = (w.attention || []).some((c) => WQ_WIZARD_WARN.has(c));
+      items.push({
+        key: `wizard:${w.id}`, kind: "wizard", state: base === "PROGRESS" && warn ? "CHECK" : base, urgency: warn ? "MEDIUM" : "LOW",
+        title: "", detail: (w.attention || []).map(lwAttentionLabel).join(" · "), target: `#${w.id}`,
+        product: { name: w.product_name || `#${w.id}`, thumbAssetId: w.thumbnail_asset_id || null, supplier: w.supplier_label || "" },
+        stepText: w.step_number ? `${w.step_number} / ${w.step_total || 10}` : "", stepKey: String(w.current_step || "").toLowerCase(),
+        next: { view: "listing-wizard", wizardId: w.id, labelKey: "wq.next_wizard" },
+      });
+    });
+    return items.sort((a, b) =>
+      (WQ_STATE_ORDER[a.state] - WQ_STATE_ORDER[b.state]) || (WQ_URGENCY_ORDER[a.urgency] - WQ_URGENCY_ORDER[b.urgency]));
+  }
+
+  function wqCounts(items) {
+    const counts = { CHECK: 0, APPROVAL: 0, PROGRESS: 0 };
+    items.forEach((i) => { counts[i.state] += 1; });
+    return counts;
+  }
+
+  function wqTitle(item) {
+    if (item.kind === "wizard") {
+      return HomezI18n.t("wq.wizard_title", { step: item.stepText || "?" });
+    }
+    return item.title || HomezI18n.t(`wq.kind.${item.kind}`);
+  }
+
+  function wqStateChip(state) {
+    const klass = { CHECK: "wq-state-check", APPROVAL: "wq-state-approval", PROGRESS: "wq-state-progress" }[state];
+    return `<span class="wq-state ${klass}">${escapeHtml(HomezI18n.t(`wq.state_${state.toLowerCase()}`))}</span>`;
+  }
+
+  function wqTargetHtml(item) {
+    if (item.product) {
+      return `<span class="wq-target">${lwThumbHtml({ thumbnail_asset_id: item.product.thumbAssetId })}<span class="wq-target-text"><strong>${escapeHtml(item.product.name)}</strong><small>${escapeHtml(item.product.supplier || item.target)}</small></span></span>`;
+    }
+    return `<span class="wq-target-text"><strong>${escapeHtml(item.target || "—")}</strong></span>`;
+  }
+
+  function wqPanelHtml(item) {
+    const urgency = AIP_URGENCY_LABEL_KEYS[item.urgency] ? HomezI18n.t(AIP_URGENCY_LABEL_KEYS[item.urgency]) : item.urgency;
+    const facts = [
+      [HomezI18n.t("wq.fact_kind"), HomezI18n.t(`wq.kind.${item.kind}`)],
+      [HomezI18n.t("wq.fact_urgency"), urgency],
+      item.target ? [HomezI18n.t("wq.fact_target"), item.target] : null,
+      item.elapsedHours !== undefined && item.elapsedHours !== null ? [HomezI18n.t("wq.fact_elapsed"), HomezI18n.t("wq.hours", { count: item.elapsedHours })] : null,
+      item.stepText ? [HomezI18n.t("wq.fact_step"), `${item.stepText} ${lwStepPlainLabel(item.stepKey)}`] : null,
+    ].filter(Boolean);
+    return `
+      <div class="wq-panel-head"><h3>${escapeHtml(HomezI18n.t("wq.panel_title"))}</h3>
+        <button type="button" class="icon-btn" data-wq-close aria-label="${escapeHtml(HomezI18n.t("wq.panel_close"))}">×</button></div>
+      <h4>${escapeHtml(wqTitle(item))}</h4>
+      ${item.product ? `<div class="lw-prog-product">${lwThumbHtml({ thumbnail_asset_id: item.product.thumbAssetId })}<div><strong>${escapeHtml(item.product.name)}</strong><div class="stat-sub">${escapeHtml(item.product.supplier || "")}</div></div></div>` : ""}
+      <div>${wqStateChip(item.state)}</div>
+      ${item.detail ? `<p class="wq-detail">${escapeHtml(item.detail)}</p>` : ""}
+      <dl class="wq-facts">${facts.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>
+      <button type="button" class="btn btn-primary btn-block" data-wq-open>${escapeHtml(HomezI18n.t(item.next.labelKey))}</button>`;
+  }
+
+  function wqOpenItem(item) {
+    if (item.next.wizardId) lwPendingOpenWizardId = item.next.wizardId;
+    currentSectionId = currentSectionId || "today";
+    navigateTo(item.next.view, item.next.opts || {});
+  }
+
+  function wqShowPanel(key) {
+    const panel = el("wq-panel");
+    const layout = panel && panel.parentElement;
+    const item = wqState.items.find((i) => i.key === key);
+    document.querySelectorAll("#wq-table-wrap tr.wq-row-selected").forEach((tr) => tr.classList.remove("wq-row-selected"));
+    if (!panel) return;
+    if (!item) {
+      wqState.selectedKey = null;
+      panel.hidden = true;
+      panel.innerHTML = "";
+      if (layout) layout.classList.remove("panel-open");
+      return;
+    }
+    wqState.selectedKey = key;
+    panel.innerHTML = wqPanelHtml(item);
+    panel.hidden = false;
+    if (layout) layout.classList.add("panel-open");
+    const tr = Array.from(document.querySelectorAll("#wq-table-wrap tr[data-wq-key]")).find((r) => r.dataset.wqKey === key);
+    if (tr) tr.classList.add("wq-row-selected");
+    panel.querySelector("[data-wq-close]").addEventListener("click", () => wqShowPanel(null));
+    panel.querySelector("[data-wq-open]").addEventListener("click", () => wqOpenItem(item));
+    lwHydrateThumbs(panel);
+  }
+
+  function wqRender() {
+    const wrap = el("wq-table-wrap");
+    const counts = wqCounts(wqState.items);
+    const chips = el("wq-chips");
+    chips.innerHTML = ["CHECK", "APPROVAL", "PROGRESS"].map((state) => `
+      <button type="button" class="wq-chip wq-chip-${state.toLowerCase()}" data-wq-filter="${state}" aria-pressed="${wqState.filter === state ? "true" : "false"}">
+        ${escapeHtml(HomezI18n.t(`wq.chip_${state.toLowerCase()}`))} <strong>${counts[state]}</strong></button>`).join("");
+    chips.querySelectorAll("[data-wq-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        wqState.filter = wqState.filter === btn.dataset.wqFilter ? null : btn.dataset.wqFilter;
+        wqRender();
+      });
+    });
+
+    const visible = wqState.filter ? wqState.items.filter((i) => i.state === wqState.filter) : wqState.items;
+    const notice = el("wq-notice");
+    notice.innerHTML = wqState.failed.length
+      ? `<div class="banner banner-info">${escapeHtml(HomezI18n.t("wq.partial_notice", { sources: wqState.failed.map((k) => HomezI18n.t(`wq.src.${k}`)).join(", ") }))}</div>` : "";
+
+    if (!visible.length) {
+      wrap.innerHTML = `<p class="empty-text"><strong>${escapeHtml(HomezI18n.t("wq.empty_title"))}</strong><br>${escapeHtml(HomezI18n.t("wq.empty_sub"))}</p>`;
+      wqShowPanel(null);
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="wq-table">
+        <thead><tr>
+          <th>${escapeHtml(HomezI18n.t("wq.col_task"))}</th><th>${escapeHtml(HomezI18n.t("wq.col_target"))}</th>
+          <th>${escapeHtml(HomezI18n.t("wq.col_state"))}</th><th>${escapeHtml(HomezI18n.t("wq.col_next"))}</th>
+        </tr></thead>
+        <tbody>${visible.map((item) => `
+          <tr data-wq-key="${escapeHtml(item.key)}" tabindex="0">
+            <td><strong>${escapeHtml(wqTitle(item))}</strong><div class="stat-sub">${escapeHtml(item.detail || HomezI18n.t(`wq.kind.${item.kind}`))}</div></td>
+            <td>${wqTargetHtml(item)}</td>
+            <td>${wqStateChip(item.state)}</td>
+            <td><button type="button" class="link-btn" data-wq-next="${escapeHtml(item.key)}">${escapeHtml(HomezI18n.t(item.next.labelKey))} ›</button></td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    wrap.querySelectorAll("tr[data-wq-key]").forEach((tr) => {
+      const select = () => wqShowPanel(tr.dataset.wqKey);
+      tr.addEventListener("click", (event) => {
+        if (event.target.closest("[data-wq-next]")) return;
+        select();
+      });
+      tr.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target === tr) { event.preventDefault(); select(); }
+      });
+    });
+    wrap.querySelectorAll("[data-wq-next]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const item = wqState.items.find((i) => i.key === btn.dataset.wqNext);
+        if (item) wqOpenItem(item);
+      });
+    });
+    lwHydrateThumbs(wrap);
+    const keep = visible.some((i) => i.key === wqState.selectedKey) ? wqState.selectedKey : visible[0].key;
+    wqShowPanel(keep);
+  }
+
+  async function loadWorkQueue() {
+    const wrap = el("wq-table-wrap");
+    wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+    const sources = {
+      priorities: "/orchestration/priorities", exceptions: "/orders/exception-analysis",
+      differences: "/settlements/difference-analysis", proposals: "/ai-governance/proposed-actions", wizards: "/listing-wizards",
+    };
+    const keys = Object.keys(sources);
+    const settled = await Promise.allSettled(keys.map((k) => apiFetch(sources[k])));
+    const data = {};
+    wqState.failed = [];
+    settled.forEach((result, i) => {
+      if (result.status === "fulfilled") data[keys[i]] = result.value;
+      else { data[keys[i]] = null; wqState.failed.push(keys[i]); }
+    });
+    // 로그인이 풀렸으면(모두 실패) 부분 안내가 아니라 오류로 보여 준다.
+    if (wqState.failed.length === keys.length) {
+      renderErrorState(wrap, settled[0].reason);
+      el("wq-chips").innerHTML = "";
+      return;
+    }
+    wqState.items = wqBuildItems(data);
+    wqRender();
+  }
+
   // ---- 업무 중심 메뉴(2026-10-15, UI 개선 시안) ----
   // 사이드바를 "오늘 할 일 / 상품 / 주문·배송 / 정산·수익 / 분석 / 설정" 6개 업무 메뉴로 보여 주고, 각 업무 안의 화면은
   // 화면 위쪽 탭으로 옮겨 다닌다. 기존 .nav-item 버튼(권한 숨김·가이드 ID·화면 이동의 기준)은 그대로 두고, 이 메뉴는
@@ -7015,7 +7242,7 @@
       id: "today", labelKey: "nav.section_today",
       icon: "M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zm3 5h8M8 13h8M8 17h5",
       tabs: [
-        ["overview", "nav.dashboard"], ["ai-proposals", "nav.ai_proposals"],
+        ["work-queue", "nav.work_queue"], ["overview", "nav.dashboard"], ["ai-proposals", "nav.ai_proposals"],
         ["operations-priorities", "nav.operations_priorities"], ["order-exceptions", "nav.order_exceptions"],
         ["settlement-differences", "nav.settlement_differences"],
       ],
@@ -7340,6 +7567,7 @@
     el("lw-csv-btn").addEventListener("click", lwDownloadCsv);
     el("lw-prev-btn").addEventListener("click", lwPrevStep);
     el("lw-next-btn").addEventListener("click", lwHandleNext);
+    el("lw-save-draft-btn").addEventListener("click", lwHandleSaveDraft);
     el("lw-close-btn").addEventListener("click", lwCloseWizard);
     el("lw-show-archived-toggle").addEventListener("change", (e) => {
       lwListState.includeArchived = e.target.checked;
@@ -9337,7 +9565,9 @@
   // 2026-08-28 "대기 상품 정리" — 목록 화면 전용 상태(선택/필터). 필터가
   // 바뀌면(archived 토글) 선택을 초기화한다 — "화면에 보이지 않는
   // 항목이 임의로 선택되지 않게 한다"는 요구를 그대로 구현.
+  let lwPendingOpenWizardId = null; // 다른 화면(전체 업무 등)이 등록 작업을 바로 열어 달라고 맡긴 id
   const lwListState = {
+    panelId: null,
     selectedIds: new Set(),
     includeArchived: false,
     rows: [],
@@ -9807,12 +10037,148 @@
     el("lw-wizard-panel").hidden = true;
     el("lw-list-panel").hidden = false;
     await lwRenderList();
+    if (lwPendingOpenWizardId) {
+      const pendingId = lwPendingOpenWizardId;
+      lwPendingOpenWizardId = null;
+      await lwOpenWizard(pendingId);
+    }
   }
 
   function lwStatusLabel(status) {
     const key = `lw.status.${String(status).toLowerCase()}`;
     const label = HomezI18n.t(key);
     return label === key ? status : label;
+  }
+
+  // ---- 등록 목록 보강(2026-10-15, UI 개선 시안 3단계) ----
+  // 목록에서 "무슨 상품인지" 바로 알아보도록 사진·상품명·공급처·판매채널·단계(n/10)·확인사항을 보이고, 행을 고르면
+  // 오른쪽에 등록 진행 패널을 연다. 값은 서버가 저장된 값에서 계산해 보낸다(없으면 비어 있고 화면도 비운다).
+  const LW_THUMB_CACHE_MAX = 200;
+  const lwThumbCache = new Map(); // 사진 id → 화면용 주소(오래된 것부터 해제)
+  let lwThumbObserver = null;
+  const LW_ATTENTION_WARN = new Set([
+    "NEEDS_CORRECTION", "SUBMIT_FAILED", "PARTIALLY_SUCCEEDED", "NO_IMAGE_SELECTED", "NO_CHANNEL", "NO_ECONOMICS",
+  ]);
+  const LW_STEP_KEYS = ["source", "draft", "media", "channels", "fulfillment", "economics", "precheck", "approval", "execution", "results"];
+
+  function lwThumbCacheSet(assetId, url) {
+    lwThumbCache.set(assetId, url);
+    while (lwThumbCache.size > LW_THUMB_CACHE_MAX) {
+      const oldest = lwThumbCache.keys().next().value;
+      URL.revokeObjectURL(lwThumbCache.get(oldest));
+      lwThumbCache.delete(oldest);
+    }
+  }
+
+  function lwThumbHtml(row) {
+    if (!row.thumbnail_asset_id) return '<span class="lw-thumb lw-thumb-empty" aria-hidden="true"></span>';
+    return `<span class="lw-thumb" data-lw-thumb="${Number(row.thumbnail_asset_id)}" aria-hidden="true"></span>`;
+  }
+
+  // 화면에 보일 때만 사진을 읽는다(목록이 길어도 한꺼번에 내려받지 않는다). 사진이 없거나 권한이 없으면 빈 칸으로 둔다.
+  function lwHydrateThumbs(root) {
+    const paint = async (node) => {
+      if (node.dataset.lwThumbDone) return;
+      node.dataset.lwThumbDone = "1";
+      const assetId = Number(node.dataset.lwThumb);
+      try {
+        let url = lwThumbCache.get(assetId);
+        if (!url) {
+          url = URL.createObjectURL(await apiFetchBlob(`/media-assets/${assetId}/file`));
+          lwThumbCacheSet(assetId, url);
+        }
+        if (node.isConnected) node.innerHTML = `<img src="${url}" alt="">`;
+      } catch (_) { /* 빈 칸 유지 */ }
+    };
+    const nodes = Array.from(root.querySelectorAll("[data-lw-thumb]"));
+    if (typeof IntersectionObserver === "undefined") { nodes.forEach(paint); return; }
+    if (lwThumbObserver) lwThumbObserver.disconnect();
+    lwThumbObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) { lwThumbObserver.unobserve(entry.target); paint(entry.target); }
+      });
+    }, { rootMargin: "120px" });
+    nodes.forEach((node) => lwThumbObserver.observe(node));
+  }
+
+  function lwAttentionLabel(code) {
+    const key = `lw.attention.${String(code).toLowerCase()}`;
+    const label = HomezI18n.t(key);
+    return label === key ? code : label;
+  }
+
+  function lwAttentionChipsHtml(row) {
+    const codes = Array.isArray(row.attention) ? row.attention : [];
+    if (!codes.length) return `<span class="stat-sub">${escapeHtml(HomezI18n.t("lw.list_none_attention"))}</span>`;
+    return codes.map((code) => {
+      const warn = LW_ATTENTION_WARN.has(code);
+      return `<span class="lw-attn ${warn ? "lw-attn-warn" : "lw-attn-info"}"><span aria-hidden="true">${warn ? "!" : "i"}</span>${escapeHtml(lwAttentionLabel(code))}</span>`;
+    }).join(" ");
+  }
+
+  function lwRowProductName(row) {
+    return row.product_name || `#${row.id}`;
+  }
+
+  function lwChannelLabel(row) {
+    const names = (row.channels || []).map((c) => c && c.code).filter(Boolean);
+    return names.length ? names.join(", ") : "—";
+  }
+
+  function lwStepPlainLabel(stepKey) {
+    // "5단계 · 판매 방식" → "판매 방식" (번호는 진행 표시가 따로 보여 준다)
+    return HomezI18n.t(`lw.step.${stepKey}`).replace(/^[^·]*·\s*/, "");
+  }
+
+  function lwProgressPanelHtml(row) {
+    const idx = Math.max(0, (row.step_number || 1) - 1);
+    const finished = row.status === "SUCCEEDED";
+    const steps = LW_STEP_KEYS.map((key, i) => {
+      const state = finished || i < idx ? "done" : (i === idx ? "current" : "todo");
+      return `<li class="lw-prog-step lw-prog-${state}"${state === "current" ? ' aria-current="step"' : ""}>
+        <span class="lw-prog-mark" aria-hidden="true">${state === "done" ? "✓" : i + 1}</span>${escapeHtml(lwStepPlainLabel(key))}</li>`;
+    }).join("");
+    const total = row.step_total || LW_STEP_KEYS.length;
+    const archived = row.status === "ARCHIVED";
+    return `
+      <div class="lw-prog-head">
+        <h3>${escapeHtml(lwRowProductName(row))}</h3>
+        <button type="button" class="icon-btn" data-lw-panel-close aria-label="${escapeHtml(HomezI18n.t("lw.list_close_panel"))}">×</button>
+      </div>
+      <div class="lw-prog-product">${lwThumbHtml(row)}<div>
+        <div class="stat-sub">${escapeHtml(row.supplier_label || "—")} · ${escapeHtml(lwChannelLabel(row))}</div>
+        <span class="pill">${escapeHtml(lwStatusLabel(row.status))}</span>
+      </div></div>
+      <h4>${escapeHtml(HomezI18n.t("lw.list_progress_title"))} <span class="lw-prog-count">${finished ? total : (row.step_number || 1)} / ${total}</span></h4>
+      <ol class="lw-prog-steps">${steps}</ol>
+      <h4>${escapeHtml(HomezI18n.t("lw.list_col_attention"))}</h4>
+      <div class="lw-prog-attn">${lwAttentionChipsHtml(row)}</div>
+      ${archived ? "" : `<button type="button" class="btn btn-primary btn-block" data-lw-panel-open="${row.id}">${escapeHtml(HomezI18n.t("lw.list_open_wizard"))}</button>`}`;
+  }
+
+  function lwShowProgressPanel(rowId) {
+    const panel = el("lw-progress-panel");
+    const layout = el("lw-list-layout");
+    const row = lwListState.rows.find((r) => r.id === rowId);
+    if (!panel || !layout) return;
+    document.querySelectorAll("#lw-list-table-wrap tr.lw-row-selected").forEach((tr) => tr.classList.remove("lw-row-selected"));
+    if (!row) {
+      lwListState.panelId = null;
+      panel.hidden = true;
+      panel.innerHTML = "";
+      layout.classList.remove("panel-open");
+      return;
+    }
+    lwListState.panelId = rowId;
+    panel.innerHTML = lwProgressPanelHtml(row);
+    panel.hidden = false;
+    layout.classList.add("panel-open");
+    const tr = document.querySelector(`#lw-list-table-wrap tr[data-lw-row="${rowId}"]`);
+    if (tr) tr.classList.add("lw-row-selected");
+    panel.querySelector("[data-lw-panel-close]").addEventListener("click", () => lwShowProgressPanel(null));
+    const openBtn = panel.querySelector("[data-lw-panel-open]");
+    if (openBtn) openBtn.addEventListener("click", () => lwOpenWizard(Number(openBtn.dataset.lwPanelOpen)));
+    lwHydrateThumbs(panel);
   }
 
   async function lwRenderList() {
@@ -9837,6 +10203,7 @@
 
       if (!rows.length) {
         wrap.innerHTML = `<p class="empty-text">${HomezI18n.t("lw.list_empty")}</p>`;
+        lwShowProgressPanel(null);
         lwRenderBulkActionBar();
         return;
       }
@@ -9846,9 +10213,11 @@
         <table>
           <thead><tr>
             <th class="lw-header-checkbox-cell">${anyDeletable ? `<input type="checkbox" id="lw-select-all-checkbox" aria-label="${HomezI18n.t("lw.select_all_aria")}">` : ""}</th>
-            <th>ID</th>
-            <th>${HomezI18n.t("lw.list_col_status")}</th>
+            <th>${HomezI18n.t("lw.list_col_product")}</th>
+            <th>${HomezI18n.t("lw.list_col_supplier")}</th>
+            <th>${HomezI18n.t("lw.list_col_channel")}</th>
             <th>${HomezI18n.t("lw.list_col_step")}</th>
+            <th>${HomezI18n.t("lw.list_col_attention")}</th>
             <th>${HomezI18n.t("lw.list_col_updated")}</th>
             <th></th>
           </tr></thead>
@@ -9858,11 +10227,13 @@
             const titleAttr = r.deletable ? "" : ` title="${escapeHtml(r.block_reason || "")}"`;
             const isArchived = r.status === "ARCHIVED";
             return `
-            <tr${isArchived ? ' class="lw-row-archived"' : ""}>
+            <tr data-lw-row="${r.id}"${isArchived ? ' class="lw-row-archived"' : ""}>
               <td class="lw-row-checkbox-cell"><span${titleAttr}><input type="checkbox" class="lw-row-checkbox" data-lw-row-id="${r.id}" aria-label="${HomezI18n.t("lw.select_row_aria")}" ${checked} ${disabledAttr}></span></td>
-              <td>${r.id}</td>
-              <td><span class="pill">${escapeHtml(lwStatusLabel(r.status))}</span></td>
-              <td>${HomezI18n.t(`lw.step.${r.current_step.toLowerCase()}`)}</td>
+              <td class="lw-product-cell"><button type="button" class="lw-product-link" data-lw-select="${r.id}">${lwThumbHtml(r)}<span class="lw-product-text"><strong>${escapeHtml(lwRowProductName(r))}</strong><small>#${r.id}</small></span></button></td>
+              <td>${escapeHtml(r.supplier_label || "—")}</td>
+              <td>${escapeHtml(lwChannelLabel(r))}</td>
+              <td><span class="lw-step-cell"><strong>${r.step_number || "?"} / ${r.step_total || 10}</strong> ${escapeHtml(lwStepPlainLabel(r.current_step.toLowerCase()))}</span> <span class="pill">${escapeHtml(lwStatusLabel(r.status))}</span></td>
+              <td>${lwAttentionChipsHtml(r)}</td>
               <td>${escapeHtml(HomezI18n.formatDate(lsParseUtc(r.updated_at)))}</td>
               <td>${isArchived
                 ? `<button class="btn btn-secondary" data-lw-restore="${r.id}">${HomezI18n.t("lw.restore_btn")}</button>`
@@ -9877,6 +10248,17 @@
       wrap.querySelectorAll("[data-lw-open]").forEach((btn) => {
         btn.addEventListener("click", () => lwOpenWizard(Number(btn.dataset.lwOpen)));
       });
+      wrap.querySelectorAll("[data-lw-select]").forEach((btn) => {
+        btn.addEventListener("click", () => lwShowProgressPanel(Number(btn.dataset.lwSelect)));
+      });
+      wrap.querySelectorAll("tr[data-lw-row]").forEach((tr) => {
+        tr.addEventListener("click", (event) => {
+          if (event.target.closest("button, input, a, label, select")) return;
+          lwShowProgressPanel(Number(tr.dataset.lwRow));
+        });
+      });
+      lwHydrateThumbs(wrap);
+      lwShowProgressPanel(rows.some((r) => r.id === lwListState.panelId) ? lwListState.panelId : null);
       wrap.querySelectorAll("[data-lw-restore]").forEach((btn) => {
         btn.addEventListener("click", () => withButtonGuard(btn, () => lwRestoreWizard(Number(btn.dataset.lwRestore))));
       });
@@ -10514,6 +10896,92 @@
     lwRenderList();
   }
 
+  // ---- 등록 화면 껍데기(2026-10-15, UI 개선 시안 4단계) ----
+  // 상품 머리글, 왼쪽 단계 목록(완료 표시·이동), 오른쪽 "이번 단계 확인" 패널, "초안 저장" 버튼. 모두 화면 표시용이다 —
+  // 저장·승인·전송은 각 단계가 등록한 lwSaveCurrentStep과 기존 버튼이 그대로 맡고, 여기서 새 판단을 만들지 않는다.
+  function lwFurthestStepIndex() {
+    const w = lwState.wizard;
+    if (!w) return 0;
+    if (w.status === "SUCCEEDED") return LW_STEPS.length - 1;
+    return Math.max(0, LW_STEPS.indexOf(w.current_step));
+  }
+
+  function lwStepperHtml() {
+    const viewing = Math.max(0, LW_STEPS.indexOf(lwState.viewingStep));
+    const furthest = lwFurthestStepIndex();
+    const finished = lwState.wizard && lwState.wizard.status === "SUCCEEDED";
+    return `<ol>${LW_STEPS.map((step, i) => {
+      const done = finished || i < furthest;
+      const current = i === viewing;
+      const reachable = i <= furthest && !current;
+      const mark = done ? "✓" : String(i + 1);
+      const label = escapeHtml(lwStepPlainLabel(step.toLowerCase()));
+      const klass = `lw-stepper-item${current ? " is-current" : ""}${done ? " is-done" : ""}`;
+      return `<li class="${klass}">${reachable
+        ? `<button type="button" data-lw-stepper-go="${step}"><span class="lw-prog-mark" aria-hidden="true">${mark}</span>${label}</button>`
+        : `<span class="lw-stepper-static"${current ? ' aria-current="step"' : ""}><span class="lw-prog-mark" aria-hidden="true">${mark}</span>${label}</span>`}</li>`;
+    }).join("")}</ol>`;
+  }
+
+  function lwCheckPanelHtml() {
+    const w = lwState.wizard;
+    const viewingKey = lwState.viewingStep;
+    const idx = Math.max(0, LW_STEPS.indexOf(viewingKey));
+    const result = w && w.validation_result;
+    const issues = result && Array.isArray(result.issues) ? result.issues.filter((i) => i.step === viewingKey) : [];
+    let body;
+    if (issues.length) {
+      body = `<ul class="lw-check-list">${issues.map((issue) => {
+        const message = HomezI18n.t(issue.localized_message_key) || HomezI18n.t("lw.precheck_unknown_issue_fallback", { code: issue.code });
+        return `<li class="${issue.blocking ? "is-blocking" : "is-note"}"><span aria-hidden="true">${issue.blocking ? "!" : "i"}</span>${escapeHtml(message)}</li>`;
+      }).join("")}</ul><p class="stat-sub">${escapeHtml(HomezI18n.t("lw.check_panel_basis"))}</p>`;
+    } else if (result) {
+      body = `<p class="stat-sub">${escapeHtml(HomezI18n.t("lw.check_panel_none"))}</p>`;
+    } else {
+      body = `<p class="stat-sub">${escapeHtml(HomezI18n.t("lw.check_panel_not_run"))}</p>`;
+    }
+    const sourceLegend = viewingKey === "FULFILLMENT" ? `
+      <h4>${escapeHtml(HomezI18n.t("lw.source_title"))}</h4>
+      <ul class="lw-source-legend">
+        <li><span class="lw-source-chip lw-source-supplier">${escapeHtml(HomezI18n.t("lw.source_supplier"))}</span>${escapeHtml(HomezI18n.t("lw.source_supplier_desc"))}</li>
+        <li><span class="lw-source-chip lw-source-default">${escapeHtml(HomezI18n.t("lw.source_default"))}</span>${escapeHtml(HomezI18n.t("lw.source_default_desc"))}</li>
+        <li><span class="lw-source-chip lw-source-manual">${escapeHtml(HomezI18n.t("lw.source_manual"))}</span>${escapeHtml(HomezI18n.t("lw.source_manual_desc"))}</li>
+      </ul>` : "";
+    const next = idx < LW_STEPS.length - 1
+      ? `<h4>${escapeHtml(HomezI18n.t("lw.check_panel_next"))}</h4><p><span class="lw-prog-mark" aria-hidden="true">${idx + 2}</span> ${escapeHtml(lwStepPlainLabel(LW_STEPS[idx + 1].toLowerCase()))}</p>` : "";
+    return `<h3>${escapeHtml(HomezI18n.t("lw.check_panel_title"))}</h3>${body}${sourceLegend}${next}`;
+  }
+
+  function lwRenderShellChrome() {
+    const w = lwState.wizard;
+    const bar = el("lw-product-bar");
+    if (!w || !bar) return;
+    const name = (w.draft && w.draft.product_name) || `#${w.id}`;
+    const firstMedia = Array.isArray(w.selected_media_asset_ids) ? w.selected_media_asset_ids[0] : null;
+    bar.innerHTML = `${lwThumbHtml({ thumbnail_asset_id: firstMedia })}
+      <div class="lw-product-bar-text"><strong>${escapeHtml(name)}</strong><span class="stat-sub">#${w.id} · ${escapeHtml(lwStatusLabel(w.status))}</span></div>`;
+    lwHydrateThumbs(bar);
+
+    const stepper = el("lw-stepper");
+    stepper.innerHTML = lwStepperHtml();
+    stepper.querySelectorAll("[data-lw-stepper-go]").forEach((btn) => {
+      btn.addEventListener("click", () => lwJumpToStep(btn.dataset.lwStepperGo));
+    });
+
+    el("lw-check-panel").innerHTML = lwCheckPanelHtml();
+    // "초안 저장"은 이 단계가 저장 함수를 등록했을 때만 보인다(승인·전송 단계에는 없다).
+    el("lw-save-draft-btn").hidden = typeof lwSaveCurrentStep !== "function";
+  }
+
+  async function lwHandleSaveDraft() {
+    if (typeof lwSaveCurrentStep !== "function" || lwNextInFlight) return;
+    const statusEl = el("lw-save-status");
+    statusEl.textContent = HomezI18n.t("lw.autosave_saving");
+    lwClearAutosaveTimer();
+    const saved = await lwSaveCurrentStep({ silent: true });
+    if (!saved) statusEl.textContent = HomezI18n.t("lw.autosave_not_saved");
+  }
+
   function lwUpdateStepIndicator() {
     const idx = Math.max(0, LW_STEPS.indexOf(lwState.viewingStep));
     el("lw-step-indicator").textContent = HomezI18n.t("lw.step_indicator", {
@@ -10523,6 +10991,7 @@
     el("lw-status-pill").textContent = lwStatusLabel(lwState.wizard.status);
     el("lw-prev-btn").disabled = idx === 0;
     el("lw-next-btn").hidden = idx === LW_STEPS.length - 1;
+    lwRenderShellChrome();
   }
 
   async function lwRenderStep(opts = {}) {
@@ -10636,7 +11105,10 @@
     try {
       if (typeof lwSaveCurrentStep === "function") {
         const ok = await lwSaveCurrentStep();
-        if (!ok) return;
+        if (!ok) {
+          lwSyncFulfillmentTabErrors(el("lw-step-content"));
+          return;
+        }
       } else {
         const idx = LW_STEPS.indexOf(lwState.viewingStep);
         if (idx < LW_STEPS.length - 1) {
@@ -12196,6 +12668,85 @@
     block.addEventListener("click", schedule);
   }
 
+  // ---- 5단계 탭(2026-10-15, UI 개선 4단계): 배송·반품 / 채널 상품정보 / 옵션·고시 ----
+  // 긴 한 장짜리 폼을 세 묶음으로 나눠 보여 준다. 칸을 옮기거나 지우지 않고 각 묶음에 표시만 붙여 보이고 숨긴다 —
+  // 저장은 이전과 같이 화면의 모든 칸을 읽으므로 숨은 탭의 값도 그대로 저장된다. 숨은 탭의 칸에 오류가 있으면 그 탭을 연다.
+  const LW_FULFILLMENT_TABS = [
+    { id: "logistics", labelKey: "lw.tab_logistics" },
+    { id: "product", labelKey: "lw.tab_product" },
+    { id: "options", labelKey: "lw.tab_options" },
+  ];
+
+  function lwFulfillmentTabTargets(block) {
+    const targets = [];
+    const add = (node, tab) => { if (node) targets.push([node, tab]); };
+    add(block.querySelector(".lw-logistics-panel"), "logistics");
+    add(block.querySelector(".lw-coupang-charges-panel"), "logistics");
+    add(block.querySelector(".lw-live-image-panel"), "product");
+    add(block.querySelector(".lw-contents-panel"), "product");
+    add(block.querySelector(".lw-brand-state-panel"), "product");
+    const policy = block.querySelector(".lw-channel-policy-panel");
+    if (policy) {
+      add(policy.querySelector(":scope > .lw-field-grid"), "product");
+      add(policy.querySelector(":scope > .lw-channel-policy-header"), "product");
+      add(policy.querySelector(":scope > .lw-channel-policy-detail"), "product");
+      add(policy.querySelector(":scope > [data-lw-purchase-option-fields]"), "options");
+      add(policy.querySelector(":scope > [data-lw-item-combo-builder]"), "options");
+      add(policy.querySelector(":scope > [data-lw-notice-fields]"), "options");
+      const confirm = policy.querySelector(".lw-policy-notice-confirmed");
+      add(confirm && confirm.closest("label"), "options");
+    }
+    return targets;
+  }
+
+  function lwSetFulfillmentTab(block, tabId) {
+    block.dataset.lwActiveTab = tabId;
+    block.querySelectorAll("[data-lw-tab]").forEach((node) => {
+      node.classList.toggle("lw-tab-off", node.dataset.lwTab !== tabId);
+    });
+    block.querySelectorAll("[data-lw-tab-btn]").forEach((btn) => {
+      const on = btn.dataset.lwTabBtn === tabId;
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+      btn.tabIndex = on ? 0 : -1;
+    });
+  }
+
+  // 숨은 탭에 오류 문구가 있으면 탭 이름에 표시하고, 현재 탭에는 오류가 없다면 그 탭으로 옮긴다.
+  function lwSyncFulfillmentTabErrors(content) {
+    content.querySelectorAll(".lw-channel-block[data-lw-tabs-applied]").forEach((block) => {
+      const withError = new Set();
+      block.querySelectorAll("[data-lw-tab]").forEach((node) => {
+        if (Array.from(node.querySelectorAll(".field-error")).some((e) => e.textContent.trim())) withError.add(node.dataset.lwTab);
+      });
+      block.querySelectorAll("[data-lw-tab-btn]").forEach((btn) => btn.classList.toggle("has-error", withError.has(btn.dataset.lwTabBtn)));
+      if (withError.size && !withError.has(block.dataset.lwActiveTab)) lwSetFulfillmentTab(block, Array.from(withError)[0]);
+    });
+  }
+
+  function lwApplyFulfillmentTabs(content) {
+    content.querySelectorAll(".lw-channel-block").forEach((block) => {
+      if (block.dataset.lwTabsApplied) return;
+      const targets = lwFulfillmentTabTargets(block);
+      if (!targets.length) return;
+      block.dataset.lwTabsApplied = "1";
+      targets.forEach(([node, tab]) => { node.dataset.lwTab = tab; });
+      const present = LW_FULFILLMENT_TABS.filter((t) => targets.some(([, tab]) => tab === t.id));
+      const bar = document.createElement("div");
+      bar.className = "lw-fulfillment-tabs";
+      bar.setAttribute("role", "tablist");
+      bar.innerHTML = present.map((t) => `<button type="button" role="tab" data-lw-tab-btn="${t.id}">${escapeHtml(HomezI18n.t(t.labelKey))}</button>`).join("");
+      // 첫 묶음 요소가 들어 있는 블록의 직계 자식 앞에 막대를 둔다.
+      let anchor = targets[0][0];
+      targets.forEach(([node]) => { if (block.contains(node) && (node.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING)) anchor = node; });
+      while (anchor.parentElement && anchor.parentElement !== block) anchor = anchor.parentElement;
+      block.insertBefore(bar, anchor);
+      bar.querySelectorAll("[data-lw-tab-btn]").forEach((btn) => {
+        btn.addEventListener("click", () => lwSetFulfillmentTab(block, btn.dataset.lwTabBtn));
+      });
+      lwSetFulfillmentTab(block, present[0].id);
+    });
+  }
+
   async function lwRenderFulfillmentStep(content) {
     const w = lwState.wizard;
     const selections = w.channel_selections || [];
@@ -12598,6 +13149,7 @@
     });
     lwWireBrandStatePanel(content);
     lwWireSellerFixedDefaults(content);
+    lwApplyFulfillmentTabs(content);
     content.querySelectorAll("[data-lw-image-auto-upload]").forEach((btn) => {
       btn.addEventListener("click", () => withButtonGuard(btn, async () => {
         const block = btn.closest(".lw-channel-block");
@@ -12996,6 +13548,24 @@
         wrap.innerHTML = `<button type="button" class="btn btn-secondary btn-sm" data-lw-fixed-default-save>${HomezI18n.t("lw.fixed_default_save")}</button>
           <span>${HomezI18n.t("lw.fixed_default_hint")}</span>`;
         input.parentElement.appendChild(wrap);
+        // 입력 정보 출처 표시: 저장해 둔 고정값과 같으면 "기본값", 다르면 "직접 수정"(고정값이 없으면 표시하지 않는다).
+        const sourceChip = document.createElement("span");
+        sourceChip.className = "lw-source-chip";
+        sourceChip.hidden = true;
+        const labelSpan = input.closest("label") && input.closest("label").querySelector(".field-label");
+        if (labelSpan) labelSpan.after(sourceChip);
+        const refreshChip = () => {
+          const fixed = input.dataset.lwFixedValue || "";
+          const value = input.value.trim();
+          sourceChip.hidden = !fixed || !value;
+          if (sourceChip.hidden) return;
+          const same = value === fixed;
+          sourceChip.textContent = HomezI18n.t(same ? "lw.source_default" : "lw.source_manual");
+          sourceChip.classList.toggle("lw-source-default", same);
+          sourceChip.classList.toggle("lw-source-manual", !same);
+        };
+        input.addEventListener("input", refreshChip);
+        input.addEventListener("change", refreshChip);
         wrap.querySelector("[data-lw-fixed-default-save]").addEventListener("click", async () => {
           const value = input.value.trim();
           if (value && !field.validate(value)) {
@@ -13006,14 +13576,17 @@
           const base = current && current.value && typeof current.value === "object" ? { ...current.value } : {};
           if (value) base[field.key] = value; else delete base[field.key];
           const saved = await userSettingSave("listing_defaults", base, 1);
+          if (saved) { input.dataset.lwFixedValue = value || ""; refreshChip(); }
           toast(HomezI18n.t(saved ? (value ? "lw.fixed_default_saved" : "lw.fixed_default_cleared") : "lw.fixed_default_failed", { label }));
         });
         userSettingFetch("listing_defaults").then((resp) => {
           const stored = resp && resp.value && typeof resp.value === "object" ? resp.value[field.key] : "";
-          if (!stored || input.value.trim() || !input.isConnected || !field.validate(stored)) return;
+          if (stored && field.validate(stored)) input.dataset.lwFixedValue = stored;
+          if (!stored || input.value.trim() || !input.isConnected || !field.validate(stored)) { refreshChip(); return; }
           input.value = stored;
           input.dispatchEvent(new Event("input", { bubbles: true }));
           input.dispatchEvent(new Event("change", { bubbles: true }));
+          refreshChip();
         });
       });
     });
@@ -17101,6 +17674,47 @@
     }
   }
 
+  // ---- 목록 화면 공통: 상태별 건수 칩 (2026-10-15, UI 개선 5단계) ----
+  // 주문·배송·반품·환불·정산 대조 목록 위에 "상태별 몇 건"을 칩으로 보여 주고, 칩을 누르면 기존 상태 필터와 같은 값으로 목록을
+  // 다시 불러온다(필터 칸은 그대로 있다). 건수는 필터와 무관하게 전체 기준이며 데이터에 있는 상태만 보여 준다 — 없는 상태를
+  // 만들어 내지 않는다. 전체를 읽지 못하면 칩을 숨긴다(틀린 숫자를 보이지 않는다).
+  function countByStatus(rows) {
+    const counts = {};
+    (rows || []).forEach((r) => { if (r && r.status) counts[r.status] = (counts[r.status] || 0) + 1; });
+    return counts;
+  }
+
+  async function statusCountsFor(listPath, selected, rows) {
+    if (!selected) return countByStatus(rows);
+    try {
+      return countByStatus(await apiFetch(listPath));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function statusChipsHtml(options, counts, selected, labelPrefix) {
+    if (!counts) return "";
+    const labelOf = (status) => {
+      const key = `${labelPrefix}${String(status).toLowerCase()}`;
+      const label = HomezI18n.t(key);
+      return label === key || !label ? status : label;
+    };
+    const present = options.filter((status) => counts[status] || status === selected);
+    if (!present.length) return "";
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const chip = (value, label, count) =>
+      `<button type="button" class="wq-chip" data-status-chip="${escapeHtml(value)}" aria-pressed="${selected === value ? "true" : "false"}">${escapeHtml(label)} <strong>${count}</strong></button>`;
+    return `<div class="wq-chips" role="group" aria-label="${escapeHtml(HomezI18n.t("common.status_chips_aria"))}">${
+      chip("", HomezI18n.t("common.all"), total)}${present.map((status) => chip(status, labelOf(status), counts[status] || 0)).join("")}</div>`;
+  }
+
+  function wireStatusChips(container, onSelect) {
+    container.querySelectorAll("[data-status-chip]").forEach((btn) => {
+      btn.addEventListener("click", () => onSelect(btn.dataset.statusChip));
+    });
+  }
+
   function statusFilterSelectHtml(id, options, selected) {
     return `
       <select id="${id}">
@@ -17129,6 +17743,7 @@
       return;
     }
     ordState.rows = rows || [];
+    const ordChipsHtml = statusChipsHtml(ORDER_STATUS_OPTIONS, await statusCountsFor("/orders?limit=200", ordState.statusFilter, ordState.rows), ordState.statusFilter, "ord.status.");
 
     const coupangConnections = (ordState.connections || []).filter(
       (c) => c.marketplace_code === "COUPANG" && c.connection_status === "CONNECTED",
@@ -17188,7 +17803,7 @@
             <tr>
               <td data-label="${HomezI18n.t("ord.col_order_number")}">${escapeHtml(o.order_number)}</td>
               <td data-label="${HomezI18n.t("ord.col_channel")}">${escapeHtml(o.channel_code)}</td>
-              <td data-label="${HomezI18n.t("ord.col_status")}">${statusPillHtml(o.status)}</td>
+              <td data-label="${HomezI18n.t("ord.col_status")}">${statusPillHtmlLabeled(o.status, "ord.status.")}</td>
               <td data-label="${HomezI18n.t("ord.col_buyer")}">${escapeHtml(o.buyer_name)}</td>
               <td data-label="${HomezI18n.t("ord.col_total")}">${fmtMoney(o.total_amount)}</td>
               <td data-label="${HomezI18n.t("ord.col_ordered_at")}">${fmtDate(o.ordered_at)}</td>
@@ -17198,7 +17813,7 @@
         </table></div></div>
       `;
 
-    container.innerHTML = `${collectionHtml}${filterHtml}${tableHtml}<div id="ord-detail-panel"></div>`;
+    container.innerHTML = `${collectionHtml}${ordChipsHtml}${filterHtml}${tableHtml}<div id="ord-detail-panel"></div>`;
 
     async function updateCollectionPositionText() {
       const account = el("ord-collection-account");
@@ -17303,6 +17918,7 @@
       ordState.statusFilter = ev.target.value;
       ordRenderList();
     });
+    wireStatusChips(container, (value) => { ordState.statusFilter = value; ordRenderList(); });
     el("ord-refresh-btn").addEventListener("click", () => ordRenderList());
 
     ordState.rows.forEach((o) => {
@@ -18671,8 +19287,9 @@
       return;
     }
     shipState.rows = rows || [];
+    const shipChipsHtml = statusChipsHtml(SHIPMENT_STATUS_OPTIONS, await statusCountsFor("/shipments?limit=200", shipState.statusFilter, shipState.rows), shipState.statusFilter, "ship.status.");
 
-    const filterHtml = `
+    const filterHtml = `${shipChipsHtml}
       <div class="detail-panel">
         <div class="ls-filter-row">
           <label class="field">
@@ -18714,6 +19331,7 @@
       shipState.statusFilter = ev.target.value;
       shipRenderList();
     });
+    wireStatusChips(container, (value) => { shipState.statusFilter = value; shipRenderList(); });
     el("ship-refresh-btn").addEventListener("click", () => shipRenderList());
 
     shipState.rows.forEach((s) => {
@@ -18911,8 +19529,9 @@
       return;
     }
     retState.rows = rows || [];
+    const retChipsHtml = statusChipsHtml(RETURN_STATUS_OPTIONS, await statusCountsFor("/return-orders?limit=200", retState.statusFilter, retState.rows), retState.statusFilter, "ret.status.");
 
-    const filterHtml = `
+    const filterHtml = `${retChipsHtml}
       <div class="detail-panel">
         <div class="ls-filter-row">
           <label class="field">
@@ -18954,6 +19573,7 @@
       retState.statusFilter = ev.target.value;
       retRenderList();
     });
+    wireStatusChips(container, (value) => { retState.statusFilter = value; retRenderList(); });
     el("ret-refresh-btn").addEventListener("click", () => retRenderList());
 
     retState.rows.forEach((r) => {
@@ -19111,8 +19731,9 @@
       return;
     }
     rfState.rows = rows || [];
+    const rfChipsHtml = statusChipsHtml(REFUND_STATUS_OPTIONS, await statusCountsFor("/refunds", rfState.statusFilter, rfState.rows), rfState.statusFilter, "refund.status.");
 
-    const filterHtml = `
+    const filterHtml = `${rfChipsHtml}
       <div class="detail-panel">
         <p class="field-hint">${HomezI18n.t("refund.fake_notice")}</p>
         <div class="ls-filter-row">
@@ -19155,6 +19776,7 @@
       rfState.statusFilter = ev.target.value;
       rfRenderList();
     });
+    wireStatusChips(container, (value) => { rfState.statusFilter = value; rfRenderList(); });
     el("rf-refresh-btn").addEventListener("click", () => rfRenderList());
 
     rfState.rows.forEach((r) => {
@@ -20635,7 +21257,7 @@
     const container = el("stl-content");
     container.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
 
-    let recons, settlements;
+    let recons, settlements, reconCounts;
     try {
       const reconQs = stlState.reconStatusFilter ? `?status=${encodeURIComponent(stlState.reconStatusFilter)}&limit=200` : "?limit=200";
       const settlementQs = stlState.settlementStatusFilter ? `?status=${encodeURIComponent(stlState.settlementStatusFilter)}&limit=200` : "?limit=200";
@@ -20643,10 +21265,12 @@
         apiFetch(`/pricing/reconciliations${reconQs}`),
         apiFetch(`/settlements${settlementQs}`),
       ]);
+      reconCounts = await statusCountsFor("/pricing/reconciliations?limit=200", stlState.reconStatusFilter, recons);
     } catch (err) {
       renderErrorState(container, err);
       return;
     }
+    const reconChipsHtml = statusChipsHtml(RECONCILIATION_STATUS_OPTIONS, reconCounts, stlState.reconStatusFilter, "stl.status.");
 
     const recordMarginHtml = `
       <div class="detail-panel">
@@ -20661,6 +21285,7 @@
     const reconFilterHtml = `
       <div class="detail-panel">
         <h2>${HomezI18n.t("stl.reconciliation_heading")}</h2>
+        ${reconChipsHtml}
         <div class="ls-filter-row">
           <label class="field">
             <span class="field-label">${HomezI18n.t("stl.filter.status_label")}</span>
@@ -20749,6 +21374,7 @@
       stlState.reconStatusFilter = ev.target.value;
       loadChannelSettlement();
     });
+    wireStatusChips(container, (value) => { stlState.reconStatusFilter = value; loadChannelSettlement(); });
     el("stl-recon-refresh-btn").addEventListener("click", () => loadChannelSettlement());
     el("stl-settlement-filter-status").addEventListener("change", (ev) => {
       stlState.settlementStatusFilter = ev.target.value;
