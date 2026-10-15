@@ -37,6 +37,7 @@ from app.domains.product_candidate.constants import EvidenceType
 from app.domains.product_candidate.model import ProductCandidate
 from app.domains.product_candidate.model import ProductCandidateEvidence
 from app.domains.product_import.notice_suggestions import decode_notice_rows
+from app.domains.user_settings.repository import UserSettingRepository
 
 
 def proposal_to_dict(proposal: Proposal) -> dict:
@@ -96,7 +97,21 @@ class RegistrationAssistantService:
                     )
         return {}, {}, None, None
 
-    def propose(self, wizard_id: int, company_id: int, request: AssistantRequest, metadata: dict) -> Proposal:
+    def _fixed_defaults(self, user_id: int | None, company_id: int) -> dict:
+        """사용자가 저장한 판매자 고정값(listing_defaults). 읽지 못하거나 형식이 틀리면 빈 값 — 이전 등록 값으로 되돌아간다."""
+
+        if user_id is None:
+            return {}
+        try:
+            row = UserSettingRepository(self.db).get_for_user(user_id, company_id, "listing_defaults")
+            value = json.loads(row.setting_value) if row is not None else {}
+        except Exception:  # noqa: BLE001 — 고정값은 편의 기능이라 실패해도 등록을 막지 않는다.
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def propose(
+        self, wizard_id: int, company_id: int, request: AssistantRequest, metadata: dict, user_id: int | None = None,
+    ) -> Proposal:
         wizard = ListingWizardService(self.db).get(wizard_id, company_id)
         entries = json.loads(wizard.channel_selections_json or "[]")
         account_id = request.marketplace_account_id or (entries[0].get("marketplace_account_id") if entries else None)
@@ -112,14 +127,15 @@ class RegistrationAssistantService:
         return build_proposal(
             wizard_draft=json.loads(wizard.draft_json or "{}"), candidate_id=candidate.id,
             source_reference=candidate.source_reference or f"CANDIDATE:{candidate.id}", account_id=account_id,
-            onch_rows=rows, metadata=metadata, seller_defaults=pick_seller_defaults(prior_fields, prior_notice),
+            onch_rows=rows, metadata=metadata,
+            seller_defaults=pick_seller_defaults(prior_fields, prior_notice, self._fixed_defaults(user_id, company_id)),
             outbound_code=prior_outbound, return_center_code=prior_return, request=request,
         )
 
     def apply(
         self, wizard_id: int, company_id: int, actor_user_id: int, request: AssistantRequest, metadata: dict,
     ) -> dict:
-        proposal = self.propose(wizard_id, company_id, request, metadata)
+        proposal = self.propose(wizard_id, company_id, request, metadata, user_id=actor_user_id)
         service = ListingWizardService(self.db)
         wizard = service.get(wizard_id, company_id)
         applied = False

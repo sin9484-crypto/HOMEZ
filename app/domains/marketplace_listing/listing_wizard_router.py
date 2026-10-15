@@ -594,7 +594,9 @@ def registration_assistant_propose(
 
     wizard = ListingWizardService(db).get(wizard_id, current_user.company_id)
     metadata = _assistant_metadata(db, current_user.company_id, wizard, data)
-    proposal = RegistrationAssistantService(db).propose(wizard_id, current_user.company_id, data, metadata)
+    proposal = RegistrationAssistantService(db).propose(
+        wizard_id, current_user.company_id, data, metadata, user_id=current_user.id,
+    )
     return {"ready": proposal.ready, **proposal_to_dict(proposal)}
 
 

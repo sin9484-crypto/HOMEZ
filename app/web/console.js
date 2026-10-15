@@ -12389,6 +12389,7 @@
       input.addEventListener("input", () => lwScheduleAutosave());
     });
     lwWireBrandStatePanel(content);
+    lwWireSellerFixedDefaults(content);
     content.querySelectorAll("[data-lw-image-auto-upload]").forEach((btn) => {
       btn.addEventListener("click", () => withButtonGuard(btn, async () => {
         const block = btn.closest(".lw-channel-block");
@@ -12754,6 +12755,59 @@
       if (!stored || input.value.trim() || !input.isConnected) return;
       input.value = stored;
       input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  // 판매자 고정값(WING 아이디·택배사, 2026-10-15) — 상품마다 같은 값을 다시 입력·확인하지 않도록 사용자 설정
+  // (listing_defaults.wing_user_id / delivery_company_code)에 한 번 저장해 두고, 칸이 비어 있을 때만 자동 입력한다
+  // (이미 입력/저장된 값은 덮어쓰지 않음). 비운 채 저장하면 고정값이 삭제된다. 인증 정보는 저장하지 않는다.
+  const LW_WING_ID_PATTERN = /^[A-Za-z0-9._-]{3,40}$/;
+
+  function lwSellerFixedFields() {
+    return [
+      {
+        selector: ".lw-vendor-user-id", key: "wing_user_id", labelKey: "lw.fixed_default_label_wing",
+        validate: (value) => LW_WING_ID_PATTERN.test(value),
+      },
+      {
+        selector: ".lw-delivery-company", key: "delivery_company_code", labelKey: "lw.fixed_default_label_courier",
+        validate: (value) => LW_COUPANG_DELIVERY_COMPANIES.some((c) => c.code === value),
+      },
+    ];
+  }
+
+  function lwWireSellerFixedDefaults(root) {
+    root.querySelectorAll(".lw-channel-block").forEach((block) => {
+      lwSellerFixedFields().forEach((field) => {
+        const input = block.querySelector(field.selector);
+        if (!input || input.dataset.lwFixedWired) return;
+        input.dataset.lwFixedWired = "1";
+        const label = HomezI18n.t(field.labelKey);
+        const wrap = document.createElement("div");
+        wrap.className = "stat-sub";
+        wrap.innerHTML = `<button type="button" class="btn btn-secondary btn-sm" data-lw-fixed-default-save>${HomezI18n.t("lw.fixed_default_save")}</button>
+          <span>${HomezI18n.t("lw.fixed_default_hint")}</span>`;
+        input.parentElement.appendChild(wrap);
+        wrap.querySelector("[data-lw-fixed-default-save]").addEventListener("click", async () => {
+          const value = input.value.trim();
+          if (value && !field.validate(value)) {
+            toast(HomezI18n.t("lw.fixed_default_invalid", { label }));
+            return;
+          }
+          const current = await userSettingFetch("listing_defaults");
+          const base = current && current.value && typeof current.value === "object" ? { ...current.value } : {};
+          if (value) base[field.key] = value; else delete base[field.key];
+          const saved = await userSettingSave("listing_defaults", base, 1);
+          toast(HomezI18n.t(saved ? (value ? "lw.fixed_default_saved" : "lw.fixed_default_cleared") : "lw.fixed_default_failed", { label }));
+        });
+        userSettingFetch("listing_defaults").then((resp) => {
+          const stored = resp && resp.value && typeof resp.value === "object" ? resp.value[field.key] : "";
+          if (!stored || input.value.trim() || !input.isConnected || !field.validate(stored)) return;
+          input.value = stored;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      });
     });
   }
 

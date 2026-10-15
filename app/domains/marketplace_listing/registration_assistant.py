@@ -71,6 +71,13 @@ _CLAIM_TERMS = ("항균", "살균", "세균", "치료", "예방", "완화", "의
 
 MIN_MARGIN_RATE = Decimal("0.18")
 
+# 사용자가 "고정값으로 저장"해 둔 판매자 값(user_settings.listing_defaults) — 이전 등록 값보다 먼저 쓴다.
+WING_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
+COURIER_CODE_PATTERN = re.compile(r"^[A-Z0-9_]{2,20}$")
+FIXED_DEFAULT_LABELS = {
+    "wing_user_id": "WING 아이디", "delivery_company_code": "택배사", "consumer_service_phone": "소비자상담 전화번호",
+}
+
 
 def _norm(text: Any) -> str:
     return re.sub(r"[\s/()\[\]·,.\-_:]+", "", str(text or "")).lower()
@@ -143,8 +150,10 @@ def parse_manufacture_month(raw: str) -> tuple[str, date | None]:
     return f"{year}년 {month:02d}월", date(year, month, 1)
 
 
-def pick_seller_defaults(prior_required_fields: dict | None, prior_notice_information: dict | None) -> dict[str, Any]:
-    """이전 성공 등록에서 판매자 공통 값만 골라 낸다(없으면 빈 딕셔너리)."""
+def pick_seller_defaults(
+    prior_required_fields: dict | None, prior_notice_information: dict | None, fixed_defaults: dict | None = None,
+) -> dict[str, Any]:
+    """판매자 공통 값을 고른다. 사용자가 저장한 고정값(`fixed_defaults`)이 먼저, 없으면 이전 성공 등록 값. 형식이 틀린 고정값은 무시한다."""
 
     prior = prior_required_fields or {}
     picked = {key: prior[key] for key in SELLER_DEFAULT_KEYS if key in prior and prior[key] not in (None, "")}
@@ -156,7 +165,22 @@ def pick_seller_defaults(prior_required_fields: dict | None, prior_notice_inform
         label = key.split("::", 1)[-1]
         if _norm(label) in _SELLER_NOTICE_LABELS and str(value).strip():
             seller_notice[_norm(label)] = str(value)
+    fixed = fixed_defaults or {}
+    fixed_used: list[str] = []
+    wing = str(fixed.get("wing_user_id") or "").strip()
+    if wing and WING_ID_PATTERN.match(wing):
+        picked["vendorUserId"] = wing
+        fixed_used.append("wing_user_id")
+    courier = str(fixed.get("delivery_company_code") or "").strip()
+    if courier and COURIER_CODE_PATTERN.match(courier):
+        picked["deliveryCompanyCode"] = courier
+        fixed_used.append("delivery_company_code")
+    phone = str(fixed.get("consumer_service_phone") or "").strip()
+    if phone and re.match(r"^[0-9+()\-\s]{5,30}$", phone):
+        seller_notice[_norm("소비자상담관련전화번호")] = phone
+        fixed_used.append("consumer_service_phone")
     picked["_seller_notice"] = seller_notice
+    picked["_fixed_used"] = fixed_used
     return picked
 
 
@@ -340,6 +364,12 @@ def build_proposal(
     unresolved: list[str] = []
     seller_defaults = dict(seller_defaults)
     seller_notice = seller_defaults.pop("_seller_notice", {})
+    fixed_used = seller_defaults.pop("_fixed_used", [])
+    if fixed_used:
+        notes.append(AssistantNote(
+            "INFO", "FIXED_DEFAULTS_USED",
+            "저장해 둔 고정값을 썼다: " + ", ".join(FIXED_DEFAULT_LABELS.get(k, k) for k in fixed_used) + " — 매번 입력·확인하지 않는다.",
+        ))
 
     # 1) 고시 — 쿠팡은 고시 카테고리 하나만 쓴다(위저드 화면과 같은 규칙): 온채널의 "상품정보제공고시 구분"과 같은 것을 고른다.
     all_notice_fields = metadata.get("notice_fields") or []
