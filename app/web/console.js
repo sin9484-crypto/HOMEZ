@@ -6807,10 +6807,17 @@
       ? escapeHtml(fmtDate(data.next_due_at))
       : escapeHtml(HomezI18n.t("odo.next_due_now"));
     const errorText = data.last_error_summary || data.last_skip_reason || "";
-    const isPausedOrError = data.function_mode === "PAUSED" || data.function_mode === "ERROR";
+    // 2026-10-16 — 켜져 있지 않으면(수동·일시중지·오류) "켜기"를, 켜져 있으면 "일시중지"를 보여 준다. 예전에는 수동(MANUAL)일 때
+    // 켜는 버튼이 없어 이 화면에서 자동 감지를 켤 수 없었다.
+    const canEnable = data.function_mode !== "AUTOMATIC";
+    const healthCode = String(data.health || "UNKNOWN").toLowerCase();
 
     wrap.innerHTML = `
       <div class="detail-panel">
+        <div class="odo-health odo-health-${escapeHtml(healthCode)}" role="status">
+          <strong>${escapeHtml(HomezI18n.t(`odo.health.${healthCode}`))}</strong>
+          <span>${escapeHtml(data.health_message || "")}</span>
+        </div>
         <h3>${escapeHtml(HomezI18n.t("odo.status_heading"))}</h3>
         <dl class="kv-list">
           <dt>${escapeHtml(HomezI18n.t("odo.function_mode_label"))}</dt>
@@ -6821,6 +6828,8 @@
           <dd>${data.last_attempted_at ? escapeHtml(fmtDate(data.last_attempted_at)) : escapeHtml(HomezI18n.t("odo.na"))}</dd>
           <dt>${escapeHtml(HomezI18n.t("odo.last_succeeded_label"))}</dt>
           <dd>${data.last_succeeded_at ? escapeHtml(fmtDate(data.last_succeeded_at)) : escapeHtml(HomezI18n.t("odo.na"))}</dd>
+          <dt>${escapeHtml(HomezI18n.t("odo.interval_label"))}</dt>
+          <dd>${escapeHtml(HomezI18n.t("odo.interval_fixed", { minutes: Number(data.interval_minutes) || 5 }))}</dd>
           <dt>${escapeHtml(HomezI18n.t("odo.next_due_label"))}</dt>
           <dd>${nextDueHtml}</dd>
           <dt>${escapeHtml(HomezI18n.t("odo.consecutive_failure_label"))}</dt>
@@ -6837,18 +6846,10 @@
           <div class="stat-card accent-pink"><div class="stat-label">${escapeHtml(HomezI18n.t("odo.count_failed"))}</div><div class="stat-value">${data.last_failed_order_count ?? "—"}</div></div>
         </div>
 
-        <div class="field-row">
-          <label class="field"><span class="field-label">${escapeHtml(HomezI18n.t("odo.interval_label"))}</span>
-            <input id="odo-interval-input" type="number" min="1" max="1440" value="${Number(data.interval_minutes) || 5}"></label>
-        </div>
-        <div class="dialog-actions" style="justify-content:flex-start;">
-          <button id="odo-interval-save-btn" class="btn btn-secondary btn-sm">${escapeHtml(HomezI18n.t("odo.interval_save_btn"))}</button>
-        </div>
-
         <div class="dialog-actions" style="justify-content:flex-start;">
           <button id="odo-trigger-btn" class="btn btn-primary">${escapeHtml(HomezI18n.t("odo.trigger_btn"))}</button>
-          ${isPausedOrError
-            ? `<button id="odo-resume-btn" class="btn btn-secondary">${escapeHtml(HomezI18n.t("odo.resume_btn"))}</button>`
+          ${canEnable
+            ? `<button id="odo-resume-btn" class="btn btn-secondary">${escapeHtml(HomezI18n.t(data.function_mode === "MANUAL" || data.function_mode === "SEMI_AUTOMATIC" ? "odo.enable_btn" : "odo.resume_btn"))}</button>`
             : `<button id="odo-pause-btn" class="btn btn-ghost">${escapeHtml(HomezI18n.t("odo.pause_btn"))}</button>`}
         </div>
 
@@ -7021,20 +7022,6 @@
       }
     }));
 
-    el("odo-interval-save-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
-      const minutes = Number(el("odo-interval-input").value);
-      try {
-        await apiFetch("/orders/collection-ops/interval", {
-          method: "POST",
-          body: JSON.stringify({ interval_minutes: minutes }),
-        });
-        toast(HomezI18n.t("odo.interval_save_success"), "success");
-        loadOrderCollectionOps();
-      } catch (err) {
-        toast((err && err.message) || HomezI18n.t("odo.interval_save_error"), "error");
-      }
-    }));
-
     const pauseBtn = el("odo-pause-btn");
     if (pauseBtn) {
       pauseBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
@@ -7058,7 +7045,7 @@
       resumeBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
         const { confirmed } = await confirmDialog({
           title: HomezI18n.t("odo.resume_confirm_title"),
-          body: HomezI18n.t("odo.resume_confirm_body"),
+          body: HomezI18n.t(data.function_mode === "MANUAL" || data.function_mode === "SEMI_AUTOMATIC" ? "odo.enable_confirm_body" : "odo.resume_confirm_body"),
         });
         if (!confirmed) return;
         const token = await promptRecentAuthToken();

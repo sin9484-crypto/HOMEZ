@@ -2865,3 +2865,12 @@ tr.lw-row-selected { background: #EAF6F0; }
 
 /* 2026-10-15 UI 개선 5단계 — 목록 위 상태별 건수 칩(전체 업무 칩과 같은 모양) */
 .detail-panel > .wq-chips, .wq-chips + .detail-panel { margin-top: 0; }
+
+/* 2026-10-16 주문 자동 감지 화면 상단 한 줄 상태 */
+.odo-health { display: flex; flex-direction: column; gap: 2px; padding: 12px 16px; border-radius: 8px; margin-bottom: 14px; background: #EEF0F4; border-left: 5px solid #8A93A0; }
+.odo-health strong { font-size: 15px; }
+.odo-health span { font-size: 13.5px; color: var(--text-muted); }
+.odo-health-ok { background: #E4F4EC; border-left-color: #1E8A5F; }
+.odo-health-waiting { background: #E7F1FB; border-left-color: #2F6DB5; }
+.odo-health-off, .odo-health-paused { background: #FFF3D6; border-left-color: #B8860B; }
+.odo-health-failing, .odo-health-error, .odo-health-blocked { background: #FDEAEE; border-left-color: #E0435A; }

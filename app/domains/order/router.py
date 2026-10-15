@@ -116,6 +116,8 @@ def get_collection_ops_status(
     from app.domains.automation_safety.constants import FunctionCode
     from app.domains.automation_safety.service import SafetyService
     from app.domains.order.auto_collection_scheduler import (
+        FIXED_INTERVAL_MINUTES,
+        describe_health,
         get_or_create_auto_collection_state,
     )
 
@@ -125,14 +127,15 @@ def get_collection_ops_status(
     function_mode = SafetyService(db).get_function_mode(
         company_id, FunctionCode.ORDER_COLLECTION,
     )
+    health, health_message = describe_health(function_mode, state)
 
     next_due_at = None
     if state.last_attempted_at is not None:
-        next_due_at = state.last_attempted_at + timedelta(minutes=state.interval_minutes)
+        next_due_at = state.last_attempted_at + timedelta(minutes=FIXED_INTERVAL_MINUTES)
 
     return OrderCollectionOpsStatusResponse(
         company_id=company_id, function_mode=function_mode,
-        interval_minutes=state.interval_minutes,
+        interval_minutes=FIXED_INTERVAL_MINUTES,
         last_attempted_at=state.last_attempted_at,
         last_succeeded_at=state.last_succeeded_at,
         next_due_at=next_due_at,
@@ -143,6 +146,7 @@ def get_collection_ops_status(
         last_duplicate_fulfillment_count=state.last_duplicate_fulfillment_count,
         last_unresolved_item_count=state.last_unresolved_item_count,
         last_failed_order_count=state.last_failed_order_count,
+        health=health, health_message=health_message, interval_fixed=True,
     )
 
 

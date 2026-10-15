@@ -29,6 +29,21 @@ from app.domains.order.order_materialization import (
 )
 from app.domains.order.order_materialization import RecoveryReviewCandidate
 from app.domains.store_connection.model import StoreConnection
+from app.core.logger import logger
+
+
+def classify_provider_exception(exc: BaseException) -> str:
+    """쿠팡 주문 조회 중 난 예외를 **원인 종류별 코드**로 바꾼다(2026-10-16). 예외 메시지는 쓰지 않는다."""
+
+    import requests
+
+    if isinstance(exc, requests.Timeout):
+        return "ORDER_PROVIDER_TIMEOUT"
+    if isinstance(exc, requests.RequestException):
+        return "ORDER_PROVIDER_NETWORK_ERROR"
+    if isinstance(exc, PermissionError):
+        return "ORDER_PROVIDER_CALL_BLOCKED"
+    return "ORDER_PROVIDER_INTERNAL_ERROR"
 
 
 @dataclass(frozen=True)
@@ -156,13 +171,18 @@ class CoupangOrderCollectionService:
                 created_at_to=query_to,
                 status=channel_status,
             )
-        except Exception:
-            position_service.fail(
-                lease.cursor_id, lease.lock_token, "ORDER_PROVIDER_INTERNAL_ERROR",
+        except Exception as exc:  # noqa: BLE001 — 쿠팡 조회 중 어떤 예외든 실패로 기록하고 원인 종류만 남긴다
+            # 2026-10-16 — 예전에는 모든 예외를 ORDER_PROVIDER_INTERNAL_ERROR 하나로 뭉뚱그려 실제 원인(시간 초과·네트워크·호출
+            # 차단 등)을 알 수 없었다. 예외 **종류 이름만** 기록한다(메시지에 주소·키가 섞일 수 있어 남기지 않는다).
+            error_code = classify_provider_exception(exc)
+            logger.warning(
+                "쿠팡 주문 조회 실패: connection_id=%s status=%s code=%s exception=%s",
+                connection_id, channel_status, error_code, type(exc).__name__,
             )
+            position_service.fail(lease.cursor_id, lease.lock_token, error_code)
             return CoupangCollectionRunResult(
                 status="FAILED", channel_status=channel_status,
-                error_codes=("ORDER_PROVIDER_INTERNAL_ERROR",),
+                error_codes=(error_code,),
             )
         finally:
             credential = {}

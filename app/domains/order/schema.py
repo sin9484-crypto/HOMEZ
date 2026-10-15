@@ -144,6 +144,11 @@ class OrderCollectionOpsStatusResponse(BaseModel):
     last_duplicate_fulfillment_count: Optional[int]
     last_unresolved_item_count: Optional[int]
     last_failed_order_count: Optional[int]
+    # 2026-10-16 — 기능 모드와 마지막 실행 결과를 합친 한 줄 상태(OFF/PAUSED/ERROR/WAITING/OK/FAILING/BLOCKED)와 설명.
+    health: str = "UNKNOWN"
+    health_message: str = ""
+    # 주기는 5분으로 고정이라 화면에서 바꿀 수 없다.
+    interval_fixed: bool = True
 
 
 class OrderCollectionOpsTriggerResponse(BaseModel):

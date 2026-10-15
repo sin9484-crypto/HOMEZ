@@ -86,7 +86,10 @@ from app.domains.order.multi_channel_collection_service import (
 from app.domains.store_connection.model import StoreConnection
 
 CONSECUTIVE_FAILURE_DEMOTE_THRESHOLD = 3  # purchase_task의 동일 취지 상수와 동일값
-DEFAULT_INTERVAL_MINUTES = 5
+# 2026-10-16 사용자 지시 — 신규 주문 자동 감지 주기는 5분으로 **고정**한다(화면·API로 바꿀 수 없다). 저장된 값이
+# 달라도 이 값을 쓰고, 상태 조회 때 저장값도 5로 바로잡는다.
+FIXED_INTERVAL_MINUTES = 5
+DEFAULT_INTERVAL_MINUTES = FIXED_INTERVAL_MINUTES
 
 # 2026-09-17 Phase 7A 사후 감사 — "신규 주문 감지"의 정의상 의미가
 # 있는 상태는 ACCEPT뿐이다(모듈 docstring 참고). 자동 tick과 수동
@@ -139,6 +142,9 @@ def get_or_create_auto_collection_state(
         .first()
     )
     if state is not None:
+        if state.interval_minutes != FIXED_INTERVAL_MINUTES:
+            state.interval_minutes = FIXED_INTERVAL_MINUTES
+            db.commit()
         return state
 
     state = OrderAutoCollectionState(
@@ -155,21 +161,19 @@ def set_interval_minutes(
     db: Session, company_id: int, minutes: int,
 ) -> OrderAutoCollectionState:
 
-    if minutes < 1:
-        raise BadRequestException("수집 주기는 1분 이상이어야 합니다.")
+    if minutes != FIXED_INTERVAL_MINUTES:
+        raise BadRequestException(
+            f"주문 자동 감지 주기는 {FIXED_INTERVAL_MINUTES}분으로 고정되어 있어 바꿀 수 없습니다.",
+        )
 
-    state = get_or_create_auto_collection_state(db, company_id)
-    state.interval_minutes = minutes
-    db.commit()
-    db.refresh(state)
-    return state
+    return get_or_create_auto_collection_state(db, company_id)
 
 
 def _is_due(state: OrderAutoCollectionState, now: datetime) -> bool:
 
     if state.last_attempted_at is None:
         return True
-    return now - state.last_attempted_at >= timedelta(minutes=state.interval_minutes)
+    return now - state.last_attempted_at >= timedelta(minutes=FIXED_INTERVAL_MINUTES)
 
 
 def _record_attempt_start(db: Session, state: OrderAutoCollectionState, now: datetime) -> None:
@@ -186,6 +190,40 @@ def _record_skip(
     state.last_status = status
     state.last_skip_reason = skip_reason
     db.commit()
+
+
+def _mark_success(
+    state: OrderAutoCollectionState, now: datetime, status: str, *, partial_detail: str = "",
+) -> None:
+    """성공(또는 부분 성공)을 기록한다. 이전 실행의 오류·건너뜀 사유를 **지운다** — 2026-10-16 확인된 결함: 성공한 뒤에도
+    예전 `ORDER_PROVIDER_INTERNAL_ERROR`와 "자동화 꺼짐으로 건너뜀"이 화면에 남아 실패 상태처럼 보였다."""
+
+    state.last_succeeded_at = now
+    state.consecutive_failure_count = 0
+    state.last_status = status
+    state.last_skip_reason = None
+    state.last_error_summary = partial_detail or None
+
+
+def describe_health(function_mode: str, state: OrderAutoCollectionState) -> tuple[str, str]:
+    """운영 화면용 한 줄 상태 — (코드, 사람이 읽는 설명). 기능 모드와 마지막 실행 결과를 합쳐 "지금 자동으로 돌고 있는가"에
+    답한다. 마지막 실행 결과(`last_status`)만 보면 꺼져 있는데도 "건너뜀/성공"처럼 보이는 혼동이 있었다."""
+
+    mode = str(function_mode or "").upper()
+    if mode == FunctionMode.ERROR:
+        return "ERROR", "연속 실패로 자동 감지가 멈췄어요. 원인을 확인한 뒤 다시 켜 주세요."
+    if mode == FunctionMode.PAUSED:
+        return "PAUSED", "일시 중지 상태예요. 다시 켜기 전에는 새 주문을 자동으로 가져오지 않아요."
+    if mode != FunctionMode.AUTOMATIC:
+        return "OFF", "자동 감지가 꺼져 있어요(수동). 켜기 전에는 새 주문을 자동으로 가져오지 않아요 — '지금 확인'으로 직접 가져올 수는 있어요."
+    status = state.last_status or ""
+    if state.consecutive_failure_count > 0 or status == OrderCollectionTickOutcome.FAILED:
+        return "FAILING", f"최근 확인이 실패했어요({state.last_error_summary or '원인 확인 필요'}). {FIXED_INTERVAL_MINUTES}분 뒤 다시 시도해요."
+    if status == OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED:
+        return "BLOCKED", "쿠팡 연결 정보를 확인할 수 없어 건너뛰고 있어요. 판매계정 연결을 다시 확인해 주세요."
+    if state.last_succeeded_at is None:
+        return "WAITING", f"켜졌어요. {FIXED_INTERVAL_MINUTES}분 안에 첫 확인을 해요."
+    return "OK", f"{FIXED_INTERVAL_MINUTES}분마다 자동으로 확인하고 있어요."
 
 
 def _record_counts(state: OrderAutoCollectionState, result) -> None:
@@ -332,9 +370,7 @@ def _run_one_company(
     _record_counts(state, result)
 
     if result.total_connections == 0:
-        state.last_status = OrderCollectionTickOutcome.SUCCEEDED
-        state.last_succeeded_at = now
-        state.consecutive_failure_count = 0
+        _mark_success(state, now, OrderCollectionTickOutcome.SUCCEEDED)
         db.commit()
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.SUCCEEDED, "no_connections")
 
@@ -353,14 +389,15 @@ def _run_one_company(
             )
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.FAILED, detail)
 
-    state.consecutive_failure_count = 0
-    state.last_succeeded_at = now
     if result.failed_runs > 0:
-        state.last_status = OrderCollectionTickOutcome.PARTIAL
+        partial_detail = ", ".join(
+            code for e in result.entries for code in e.error_codes
+        )[:200] or "partial_failure"
+        _mark_success(state, now, OrderCollectionTickOutcome.PARTIAL, partial_detail=partial_detail)
         db.commit()
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.PARTIAL)
 
-    state.last_status = OrderCollectionTickOutcome.SUCCEEDED
+    _mark_success(state, now, OrderCollectionTickOutcome.SUCCEEDED)
     db.commit()
     return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.SUCCEEDED)
 
@@ -482,12 +519,13 @@ def trigger_company_now(
         db.commit()
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.FAILED, detail)
 
-    state.last_succeeded_at = now
-    state.consecutive_failure_count = 0
-    state.last_status = (
-        OrderCollectionTickOutcome.PARTIAL if result.failed_runs > 0
-        else OrderCollectionTickOutcome.SUCCEEDED
-    )
+    if result.failed_runs > 0:
+        partial_detail = ", ".join(
+            code for e in result.entries for code in e.error_codes
+        )[:200] or "partial_failure"
+        _mark_success(state, now, OrderCollectionTickOutcome.PARTIAL, partial_detail=partial_detail)
+    else:
+        _mark_success(state, now, OrderCollectionTickOutcome.SUCCEEDED)
     db.commit()
     return OrderCollectionTickCompanyEntry(company_id, state.last_status)
 
