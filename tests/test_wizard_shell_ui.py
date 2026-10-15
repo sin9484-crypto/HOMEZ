@@ -192,6 +192,15 @@ class WiringTests(unittest.TestCase):
         self.assertIn("lwNextInFlight", body)
         self.assertIn('hidden = typeof lwSaveCurrentStep !== "function"', function_source("lwRenderShellChrome"))
 
+    def test_the_draft_button_is_decided_after_the_step_has_registered_its_save_function(self):
+        # 2026-10-15 실화면에서 발견: 단계를 그리기 전에 계산해 5단계에서 버튼이 숨은 채였다.
+        body = function_source("lwRenderStep")
+        self.assertIn("const outcome = await rendering;", body)
+        self.assertLess(body.index("await rendering"), body.index("lwRefreshDraftButton();"))
+        self.assertIn('hidden = typeof lwSaveCurrentStep !== "function"', function_source("lwRefreshDraftButton"))
+        # 단계 렌더 함수가 돌려주던 값과 거절(reject)은 그대로 전달된다.
+        self.assertIn("return outcome;", body)
+
     def test_a_failed_save_reveals_the_tab_that_holds_the_error(self):
         nxt = function_source("lwHandleNext")
         self.assertLess(nxt.index("if (!ok) {"), nxt.index("lwSyncFulfillmentTabErrors("))

@@ -4377,6 +4377,7 @@
       ${candidatesHtml}
       ${reviewCardHtml}
       ${trackingHtml}
+      ${ptInvoiceCardHtml(task, tracking)}
       ${task.channel_connection_id ? `
         <div class="dash-card">
           <div class="dash-card-head">
@@ -4421,6 +4422,7 @@
     ptLoadProgressRecord(task, null, tracking);
     if (el("pt-link-panel")) olLoadTaskPanel(task);
     wireIfExists("pt-tracking-refresh-btn", () => ptRefreshTracking(task));
+    wireIfExists("pt-invoice-preview-btn", () => ptInvoicePreview(task));
 
     const historyToggleBtn = el("pt-attempt-history-toggle-btn");
     if (historyToggleBtn) {
@@ -4579,6 +4581,107 @@
         errEl.textContent = (err && err.message) || HomezI18n.t("purchase_task.action_error");
       }
     }));
+  }
+
+  // 2026-10-15 — HOMEZ에서 쿠팡에 송장 등록. 미리보기(쿠팡 발주서 읽기 GET 1회)는 버튼을 눌렀을 때만 나가고, 등록(POST 1회)은
+  // 보이는 값을 그대로 확인 → 비밀번호 재확인을 거친 뒤에만 나간다. 서버가 값 일치·모드·비상정지·중복을 다시 확인한다.
+  function ptInvoiceCardHtml(task, tracking) {
+    if (!tracking || task.status !== "SHIPPED") return "";
+    return `
+      <div class="dash-card" id="pt-invoice-card">
+        <div class="dash-card-head"><h2>${escapeHtml(HomezI18n.t("purchase_task.invoice_title"))}</h2></div>
+        <p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.invoice_intro"))}</p>
+        <div id="pt-invoice-body"></div>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="pt-invoice-preview-btn">${escapeHtml(HomezI18n.t("purchase_task.invoice_preview_btn"))}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function ptInvoiceRenderPlan(task, plan, outcomeText) {
+    const box = el("pt-invoice-body");
+    if (!box) return;
+    const v = plan.values || {};
+    const rows = [
+      ["purchase_task.invoice_field_order", v.channel_order_id],
+      ["purchase_task.invoice_field_box", v.shipment_box_id],
+      ["purchase_task.invoice_field_courier", v.courier_name ? `${v.courier_name} (${v.delivery_company_code || "—"})` : null],
+      ["purchase_task.invoice_field_number", v.invoice_number],
+      ["purchase_task.invoice_field_items", (v.vendor_item_ids || []).join(", ")],
+      ["purchase_task.invoice_field_coupang_status", plan.coupang ? plan.coupang.status : null],
+      ["purchase_task.invoice_field_coupang_invoice", plan.coupang ? plan.coupang.invoice_number : null],
+      ["purchase_task.invoice_field_ledger", plan.ledger ? plan.ledger.status : null],
+    ];
+    const reasons = (plan.blockers || []).concat(plan.gate_blockers || []);
+    let status = "";
+    if (outcomeText) status = `<p class="field-hint"><strong>${escapeHtml(outcomeText)}</strong></p>`;
+    else if (plan.already_registered) status = `<p class="field-hint"><strong>${escapeHtml(HomezI18n.t("purchase_task.invoice_already"))}</strong></p>`;
+    else if (plan.sendable) status = `<p class="field-hint">${escapeHtml(HomezI18n.t("purchase_task.invoice_ready"))}</p>`;
+    box.innerHTML = `
+      <dl class="detail-grid">${rows.map(([key, value]) => `<dt>${escapeHtml(HomezI18n.t(key))}</dt><dd>${escapeHtml(value === null || value === undefined || value === "" ? "—" : String(value))}</dd>`).join("")}</dl>
+      ${reasons.length ? `<ul class="field-hint">${reasons.map((b) => `<li>${escapeHtml(b.message)}</li>`).join("")}</ul>` : ""}
+      ${status}
+      <div class="dialog-actions">
+        ${plan.sendable ? `<button type="button" class="btn btn-primary" id="pt-invoice-send-btn">${escapeHtml(HomezI18n.t(plan.ledger && plan.ledger.status === "ACTION_REQUIRED" ? "purchase_task.invoice_resend_btn" : "purchase_task.invoice_send_btn"))}</button>` : ""}
+        ${plan.ledger && plan.ledger.status === "UNKNOWN" ? `<button type="button" class="btn btn-ghost" id="pt-invoice-reconcile-btn">${escapeHtml(HomezI18n.t("purchase_task.invoice_reconcile_btn"))}</button>` : ""}
+      </div>
+    `;
+    const send = el("pt-invoice-send-btn");
+    if (send) send.addEventListener("click", () => withButtonGuard(send, () => ptInvoiceSend(task, plan)));
+    const rec = el("pt-invoice-reconcile-btn");
+    if (rec) rec.addEventListener("click", () => withButtonGuard(rec, () => ptInvoiceReconcile(task)));
+  }
+
+  async function ptInvoicePreview(task) {
+    try {
+      const plan = await apiFetch(`/purchase-tasks/${task.id}/coupang-invoice/preview?live=true`);
+      ptInvoiceRenderPlan(task, plan, null);
+    } catch (err) {
+      toast((err && err.message) || HomezI18n.t("purchase_task.action_error"), "error");
+    }
+  }
+
+  async function ptInvoiceSend(task, plan) {
+    const v = plan.values || {};
+    const confirmed = await askConfirm(
+      HomezI18n.t("purchase_task.invoice_confirm_body", {
+        order: v.channel_order_id, box: v.shipment_box_id, courier: `${v.courier_name} (${v.delivery_company_code})`, number: v.invoice_number,
+      }),
+      { title: HomezI18n.t("purchase_task.invoice_confirm_title"), okLabel: HomezI18n.t("purchase_task.invoice_send_btn") },
+    );
+    if (!confirmed) return;
+    const recentAuthToken = await promptRecentAuthToken();
+    if (recentAuthToken === null) return;
+    try {
+      const result = await apiFetch(`/purchase-tasks/${task.id}/coupang-invoice/send`, {
+        method: "POST",
+        headers: { "X-Recent-Auth-Token": recentAuthToken },
+        body: JSON.stringify({
+          delivery_company_code: v.delivery_company_code,
+          invoice_number: v.invoice_number,
+          shipment_box_id: v.shipment_box_id,
+          vendor_item_ids: v.vendor_item_ids,
+          retry_action_required: Boolean(plan.ledger && plan.ledger.status === "ACTION_REQUIRED"),
+        }),
+      });
+      const label = HomezI18n.t(`purchase_task.invoice_outcome.${String(result.outcome).toLowerCase()}`);
+      ptInvoiceRenderPlan(task, result.plan || plan, `${label} — ${result.detail || ""}`);
+      toast(label, result.outcome === "SUCCEEDED" ? "success" : "error");
+    } catch (err) {
+      toast((err && err.message) || HomezI18n.t("purchase_task.action_error"), "error");
+    }
+  }
+
+  async function ptInvoiceReconcile(task) {
+    try {
+      const result = await apiFetch(`/purchase-tasks/${task.id}/coupang-invoice/reconcile`, { method: "POST" });
+      const label = HomezI18n.t(`purchase_task.invoice_outcome.${String(result.outcome).toLowerCase()}`);
+      toast(`${label}`, result.outcome === "SUCCEEDED" ? "success" : "info");
+      await ptInvoicePreview(task);
+    } catch (err) {
+      toast((err && err.message) || HomezI18n.t("purchase_task.action_error"), "error");
+    }
   }
 
   // 2026-09-11 후속(운영 전 최종 검증 라운드, "송장 다시 조회") —
@@ -7021,6 +7124,8 @@
     FAILED: "CHECK", PARTIALLY_SUCCEEDED: "CHECK", SUBMITTING: "PROGRESS", VALIDATING: "PROGRESS",
   };
   const WQ_WIZARD_WARN = new Set(["NO_IMAGE_SELECTED", "NO_CHANNEL", "NO_ECONOMICS", "NEEDS_CORRECTION", "SUBMIT_FAILED", "PARTIALLY_SUCCEEDED"]);
+  // 제출이 실패했거나 일부만 등록된 작업은 수정할 수 없고 결과를 봐야 한다 — "진행 중"으로 보이지 않게 한다.
+  const WQ_RESULT_STATUS = new Set(["FAILED", "PARTIALLY_SUCCEEDED"]);
   const wqState = { items: [], filter: null, selectedKey: null, failed: [] };
 
   function wqUrgency(value) {
@@ -7063,11 +7168,11 @@
       if (!base || w.deleted_at) return;
       const warn = (w.attention || []).some((c) => WQ_WIZARD_WARN.has(c));
       items.push({
-        key: `wizard:${w.id}`, kind: "wizard", state: base === "PROGRESS" && warn ? "CHECK" : base, urgency: warn ? "MEDIUM" : "LOW",
+        key: `wizard:${w.id}`, kind: "wizard", wizardStatus: w.status, state: base === "PROGRESS" && warn ? "CHECK" : base, urgency: warn ? "MEDIUM" : "LOW",
         title: "", detail: (w.attention || []).map(lwAttentionLabel).join(" · "), target: `#${w.id}`,
         product: { name: w.product_name || `#${w.id}`, thumbAssetId: w.thumbnail_asset_id || null, supplier: w.supplier_label || "" },
         stepText: w.step_number ? `${w.step_number} / ${w.step_total || 10}` : "", stepKey: String(w.current_step || "").toLowerCase(),
-        next: { view: "listing-wizard", wizardId: w.id, labelKey: "wq.next_wizard" },
+        next: { view: "listing-wizard", wizardId: w.id, labelKey: WQ_RESULT_STATUS.has(w.status) ? "wq.next_result" : "wq.next_wizard" },
       });
     });
     return items.sort((a, b) =>
@@ -7082,7 +7187,7 @@
 
   function wqTitle(item) {
     if (item.kind === "wizard") {
-      return HomezI18n.t("wq.wizard_title", { step: item.stepText || "?" });
+      return HomezI18n.t(WQ_RESULT_STATUS.has(item.wizardStatus) ? "wq.wizard_title_result" : "wq.wizard_title", { step: item.stepText || "?" });
     }
     return item.title || HomezI18n.t(`wq.kind.${item.kind}`);
   }
@@ -7094,7 +7199,7 @@
 
   function wqTargetHtml(item) {
     if (item.product) {
-      return `<span class="wq-target">${lwThumbHtml({ thumbnail_asset_id: item.product.thumbAssetId })}<span class="wq-target-text"><strong>${escapeHtml(item.product.name)}</strong><small>${escapeHtml(item.product.supplier || item.target)}</small></span></span>`;
+      return `<span class="wq-target">${lwThumbHtml({ thumbnail_asset_id: item.product.thumbAssetId })}<span class="wq-target-text"><strong>${escapeHtml(item.product.name)}</strong><small>${escapeHtml(item.product.supplier || (item.target === item.product.name ? "" : item.target))}</small></span></span>`;
     }
     return `<span class="wq-target-text"><strong>${escapeHtml(item.target || "—")}</strong></span>`;
   }
@@ -10055,7 +10160,7 @@
   // 오른쪽에 등록 진행 패널을 연다. 값은 서버가 저장된 값에서 계산해 보낸다(없으면 비어 있고 화면도 비운다).
   const LW_THUMB_CACHE_MAX = 200;
   const lwThumbCache = new Map(); // 사진 id → 화면용 주소(오래된 것부터 해제)
-  let lwThumbObserver = null;
+  const lwThumbObservers = new WeakMap(); // 영역(목록·패널 등)마다 관찰자를 따로 둔다 — 한쪽을 다시 그려도 다른 쪽 로딩이 끊기지 않게
   const LW_ATTENTION_WARN = new Set([
     "NEEDS_CORRECTION", "SUBMIT_FAILED", "PARTIALLY_SUCCEEDED", "NO_IMAGE_SELECTED", "NO_CHANNEL", "NO_ECONOMICS",
   ]);
@@ -10092,13 +10197,15 @@
     };
     const nodes = Array.from(root.querySelectorAll("[data-lw-thumb]"));
     if (typeof IntersectionObserver === "undefined") { nodes.forEach(paint); return; }
-    if (lwThumbObserver) lwThumbObserver.disconnect();
-    lwThumbObserver = new IntersectionObserver((entries) => {
+    const previous = lwThumbObservers.get(root);
+    if (previous) previous.disconnect();
+    const observer = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) { lwThumbObserver.unobserve(entry.target); paint(entry.target); }
+        if (entry.isIntersecting) { observer.unobserve(entry.target); paint(entry.target); }
       });
     }, { rootMargin: "120px" });
-    nodes.forEach((node) => lwThumbObserver.observe(node));
+    lwThumbObservers.set(root, observer);
+    nodes.forEach((node) => observer.observe(node));
   }
 
   function lwAttentionLabel(code) {
@@ -10973,6 +11080,11 @@
     el("lw-save-draft-btn").hidden = typeof lwSaveCurrentStep !== "function";
   }
 
+  function lwRefreshDraftButton() {
+    const btn = el("lw-save-draft-btn");
+    if (btn) btn.hidden = typeof lwSaveCurrentStep !== "function";
+  }
+
   async function lwHandleSaveDraft() {
     if (typeof lwSaveCurrentStep !== "function" || lwNextInFlight) return;
     const statusEl = el("lw-save-status");
@@ -11009,19 +11121,24 @@
     const content = el("lw-step-content");
     el("lw-save-status").textContent = "";
 
+    let rendering;
     switch (lwState.viewingStep) {
-      case "SOURCE": return lwRenderSourceStep(content);
-      case "DRAFT": return lwRenderDraftStep(content);
-      case "MEDIA": return lwRenderMediaStep(content);
-      case "CHANNELS": return lwRenderChannelsStep(content);
-      case "FULFILLMENT": return lwRenderFulfillmentStep(content);
-      case "ECONOMICS": return lwRenderEconomicsStep(content);
-      case "PRECHECK": return lwRenderPrecheckStep(content);
-      case "APPROVAL": return lwRenderApprovalStep(content);
-      case "EXECUTION": return lwRenderExecutionStep(content);
-      case "RESULTS": return lwRenderResultsStep(content);
+      case "SOURCE": rendering = lwRenderSourceStep(content); break;
+      case "DRAFT": rendering = lwRenderDraftStep(content); break;
+      case "MEDIA": rendering = lwRenderMediaStep(content); break;
+      case "CHANNELS": rendering = lwRenderChannelsStep(content); break;
+      case "FULFILLMENT": rendering = lwRenderFulfillmentStep(content); break;
+      case "ECONOMICS": rendering = lwRenderEconomicsStep(content); break;
+      case "PRECHECK": rendering = lwRenderPrecheckStep(content); break;
+      case "APPROVAL": rendering = lwRenderApprovalStep(content); break;
+      case "EXECUTION": rendering = lwRenderExecutionStep(content); break;
+      case "RESULTS": rendering = lwRenderResultsStep(content); break;
       default: content.innerHTML = "";
     }
+    const outcome = await rendering;
+    // 각 단계는 그려지는 도중에 자기 저장 함수를 등록한다 — 그 뒤에야 "초안 저장" 버튼을 보일지 알 수 있다.
+    lwRefreshDraftButton();
+    return outcome;
   }
 
   // Gate R-1(2026-08-09) — 언어 전환 시 현재 열린 단계를 즉시 다시
@@ -12910,6 +13027,12 @@
                 <p class="field-error" data-lw-max-buy-count-error></p>
               </label>
               <label class="field">
+                <span class="field-label">${HomezI18n.t("lw.outbound_days_label")}</span>
+                <input type="number" min="1" max="${LW_OUTBOUND_DAYS_MAX}" class="lw-outbound-days" value="${sel.required_fields?.outboundShippingTimeDay ?? LW_OUTBOUND_DAYS_DEFAULT}">
+                <p class="field-hint">${HomezI18n.t("lw.outbound_days_hint")}</p>
+                <p class="field-error" data-lw-outbound-days-error></p>
+              </label>
+              <label class="field">
                 <span class="field-label">${HomezI18n.t("lw.delivery_company_label")}</span>
                 <select class="lw-delivery-company">
                   <option value="">${HomezI18n.t("common.select_placeholder")}</option>
@@ -13322,6 +13445,14 @@
               block.querySelector(".lw-max-buy-count")?.value || "0",
             );
             requiredFields.deliveryCompanyCode = block.querySelector(".lw-delivery-company")?.value || null;
+            const outboundDays = Number(block.querySelector(".lw-outbound-days")?.value);
+            if (!Number.isInteger(outboundDays) || outboundDays < 1 || outboundDays > LW_OUTBOUND_DAYS_MAX) {
+              const outboundErr = block.querySelector("[data-lw-outbound-days-error]");
+              if (outboundErr) outboundErr.textContent = HomezI18n.t("lw.outbound_days_invalid", { max: LW_OUTBOUND_DAYS_MAX });
+              if (!opts.silent) errEl.textContent = HomezI18n.t("lw.outbound_days_invalid", { max: LW_OUTBOUND_DAYS_MAX });
+              return false;
+            }
+            requiredFields.outboundShippingTimeDay = outboundDays;
           }
           const vendorUserId = block.querySelector(".lw-vendor-user-id")?.value.trim();
           if (vendorUserId) requiredFields.vendorUserId = vendorUserId;
@@ -13522,12 +13653,19 @@
   // (listing_defaults.wing_user_id / delivery_company_code)에 한 번 저장해 두고, 칸이 비어 있을 때만 자동 입력한다
   // (이미 입력/저장된 값은 덮어쓰지 않음). 비운 채 저장하면 고정값이 삭제된다. 인증 정보는 저장하지 않는다.
   const LW_WING_ID_PATTERN = /^[A-Za-z0-9._-]{3,40}$/;
+  // 쿠팡 기준 출고일(주문 → 출고 일수) — 무재고 중개라 공급처가 다음 날 출고하므로 기본 2일(서버 DEFAULT_OUTBOUND_SHIPPING_TIME_DAY와 같은 값).
+  const LW_OUTBOUND_DAYS_DEFAULT = 2;
+  const LW_OUTBOUND_DAYS_MAX = 14;
 
   function lwSellerFixedFields() {
     return [
       {
         selector: ".lw-vendor-user-id", key: "wing_user_id", labelKey: "lw.fixed_default_label_wing",
         validate: (value) => LW_WING_ID_PATTERN.test(value),
+      },
+      {
+        selector: ".lw-outbound-days", key: "outbound_shipping_time_day", labelKey: "lw.fixed_default_label_outbound",
+        validate: (value) => /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= LW_OUTBOUND_DAYS_MAX,
       },
       {
         selector: ".lw-delivery-company", key: "delivery_company_code", labelKey: "lw.fixed_default_label_courier",

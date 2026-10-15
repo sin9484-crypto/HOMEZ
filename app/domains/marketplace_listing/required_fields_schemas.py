@@ -136,6 +136,13 @@ class CoupangContentEntry(_StrictModel):
     contentDetails: list[CoupangContentDetail] = Field(min_length=1)
 
 
+# 2026-10-15 — 쿠팡 기준출고일(주문일로부터 출고까지 일수). 무재고 중개라 공급처가 주문을 받은 **다음 날** 출고하므로
+# 1일이 아니라 2일(+1일)이 기본이다(첫 주문 8103602504198이 "당일출고 필요"로 잡힌 경험). 상한 14일은 HOMEZ 자체 제한이다
+# (쿠팡 공식 상한이 아니다 — 확인한 공식 값이 없다).
+DEFAULT_OUTBOUND_SHIPPING_TIME_DAY = 2
+MAX_OUTBOUND_SHIPPING_TIME_DAY = 14
+
+
 class CoupangSellerFulfilledFields(_StrictModel):
 
     # Coupang Product Creation 공식 계약에 공개된 값만 허용한다.
@@ -174,7 +181,9 @@ class CoupangSellerFulfilledFields(_StrictModel):
     # 이 HOMEZ 전용 값 자체는 쿠팡 payload로 전송하지 않는다.
     liveImageRightsConfirmed: bool = False
     maximumBuyForPerson: int = Field(default=0, ge=0)
-    outboundShippingTimeDay: int = Field(default=1, gt=0)
+    outboundShippingTimeDay: int = Field(
+        default=DEFAULT_OUTBOUND_SHIPPING_TIME_DAY, ge=1, le=MAX_OUTBOUND_SHIPPING_TIME_DAY,
+    )
     unitCount: int = Field(default=1, gt=0)
     adultOnly: Literal["EVERYONE", "ADULT_ONLY"] = "EVERYONE"
     taxType: Literal["TAX", "FREE"] = "TAX"

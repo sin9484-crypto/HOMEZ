@@ -850,8 +850,10 @@ class ChannelActionType:
 
     SALE_STOP = "SALE_STOP"          # 쿠팡 옵션(vendorItemId) 판매중지
     ORDER_CANCEL = "ORDER_CANCEL"    # 쿠팡 고객 주문(발주서) 품목 취소
+    INVOICE_UPLOAD = "INVOICE_UPLOAD"  # 쿠팡 발주서 송장 등록(상품준비중 → 배송지시)
+    PRODUCT_OUTBOUND_DAYS = "PRODUCT_OUTBOUND_DAYS"  # 쿠팡 등록 상품의 기준 출고일 변경(상품 수정 승인불필요 API)
 
-    ALL = (SALE_STOP, ORDER_CANCEL)
+    ALL = (SALE_STOP, ORDER_CANCEL, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS)
 
 
 class ChannelActionStatus:

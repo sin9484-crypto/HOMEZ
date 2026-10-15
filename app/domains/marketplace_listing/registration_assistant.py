@@ -34,6 +34,9 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from app.domains.marketplace_listing.required_fields_schemas import DEFAULT_OUTBOUND_SHIPPING_TIME_DAY
+from app.domains.marketplace_listing.required_fields_schemas import MAX_OUTBOUND_SHIPPING_TIME_DAY
+
 NOTES_EVIDENCE_PREFIX = "REGISTRATION_NOTES:"
 NOTICE_EVIDENCE_PREFIX = "URL_IMPORT_NOTICE:"
 
@@ -76,7 +79,18 @@ WING_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
 COURIER_CODE_PATTERN = re.compile(r"^[A-Z0-9_]{2,20}$")
 FIXED_DEFAULT_LABELS = {
     "wing_user_id": "WING 아이디", "delivery_company_code": "택배사", "consumer_service_phone": "소비자상담 전화번호",
+    "outbound_shipping_time_day": "기준 출고일",
 }
+
+
+def parse_outbound_days(value: Any) -> int | None:
+    """고정값/입력값 → 1~상한의 정수. 형식이 틀리면 None(무시하고 기본값을 쓴다)."""
+
+    text = str(value if value is not None else "").strip()
+    if not text.isdigit():
+        return None
+    days = int(text)
+    return days if 1 <= days <= MAX_OUTBOUND_SHIPPING_TIME_DAY else None
 
 
 def _norm(text: Any) -> str:
@@ -175,6 +189,10 @@ def pick_seller_defaults(
     if courier and COURIER_CODE_PATTERN.match(courier):
         picked["deliveryCompanyCode"] = courier
         fixed_used.append("delivery_company_code")
+    days = parse_outbound_days(fixed.get("outbound_shipping_time_day"))
+    if days is not None:
+        fixed_used.append("outbound_shipping_time_day")
+    picked["outboundShippingTimeDay"] = days if days is not None else DEFAULT_OUTBOUND_SHIPPING_TIME_DAY
     phone = str(fixed.get("consumer_service_phone") or "").strip()
     if phone and re.match(r"^[0-9+()\-\s]{5,30}$", phone):
         seller_notice[_norm("소비자상담관련전화번호")] = phone
@@ -474,6 +492,7 @@ def build_proposal(
         **{k: seller_defaults[k] for k in SELLER_DEFAULT_KEYS if k in seller_defaults},
         **brand_fields,
         "maximumBuyCount": request.stock,
+        "outboundShippingTimeDay": seller_defaults.get("outboundShippingTimeDay", DEFAULT_OUTBOUND_SHIPPING_TIME_DAY),
         "originalPrice": request.sale_price, "salePrice": request.sale_price,
         "displayCategoryCode": int(request.display_category_code) if request.display_category_code.isdigit() else None,
         "items": items,

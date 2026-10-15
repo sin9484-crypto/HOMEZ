@@ -108,7 +108,7 @@ const src = JSON.parse(process.env.SRC_JSON);
 console.log(JSON.stringify(__EXPR__));
 """
 
-CONSTS = ("WQ_STATE_ORDER", "WQ_URGENCY_ORDER", "WQ_PRIORITY_DUPLICATES", "WQ_PRIORITY_VIEWS", "WQ_OPEN_WIZARD_STATUS", "WQ_WIZARD_WARN")
+CONSTS = ("WQ_RESULT_STATUS", "WQ_STATE_ORDER", "WQ_URGENCY_ORDER", "WQ_PRIORITY_DUPLICATES", "WQ_PRIORITY_VIEWS", "WQ_OPEN_WIZARD_STATUS", "WQ_WIZARD_WARN")
 FUNCS = ("wqUrgency", "wqBuildItems", "wqCounts", "wqTitle")
 
 
@@ -179,6 +179,22 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(item["product"], {"name": "방수 생리팬티", "thumbAssetId": 136, "supplier": "온채널"})
         self.assertEqual(item["stepText"], "3 / 10")
         self.assertEqual(item["next"]["wizardId"], 14)
+
+    def test_a_failed_or_partial_registration_asks_for_the_result_not_for_more_editing(self):
+        items = self.items({"wizards": [wizard(id=1, status="FAILED", current_step="RESULTS", step_number=10),
+                                        wizard(id=2, status="PARTIALLY_SUCCEEDED", current_step="RESULTS", step_number=10),
+                                        wizard(id=3, status="DRAFT")]})
+        by_key = {i["key"]: i for i in items}
+        self.assertEqual(by_key["wizard:1"]["next"]["labelKey"], "wq.next_result")
+        self.assertEqual(by_key["wizard:2"]["next"]["labelKey"], "wq.next_result")
+        self.assertEqual(by_key["wizard:3"]["next"]["labelKey"], "wq.next_wizard")
+        titles = self.run_js("wqBuildItems(src).map(wqTitle)", {"wizards": [wizard(id=1, status="FAILED", current_step="RESULTS", step_number=10)]})
+        self.assertEqual(titles, ["상품 등록 결과 확인 필요 · 10 / 10"])
+        self.assertNotIn("진행 중", titles[0])
+
+    def test_a_product_without_a_name_does_not_repeat_its_id_as_the_subtitle(self):
+        body = function_source("wqTargetHtml")
+        self.assertIn("item.target === item.product.name", body)
 
     def test_items_are_sorted_check_first_then_urgency(self):
         src = {"exceptions": {"exceptions": [exception(urgency="LOW", target_entity="a"), exception(urgency="HIGH", target_entity="b")]},

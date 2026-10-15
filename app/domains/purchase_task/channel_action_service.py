@@ -484,6 +484,98 @@ class CoupangChannelActions:
         )
 
 
+    # ---- 송장 등록(2026-10-15) ----
+
+    @staticmethod
+    def invoice_key(channel_order_id: str, shipment_box_id: str) -> str:
+        return f"order:{str(channel_order_id).strip()}:box:{str(shipment_box_id).strip()}"
+
+    def read_order_sheet(self, *, company_id: int, store_connection_id: int, shipment_box_id: str):
+        """발주서 1건 읽기(GET 1회). (스냅샷, None) 또는 (None, 실패 ActionResult). 장부를 쓰지 않는다."""
+
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        try:
+            return provider.read_order_sheet(shipment_box_id), None
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 발주서 조회 예외: %s", type(exc).__name__)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "발주서 조회에 실패했다")
+
+    def register_invoice(
+        self, *, company_id: int, store_connection_id: int, channel_order_id: str,
+        shipment_box_id: str, vendor_item_ids: list[str], delivery_company_code: str,
+        invoice_number: str, triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.INVOICE_UPLOAD,
+            target_key=self.invoice_key(channel_order_id, shipment_box_id),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.upload_invoice(
+                order_id=channel_order_id, shipment_box_id=shipment_box_id, vendor_item_ids=vendor_item_ids,
+                delivery_company_code=delivery_company_code, invoice_number=invoice_number,
+            ),
+            validate=lambda p: p.validate_invoice(
+                channel_order_id, shipment_box_id, vendor_item_ids, delivery_company_code, invoice_number,
+            ),
+        )
+
+    def check_invoice_registered(
+        self, *, company_id: int, store_connection_id: int, channel_order_id: str,
+        shipment_box_id: str, invoice_number: str,
+    ) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.INVOICE_UPLOAD,
+            target_key=self.invoice_key(channel_order_id, shipment_box_id),
+            read=lambda p: p.read_invoice_registered(shipment_box_id, invoice_number),
+            applied_when=True,  # 발주서의 송장번호가 보낸 번호와 같으면 적용된 것
+        )
+
+    # ---- 등록 상품 기준 출고일(2026-10-15) ----
+
+    @staticmethod
+    def product_days_key(seller_product_id: str, days: int) -> str:
+        return f"product:{str(seller_product_id).strip()}:days:{int(days)}"
+
+    def read_product_days(self, *, company_id: int, store_connection_id: int, seller_product_id: str):
+        """등록 상품 1건 읽기(GET 1회). (스냅샷, None) 또는 (None, 실패 ActionResult). 장부를 쓰지 않는다."""
+
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        try:
+            return provider.read_product_days(seller_product_id), None
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 상품 조회 예외: %s", type(exc).__name__)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "상품 조회에 실패했다")
+
+    def set_product_outbound_days(
+        self, *, company_id: int, store_connection_id: int, seller_product_id: str, days: int,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRODUCT_OUTBOUND_DAYS,
+            target_key=self.product_days_key(seller_product_id, days),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.update_outbound_days(seller_product_id, days),
+            validate=lambda p: p.validate_outbound_days(seller_product_id, days),
+        )
+
+    def check_product_outbound_days(
+        self, *, company_id: int, store_connection_id: int, seller_product_id: str, days: int,
+    ) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRODUCT_OUTBOUND_DAYS,
+            target_key=self.product_days_key(seller_product_id, days),
+            read=lambda p: p.read_outbound_days_applied(seller_product_id, days),
+            applied_when=True,  # 모든 옵션의 기준출고일이 요청한 값이면 적용된 것
+        )
+
+
 __all__ = [
     "ActionOutcome", "ActionResult", "ClaimResult", "ChannelActionJournal",
     "CoupangChannelActions", "journal_available", "REQUESTING_STALE_SECONDS",

@@ -77,6 +77,20 @@ class BackendPriorityTests(unittest.TestCase):
         self.assertEqual(picked["deliveryCompanyCode"], "HANJIN")
         self.assertEqual(sorted(picked["_fixed_used"]), ["delivery_company_code", "wing_user_id"])
 
+    def test_outbound_days_default_to_two_and_a_valid_fixed_value_wins(self):
+        self.assertEqual(pick_seller_defaults(PRIOR, {})["outboundShippingTimeDay"], 2)
+        picked = pick_seller_defaults(PRIOR, {}, {"outbound_shipping_time_day": "3"})
+        self.assertEqual(picked["outboundShippingTimeDay"], 3)
+        self.assertIn("outbound_shipping_time_day", picked["_fixed_used"])
+        picked = pick_seller_defaults(PRIOR, {}, {"outbound_shipping_time_day": 5})
+        self.assertEqual(picked["outboundShippingTimeDay"], 5)
+
+    def test_invalid_outbound_days_fall_back_to_the_default(self):
+        for bad in ("0", "15", "-1", "1.5", "abc", "", None, 0, 99):
+            picked = pick_seller_defaults(PRIOR, {}, {"outbound_shipping_time_day": bad})
+            self.assertEqual(picked["outboundShippingTimeDay"], 2, bad)
+            self.assertNotIn("outbound_shipping_time_day", picked["_fixed_used"], bad)
+
     def test_without_fixed_values_the_previous_registration_is_used(self):
         picked = pick_seller_defaults(PRIOR, {})
         self.assertEqual(picked["vendorUserId"], "prior-id")
@@ -130,6 +144,7 @@ class UiValidatorTests(unittest.TestCase):
         harness = (
             "const LW_COUPANG_DELIVERY_COMPANIES = [{code:'CJGLS'},{code:'HANJIN'}];\n"
             + "const LW_WING_ID_PATTERN = /^[A-Za-z0-9._-]{3,40}$/;\n"
+            + "const LW_OUTBOUND_DAYS_MAX = 14;\n"
             + function_source("lwSellerFixedFields") + "\n"
             + "const f = lwSellerFixedFields(); console.log(JSON.stringify(" + expression + "));"
         )
@@ -142,11 +157,19 @@ class UiValidatorTests(unittest.TestCase):
                          [True, False, False, False])
 
     def test_courier_must_be_a_known_code(self):
-        self.assertEqual(self._run("[f[1].validate('CJGLS'), f[1].validate('NOPE'), f[1].validate('')]"), [True, False, False])
+        self.assertEqual(
+            self._run("(c => [c.validate('CJGLS'), c.validate('NOPE'), c.validate('')])(f.find(x => x.key === 'delivery_company_code'))"),
+            [True, False, False])
 
-    def test_the_two_fields_map_to_the_expected_inputs_and_keys(self):
+    def test_outbound_days_must_be_a_whole_number_within_the_limit(self):
+        self.assertEqual(
+            self._run("(c => ['1', '2', '14', '0', '15', '1.5', '-1', '', 'a'].map(v => c.validate(v)))(f.find(x => x.key === 'outbound_shipping_time_day'))"),
+            [True, True, True, False, False, False, False, False, False])
+
+    def test_the_fields_map_to_the_expected_inputs_and_keys(self):
         self.assertEqual(self._run("f.map(x => [x.selector, x.key])"),
-                         [[".lw-vendor-user-id", "wing_user_id"], [".lw-delivery-company", "delivery_company_code"]])
+                         [[".lw-vendor-user-id", "wing_user_id"], [".lw-outbound-days", "outbound_shipping_time_day"],
+                          [".lw-delivery-company", "delivery_company_code"]])
 
 
 class UiWiringTests(unittest.TestCase):

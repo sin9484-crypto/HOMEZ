@@ -20,7 +20,16 @@ File : app/domains/purchase_task/coupang_channel_control_provider.py
   판매 상태  GET  /v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/{vendorItemId}/inventories
             data.onSale(true/false).
   발주서 1건 GET  /v2/providers/openapi/apis/api/v5/vendors/{vendorId}/ordersheets/{shipmentBoxId}
-            data.status, data.orderItems[].vendorItemId/shippingCount/cancelCount/canceled.
+            data.status, data.orderItems[].vendorItemId/shippingCount/cancelCount/canceled,
+            data.deliveryCompanyName/invoiceNumber(송장이 있을 때).
+  송장 등록 POST  /v2/providers/openapi/apis/api/v4/vendors/{vendorId}/orders/invoices
+            (2026-10-15 공식 문서 "송장업로드 처리" 확인) 본문 vendorId·orderSheetInvoiceApplyDtos[]
+            (shipmentBoxId·orderId·vendorItemId·deliveryCompanyCode·invoiceNumber·splitShipping=false·
+            preSplitShipped=false·estimatedShippingDate=""). **발주서가 상품준비중(INSTRUCT)일 때만**
+            가능하다. 응답 data.responseCode(0 성공·1 부분실패·99 실패·-1 결과없음)와 건별
+            data.responseList[](shipmentBoxId·succeed·resultCode·retryRequired·resultMessage)를 둘 다
+            본다. 송장이 이미 있으면 재등록 불가(NOT_ALLOW_INVOICE_NUMBER_RE_UPLOAD). 분리배송은 지원하지
+            않는다(항상 전체배송). 같은 요청을 두 번 보냈을 때의 동작은 문서에 없다 → 작업 장부로 재요청 방지.
 
 오류 분류(쓰기 호출) — 요청이 **적용되지 않았음이 확실한지**가 기준이다:
   200 + 성공 코드            → SUCCEEDED
@@ -63,6 +72,20 @@ ORDERSHEET_PATH = (
     "/v2/providers/openapi/apis/api/v5/vendors/{vendor_id}/ordersheets/{shipment_box_id}"
 )
 
+INVOICE_PATH = "/v2/providers/openapi/apis/api/v4/vendors/{vendor_id}/orders/invoices"
+# 송장 업로드는 발주서가 "상품준비중"일 때만 받아 준다(공식 문서). 결제완료(ACCEPT)는 먼저 상품준비중 처리가 필요하다.
+INVOICE_UPLOAD_ALLOWED_RAW_STATUS = "INSTRUCT"
+# 건별 결과 코드 중 "적용 여부를 알 수 없는" 것 — 자동 재요청 금지, 발주서 조회로만 확인한다.
+INVOICE_UNKNOWN_RESULT_CODES = frozenset({"UNDEFINED_ERROR_OCCUR"})
+
+# 상품 수정(승인불필요) — 2026-10-15 공식 문서 확인: PUT .../seller-products/{sellerProductId}/partial, Body의 최상위
+# outboundShippingTimeDay(기준출고일, number, "당일출고는 1")만 바꾼다(필수 항목은 sellerProductId뿐). 임시저장중·승인대기중 상품은
+# 수정할 수 없다. 응답 모양은 실제로 받아 본 적이 없어 성공 판정은 최상위 code=SUCCESS와 사후 조회(GET)로 이중 확인한다.
+PRODUCT_PARTIAL_PATH = "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}/partial"
+PRODUCT_DETAIL_PATH = "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}"
+MIN_OUTBOUND_DAYS = 1
+MAX_OUTBOUND_DAYS = 14  # HOMEZ 자체 상한(쿠팡 공식 상한이 아님)
+
 BIG_CANCEL_CODE = "CANERR"
 MIDDLE_CANCEL_CODE_INVENTORY = "CCTTER"  # 재고 연동 오류(공급 불가에 해당하는 유일한 코드)
 
@@ -93,6 +116,31 @@ class ProviderReadResult:
 
     ok: bool
     value: bool | None = None  # SALE: onSale / ORDER: 요청 품목이 모두 취소됐는가
+    detail: str = ""
+    http_status: int | None = None
+
+
+@dataclass(frozen=True)
+class OrderSheetSnapshot:
+    """발주서 1건의 읽기 결과. ok=False면 아래 값은 모두 알 수 없다(실패를 값으로 해석하지 않는다)."""
+
+    ok: bool
+    status: str | None = None
+    # (vendorItemId, shippingCount, cancelCount) — 이미 전량 취소된 품목은 호출자가 걸러 낸다.
+    items: tuple[tuple[str, int, int], ...] = ()
+    delivery_company_name: str | None = None
+    invoice_number: str | None = None
+    detail: str = ""
+    http_status: int | None = None
+
+
+@dataclass(frozen=True)
+class ProductDaysSnapshot:
+    """등록 상품 1건의 읽기 결과. ok=False면 아래 값은 모두 알 수 없다(실패를 값으로 해석하지 않는다)."""
+
+    ok: bool
+    status_name: str | None = None  # 쿠팡이 준 원문(영문/한글)
+    days: tuple[int, ...] = ()  # items[] 마다의 기준출고일(옵션 순서)
     detail: str = ""
     http_status: int | None = None
 
@@ -145,7 +193,237 @@ def _retry_after(response: requests.Response) -> int | None:
     return value if value is not None and value >= 0 else None
 
 
-class CoupangChannelControlProvider:
+def _int_or_zero(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+class _InvoiceMixin:
+    """송장 등록(쓰기)과 발주서 조회(읽기). `CoupangChannelControlProvider`에 합쳐 쓴다."""
+
+    @staticmethod
+    def _valid_courier_code(code: str) -> bool:
+        text = str(code or "")
+        return 2 <= len(text) <= 20 and all(c.isupper() or c.isdigit() or c == "_" for c in text)
+
+    @staticmethod
+    def _valid_invoice_number(number: str) -> bool:
+        text = str(number or "")
+        return 6 <= len(text) <= 30 and all(c.isalnum() or c == "-" for c in text)
+
+    def validate_invoice(
+        self, order_id: str, shipment_box_id: str, vendor_item_ids: list[str],
+        delivery_company_code: str, invoice_number: str,
+    ) -> ProviderCallResult | None:
+        """요청을 만들 수 없으면 사유(외부 요청 없음), 만들 수 있으면 None. 장부 선점 전에 호출한다."""
+
+        order = str(order_id or "").strip()
+        box = str(shipment_box_id or "").strip()
+        items = [str(v).strip() for v in vendor_item_ids]
+        if not order.isdigit() or not box.isdigit() or not items or any(not v.isdigit() for v in items):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_TARGET",
+                "주문번호·배송번호·옵션번호가 쿠팡 요청 형식(숫자)에 맞지 않아 요청하지 않았다",
+            )
+        if not self._valid_courier_code(delivery_company_code):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_COURIER",
+                "택배사 코드가 쿠팡 코드 형식이 아니라 요청하지 않았다 — 추측해서 채우지 않는다",
+            )
+        if not self._valid_invoice_number(invoice_number):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_INVOICE_NUMBER",
+                "송장번호 형식(6~30자 영문·숫자·하이픈)이 아니라 요청하지 않았다",
+            )
+        return None
+
+    def upload_invoice(
+        self, *, order_id: str, shipment_box_id: str, vendor_item_ids: list[str],
+        delivery_company_code: str, invoice_number: str,
+    ) -> ProviderCallResult:
+        """송장 등록(전체배송). 호출자가 한 배송번호(박스) 단위로 호출하며, 박스의 취소되지 않은 품목을 모두 싣는다."""
+
+        invalid = self.validate_invoice(
+            order_id, shipment_box_id, vendor_item_ids, delivery_company_code, invoice_number,
+        )
+        if invalid is not None:
+            return invalid
+        path = INVOICE_PATH.format(vendor_id=quote(self.vendor_id, safe=""))
+        payload = {
+            "vendorId": self.vendor_id,
+            "orderSheetInvoiceApplyDtos": [
+                {
+                    "shipmentBoxId": int(str(shipment_box_id).strip()),
+                    "orderId": int(str(order_id).strip()),
+                    "vendorItemId": int(str(v).strip()),
+                    "deliveryCompanyCode": delivery_company_code,
+                    "invoiceNumber": invoice_number,
+                    "splitShipping": False,
+                    "preSplitShipped": False,
+                    "estimatedShippingDate": "",
+                }
+                for v in vendor_item_ids
+            ],
+        }
+        sent = self._write("POST", path, payload)
+        if isinstance(sent, ProviderCallResult):
+            return sent
+        failure = self._classify_status(sent)
+        if failure is not None:
+            return failure
+        body = _body(sent) or {}
+        data = body.get("data")
+        results = data.get("responseList") if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(results, list) or not results:
+            return ProviderCallResult(
+                CallKind.UNKNOWN, 200, "INVALID_RESPONSE",
+                "200 응답이지만 건별 결과가 없어 적용 여부를 알 수 없다",
+            )
+        entries = [r for r in results if isinstance(r, dict)]
+        response_code = data.get("responseCode")
+        all_succeeded = bool(entries) and len(entries) == len(results) and all(
+            e.get("succeed") is True for e in entries
+        )
+        if response_code == 0 and all_succeeded:
+            return ProviderCallResult(CallKind.SUCCEEDED, 200, None, _summary(body))
+        failed = [e for e in entries if e.get("succeed") is not True]
+        codes = sorted({str(e.get("resultCode") or "").strip() for e in failed if e.get("resultCode")})
+        brief = ", ".join(codes)[:120] or f"responseCode={response_code}"
+        message = str((failed[0] if failed else {}).get("resultMessage") or "")[:120]
+        if response_code == 0 or not failed or any(c in INVOICE_UNKNOWN_RESULT_CODES for c in codes):
+            # 전체 결과와 건별 결과가 어긋나거나(성공이라는데 실패 건이 있음) 알 수 없는 오류 — 서버가
+            # 처리했을 수 있어 자동 재요청하지 않고 발주서 조회로 확인한다.
+            return ProviderCallResult(
+                CallKind.UNKNOWN, 200, "UNCERTAIN_RESULT",
+                f"쿠팡 응답으로 적용 여부를 확정할 수 없다({brief}) {message}".strip(),
+            )
+        return ProviderCallResult(
+            CallKind.ACTION_REQUIRED, 200, "REJECTED",
+            f"쿠팡이 송장 등록을 거부했다({brief}) {message}".strip(),
+        )
+
+    def read_order_sheet(self, shipment_box_id: str) -> OrderSheetSnapshot:
+        """발주서 1건(배송번호)의 상태·품목·송장. 읽기 전용 GET 1회."""
+
+        box = str(shipment_box_id or "").strip()
+        if not box.isdigit():
+            return OrderSheetSnapshot(False, detail="배송번호 형식 오류")
+        path = ORDERSHEET_PATH.format(vendor_id=quote(self.vendor_id, safe=""), shipment_box_id=box)
+        try:
+            response = self._send("GET", path)
+        except requests.RequestException:
+            return OrderSheetSnapshot(False, detail="조회 통신 오류")
+        if response.status_code != 200:
+            return OrderSheetSnapshot(
+                False, detail=_summary(_body(response)), http_status=response.status_code,
+            )
+        body = _body(response) or {}
+        data = body.get("data")
+        if isinstance(data, list):
+            data = data[0] if len(data) == 1 and isinstance(data[0], dict) else None
+        items = data.get("orderItems") if isinstance(data, dict) else None
+        status = str(data.get("status") or "").strip() if isinstance(data, dict) else ""
+        if not isinstance(items, list) or not status:
+            return OrderSheetSnapshot(False, detail="발주서 응답 해석 불가", http_status=200)
+        parsed = tuple(
+            (str(i.get("vendorItemId")), _int_or_zero(i.get("shippingCount")), _int_or_zero(i.get("cancelCount")))
+            for i in items if isinstance(i, dict) and str(i.get("vendorItemId") or "").isdigit()
+        )
+        invoice = str(data.get("invoiceNumber") or "").strip() or None
+        courier = str(data.get("deliveryCompanyName") or "").strip() or None
+        return OrderSheetSnapshot(True, status, parsed, courier, invoice, "", 200)
+
+    def read_invoice_registered(self, shipment_box_id: str, invoice_number: str) -> ProviderReadResult:
+        """결과불명 대조 — 발주서의 송장번호가 보낸 번호와 같으면 value=True, 송장이 없으면 False."""
+
+        sheet = self.read_order_sheet(shipment_box_id)
+        if not sheet.ok:
+            return ProviderReadResult(False, None, sheet.detail, sheet.http_status)
+        if sheet.invoice_number is None:
+            return ProviderReadResult(True, False, "", 200)
+        return ProviderReadResult(True, sheet.invoice_number == str(invoice_number).strip(), "", 200)
+
+
+class _ProductDaysMixin:
+    """등록 상품의 기준 출고일 변경(쓰기)과 조회(읽기)."""
+
+    @staticmethod
+    def _valid_days(days: Any) -> bool:
+        return isinstance(days, int) and not isinstance(days, bool) and MIN_OUTBOUND_DAYS <= days <= MAX_OUTBOUND_DAYS
+
+    def validate_outbound_days(self, seller_product_id: str, days: Any) -> ProviderCallResult | None:
+        if not str(seller_product_id or "").strip().isdigit():
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_TARGET",
+                "쿠팡 등록상품번호(sellerProductId)가 숫자가 아니라 요청하지 않았다",
+            )
+        if not self._valid_days(days):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_DAYS",
+                f"기준 출고일은 {MIN_OUTBOUND_DAYS}~{MAX_OUTBOUND_DAYS}일의 정수여야 해서 요청하지 않았다",
+            )
+        return None
+
+    def update_outbound_days(self, seller_product_id: str, days: int) -> ProviderCallResult:
+        invalid = self.validate_outbound_days(seller_product_id, days)
+        if invalid is not None:
+            return invalid
+        product = str(seller_product_id).strip()
+        path = PRODUCT_PARTIAL_PATH.format(seller_product_id=product)
+        sent = self._write("PUT", path, {"sellerProductId": int(product), "outboundShippingTimeDay": days})
+        if isinstance(sent, ProviderCallResult):
+            return sent
+        failure = self._classify_status(sent)
+        if failure is not None:
+            return failure
+        body = _body(sent)
+        code = str((body or {}).get("code") or "").strip().upper()
+        if code == "SUCCESS" or code == "200":
+            return ProviderCallResult(CallKind.SUCCEEDED, 200, None, _summary(body))
+        if code == "ERROR":
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, 200, "REJECTED", _summary(body))
+        return ProviderCallResult(
+            CallKind.UNKNOWN, 200, "INVALID_RESPONSE",
+            "200 응답이지만 성공·실패를 판정할 수 없는 본문이라 적용 여부를 알 수 없다",
+        )
+
+    def read_product_days(self, seller_product_id: str) -> ProductDaysSnapshot:
+        """상품 상세(GET 1회)에서 상태와 옵션별 기준출고일을 읽는다. 하나라도 읽지 못하면 ok=False."""
+
+        product = str(seller_product_id or "").strip()
+        if not product.isdigit():
+            return ProductDaysSnapshot(False, detail="등록상품번호 형식 오류")
+        path = PRODUCT_DETAIL_PATH.format(seller_product_id=product)
+        try:
+            response = self._send("GET", path)
+        except requests.RequestException:
+            return ProductDaysSnapshot(False, detail="조회 통신 오류")
+        if response.status_code != 200:
+            return ProductDaysSnapshot(False, detail=_summary(_body(response)), http_status=response.status_code)
+        body = _body(response) or {}
+        data = body.get("data")
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list) or not items:
+            return ProductDaysSnapshot(False, detail="상품 응답 해석 불가", http_status=200)
+        days: list[int] = []
+        for item in items:
+            raw = item.get("outboundShippingTimeDay") if isinstance(item, dict) else None
+            text = str(raw).strip() if raw is not None and not isinstance(raw, bool) else ""
+            if not text.isdigit():
+                return ProductDaysSnapshot(False, detail="옵션의 기준출고일을 읽지 못함", http_status=200)
+            days.append(int(text))
+        status = str(data.get("statusName") or "").strip() or None
+        return ProductDaysSnapshot(True, status, tuple(days), "", 200)
+
+    def read_outbound_days_applied(self, seller_product_id: str, days: int) -> ProviderReadResult:
+        """결과불명 대조 — 모든 옵션의 기준출고일이 요청한 값이면 value=True."""
+
+        snapshot = self.read_product_days(seller_product_id)
+        if not snapshot.ok:
+            return ProviderReadResult(False, None, snapshot.detail, snapshot.http_status)
+        return ProviderReadResult(True, all(d == days for d in snapshot.days), "", 200)
+
+
+class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin):
     """쿠팡 옵션 판매중지·주문 취소(쓰기)와 결과 대조(읽기). 자동 재시도·스케줄 없음 —
     재시도 정책은 호출하는 작업 장부 서비스의 몫이다."""
 
@@ -395,6 +673,6 @@ class CoupangChannelControlProvider:
 
 __all__ = [
     "CallKind", "ProviderCallResult", "ProviderReadResult", "ControlTransport",
-    "RequestsControlTransport", "CoupangChannelControlProvider",
-    "CANCEL_AUTO_ALLOWED_RAW_STATUSES",
+    "RequestsControlTransport", "CoupangChannelControlProvider", "OrderSheetSnapshot", "ProductDaysSnapshot",
+    "CANCEL_AUTO_ALLOWED_RAW_STATUSES", "INVOICE_UPLOAD_ALLOWED_RAW_STATUS",
 ]

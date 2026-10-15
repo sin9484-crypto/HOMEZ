@@ -37,6 +37,8 @@ from app.core.exceptions import UnauthorizedException
 from app.core.permission_check import require_permission
 from app.core.guard import AdminGuard
 from app.core.guard import StaffGuard
+from app.domains.purchase_task.coupang_invoice_schema import CoupangInvoiceSendRequest
+from app.domains.purchase_task.coupang_product_days_schema import CoupangProductDaysSendRequest
 from app.core.recent_auth import consume_recent_auth_token
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
 from app.domains.purchase_task.channel_adapter import get_purchase_channel_adapter
@@ -1036,6 +1038,107 @@ def re_execute_supplier_stop_sale(
         retry_action_required=data.retry_action_required,
     )
     return _stop_sale_report_response(report)
+
+
+@router.get("/coupang-products/{seller_product_id}/outbound-days/preview")
+def preview_coupang_product_days(
+    seller_product_id: str,
+    days: int = Query(ge=1, le=14, description="바꾸려는 기준 출고일(일)"),
+    live: bool = Query(default=True, description="true면 쿠팡 상품을 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 등록 상품의 기준 출고일 변경 **미리보기** — 현재 값·막는 이유·쿠팡 상태. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_product_days_service import CoupangProductDaysService
+
+    return CoupangProductDaysService(db).plan(current_user.company_id, seller_product_id, days, live=live).to_dict()
+
+
+@router.post("/coupang-products/{seller_product_id}/outbound-days/send")
+def send_coupang_product_days(
+    seller_product_id: str,
+    data: CoupangProductDaysSendRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 등록 상품의 기준 출고일을 **바꾼다(외부 변경)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐이 필요하고, 미리보기에서 본
+    현재 값과 쿠팡의 지금 값이 같을 때만 한 번 보낸다(작업 장부가 중복을 막고, 성공 뒤 상품을 다시 읽어 확인한다)."""
+
+    from app.domains.purchase_task.coupang_product_days_service import CoupangProductDaysService
+
+    return CoupangProductDaysService(db).send(
+        current_user.company_id, current_user.id, seller_product_id, data.days,
+        expected_current_days=data.expected_current_days, retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-products/{seller_product_id}/outbound-days/reconcile")
+def reconcile_coupang_product_days(
+    seller_product_id: str,
+    days: int = Query(ge=1, le=14),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 기준 출고일 변경 요청을 쿠팡 상품 조회로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_product_days_service import CoupangProductDaysService
+
+    return CoupangProductDaysService(db).reconcile(current_user.company_id, seller_product_id, days)
+
+
+@router.get("/{task_id}/coupang-invoice/preview")
+def preview_coupang_invoice(
+    task_id: int,
+    live: bool = Query(default=True, description="true면 쿠팡 발주서를 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """HOMEZ에서 쿠팡에 송장을 등록하기 전 **미리보기** — 보낼 값·막는 이유·쿠팡 현재 상태. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_invoice_service import CoupangInvoiceService
+
+    return CoupangInvoiceService(db).plan(task_id, current_user.company_id, live=live).to_dict()
+
+
+@router.post("/{task_id}/coupang-invoice/send")
+def send_coupang_invoice(
+    task_id: int,
+    data: CoupangInvoiceSendRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    recent_auth_token: str | None = Header(default=None, alias="X-Recent-Auth-Token"),
+):
+    """쿠팡 발주서에 송장을 **등록한다(외부 변경)**. 관리자 + 최근 인증 + 운영자 승인 모드 + 비상정지 꺼짐이 필요하고,
+    미리보기에서 본 값과 지금 값이 같을 때만 한 번 보낸다(작업 장부가 중복을 막는다)."""
+
+    from app.domains.purchase_task.coupang_invoice_service import CoupangInvoiceService
+
+    def require_recent_auth() -> None:
+        if not consume_recent_auth_token(recent_auth_token, current_user.id):
+            raise UnauthorizedException(
+                "COUPANG_INVOICE_RECENT_AUTH_REQUIRED: 쿠팡에 송장을 등록하려면 현재 비밀번호를 다시 확인해야 합니다.",
+            )
+
+    return CoupangInvoiceService(db).send(
+        task_id, current_user.company_id, current_user.id,
+        delivery_company_code=data.delivery_company_code, invoice_number=data.invoice_number,
+        shipment_box_id=data.shipment_box_id, vendor_item_ids=data.vendor_item_ids,
+        retry_action_required=data.retry_action_required, before_send=require_recent_auth,
+    )
+
+
+@router.post("/{task_id}/coupang-invoice/reconcile")
+def reconcile_coupang_invoice(
+    task_id: int,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 송장 요청을 쿠팡 발주서의 송장번호로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_invoice_service import CoupangInvoiceService
+
+    return CoupangInvoiceService(db).reconcile(task_id, current_user.company_id)
 
 
 @router.get("/{task_id}", response_model=PurchaseTaskResponse)

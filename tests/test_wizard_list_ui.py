@@ -186,6 +186,14 @@ class WiringTests(unittest.TestCase):
         self.assertIn("apiFetchBlob(`/media-assets/${assetId}/file`)", body)
         self.assertIn("catch", body)  # 권한 없음·사진 없음은 빈 칸으로 둔다
 
+    def test_each_area_has_its_own_observer_so_redrawing_one_does_not_stop_the_others(self):
+        # 패널을 열 때 목록의 사진 로딩이 끊기던 결함(2026-10-15 실화면에서 발견)을 고정한다.
+        self.assertIn("const lwThumbObservers = new WeakMap();", JS)
+        body = function_source("lwHydrateThumbs")
+        self.assertIn("lwThumbObservers.get(root)", body)
+        self.assertIn("lwThumbObservers.set(root, observer)", body)
+        self.assertNotIn("lwThumbObserver ", JS.replace("lwThumbObservers", ""))
+
     def test_the_picture_cache_is_bounded_and_released(self):
         body = function_source("lwThumbCacheSet")
         self.assertIn("LW_THUMB_CACHE_MAX", body)

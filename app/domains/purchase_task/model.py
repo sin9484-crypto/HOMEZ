@@ -1232,7 +1232,9 @@ class ChannelActionRequest(Base):
     # 논리 참조(store_connections.id) — 요청을 보낸 쿠팡 판매 연결.
     store_connection_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     action_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    # 대상 식별: SALE_STOP="vi:<vendorItemId>", ORDER_CANCEL="order:<주문번호>:box:<박스번호>".
+    # 대상 식별: SALE_STOP="vi:<vendorItemId>", ORDER_CANCEL·INVOICE_UPLOAD="order:<주문번호>:box:<박스번호>",
+    # PRODUCT_OUTBOUND_DAYS="product:<sellerProductId>:days:<일수>"
+    # (같은 형식이어도 action_type이 달라 유일 제약이 서로 다른 동작을 구분한다).
     target_key: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

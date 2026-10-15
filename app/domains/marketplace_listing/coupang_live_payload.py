@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.domains.marketplace_listing.required_fields_schemas import DEFAULT_OUTBOUND_SHIPPING_TIME_DAY
 from app.domains.marketplace_listing.coupang_submission_contract import (
     validate_coupang_submission_contract,
 )
@@ -184,7 +185,9 @@ def build_coupang_live_payload(
             "maximumBuyForPersonPeriod": required_fields.get(
                 "maximumBuyForPersonPeriod", 1,
             ),
-            "outboundShippingTimeDay": required_fields.get("outboundShippingTimeDay", 1),
+            "outboundShippingTimeDay": required_fields.get(
+                "outboundShippingTimeDay", DEFAULT_OUTBOUND_SHIPPING_TIME_DAY,
+            ),
             "unitCount": item.get("unitCount", required_fields.get("unitCount", 1)),
             "adultOnly": required_fields.get("adultOnly", "EVERYONE"),
             "taxType": required_fields.get("taxType", "TAX"),
