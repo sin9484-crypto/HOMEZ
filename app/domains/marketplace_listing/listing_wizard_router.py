@@ -889,7 +889,14 @@ def list_wizards(
         include_archived=include_archived,
     )
 
-    return [_to_list_item(w) for w in wizards]
+    from app.domains.marketplace_listing.listing_wizard_list_enrichment import enrich_list_items
+
+    extras = enrich_list_items(db, current_user.company_id, wizards)
+    items = []
+    for w in wizards:
+        item = _to_list_item(w)
+        items.append(item.model_copy(update=extras.get(w.id, {})))
+    return items
 
 
 @router.get("/export.csv")

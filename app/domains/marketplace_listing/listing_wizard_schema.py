@@ -51,6 +51,16 @@ class WizardListItem(BaseModel):
     deletable: bool = False
     block_reason: str | None = None
 
+    # 2026-10-15 UI 개선 3단계 — 목록에서 "무슨 상품인지" 알아보도록 저장된 값에서 계산해 채우는 선택 필드
+    # (listing_wizard_list_enrichment.py). 모두 기본값이 있어 기존 호출자·응답 소비자는 영향이 없다.
+    product_name: str | None = None
+    supplier_label: str | None = None
+    channels: list[dict] = Field(default_factory=list)
+    step_number: int | None = None
+    step_total: int = 10
+    thumbnail_asset_id: int | None = None
+    attention: list[str] = Field(default_factory=list)
+
     model_config = ConfigDict(from_attributes=True)
 
 
