@@ -79,6 +79,11 @@ from app.core.windows_credential_store import CredentialStore
 from app.domains.automation_safety.constants import FunctionCode
 from app.domains.automation_safety.constants import FunctionMode
 from app.domains.automation_safety.service import SafetyService
+from app.domains.external_call.constants import CallKind as ExtKind
+from app.domains.external_call.constants import CallPurpose as ExtPurpose
+from app.domains.external_call.constants import ExternalSystem as ExtSystem
+from app.domains.external_call.service import ExternalCallNotAllowed
+from app.domains.external_call.service import ExternalCallPolicyService
 from app.domains.order.collection_model import OrderAutoCollectionState
 from app.domains.order.multi_channel_collection_service import (
     OrderMultiChannelCollectionService,
@@ -106,6 +111,10 @@ class OrderCollectionTickOutcome:
     SKIPPED_NOT_AUTOMATIC = "SKIPPED_NOT_AUTOMATIC"
     SKIPPED_ALREADY_RUNNING = "SKIPPED_ALREADY_RUNNING"
     SKIPPED_VALIDATION_BLOCKED = "SKIPPED_VALIDATION_BLOCKED"
+    # 2026-10-16 — 승인 센터의 "주문 자동 감지" 허용이 없어 쿠팡을 부르지 않았다(허용 요청이 올라간다).
+    SKIPPED_NO_ALLOWANCE = "SKIPPED_NO_ALLOWANCE"
+    # 2026-10-16 — 실행 환경(개발용 호출 제한 등)이 쿠팡 호출을 막았다. 쿠팡·앱 문제가 아니므로 연속 실패로 세지 않는다.
+    SKIPPED_CALL_BLOCKED = "SKIPPED_CALL_BLOCKED"
     SUCCEEDED = "SUCCEEDED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
@@ -113,7 +122,7 @@ class OrderCollectionTickOutcome:
     ALL = (
         SKIPPED_EMERGENCY_STOP, SKIPPED_MIGRATION_RESTRICTED, NOT_DUE,
         SKIPPED_NOT_AUTOMATIC, SKIPPED_ALREADY_RUNNING,
-        SKIPPED_VALIDATION_BLOCKED, SUCCEEDED, PARTIAL, FAILED,
+        SKIPPED_VALIDATION_BLOCKED, SKIPPED_NO_ALLOWANCE, SKIPPED_CALL_BLOCKED, SUCCEEDED, PARTIAL, FAILED,
     )
 
 
@@ -217,6 +226,10 @@ def describe_health(function_mode: str, state: OrderAutoCollectionState) -> tupl
     if mode != FunctionMode.AUTOMATIC:
         return "OFF", "자동 감지가 꺼져 있어요(수동). 켜기 전에는 새 주문을 자동으로 가져오지 않아요 — '지금 확인'으로 직접 가져올 수는 있어요."
     status = state.last_status or ""
+    if status == OrderCollectionTickOutcome.SKIPPED_NO_ALLOWANCE:
+        return "NEEDS_ALLOWANCE", "5분마다 주문을 확인하려면 승인 센터에서 '신규 주문 자동 감지' 허용이 필요해요."
+    if status == OrderCollectionTickOutcome.SKIPPED_CALL_BLOCKED:
+        return "ENV_BLOCKED", "실행 환경의 호출 제한이 쿠팡 조회를 막고 있어요(앱이나 쿠팡 문제가 아니에요). 환경 제한을 풀어야 자동으로 확인돼요."
     if state.consecutive_failure_count > 0 or status == OrderCollectionTickOutcome.FAILED:
         return "FAILING", f"최근 확인이 실패했어요({state.last_error_summary or '원인 확인 필요'}). {FIXED_INTERVAL_MINUTES}분 뒤 다시 시도해요."
     if status == OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED:
@@ -326,6 +339,32 @@ def _run_one_company(
             company_id, OrderCollectionTickOutcome.SKIPPED_NOT_AUTOMATIC,
         )
 
+    # 2026-10-16 바깥 호출 허용 — 허용 테이블이 있으면 "신규 주문 자동 감지" 상시 허용이 있어야 쿠팡을 부른다(없으면 허용 요청만
+    # 올리고 건너뛴다). 테이블이 없으면(Migration 적용 전) 예전처럼 진행한다.
+    policy = ExternalCallPolicyService(db) if ExternalCallPolicyService.installed(db) else None
+    ticket = None
+    if policy is not None:
+        try:
+            ticket = policy.authorize(
+                company_id, ExtSystem.COUPANG, ExtKind.READ, ExtPurpose.ORDER_DETECTION,
+                method="GET", target="ordersheets",
+            )
+        except ExternalCallNotAllowed:
+            _record_skip(
+                db, state, status=OrderCollectionTickOutcome.SKIPPED_NO_ALLOWANCE,
+                skip_reason="external_allowance_required",
+            )
+            return OrderCollectionTickCompanyEntry(
+                company_id, OrderCollectionTickOutcome.SKIPPED_NO_ALLOWANCE,
+            )
+
+    def _finish_ticket(ok: bool) -> None:
+        if policy is not None and ticket is not None:
+            try:
+                policy.finish(ticket, succeeded=ok)
+            except Exception:  # noqa: BLE001 — 기록 실패가 수집 결과를 바꾸지 않는다
+                pass
+
     _record_attempt_start(db, state, now)
 
     try:
@@ -333,6 +372,7 @@ def _run_one_company(
             db, credential_store, provider_factory=provider_factory,
         ).run_all(company_id, statuses=NEW_ORDER_DETECTION_STATUSES)
     except ConflictException:
+        _finish_ticket(False)
         _record_skip(
             db, state, status=OrderCollectionTickOutcome.SKIPPED_ALREADY_RUNNING,
             skip_reason="collection_already_running",
@@ -343,6 +383,7 @@ def _run_one_company(
     except BadRequestException as exc:
         # 대부분 자격증명 만료/미연결 — 시스템 장애가 아니므로 연속
         # 실패 카운터를 올리지 않는다(사용자 재인증 문제일 뿐).
+        _finish_ticket(False)
         _record_skip(
             db, state, status=OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED,
             skip_reason=str(exc)[:200],
@@ -351,6 +392,7 @@ def _run_one_company(
             company_id, OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED, str(exc)[:200],
         )
     except Exception as exc:  # noqa: BLE001 — 예상 밖 오류도 실패로 기록하고 다음 회사로 진행
+        _finish_ticket(False)
         db.rollback()
         detail = f"{type(exc).__name__}: {exc}"[:200]
         state.consecutive_failure_count += 1
@@ -368,6 +410,7 @@ def _run_one_company(
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.FAILED, detail)
 
     _record_counts(state, result)
+    _finish_ticket(result.failed_runs == 0 or result.succeeded_runs > 0)
 
     if result.total_connections == 0:
         _mark_success(state, now, OrderCollectionTickOutcome.SUCCEEDED)
@@ -375,9 +418,17 @@ def _run_one_company(
         return OrderCollectionTickCompanyEntry(company_id, OrderCollectionTickOutcome.SUCCEEDED, "no_connections")
 
     if result.failed_runs > 0 and result.succeeded_runs == 0:
-        detail = ", ".join(
-            code for e in result.entries for code in e.error_codes
-        )[:200] or "collection_failed"
+        codes = [code for e in result.entries for code in e.error_codes]
+        if codes and all(code == "ORDER_PROVIDER_CALL_BLOCKED" for code in codes):
+            # 실행 환경이 호출을 막았다 — 쿠팡·앱 장애가 아니므로 연속 실패로 세지 않고(자동 중지 방지) 이유만 남긴다.
+            state.last_status = OrderCollectionTickOutcome.SKIPPED_CALL_BLOCKED
+            state.last_skip_reason = "external_call_blocked_by_environment"
+            state.last_error_summary = "ORDER_PROVIDER_CALL_BLOCKED"
+            db.commit()
+            return OrderCollectionTickCompanyEntry(
+                company_id, OrderCollectionTickOutcome.SKIPPED_CALL_BLOCKED, "ORDER_PROVIDER_CALL_BLOCKED",
+            )
+        detail = ", ".join(codes)[:200] or "collection_failed"
         state.consecutive_failure_count += 1
         state.last_error_summary = detail
         state.last_status = OrderCollectionTickOutcome.FAILED
@@ -487,11 +538,28 @@ def trigger_company_now(
     state = get_or_create_auto_collection_state(db, company_id)
     _record_attempt_start(db, state, now)
 
+    # 사용자가 방금 직접 누른 "지금 확인"은 허용을 기다리지 않고(누른 것 자체가 결정) **기록만** 남긴다.
+    manual_policy = ExternalCallPolicyService(db) if ExternalCallPolicyService.installed(db) else None
+    manual_ticket = None
+    if manual_policy is not None:
+        manual_ticket = manual_policy.authorize(
+            company_id, ExtSystem.COUPANG, ExtKind.READ, ExtPurpose.ORDER_DETECTION,
+            method="GET", target="ordersheets", enforce=False,
+        )
+
+    def _finish_manual(ok: bool) -> None:
+        if manual_policy is not None and manual_ticket is not None:
+            try:
+                manual_policy.finish(manual_ticket, succeeded=ok)
+            except Exception:  # noqa: BLE001
+                pass
+
     try:
         result = OrderMultiChannelCollectionService(
             db, credential_store, provider_factory=provider_factory,
         ).run_all(company_id, statuses=NEW_ORDER_DETECTION_STATUSES)
     except ConflictException:
+        _finish_manual(False)
         _record_skip(
             db, state, status=OrderCollectionTickOutcome.SKIPPED_ALREADY_RUNNING,
             skip_reason="collection_already_running",
@@ -500,6 +568,7 @@ def trigger_company_now(
             company_id, OrderCollectionTickOutcome.SKIPPED_ALREADY_RUNNING,
         )
     except BadRequestException as exc:
+        _finish_manual(False)
         _record_skip(
             db, state, status=OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED,
             skip_reason=str(exc)[:200],
@@ -508,6 +577,7 @@ def trigger_company_now(
             company_id, OrderCollectionTickOutcome.SKIPPED_VALIDATION_BLOCKED, str(exc)[:200],
         )
 
+    _finish_manual(result.failed_runs == 0 or result.succeeded_runs > 0)
     _record_counts(state, result)
 
     if result.failed_runs > 0 and result.succeeded_runs == 0:

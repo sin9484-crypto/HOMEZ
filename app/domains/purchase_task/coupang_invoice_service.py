@@ -224,6 +224,10 @@ class CoupangInvoiceService:
         )
         if sheet is None or not sheet.ok:
             detail = failure.detail if failure is not None else (sheet.detail if sheet is not None else "")
+            if detail.startswith("EXTERNAL_"):
+                # 허용이 없거나 비상 정지 — 쿠팡을 부르지 않았다. 승인 센터에서 허용하면 다시 확인할 수 있다.
+                plan.blockers.append(InvoiceBlocker("EXTERNAL_CALL_NOT_ALLOWED", detail))
+                return
             plan.blockers.append(InvoiceBlocker("SHEET_READ_FAILED", f"쿠팡 발주서를 읽지 못했다 — 결과를 확인할 수 없어 보내지 않는다. {detail}".strip()))
             return
         plan.live_checked = True

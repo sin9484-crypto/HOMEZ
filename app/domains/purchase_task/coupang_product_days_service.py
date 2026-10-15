@@ -153,6 +153,9 @@ class CoupangProductDaysService:
         )
         if snapshot is None or not snapshot.ok:
             detail = failure.detail if failure is not None else (snapshot.detail if snapshot is not None else "")
+            if detail.startswith("EXTERNAL_"):
+                plan.blockers.append(DaysBlocker("EXTERNAL_CALL_NOT_ALLOWED", detail))
+                return
             plan.blockers.append(DaysBlocker("PRODUCT_READ_FAILED", f"쿠팡 상품을 읽지 못해 보내지 않는다. {detail}".strip()))
             return
         plan.live_checked = True

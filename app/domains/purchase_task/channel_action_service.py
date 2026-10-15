@@ -42,6 +42,12 @@ from app.domains.purchase_task.coupang_channel_control_provider import (
 )
 from app.domains.purchase_task.coupang_channel_control_provider import ProviderCallResult
 from app.domains.purchase_task.coupang_channel_control_provider import ProviderReadResult
+from app.domains.external_call.constants import CallKind as ExtKind
+from app.domains.external_call.constants import CallPurpose as ExtPurpose
+from app.domains.external_call.constants import ExternalSystem as ExtSystem
+from app.domains.external_call.service import CallTicket
+from app.domains.external_call.service import ExternalCallNotAllowed
+from app.domains.external_call.service import ExternalCallPolicyService
 from app.domains.purchase_task.model import ChannelActionRequest
 
 logger = logging.getLogger("homez")
@@ -355,6 +361,55 @@ class CoupangChannelActions:
                 ActionOutcome.ACTION_REQUIRED, "쿠팡 자격증명을 준비하지 못해 요청하지 않았다",
             )
 
+    # ---- 바깥 호출 허용(2026-10-16) ----
+
+    # 작업 종류 → (허용 목적, 요청 메서드). 허용 대상이 아닌 종류(판매중지·주문 취소)는 기록만 한다.
+    _EXTERNAL_PURPOSE = {
+        ChannelActionType.INVOICE_UPLOAD: (ExtPurpose.INVOICE_UPLOAD, "POST"),
+        ChannelActionType.PRODUCT_OUTBOUND_DAYS: (ExtPurpose.PRODUCT_OUTBOUND_DAYS, "PUT"),
+        ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
+        ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
+    }
+
+    def _external_policy(self) -> ExternalCallPolicyService | None:
+        """허용 테이블이 있을 때만 확인한다(Migration 적용 전에는 예전 동작 유지)."""
+
+        try:
+            if ExternalCallPolicyService.installed(self.db):
+                return ExternalCallPolicyService(self.db)
+        except Exception:  # noqa: BLE001
+            logger.warning("바깥 호출 허용 테이블 확인 실패 — 허용 확인 없이 진행")
+        return None
+
+    def _external_authorize(
+        self, company_id: int, kind: str, action_type: str, *, triggered_by: int | None = None,
+        method: str | None = None,
+    ) -> tuple[CallTicket | None, ActionResult | None]:
+        """(통과표, None) 또는 (None, 막힌 이유 ActionResult). 허용이 없으면 요청을 보내지 않는다."""
+
+        policy = self._external_policy()
+        if policy is None:
+            return None, None
+        purpose, default_method = self._EXTERNAL_PURPOSE.get(action_type, (action_type, None))
+        try:
+            ticket = policy.authorize(
+                company_id, ExtSystem.COUPANG, kind, purpose, actor_user_id=triggered_by,
+                method=method or (default_method if kind == ExtKind.WRITE else "GET"),
+            )
+            return ticket, None
+        except ExternalCallNotAllowed as exc:
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, str(exc.detail))
+
+    def _external_finish(self, ticket: CallTicket | None, *, succeeded: bool, http_status: int | None = None) -> None:
+        if ticket is None:
+            return
+        policy = self._external_policy()
+        if policy is not None:
+            try:
+                policy.finish(ticket, succeeded=succeeded, http_status=http_status)
+            except Exception:  # noqa: BLE001 — 기록 실패가 요청 결과를 바꾸지 않는다
+                logger.warning("바깥 호출 기록 갱신 실패")
+
     def _execute(
         self, *, company_id: int, store_connection_id: int, action_type: str, target_key: str,
         triggered_by: int | None, retry_action_required: bool,
@@ -371,6 +426,12 @@ class CoupangChannelActions:
             return ActionResult(
                 ActionOutcome.ACTION_REQUIRED, f"{invalid.error_class}: {invalid.detail}",
             )
+        # 허용 확인은 장부 선점 **전에** 한다 — 막혔는데 장부에 REQUESTING이 남아 결과불명이 되는 일이 없게 한다.
+        ticket, denied = self._external_authorize(
+            company_id, ExtKind.WRITE, action_type, triggered_by=triggered_by,
+        )
+        if denied is not None:
+            return denied
         claim = self._journal.claim(
             company_id=company_id, store_connection_id=store_connection_id,
             action_type=action_type, target_key=target_key, triggered_by=triggered_by,
@@ -386,6 +447,9 @@ class CoupangChannelActions:
                 CallKind.UNKNOWN, None, "EXCEPTION", type(exc).__name__,
             )
         done = self._journal.finish(claim.row, result)
+        self._external_finish(
+            ticket, succeeded=result.kind == CallKind.SUCCEEDED, http_status=getattr(result, "http_status", None),
+        )
         return ActionResult(done.outcome, done.detail, executed=True)
 
     def _reconcile(
@@ -405,11 +469,16 @@ class CoupangChannelActions:
         provider, failure = self._provider(company_id, store_connection_id)
         if failure is not None:
             return ActionResult(ActionOutcome.UNKNOWN, failure.detail)
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, action_type)
+        if denied is not None:
+            return ActionResult(ActionOutcome.UNKNOWN, denied.detail)
         try:
             read_result = read(provider)
         except Exception as exc:  # noqa: BLE001
             logger.warning("쿠팡 대조 조회 예외: %s", type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
             return ActionResult(ActionOutcome.UNKNOWN, "대조 조회에 실패했다 — 결과불명 유지")
+        self._external_finish(ticket, succeeded=bool(read_result.ok), http_status=read_result.http_status)
         if not read_result.ok or read_result.value is None:
             return ActionResult(
                 ActionOutcome.UNKNOWN, f"대조 조회로 상태를 확인하지 못했다 — 결과불명 유지 {read_result.detail}".strip(),
@@ -496,11 +565,17 @@ class CoupangChannelActions:
         provider, failure = self._provider(company_id, store_connection_id)
         if failure is not None:
             return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.INVOICE_UPLOAD)
+        if denied is not None:
+            return None, denied
         try:
-            return provider.read_order_sheet(shipment_box_id), None
+            snapshot = provider.read_order_sheet(shipment_box_id)
         except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
             logger.warning("쿠팡 발주서 조회 예외: %s", type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
             return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "발주서 조회에 실패했다")
+        self._external_finish(ticket, succeeded=bool(snapshot.ok), http_status=snapshot.http_status)
+        return snapshot, None
 
     def register_invoice(
         self, *, company_id: int, store_connection_id: int, channel_order_id: str,
@@ -545,11 +620,17 @@ class CoupangChannelActions:
         provider, failure = self._provider(company_id, store_connection_id)
         if failure is not None:
             return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.PRODUCT_OUTBOUND_DAYS)
+        if denied is not None:
+            return None, denied
         try:
-            return provider.read_product_days(seller_product_id), None
+            snapshot = provider.read_product_days(seller_product_id)
         except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
             logger.warning("쿠팡 상품 조회 예외: %s", type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
             return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "상품 조회에 실패했다")
+        self._external_finish(ticket, succeeded=bool(snapshot.ok), http_status=snapshot.http_status)
+        return snapshot, None
 
     def set_product_outbound_days(
         self, *, company_id: int, store_connection_id: int, seller_product_id: str, days: int,

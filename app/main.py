@@ -103,6 +103,7 @@ from app.domains.role_permission.router import (
 from app.domains.retail_purchase.router import (
     router as retail_purchase_router,
 )
+from app.domains.external_call.router import router as external_call_router
 from app.domains.purchase_task.router import (
     router as purchase_task_router,
 )
@@ -648,6 +649,11 @@ app.include_router(
 
 app.include_router(
     user_settings_router,
+)
+
+# 2026-10-16 바깥 호출 허용(승인 센터) — 새 테이블은 Migration 적용 후에만 쓰이고, 없으면 summary가 installed=false로 답한다.
+app.include_router(
+    external_call_router,
 )
 
 app.include_router(

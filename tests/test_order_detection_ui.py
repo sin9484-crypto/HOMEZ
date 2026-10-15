@@ -64,8 +64,8 @@ class OrderDetectionScreenTests(unittest.TestCase):
 
     def test_server_health_codes_match_the_screen_labels(self):
         server = (ROOT / "app/domains/order/auto_collection_scheduler.py").read_text(encoding="utf-8")
-        codes = set(re.findall(r'return "([A-Z]+)",', server.split("def describe_health")[1].split("def _record_counts")[0]))
-        self.assertEqual(codes, {"ERROR", "PAUSED", "OFF", "FAILING", "BLOCKED", "WAITING", "OK"})
+        codes = set(re.findall(r'return "([A-Z_]+)",', server.split("def describe_health")[1].split("def _record_counts")[0]))
+        self.assertEqual(codes, {"ERROR", "PAUSED", "OFF", "FAILING", "BLOCKED", "WAITING", "OK", "NEEDS_ALLOWANCE", "ENV_BLOCKED"})
         for code in codes:
             self.assertIn(f'"odo.health.{code.lower()}":', KO)
 
