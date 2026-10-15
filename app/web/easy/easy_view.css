@@ -1,0 +1,233 @@
+/* =========================================================
+   Homez OS — app/web/easy/easy_view.css
+   2026-10-16 "쉬운 보기" 스타일. 모든 규칙은 `body.easy-view` 아래에만 적용돼 쉬운 보기를 끄면 기존 화면은 그대로다.
+   색·모양은 전달받은 시안(흰 바탕, 짙은 초록 포인트, 표 + 오른쪽 상세 패널, 파스텔 상태 칩)을 따른다.
+   ========================================================= */
+
+body.easy-view {
+  --ez-g: #138049;
+  --ez-g-dark: #0E6A3B;
+  --ez-g-soft: #E9F6EE;
+  --ez-g-line: #BFE3CB;
+  --ez-ink: #1B1F27;
+  --ez-muted: #5B6470;
+  --ez-faint: #8C94A0;
+  --ez-line: #E4E7EB;
+  --ez-head: #F3F5F7;
+  --ez-orange: #F59E0B;
+  --ez-blue: #1F6FD6;
+  --ez-red: #D12B3F;
+  --ez-radius: 10px;
+  /* 기존 화면이 쓰는 변수도 초록 계열로 맞춰 기존 화면(고급 보기)도 같은 분위기로 보이게 한다. */
+  --teal: #138049;
+  --purple: #138049;
+  --primary: #138049;
+}
+
+/* ---------- 껍데기: 사이드바 · 상단바 ---------- */
+body.easy-view .sidenav > .nav-group,
+body.easy-view .sidenav > .nav-sections,
+body.easy-view .sidenav > #nav-legacy-toggle { display: none !important; }
+body.easy-view .sidenav { width: 214px; background: #FAFBFA; border-right: 1px solid var(--ez-line); }
+body.easy-view .sidenav-brand { padding: 20px 18px 14px; }
+body.easy-view .sidenav-brand-sub { color: var(--ez-faint); }
+
+#ez-side { display: none; flex-direction: column; gap: 4px; padding: 6px 10px 14px; flex: 1; }
+body.easy-view #ez-side { display: flex; }
+.ez-nav { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; border: 0; background: transparent; width: 100%;
+  font: inherit; font-size: 16px; font-weight: 600; color: #39414D; cursor: pointer; text-align: left; }
+.ez-nav svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; color: #4B5563; }
+.ez-nav:hover { background: #EEF2EF; }
+.ez-nav[aria-current="page"] { background: var(--ez-g); color: #fff; }
+.ez-nav[aria-current="page"] svg { color: #fff; }
+.ez-nav .ez-badge { margin-left: auto; background: var(--ez-red); color: #fff; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 0 8px; line-height: 20px; }
+.ez-nav[aria-current="page"] .ez-badge { background: #fff; color: var(--ez-g); }
+.ez-nav-sep { border: 0; border-top: 1px solid var(--ez-line); margin: 10px 6px; }
+.ez-nav-spacer { flex: 1; }
+.ez-nav.ez-sub { font-weight: 500; font-size: 15px; }
+
+body.easy-view .topbar { height: 66px; border-bottom: 1px solid var(--ez-line); background: #fff; }
+body.easy-view #badge-version, body.easy-view #badge-schema, body.easy-view #badge-conn { display: none; }
+body.easy-view #badge-mode, body.easy-view #badge-estop { font-weight: 700; }
+body.easy-view .topbar-search input { background: #F7F8FA; border-radius: 8px; }
+body.easy-view .btn-primary { background: var(--ez-g); border-color: var(--ez-g); }
+body.easy-view .btn-primary:hover { background: var(--ez-g-dark); }
+
+/* 쉬운 보기 화면이 아닌(기존) 화면에는 위쪽에 돌아가기 줄을 보여 준다. */
+#ez-legacy-bar { display: none; align-items: center; gap: 12px; padding: 8px 24px; background: var(--ez-g-soft); border-bottom: 1px solid var(--ez-g-line); font-size: 14px; color: #0B4F2C; }
+body.easy-view.ez-on-legacy #ez-legacy-bar { display: flex; }
+#ez-legacy-bar button { border: 1.5px solid var(--ez-g); background: #fff; color: var(--ez-g-dark); border-radius: 6px; padding: 5px 12px; font-weight: 700; cursor: pointer; font: inherit; font-weight: 700; }
+
+/* ---------- 화면 공통 ---------- */
+body.easy-view .view-root { background: #fff; }
+.ez-page { padding: 4px 4px 40px; color: var(--ez-ink); }
+.ez-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ez-head h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.01em; margin: 0; }
+.ez-lead { color: var(--ez-muted); font-size: 15.5px; margin-top: 4px; }
+.ez-tabs { display: flex; gap: 28px; border-bottom: 1px solid var(--ez-line); margin-top: 14px; overflow-x: auto; }
+.ez-tab { padding: 10px 2px 11px; font-size: 16px; font-weight: 600; color: #4B5563; background: none; border: 0; border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap; font-family: inherit; }
+.ez-tab[aria-selected="true"] { color: var(--ez-g); border-bottom-color: var(--ez-g); }
+.ez-summary { display: flex; margin-top: 16px; background: var(--ez-head); border-radius: 8px; padding: 12px 8px; font-size: 15.5px; }
+.ez-summary > div { flex: 1; text-align: center; border-right: 1px solid var(--ez-line); }
+.ez-summary > div:last-child { border-right: 0; }
+.ez-summary b { font-size: 21px; margin-left: 6px; }
+.ez-c-orange { color: #D97706; } .ez-c-blue { color: var(--ez-blue); } .ez-c-red { color: var(--ez-red); } .ez-c-green { color: var(--ez-g); }
+.ez-layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 0; margin-top: 4px; }
+.ez-layout.ez-no-panel { grid-template-columns: minmax(0, 1fr); }
+.ez-main { min-width: 0; padding-right: 22px; }
+.ez-panel { border-left: 1px solid var(--ez-line); padding: 8px 4px 8px 24px; min-width: 0; }
+.ez-panel h2 { font-size: 20px; font-weight: 800; margin: 0; }
+.ez-sec { font-size: 18px; font-weight: 800; margin: 24px 0 8px; display: flex; align-items: baseline; gap: 10px; }
+.ez-sec small { font-size: 13.5px; font-weight: 500; color: var(--ez-faint); }
+.ez-muted { color: var(--ez-muted); } .ez-faint { color: var(--ez-faint); } .ez-num { font-variant-numeric: tabular-nums; }
+
+/* 버튼 */
+.ez-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 6px; padding: 10px 18px; font: inherit; font-size: 15px; font-weight: 700;
+  background: var(--ez-g); color: #fff; border: 1.5px solid var(--ez-g); cursor: pointer; white-space: nowrap; }
+.ez-btn:hover { background: var(--ez-g-dark); border-color: var(--ez-g-dark); }
+.ez-btn.ghost { background: #fff; color: var(--ez-g-dark); }
+.ez-btn.ghost:hover { background: var(--ez-g-soft); }
+.ez-btn.line { background: #fff; color: var(--ez-ink); border-color: #CBD2D9; }
+.ez-btn.line:hover { background: #F3F5F7; }
+.ez-btn.red { background: #fff; color: var(--ez-red); border-color: var(--ez-red); }
+.ez-btn.danger { background: var(--ez-red); border-color: var(--ez-red); }
+.ez-btn.big { width: 100%; padding: 14px 20px; font-size: 17px; }
+.ez-btn.sm { padding: 6px 12px; font-size: 13.5px; }
+.ez-btn[disabled], .ez-btn.disabled { background: #D9DDE3; border-color: #D9DDE3; color: #7B8490; cursor: not-allowed; }
+
+/* 표 */
+.ez-table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+.ez-table th { background: var(--ez-head); text-align: left; font-size: 14px; font-weight: 700; color: #3B4450; padding: 11px 14px; white-space: nowrap; }
+.ez-table td { padding: 12px 14px; border-bottom: 1px solid var(--ez-line); vertical-align: middle; font-size: 15px; }
+.ez-table tbody tr { cursor: pointer; }
+.ez-table tbody tr:hover td { background: #FAFBFA; }
+.ez-table tbody tr.hl td { background: var(--ez-g-soft); border-bottom-color: var(--ez-g-line); }
+.ez-cell { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.ez-cell b { display: block; font-size: 15.5px; } .ez-cell small { display: block; color: var(--ez-muted); font-size: 13px; }
+.ez-thumb { width: 56px; height: 56px; border-radius: 8px; overflow: hidden; flex: none; background: #EEF2EF; display: grid; place-items: center; color: #7A8B80; font-weight: 800; }
+.ez-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ez-thumb.lg { width: 100%; height: 150px; }
+.ez-thumb svg { width: 60%; height: 60%; }
+.ez-thumb .lw-thumb { width: 100%; height: 100%; border: 0; border-radius: 0; background: transparent; }
+
+/* 칩·아이콘 */
+.ez-chip { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 6px; padding: 4px 10px; white-space: nowrap; }
+.ez-chip.wait { background: #FFF1D6; color: #A25E00; } .ez-chip.ok { background: #E3F5E8; color: #17803D; }
+.ez-chip.blue { background: #DEEBFF; color: #1F5FBF; } .ez-chip.gray { background: #E9EBEE; color: #565E69; }
+.ez-chip.red { background: #FDE7EA; color: #C0243A; }
+.ez-dot { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 13px; font-weight: 800; flex: none; }
+.ez-dot.ok { background: var(--ez-g); } .ez-dot.warn { background: var(--ez-orange); } .ez-dot.info { background: var(--ez-blue); } .ez-dot.gray { background: #C9CED6; }
+
+/* 안내 상자 */
+.ez-note { border-radius: 8px; padding: 13px 16px; font-size: 14.5px; display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; }
+.ez-note.warn { background: #FFF5DC; color: #5C3F00; } .ez-note.info { background: #EAF2FD; color: #123E75; }
+.ez-note.ok { background: var(--ez-g-soft); color: #0B4F2C; } .ez-note.bad { background: #FDEAEE; color: #7C1626; }
+.ez-note > div { min-width: 0; }
+
+/* 키-값 줄 */
+.ez-kv { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--ez-line); font-size: 15px; }
+.ez-kv:first-child { border-top: 0; } .ez-kv span { color: var(--ez-muted); } .ez-kv b { font-size: 16px; text-align: right; }
+
+/* 흐름 띠(오늘) */
+.ez-flow { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 16px; border: 1px solid var(--ez-line); border-radius: 10px; overflow: hidden; background: #fff; }
+.ez-flow > div { padding: 14px 18px; border-right: 1px solid var(--ez-line); position: relative; }
+.ez-flow > div:last-child { border-right: 0; }
+.ez-flow .n { font-size: 32px; font-weight: 800; line-height: 1.1; } .ez-flow .l { font-weight: 700; font-size: 15px; } .ez-flow .d { font-size: 12.5px; color: var(--ez-faint); }
+.ez-flow .hot { background: var(--ez-g-soft); } .ez-flow .hot .n { color: var(--ez-g-dark); }
+.ez-flow .hot::after { content: ""; position: absolute; right: 14px; top: 14px; width: 9px; height: 9px; border-radius: 50%; background: var(--ez-red); }
+
+/* 5단계 진행 */
+.ez-prog { display: grid; grid-template-columns: repeat(5, 1fr); position: relative; margin: 18px 0 6px; }
+.ez-prog::before { content: ""; position: absolute; left: 10%; right: 10%; top: 17px; height: 3px; background: var(--ez-line); }
+.ez-prog > div { text-align: center; position: relative; z-index: 1; }
+.ez-prog .c { width: 36px; height: 36px; border-radius: 50%; margin: 0 auto; display: grid; place-items: center; font-weight: 800; background: #D9DDE3; color: #fff; }
+.ez-prog .done .c { background: var(--ez-g); } .ez-prog .now .c { background: #fff; color: var(--ez-g); border: 3px solid var(--ez-g); box-shadow: 0 0 0 5px var(--ez-g-soft); }
+.ez-prog b { display: block; margin-top: 7px; font-size: 13.5px; } .ez-prog span { display: block; color: var(--ez-faint); font-size: 11.5px; line-height: 1.3; }
+.ez-prog .now b { color: var(--ez-g-dark); }
+.ez-prog-bar { position: absolute; left: 10%; top: 17px; height: 3px; background: var(--ez-g); z-index: 0; }
+
+/* 상품 준비 화면 */
+.ez-steps3 { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 14px; border: 1px solid var(--ez-line); border-radius: 8px; overflow: hidden; }
+.ez-steps3 > div { padding: 12px 16px; display: flex; gap: 10px; align-items: center; font-weight: 700; color: var(--ez-muted); border-right: 1px solid var(--ez-line); }
+.ez-steps3 > div:last-child { border-right: 0; }
+.ez-steps3 .n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; background: #D9DDE3; color: #fff; }
+.ez-steps3 .done { color: var(--ez-g-dark); } .ez-steps3 .done .n { background: var(--ez-g); }
+.ez-steps3 .on { background: var(--ez-g); color: #fff; } .ez-steps3 .on .n { background: #fff; color: var(--ez-g); }
+.ez-block { border: 1px solid var(--ez-line); border-radius: 8px; margin-top: 14px; overflow: hidden; }
+.ez-block > h3 { margin: 0; padding: 13px 18px; background: var(--ez-head); font-size: 16.5px; font-weight: 800; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--ez-line); }
+.ez-field { display: grid; grid-template-columns: 150px 1fr auto; gap: 14px; align-items: center; padding: 11px 18px; border-bottom: 1px solid var(--ez-line); }
+.ez-field:last-child { border-bottom: 0; } .ez-field.need { background: #FFF8E6; }
+.ez-field .k { color: var(--ez-muted); font-size: 14.5px; } .ez-field .v { font-weight: 700; font-size: 15.5px; } .ez-field .v small { display: block; font-weight: 400; font-size: 13px; color: var(--ez-muted); }
+.ez-checks { list-style: none; margin: 8px 0 0; padding: 0; }
+.ez-checks li { display: flex; gap: 12px; align-items: center; padding: 8px 8px; border-radius: 6px; font-size: 15px; }
+.ez-checks li.w { background: #FFF5DC; font-weight: 700; }
+.ez-money { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; font-size: 14.5px; }
+.ez-money b { text-align: right; } .ez-money .tot { border-top: 1px solid var(--ez-line); padding-top: 10px; margin-top: 4px; font-size: 16px; }
+
+/* 승인 센터 */
+.ez-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-top: 16px; border: 1px solid var(--ez-line); border-radius: 8px; overflow: hidden; }
+.ez-modes > div { padding: 13px 18px; border-right: 1px solid var(--ez-line); }
+.ez-modes > div:last-child { border-right: 0; }
+.ez-modes b { display: block; font-size: 16.5px; } .ez-modes span { font-size: 13px; color: var(--ez-muted); }
+.ez-modes .on { background: var(--ez-g); color: #fff; } .ez-modes .on span { color: #D5EEDD; }
+.ez-lim { display: flex; gap: 6px; flex-wrap: wrap; }
+.ez-lim span { background: var(--ez-head); border-radius: 6px; padding: 3px 9px; font-size: 13px; color: var(--ez-muted); } .ez-lim b { color: var(--ez-ink); }
+.ez-stop { margin-top: 22px; border: 1.5px solid var(--ez-red); background: #FEF3F4; border-radius: 8px; padding: 18px; }
+.ez-stop h3 { color: var(--ez-red); margin: 0; }
+.ez-list { list-style: none; margin: 8px 0 0; padding: 0; } .ez-list li { display: flex; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--ez-line); font-size: 15px; } .ez-list li:first-child { border-top: 0; }
+
+/* 정산·수익 */
+.ez-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 16px; }
+.ez-card { border: 1px solid var(--ez-line); border-radius: 10px; padding: 16px 18px; background: #fff; }
+.ez-card .k { font-size: 13.5px; color: var(--ez-muted); font-weight: 600; } .ez-card .v { font-size: 26px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.ez-card .s { font-size: 12.5px; color: var(--ez-faint); margin-top: 2px; }
+.ez-card.accent { border-color: var(--ez-g-line); background: var(--ez-g-soft); }
+.ez-bar { height: 8px; border-radius: 4px; background: #E9EBEE; overflow: hidden; min-width: 90px; } .ez-bar i { display: block; height: 100%; background: var(--ez-g); border-radius: 4px; }
+.ez-bar.neg i { background: var(--ez-red); }
+
+/* 더보기 */
+.ez-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
+.ez-group { border: 1px solid var(--ez-line); border-radius: 10px; padding: 16px 18px; }
+.ez-group h3 { margin: 0 0 8px; font-size: 17px; font-weight: 800; }
+.ez-group button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 6px; border-radius: 6px; font: inherit; font-size: 15px; color: #26303B; cursor: pointer; }
+.ez-group button:hover { background: var(--ez-g-soft); color: var(--ez-g-dark); }
+.ez-switch { display: flex; align-items: center; gap: 14px; border: 1px solid var(--ez-line); border-radius: 10px; padding: 16px 18px; margin-top: 18px; }
+
+.ez-empty { text-align: center; color: var(--ez-muted); padding: 36px 12px; }
+.ez-empty b { display: block; color: var(--ez-ink); font-size: 17px; margin-bottom: 4px; }
+.ez-loading { color: var(--ez-faint); padding: 24px 4px; }
+
+/* 대화상자 */
+dialog.ez-dialog { border: 0; border-radius: 12px; padding: 24px 26px; width: min(460px, 92vw); box-shadow: 0 20px 60px rgba(0,0,0,.28); }
+dialog.ez-dialog::backdrop { background: rgba(20, 24, 30, .45); }
+.ez-dialog h3 { margin: 0 0 6px; font-size: 19px; } .ez-dialog p { color: var(--ez-muted); font-size: 14.5px; margin: 0 0 14px; }
+.ez-dialog label { display: block; font-size: 14px; font-weight: 700; margin: 12px 0 4px; }
+.ez-dialog input, .ez-dialog select { width: 100%; padding: 9px 12px; border: 1px solid #CBD2D9; border-radius: 6px; font: inherit; }
+.ez-dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+/* ---------- 좁은 화면(모바일): 아래 탭 + 한 열 ---------- */
+@media (max-width: 860px) {
+  body.easy-view .sidenav { display: none; }
+  body.easy-view.ez-mobile-tabs #ez-bottom { display: grid; }
+  body.easy-view .view-root { padding-bottom: 84px; }
+  .ez-layout { grid-template-columns: minmax(0, 1fr); }
+  .ez-main { padding-right: 0; }
+  .ez-panel { border-left: 0; border-top: 1px solid var(--ez-line); padding: 18px 0 0; margin-top: 18px; }
+  .ez-flow { grid-template-columns: repeat(2, 1fr); } .ez-flow > div { border-bottom: 1px solid var(--ez-line); }
+  .ez-cards { grid-template-columns: repeat(2, 1fr); } .ez-groups { grid-template-columns: 1fr; }
+  .ez-steps3, .ez-modes { grid-template-columns: 1fr; }
+  .ez-field { grid-template-columns: 1fr; gap: 4px; }
+  .ez-table thead { display: none; } .ez-table, .ez-table tbody, .ez-table tr, .ez-table td { display: block; width: 100%; }
+  .ez-table tr { border-bottom: 1px solid var(--ez-line); padding: 8px 0; } .ez-table td { border: 0; padding: 4px 10px; }
+  .ez-head h1 { font-size: 24px; }
+}
+#ez-bottom { display: none; position: fixed; left: 0; right: 0; bottom: 0; height: 68px; background: #FAFBFA; border-top: 1px solid var(--ez-line); grid-template-columns: repeat(5, 1fr); z-index: 40; }
+#ez-bottom button { border: 0; background: none; font: inherit; font-size: 11.5px; font-weight: 700; color: #6B7480; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; position: relative; }
+#ez-bottom button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#ez-bottom button[aria-current="page"] { color: var(--ez-g); }
+#ez-bottom .ez-badge { position: absolute; top: 6px; left: 56%; background: var(--ez-red); color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 16px; }
+
+/* 키보드 초점 */
+body.easy-view .ez-nav:focus-visible, body.easy-view .ez-btn:focus-visible, body.easy-view .ez-tab:focus-visible,
+body.easy-view .ez-table tbody tr:focus-visible, body.easy-view #ez-bottom button:focus-visible { outline: 3px solid #7BC99B; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { body.easy-view * { transition: none !important; animation: none !important; } }

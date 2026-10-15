@@ -121,6 +121,9 @@ _CACHE_BUST_ASSET_PATHS = (
     "/console/static/i18n/en-US.js",
     "/console/static/i18n/i18n.js",
     "/console/static/console.js",
+    "/console/static/easy/easy_texts.js",
+    "/console/static/easy/easy_view.js",
+    "/console/static/easy/easy_view.css",
 )
 
 
@@ -137,6 +140,8 @@ def _apply_cache_busting(html: str) -> str:
     for asset_path in _CACHE_BUST_ASSET_PATHS:
         if asset_path.startswith("/console/static/i18n/"):
             local_path = os.path.join(WEB_DIR, "i18n", asset_path.rsplit("/", 1)[-1])
+        elif asset_path.startswith("/console/static/easy/"):
+            local_path = os.path.join(WEB_DIR, "easy", asset_path.rsplit("/", 1)[-1])
         else:
             local_path = os.path.join(WEB_DIR, asset_path.rsplit("/", 1)[-1])
         version = _cache_bust_query(local_path)
@@ -214,6 +219,28 @@ def console_i18n_asset(filename: str):
         raise HTTPException(status_code=404, detail="not found")
 
     return FileResponse(path, media_type="application/javascript")
+
+
+# 2026-10-16 쉬운 보기(app/web/easy) — 다른 static 라우트와 같은 명시적 allowlist 방식(경로 조작 방지, 디렉터리 통짜 마운트 없음).
+_EASY_FILES = {"easy_view.js": "application/javascript", "easy_texts.js": "application/javascript", "easy_view.css": "text/css"}
+
+
+@router.get(
+    "/console/static/easy/{filename}",
+    include_in_schema=False,
+)
+def console_easy_asset(filename: str):
+
+    media_type = _EASY_FILES.get(filename)
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    path = os.path.join(WEB_DIR, "easy", filename)
+
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="not found")
+
+    return FileResponse(path, media_type=media_type)
 
 
 # Section 5(2026-08-28) 이미지 수동 편집기 MVP — Fabric.js(MIT, vendor

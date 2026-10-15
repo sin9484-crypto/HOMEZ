@@ -225,18 +225,21 @@ class WiringTests(unittest.TestCase):
         self.assertRegex(JS, r'tabs: \[\s*\["work-queue", "nav\.work_queue"\]')
 
     def test_each_source_is_read_only_and_a_failure_in_one_does_not_hide_the_rest(self):
-        body = function_source("loadWorkQueue")
+        # 2026-10-16: 조회부는 쉬운 보기와 공유하려고 wqFetchItems로 옮겼다(동작·보장은 그대로).
+        body = function_source("wqFetchItems")
         self.assertIn("Promise.allSettled", body)
         for path in ("/orchestration/priorities", "/orders/exception-analysis", "/settlements/difference-analysis",
                      "/ai-governance/proposed-actions", "/listing-wizards"):
             self.assertIn(f'"{path}"', body)
         self.assertNotIn('method: "POST"', body)
         self.assertNotIn('method: "PUT"', body)
-        self.assertIn("wqState.failed.push", body)
+        self.assertIn("failed.push(keys[i])", body)
+        self.assertIn("wqState.failed = result.failed", function_source("loadWorkQueue"))
 
     def test_when_everything_fails_it_shows_an_error_not_an_empty_success(self):
+        self.assertIn("failed.length === keys.length", function_source("wqFetchItems"))
         body = function_source("loadWorkQueue")
-        self.assertIn("wqState.failed.length === keys.length", body)
+        self.assertIn("result.allFailed", body)
         self.assertIn("renderErrorState(", body)
 
     def test_the_panel_open_button_reuses_the_existing_wizard_opening_path(self):

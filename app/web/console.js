@@ -545,7 +545,19 @@
   // 보이는 첫 nav-item으로 대신 이동한다 — 서버 판정과 화면 진입점을
   // 일치시킨다. 아무것도 보이지 않으면(이론상 발생하면 안 됨) 기존
   // 동작인 "overview"로 안전하게 폴백한다.
+  // 2026-10-16 쉬운 보기 연결부 — 쉬운 보기 스크립트(app/web/easy/easy_view.js)가 로그인 직후·화면 이동 때 부를 훅과
+  // 처음 열 화면. 쉬운 보기가 없거나 꺼져 있으면 비어 있어 기존 동작과 같다.
+  const easyHooks = { shellShown: [], navigated: [] };
+  const easyState = { homeView: null };
+
+  function runEasyHooks(list, ...args) {
+    list.forEach((fn) => {
+      try { fn(...args); } catch (err) { console.error("[easy-view hook]", err); }
+    });
+  }
+
   function firstVisibleNavView() {
+    if (easyState.homeView) return easyState.homeView;
     const overviewBtn = document.querySelector('.nav-item[data-view="overview"]');
     if (overviewBtn && !overviewBtn.hidden) return "overview";
 
@@ -567,6 +579,7 @@
     buildSectionNav();
     refreshSectionNav(currentView);
     checkMigrationApprovalGate();
+    runEasyHooks(easyHooks.shellShown);
   }
 
   // 2026-08-30 V7 후속 안정화 Phase 2 — 로그인 성공/Refresh 성공 양쪽이
@@ -7300,9 +7313,8 @@
     wqShowPanel(keep);
   }
 
-  async function loadWorkQueue() {
-    const wrap = el("wq-table-wrap");
-    wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+  // 읽기 전용 원본 5개를 불러 업무 항목으로 만든다. 원본 하나가 실패해도 나머지는 쓰고 실패한 원본 이름을 함께 돌려준다.
+  async function wqFetchItems() {
     const sources = {
       priorities: "/orchestration/priorities", exceptions: "/orders/exception-analysis",
       differences: "/settlements/difference-analysis", proposals: "/ai-governance/proposed-actions", wizards: "/listing-wizards",
@@ -7310,20 +7322,47 @@
     const keys = Object.keys(sources);
     const settled = await Promise.allSettled(keys.map((k) => apiFetch(sources[k])));
     const data = {};
-    wqState.failed = [];
+    const failed = [];
     settled.forEach((result, i) => {
       if (result.status === "fulfilled") data[keys[i]] = result.value;
-      else { data[keys[i]] = null; wqState.failed.push(keys[i]); }
+      else { data[keys[i]] = null; failed.push(keys[i]); }
     });
+    if (failed.length === keys.length) return { items: [], failed, allFailed: true, error: settled[0].reason, data };
+    return { items: wqBuildItems(data), failed, allFailed: false, error: null, data };
+  }
+
+  async function loadWorkQueue() {
+    const wrap = el("wq-table-wrap");
+    wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+    const result = await wqFetchItems();
+    wqState.failed = result.failed;
     // 로그인이 풀렸으면(모두 실패) 부분 안내가 아니라 오류로 보여 준다.
-    if (wqState.failed.length === keys.length) {
-      renderErrorState(wrap, settled[0].reason);
+    if (result.allFailed) {
+      renderErrorState(wrap, result.error);
       el("wq-chips").innerHTML = "";
       return;
     }
-    wqState.items = wqBuildItems(data);
+    wqState.items = result.items;
     wqRender();
   }
+
+  // ---- 쉬운 보기 연결부(2026-10-16) ----
+  // app/web/easy/easy_view.js가 쓰는 도구 모음. 쉬운 보기는 이 연결부만 통해 이 파일의 함수를 부른다(내부 변수에 직접 닿지 않는다).
+  window.HomezEasyBridge = Object.freeze({
+    apiFetch, toast, el, escapeHtml, fmtDate, fmtMoney, confirmDialog, askConfirm, promptRecentAuthToken,
+    navigateTo, renderErrorState, getCurrentUser, userSettingFetch, userSettingSave, safetyModeLabel,
+    lwThumbHtml, lwHydrateThumbs, taskStatusLabel: ptStatusLabel,
+    hooks: easyHooks,
+    state: easyState,
+    registerView(name, loader) { VIEW_LOADERS[name] = loader; },
+    legacyNavButton,
+    sections() { return SECTION_NAV.map((s) => ({ id: s.id, labelKey: s.labelKey, tabs: s.tabs.map(([view, labelKey]) => ({ view, labelKey })) })); },
+    sectionIdFor(viewName) { return sectionIdFor(viewName, null); },
+    isViewVisible: isSectionTabVisible,
+    openWizard(wizardId) { lwPendingOpenWizardId = wizardId; navigateTo("listing-wizard"); },
+    wq: { fetchItems: wqFetchItems, title: wqTitle },
+    get currentView() { return currentView; },
+  });
 
   // ---- 업무 중심 메뉴(2026-10-15, UI 개선 시안) ----
   // 사이드바를 "오늘 할 일 / 상품 / 주문·배송 / 정산·수익 / 분석 / 설정" 6개 업무 메뉴로 보여 주고, 각 업무 안의 화면은
@@ -7563,6 +7602,7 @@
     const loader = VIEW_LOADERS[viewName];
     if (loader) loader(opts);
     refreshSectionNav(viewName);
+    runEasyHooks(easyHooks.navigated, viewName);
   }
 
   const COMING_SOON_TITLE_KEYS = {

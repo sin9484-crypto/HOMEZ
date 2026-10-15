@@ -12677,3 +12677,12 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - **수정**: 주기 5분 고정(저장값이 달라도 5분 사용, 변경 API는 5 외 거절, 화면 입력칸 제거), 성공·부분 성공 시 이전 오류·건너뜀 사유 삭제, 예외 종류별 코드(TIMEOUT/NETWORK_ERROR/CALL_BLOCKED/INTERNAL_ERROR, 예외 메시지는 저장·로그 안 함), 상태 API에 `health`(OK/WAITING/OFF/PAUSED/ERROR/FAILING/BLOCKED)와 설명 추가, 화면 상단 한 줄 상태와 수동일 때 "자동 감지 켜기"(비밀번호 재확인) 버튼. 테스트 신규 18건(서버 12·화면 6), 주문·스케줄러 24개 모듈 260건 통과.
 - **켜는 방법과 남은 조건**: 자동 감지를 실제로 돌리려면 사용자가 화면에서 "자동 감지 켜기"(재인증)를 눌러야 한다(모드 변경은 사용자 몫). 지금 앱은 호출 예산 가드 아래에서 실행되므로 5분마다의 쿠팡 조회가 막힌다 — 켜기 전에 가드의 상시 허용(주문 조회 GET만, 시간당 상한) 또는 앱 내 허용 기능이 필요하며 이는 사용자 승인 사항이다.
 - **기준선 기록**: 쉬운 보기 작업 시작 전 기존 화면을 git 태그 `legacy-ui-before-easy-view`(커밋 d8d057a)로 보존.
+
+## 2026-10-16 — 쉬운 보기(E0~E5) 구현: 기본 켜짐, 기존 화면 보존(미적용·미재시작)
+
+- **내용**: 기존 콘솔 위에 얹는 "쉬운 보기" 층. 오늘 할 일(5단계 흐름·출고일/송장 할 일)·상품(카드·상세·출고일 변경)·주문·배송(5단계 진행·다음 할 일)·정산·수익·승인 센터(허용 요청·횟수·상시 허용·호출 기록)·더보기(고급 보기 전환). 관리자(ADMIN/SUPER_ADMIN)에게 기본 켜짐, 계정 메뉴에서 끄면 기존 화면 그대로(선호는 `user_settings.ui_preferences.easy_view`).
+- **신규 파일**: `app/domains/easy_view/{__init__,service,router}.py`(읽기 전용 집계 `/easy-view/today`, `/easy-view/orders`), `app/web/easy/{easy_view.js,easy_view.css,easy_texts.js}`(문구 한국어·영어 짝 검증), `tests/test_easy_view_server.py`(33), `tests/test_easy_view_ui.py`(34).
+- **수정 파일**: `console.js`(연결부 `HomezEasyBridge`·훅), `console.html`(스타일·스크립트 연결), `app/web/router.py`(허용 목록 정적 라우트 `/console/static/easy/{filename}`·캐시 갱신), `main.py`(라우터 등록), `channel_action_service.py`(`record_manual_success`), `coupang_invoice_service.py`(`mark_registered`), `purchase_task/router.py`(`POST /{task_id}/coupang-invoice/mark-registered`), `test_route_authentication_contract.py`(공개 허용 목록).
+- **안전 설계**: 화면을 여는 것만으로 쿠팡·온채널을 부르지 않음(바깥 읽기는 버튼 핸들러 안에서만, 변경은 확인→비밀번호 재확인→전송). 허용 부여는 항상 재인증. 기능 모드 변경은 쉬운 보기에 넣지 않고 기존 안전 화면에 둠. 모든 스타일은 `body.easy-view` 범위.
+- **발견·수정한 결함**: 대화상자 취소 버튼이 없는 키(`common.cancel`)를 써 글자가 비어 나오던 것을 `dialog.confirm.cancel`로 수정(정적 테스트가 잡음).
+- **미완료**: 실제 브라우저·모바일 확인은 앱 재시작(사용자 승인)과 재로그인 필요. Migration `20261016_00`(외부 호출 허용)은 실제 DB에 미적용(적용 전에는 허용 시스템이 열린 상태로 동작, `/external-calls/summary` installed=false). 분석 화면의 시각 개편은 아직 더보기 링크만 있음.

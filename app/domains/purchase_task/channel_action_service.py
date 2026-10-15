@@ -596,6 +596,32 @@ class CoupangChannelActions:
             ),
         )
 
+    def record_manual_success(
+        self, *, company_id: int, store_connection_id: int, action_type: str, target_key: str,
+        triggered_by: int | None, detail: str,
+    ) -> ActionResult:
+        """사람이 쿠팡 WING 등에서 **직접 처리했다고 확인한** 일을 작업 장부에 성공으로 남긴다(외부 요청 없음). 이후 같은
+        대상으로 다시 보내지 않게 하는 기록이다. 이미 성공이면 그대로 두고, 결과불명·거부 등으로 남은 행은 성공으로 바로잡는다."""
+
+        if not journal_available(self.db):
+            return ActionResult(ActionOutcome.ACTION_REQUIRED, "작업 장부 테이블이 없어 기록하지 못했다 — Migration 적용 필요")
+        row = self._journal.get(company_id, action_type, target_key)
+        if row is None:
+            claim = self._journal.claim(
+                company_id=company_id, store_connection_id=store_connection_id, action_type=action_type,
+                target_key=target_key, triggered_by=triggered_by,
+            )
+            if not claim.claimed:
+                return ActionResult(claim.outcome, claim.detail)
+            self._journal._set(
+                claim.row, ChannelActionStatus.SUCCEEDED, None, detail, expected_status=ChannelActionStatus.REQUESTING,
+            )
+            return ActionResult(ActionOutcome.SUCCEEDED, detail)
+        if row.status == ChannelActionStatus.SUCCEEDED:
+            return ActionResult(ActionOutcome.ALREADY_DONE, row.detail or "")
+        self._journal._set(row, ChannelActionStatus.SUCCEEDED, None, detail, expected_status=row.status)
+        return ActionResult(ActionOutcome.SUCCEEDED, detail)
+
     def check_invoice_registered(
         self, *, company_id: int, store_connection_id: int, channel_order_id: str,
         shipment_box_id: str, invoice_number: str,

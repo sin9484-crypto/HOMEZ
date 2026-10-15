@@ -1128,6 +1128,19 @@ def send_coupang_invoice(
     )
 
 
+@router.post("/{task_id}/coupang-invoice/mark-registered")
+def mark_coupang_invoice_registered(
+    task_id: int,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 WING에서 이미 직접 송장을 등록했을 때 "했다"고 기록한다(쿠팡 호출 없음). 이후 HOMEZ가 같은 송장을 다시 보내지 않는다."""
+
+    from app.domains.purchase_task.coupang_invoice_service import CoupangInvoiceService
+
+    return CoupangInvoiceService(db).mark_registered(task_id, current_user.company_id, current_user.id)
+
+
 @router.post("/{task_id}/coupang-invoice/reconcile")
 def reconcile_coupang_invoice(
     task_id: int,

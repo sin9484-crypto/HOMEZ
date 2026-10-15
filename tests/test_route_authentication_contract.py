@@ -46,6 +46,7 @@ PUBLIC_ALLOWLIST = {
     "/console/static/assets/{filename}",
     "/console/static/console.css",
     "/console/static/console.js",
+    "/console/static/easy/{filename}",
     "/console/static/i18n/{filename}",
     # Section 5(2026-08-28) 이미지 수동 편집기 MVP — Fabric.js(vendor된
     # 정적 JS 라이브러리, app/web/vendor/fabric.min.js)도 console.js와

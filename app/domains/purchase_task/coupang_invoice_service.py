@@ -296,6 +296,27 @@ class CoupangInvoiceService:
         self.db.commit()
         return {"outcome": result.outcome, "detail": result.detail, "executed": result.executed, "plan": plan.to_dict()}
 
+    def mark_registered(self, task_id: int, company_id: int, user_id: int) -> dict:
+        """사용자가 쿠팡 WING에서 **직접 송장을 등록했다고 확인**했을 때 장부에 성공으로 남긴다(쿠팡을 부르지 않는다).
+        같은 주문에 다시 송장을 보내지 않게 하고 주문 진행 화면의 "송장" 단계를 끝으로 바꾼다. 송장 기록이 없는 작업은 거절한다."""
+
+        plan = self.plan(task_id, company_id, live=False)
+        if plan.blockers:
+            raise BadRequestException("송장 등록 여부를 기록할 수 없는 상태다: " + ", ".join(b.code for b in plan.blockers))
+        result = self._actions_factory(self.db).record_manual_success(
+            company_id=company_id, store_connection_id=plan.store_connection_id, action_type=ChannelActionType.INVOICE_UPLOAD,
+            target_key=CoupangChannelActions.invoice_key(plan.channel_order_id, plan.shipment_box_id), triggered_by=user_id,
+            detail="사용자가 쿠팡 WING에서 직접 등록했다고 확인함(HOMEZ는 쿠팡에 보내지 않음)",
+        )
+        if result.outcome == ActionOutcome.SUCCEEDED:
+            write_audit_log(
+                self.db, user_id=user_id, action="COUPANG_INVOICE_MARKED_REGISTERED", entity="purchase_task",
+                entity_id=str(task_id), description=f"쿠팡 송장 직접 등록 확인 기록: 배송번호 {plan.shipment_box_id}",
+                company_id=company_id,
+            )
+            self.db.commit()
+        return {"outcome": result.outcome, "detail": result.detail}
+
     def reconcile(self, task_id: int, company_id: int) -> dict:
         """결과불명(UNKNOWN)인 요청을 쿠팡 발주서의 송장번호로 확인한다(읽기 GET 1회, 보내지 않음)."""
 
