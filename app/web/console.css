@@ -2700,3 +2700,37 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .lw-ui-image { display: flex; flex-direction: column; gap: 4px; }
 .lw-ui-image img { width: 100%; max-height: 120px; object-fit: contain; background: rgba(128, 128, 128, 0.12); }
 .lw-ui-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+
+
+/* 2026-10-15 UI 개선 시안 — 업무 중심 메뉴(6개)와 화면 위쪽 탭. 기존 메뉴 목록은 DOM에 그대로 두고(권한·가이드 기준) 접어 둔다. */
+.sidenav.sections-on > .nav-group:not(.nav-sections) { display: none; }
+.sidenav.sections-on.legacy-open > .nav-group:not(.nav-sections) { display: block; }
+.nav-sections { padding-top: 6px; }
+.nav-section-btn { font-weight: 600; }
+.nav-section-help { margin-top: 12px; }
+.nav-legacy-toggle {
+  margin: 10px 12px 4px; padding: 6px 8px; background: none; border: 0; cursor: pointer;
+  color: var(--text-faint); font-size: 12px; text-align: left; text-decoration: underline;
+}
+.nav-legacy-toggle:hover { color: var(--text-muted); }
+.section-tabs {
+  display: flex; gap: 4px; flex-wrap: wrap; padding: 0 20px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.section-tabs[hidden] { display: none; }
+.section-tab {
+  padding: 12px 14px; background: none; border: 0; border-bottom: 3px solid transparent; cursor: pointer;
+  color: var(--text-muted); font-size: 14px; white-space: nowrap;
+}
+.section-tab:hover { color: var(--text); }
+.section-tab[aria-selected="true"] { color: var(--ok); border-bottom-color: var(--ok); font-weight: 700; }
+.section-tab:focus-visible, .nav-section-btn:focus-visible, .nav-legacy-toggle:focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+@media (max-width: 900px) {
+  .section-tabs { flex-wrap: nowrap; overflow-x: auto; padding: 0 8px; }
+}
+/* 좁은 사이드바(76px, 아이콘형): 업무 메뉴는 짧은 라벨을 아이콘 아래에 보여 주고, 폭이 좁은 전체 메뉴 토글은 숨긴다. */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .nav-section-btn { flex-direction: column; gap: 3px; }
+  .nav-section-btn span { display: block; font-size: 11px; line-height: 1.2; }
+  .nav-legacy-toggle { display: none; }
+}

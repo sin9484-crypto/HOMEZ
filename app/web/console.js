@@ -564,6 +564,8 @@
     const roleEl = el("operator-role");
     if (roleEl) roleEl.textContent = (user && user.role) || "";
     applyPermissionGatedNav();
+    buildSectionNav();
+    refreshSectionNav(currentView);
     checkMigrationApprovalGate();
   }
 
@@ -7004,6 +7006,211 @@
     guides: loadGuides,
   };
 
+  // ---- 업무 중심 메뉴(2026-10-15, UI 개선 시안) ----
+  // 사이드바를 "오늘 할 일 / 상품 / 주문·배송 / 정산·수익 / 분석 / 설정" 6개 업무 메뉴로 보여 주고, 각 업무 안의 화면은
+  // 화면 위쪽 탭으로 옮겨 다닌다. 기존 .nav-item 버튼(권한 숨김·가이드 ID·화면 이동의 기준)은 그대로 두고, 이 메뉴는
+  // 그 버튼의 hidden 상태를 읽어 따라간다 — 권한 규칙을 새로 만들지 않는다. 같은 화면이 두 업무에 속할 수 있다.
+  const SECTION_NAV = [
+    {
+      id: "today", labelKey: "nav.section_today",
+      icon: "M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zm3 5h8M8 13h8M8 17h5",
+      tabs: [
+        ["overview", "nav.dashboard"], ["ai-proposals", "nav.ai_proposals"],
+        ["operations-priorities", "nav.operations_priorities"], ["order-exceptions", "nav.order_exceptions"],
+        ["settlement-differences", "nav.settlement_differences"],
+      ],
+    },
+    {
+      id: "products", labelKey: "nav.section_products",
+      icon: "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 9l8-4.5M12 12v9M12 12L4 7.5",
+      tabs: [
+        ["candidates", "nav.candidates"], ["listing-wizard", "nav.listing_wizard"], ["listing-package", "nav.listing_package"],
+        ["marketplace-listing", "nav.marketplace_listing"], ["inventory", "nav.product_list"],
+        ["listing-status-sync", "nav.listing_status_sync"], ["product-attr-comparison", "nav.product_attr_comparison"],
+        ["recall-blocks", "nav.recall_blocks"],
+      ],
+    },
+    {
+      id: "orders", labelKey: "nav.section_orders",
+      icon: "M3 7h11v9H3zM14 10h4l3 3v3h-7zM7 19a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm10 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3z",
+      tabs: [
+        ["order-fulfillment", "nav.order_status"], ["order-collection-ops", "nav.order_collection_ops"],
+        ["purchase-task", "nav.purchase_task"], ["retail-purchase", "nav.retail_purchase"],
+        ["supplier-sourcing", "nav.supplier_sourcing"], ["shipment", "nav.shipment"],
+        ["return-order", "nav.return_exchange"], ["refund", "refund.title"],
+      ],
+    },
+    {
+      id: "money", labelKey: "nav.section_money",
+      icon: "M12 3a9 9 0 100 18 9 9 0 000-18zm0 4v10M9.5 9.5C9.5 8.4 10.6 8 12 8s2.5.6 2.5 1.7c0 2.5-5 1.6-5 4.1 0 1.1 1.1 1.7 2.5 1.7s2.5-.5 2.5-1.6",
+      tabs: [
+        ["channel-settlement", "nav.channel_settlement"], ["settlement-differences", "nav.settlement_differences"],
+        ["margin-analysis", "nav.margin_analysis"], ["finance", "nav.finance"],
+      ],
+    },
+    {
+      id: "analysis", labelKey: "nav.section_analysis",
+      icon: "M5 20V10M12 20V4M19 20v-7",
+      tabs: [
+        ["trend", "nav.trend"], ["new-product", "nav.new_product"], ["decision", "nav.decision"],
+        ["ai-learning", "ail.title"],
+      ],
+    },
+    {
+      id: "settings", labelKey: "nav.section_settings",
+      icon: "M12 15a3 3 0 100-6 3 3 0 000 6zm7.4-3l1.6-1.2-1.8-3.1-1.9.7a7 7 0 00-1.6-.9L15.3 5h-3.6l-.4 2.5a7 7 0 00-1.6.9l-1.9-.7L5.9 10.8 7.5 12a7 7 0 000 1.8l-1.6 1.2 1.8 3.1 1.9-.7c.5.4 1 .7 1.6.9l.4 2.5h3.6l.4-2.5c.6-.2 1.1-.5 1.6-.9l1.9.7 1.8-3.1-1.6-1.2a7 7 0 000-1.8z",
+      tabs: [
+        ["store-connection", "nav.store_connection"], ["supplier-capability", "spc.title"], ["safety", "nav.safety"],
+        ["price-stock-safety", "pss.title"], ["currency", "curr.title"], ["payment", "pay.title"],
+        ["account-security", "nav.user_permission"], ["system", "nav.system"],
+      ],
+    },
+  ];
+  const SECTION_HELP_VIEW = "guides";
+  let currentSectionId = null;
+  let sectionNavBuilt = false;
+
+  // 상세 화면(예: purchase-task-detail)은 목록 화면의 탭 아래에 있는 것으로 본다.
+  function sectionTabViewFor(viewName) {
+    if (SECTION_NAV.some((s) => s.tabs.some(([v]) => v === viewName))) return viewName;
+    const base = String(viewName || "").replace(/-detail$/, "");
+    return SECTION_NAV.some((s) => s.tabs.some(([v]) => v === base)) ? base : null;
+  }
+
+  // 같은 화면이 여러 업무에 속하면, 지금 보던 업무를 우선한다(탭을 눌러 옮길 때 업무가 바뀌지 않게).
+  function sectionIdFor(viewName, preferredId) {
+    const tabView = sectionTabViewFor(viewName);
+    if (!tabView) return null;
+    const owners = SECTION_NAV.filter((s) => s.tabs.some(([v]) => v === tabView));
+    const preferred = owners.find((s) => s.id === preferredId);
+    return (preferred || owners[0]).id;
+  }
+
+  function legacyNavButton(viewName) {
+    return document.querySelector(`.nav-item[data-view="${viewName}"]:not(.nav-section-btn)`);
+  }
+
+  function isSectionTabVisible(viewName) {
+    const legacy = legacyNavButton(viewName);
+    return Boolean(legacy) && !legacy.hidden;
+  }
+
+  function buildSectionNav() {
+    if (sectionNavBuilt) return;
+    const sidenav = document.querySelector(".sidenav");
+    const brand = sidenav && sidenav.querySelector(".sidenav-brand");
+    const main = document.getElementById("view-root");
+    if (!sidenav || !brand || !main) return;
+    sectionNavBuilt = true;
+
+    const wrap = document.createElement("div");
+    wrap.id = "nav-sections";
+    wrap.className = "nav-group nav-sections";
+    wrap.setAttribute("role", "navigation");
+    wrap.setAttribute("aria-label", HomezI18n.t("nav.sections_aria"));
+    const svg = (path) => `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="${path}" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    SECTION_NAV.forEach((section) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "nav-item nav-section-btn";
+      btn.dataset.section = section.id;
+      btn.innerHTML = `${svg(section.icon)}<span></span>`;
+      btn.addEventListener("click", () => {
+        const first = section.tabs.find(([v]) => isSectionTabVisible(v));
+        if (first) { currentSectionId = section.id; navigateTo(first[0]); }
+      });
+      wrap.appendChild(btn);
+    });
+    const help = document.createElement("button");
+    help.type = "button";
+    help.className = "nav-item nav-section-btn nav-section-help";
+    help.dataset.section = "help";
+    help.innerHTML = `${svg("M12 21a9 9 0 100-18 9 9 0 000 18zm0-5v.5M9.5 9.5a2.5 2.5 0 114 2c-.9.6-1.5 1.1-1.5 2")}<span></span>`;
+    help.addEventListener("click", () => { currentSectionId = null; navigateTo(SECTION_HELP_VIEW); });
+    wrap.appendChild(help);
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.id = "nav-legacy-toggle";
+    toggle.className = "nav-legacy-toggle";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", () => {
+      const open = sidenav.classList.toggle("legacy-open");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      refreshSectionNavText();
+    });
+    wrap.appendChild(toggle);
+    brand.after(wrap);
+
+    const tabs = document.createElement("div");
+    tabs.id = "section-tabs";
+    tabs.className = "section-tabs";
+    tabs.setAttribute("role", "tablist");
+    tabs.hidden = true;
+    main.before(tabs);
+
+    sidenav.classList.add("sections-on");
+    refreshSectionNavText();
+  }
+
+  function refreshSectionNavText() {
+    const sidenav = document.querySelector(".sidenav");
+    document.querySelectorAll(".nav-section-btn[data-section]").forEach((btn) => {
+      const id = btn.dataset.section;
+      const section = SECTION_NAV.find((s) => s.id === id);
+      const label = id === "help" ? HomezI18n.t("nav.section_help") : (section ? HomezI18n.t(section.labelKey) : id);
+      const span = btn.querySelector("span");
+      if (span) span.textContent = label;
+    });
+    const toggle = document.getElementById("nav-legacy-toggle");
+    if (toggle && sidenav) {
+      toggle.textContent = HomezI18n.t(sidenav.classList.contains("legacy-open") ? "nav.hide_all_menu" : "nav.show_all_menu");
+    }
+  }
+
+  // 권한·현재 화면에 맞춰 업무 메뉴 강조와 탭 막대를 다시 그린다. 로그인 직후와 화면 이동마다 호출한다.
+  function refreshSectionNav(viewName) {
+    if (!sectionNavBuilt) return;
+    refreshSectionNavText();
+    const activeSection = sectionIdFor(viewName, currentSectionId);
+    currentSectionId = activeSection;
+    document.querySelectorAll(".nav-section-btn[data-section]").forEach((btn) => {
+      const id = btn.dataset.section;
+      if (id === "help") {
+        const legacyHelp = legacyNavButton(SECTION_HELP_VIEW);
+        btn.hidden = Boolean(legacyHelp && legacyHelp.hidden);
+        if (viewName === SECTION_HELP_VIEW) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+        return;
+      }
+      const section = SECTION_NAV.find((s) => s.id === id);
+      btn.hidden = !section.tabs.some(([v]) => isSectionTabVisible(v));
+      if (id === activeSection) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+    });
+
+    const bar = document.getElementById("section-tabs");
+    if (!bar) return;
+    const section = SECTION_NAV.find((s) => s.id === activeSection);
+    if (!section) { bar.hidden = true; bar.innerHTML = ""; return; }
+    const activeTab = sectionTabViewFor(viewName);
+    const visibleTabs = section.tabs.filter(([v]) => isSectionTabVisible(v));
+    bar.innerHTML = "";
+    visibleTabs.forEach(([view, labelKey]) => {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "section-tab";
+      tab.setAttribute("role", "tab");
+      tab.dataset.sectionTab = view;
+      tab.textContent = HomezI18n.t(labelKey);
+      const selected = view === activeTab;
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+      if (selected) tab.setAttribute("aria-current", "page");
+      tab.addEventListener("click", () => { currentSectionId = section.id; navigateTo(view); });
+      bar.appendChild(tab);
+    });
+    bar.hidden = visibleTabs.length < 2;
+    bar.setAttribute("aria-label", HomezI18n.t(section.labelKey));
+  }
+
   let currentView = "overview";
 
   function navigateTo(viewName, opts = {}, sourceBtn = null) {
@@ -7036,6 +7243,7 @@
 
     const loader = VIEW_LOADERS[viewName];
     if (loader) loader(opts);
+    refreshSectionNav(viewName);
   }
 
   const COMING_SOON_TITLE_KEYS = {
@@ -22279,6 +22487,10 @@
   function tourResolveTarget(guideId) {
     const elx = document.querySelector(`[data-guide-id="${CSS.escape(guideId)}"]`);
     if (!elx) return null;
+    // 업무 메뉴 안에서는 기존 메뉴 목록이 접혀 있다 — 가이드가 그 항목을 가리키면 잠시 펼쳐 보여 준다.
+    if (elx.classList.contains("nav-item") && elx.closest(".sidenav")) {
+      document.querySelector(".sidenav").classList.add("legacy-open");
+    }
     const rect = elx.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return null; // hidden(권한 등으로 숨김 포함)
 
