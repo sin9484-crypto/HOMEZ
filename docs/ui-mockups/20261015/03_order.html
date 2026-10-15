@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>주문 한 건</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .head { display: grid; grid-template-columns: 76px 1fr auto; gap: 18px; align-items: center; }
+  .thumb { width: 76px; height: 76px; border-radius: 14px; background: linear-gradient(135deg, #D6EEF7, #E7F3FB); display: grid; place-items: center; color: #4B87A6; font-weight: 800; font-size: 13px; }
+  .bar { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 24px; position: relative; }
+  .bar::before { content: ""; position: absolute; left: 10%; right: 10%; top: 21px; height: 4px; background: var(--line); }
+  .bar::after { content: ""; position: absolute; left: 10%; width: 48%; top: 21px; height: 4px; background: var(--ok); }
+  .s { text-align: center; position: relative; z-index: 1; }
+  .s .c { width: 46px; height: 46px; border-radius: 50%; margin: 0 auto; display: grid; place-items: center; font-weight: 800; font-size: 18px; background: #fff; border: 3px solid var(--line); color: var(--faint); }
+  .s.done .c { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .s.now .c { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 0 0 6px var(--brand-soft); }
+  .s .l { font-weight: 800; margin-top: 8px; font-size: 16px; }
+  .s .d { font-size: 13px; color: var(--faint); }
+  .s.now .l { color: var(--brand-ink); }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 22px; margin-top: 22px; }
+  .now-card { border: 2px solid var(--brand); }
+  .vals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 14px 0; }
+  .val { background: var(--bg); border-radius: 12px; padding: 12px 16px; }
+  .val .k { font-size: 13px; color: var(--muted); }
+  .val .v { font-size: 20px; font-weight: 800; margin-top: 2px; }
+  .note { background: var(--warn-soft); color: #6F4C05; border-radius: 12px; padding: 12px 16px; font-size: 14.5px; }
+  .log { list-style: none; position: relative; }
+  .log li { display: grid; grid-template-columns: 14px 1fr; gap: 12px; padding-bottom: 16px; position: relative; }
+  .log li::before { content: ""; position: absolute; left: 6px; top: 16px; bottom: 0; width: 2px; background: var(--line); }
+  .log li:last-child::before { display: none; }
+  .log .dt { width: 14px; height: 14px; border-radius: 50%; background: var(--ok); margin-top: 4px; }
+  .log b { font-size: 14.5px; } .log small { display: block; color: var(--faint); font-size: 12.5px; }
+</style></head><body>
+<aside class="side">
+  <div class="logo">HOME<b>Z</b></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg>오늘</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>상품</div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7M7 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3zM17 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3z"/></svg>주문</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.6c0-1 1-1.6 2.5-1.6s2.5.7 2.5 1.7-1 1.4-2.5 1.8-2.5.8-2.5 1.8 1 1.7 2.5 1.7 2.5-.6 2.5-1.6"/></svg>돈</div>
+  <hr>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3zM9 12l2 2 4-4"/></svg>승인 센터<span class="badge">1</span></div>
+  <div class="sp"></div>
+  <div class="nav sub"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>더보기 · 설정 · 도움말</div>
+</aside>
+<div class="main">
+  <header class="top">
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>상품명, 주문번호로 찾기</div>
+    <span class="pill brand"><i></i>운영자 승인 모드</span>
+    <span class="stop">긴급 정지</span>
+  </header>
+  <section class="content">
+    <div class="head">
+      <div class="thumb">백산수</div>
+      <div><h1>백산수 생수 500ml × 20병</h1><p class="lead" style="margin-top:2px">쿠팡 주문 8103602504198 · 고객 김*준 · 10월 14일 18:49 주문 · 1개</p></div>
+      <span class="pill warn">내 확인이 필요해요</span>
+    </div>
+
+    <div class="bar">
+      <div class="s done"><div class="c">✓</div><div class="l">주문 받음</div><div class="d">10/14 18:49</div></div>
+      <div class="s done"><div class="c">✓</div><div class="l">공급처에 주문</div><div class="d">온채널 주문 완료</div></div>
+      <div class="s done"><div class="c">✓</div><div class="l">공급처 발송</div><div class="d">롯데택배 259606480560</div></div>
+      <div class="s now"><div class="c">4</div><div class="l">쿠팡에 송장 등록</div><div class="d">지금 할 일</div></div>
+      <div class="s"><div class="c">5</div><div class="l">배송 완료</div><div class="d">고객 수령</div></div>
+    </div>
+
+    <div class="layout">
+      <div class="card now-card">
+        <h2>쿠팡에 송장을 등록해요</h2>
+        <p class="muted" style="margin-top:4px">공급처가 보낸 송장을 쿠팡 주문에 알려 주는 일이에요. 값이 맞는지 한 번만 봐 주세요.</p>
+        <div class="vals">
+          <div class="val"><div class="k">택배사</div><div class="v">롯데택배</div></div>
+          <div class="val"><div class="k">송장번호</div><div class="v num">259606480560</div></div>
+          <div class="val"><div class="k">쿠팡 주문 상태</div><div class="v" style="color:var(--ok)">상품준비중</div></div>
+        </div>
+        <div class="note"><b>한 번 등록하면 되돌릴 수 없어요.</b> 이미 쿠팡 WING에서 직접 등록했다면 아래 "이미 했어요"를 눌러 주세요 — 중복으로 보내지 않아요.</div>
+        <div class="row" style="margin-top:16px;gap:12px">
+          <span class="btn big">쿠팡에 송장 등록</span>
+          <span class="btn ghost big">이미 했어요</span>
+          <span class="faint" style="margin-left:auto;font-size:13px">쿠팡에 조회 1회 · 등록 1회<br>비밀번호 재확인 필요</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px">지나온 기록</h3>
+        <ul class="log">
+          <li><span class="dt"></span><div><b>공급처가 발송했어요</b><small>10/15 14:08 · 롯데택배</small></div></li>
+          <li><span class="dt"></span><div><b>공급처에 주문했어요</b><small>10/14 · 승인 후 실행</small></div></li>
+          <li><span class="dt"></span><div><b>쿠팡 주문이 들어왔어요</b><small>10/14 18:49 · 당일출고 필요로 표시</small></div></li>
+        </ul>
+        <div class="note" style="background:var(--teal-soft);color:#075E58;margin-top:4px">다음 주문부터 출고일을 2일로 올리면 "당일출고 필요" 표시가 줄어요.</div>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="foot">예시 화면 · 실제 화면과 다를 수 있어요</div>
+</body></html>

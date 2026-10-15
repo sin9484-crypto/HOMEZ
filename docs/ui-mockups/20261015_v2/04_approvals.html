@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>승인 센터</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .m { padding: 14px 18px; border-right: 1px solid var(--line); }
+  .m:last-child { border-right: 0; }
+  .m b { font-size: 17px; display: block; } .m span { font-size: 13.5px; color: var(--muted); }
+  .m.on { background: var(--g); color: #fff; } .m.on span { color: #D5EEDD; }
+  .rq td { padding: 16px 14px; }
+  .acts { display: flex; gap: 8px; }
+  .lim { display: flex; gap: 6px; flex-wrap: wrap; }
+  .lim span { background: var(--head); border-radius: 6px; padding: 3px 9px; font-size: 13px; color: var(--muted); } .lim b { color: var(--ink); }
+  .tl { list-style: none; } .tl li { display: flex; justify-content: space-between; padding: 11px 0; border-top: 1px solid var(--line); font-size: 15px; } .tl li:first-child { border-top: 0; }
+</style></head>
+<body data-active="approvals" data-badge="2">
+<section class="page">
+  <div class="title"><div><h1>승인 센터</h1><div class="sub-lead">쿠팡·온채널 같은 바깥으로 나가는 일은 전부 여기서 허락해야 실행돼요.</div></div></div>
+  <div class="modes">
+    <div class="m"><b>추천만</b><span>제안만 하고 아무것도 보내지 않아요</span></div>
+    <div class="m on"><b>운영자 승인 · 지금</b><span>제가 허용한 것만, 허용한 횟수만큼 나가요</span></div>
+    <div class="m"><b>자동</b><span>정해 둔 범위 안에서 알아서 (아직 안 써요)</span></div>
+  </div>
+  <div class="tabs"><div class="tab on">승인 대기 1</div><div class="tab">허용 중 1</div><div class="tab">처리 기록</div></div>
+
+  <table class="rq">
+    <thead><tr><th>요청</th><th style="width:100px">보내는 곳</th><th style="width:250px">횟수 · 되돌리기</th><th style="width:170px">작업</th></tr></thead>
+    <tbody>
+      <tr class="hl">
+        <td><div class="cell"><div class="th" data-art="panty"></div><div><b>출고일을 2일로 수정</b><small>방수 생리팬티 · 쿠팡 16415163636 · 1일 → 2일</small></div></div></td>
+        <td><b>쿠팡</b></td>
+        <td><div class="lim"><span>조회 <b>2회</b></span><span>수정 <b>1회</b></span><span>되돌리기 <b>가능</b></span></div></td>
+        <td><div class="acts"><span class="btn sm">허용</span><span class="btn red sm">거절</span></div></td>
+      </tr>
+      <tr>
+        <td><div class="cell"><div class="th" data-art="eye"></div><div><b>판매신청 승인 확인</b><small>방수 생리팬티 · 온채널 CH1837300 · 매시 1번</small></div></div></td>
+        <td><b>온채널</b></td>
+        <td><div class="lim"><span>조회 <b>시간당 1회</b></span><span>수정·주문 <b>없음</b></span><span>남은 <b>1회</b></span></div></td>
+        <td><div class="acts"><span class="chip ok">허용 중</span><span class="btn line sm">멈추기</span></div></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box-info" style="margin-top:18px"><span class="info">i</span><div><b>허용 없이는 이런 일이 막혀요.</b> 주문 취소 · 판매 중지 · 송장 등록 · 상품 등록 · 가격/재고 변경은 허용한 횟수가 0이면 버튼 자체가 켜지지 않아요.</div></div>
+</section>
+
+<aside class="panel">
+  <h2>오늘 바깥으로 나간 일</h2>
+  <ul class="tl" style="margin-top:8px">
+    <li><span>온채널 상품 조회</span><b class="num">6회</b></li>
+    <li><span>쿠팡 송장 등록</span><b class="num">0회</b></li>
+    <li><span>쿠팡 상품 수정</span><b class="num">0회</b></li>
+    <li><span>주문 · 취소 · 결제</span><b class="num">0회</b></li>
+  </ul>
+  <div class="faint" style="font-size:13px;margin-top:8px">기록은 모두 남아 있어서 나중에 확인할 수 있어요.</div>
+  <div style="margin-top:22px;border:1.5px solid var(--red);background:#FEF3F4;border-radius:8px;padding:18px">
+    <h3 style="color:var(--red)">긴급 중지</h3>
+    <p class="muted" style="font-size:14.5px;margin:4px 0 14px">누르면 모든 바깥 전송이 즉시 멈춰요. 다시 켜기 전까지 아무것도 나가지 않아요.</p>
+    <span class="btn big" style="background:var(--red)">지금 모두 멈추기</span>
+  </div>
+</aside>
+<script src="chrome.js"></script>
+</body></html>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>승인 센터</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 18px; background: #E9EBF1; border-radius: 14px; padding: 5px; }
+  .m { padding: 14px 18px; border-radius: 10px; }
+  .m b { font-size: 17px; display: block; } .m span { font-size: 13.5px; color: var(--muted); }
+  .m.on { background: #fff; box-shadow: 0 1px 4px rgba(23,23,31,.12); } .m.on b { color: var(--brand-ink); }
+  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 22px; margin-top: 22px; }
+  .req { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; margin-bottom: 14px; }
+  .req .t { font-size: 18px; font-weight: 800; }
+  .req .w { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .chip { font-size: 13px; background: var(--bg); border-radius: 8px; padding: 4px 10px; color: var(--muted); }
+  .chip b { color: var(--ink); }
+  .acts { display: flex; flex-direction: column; gap: 8px; width: 150px; }
+  .acts .btn { width: 100%; padding: 12px; }
+  .acts .no { background: #fff; color: var(--bad); border: 1.5px solid var(--bad); }
+  .tl { list-style: none; } .tl li { display: flex; justify-content: space-between; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14.5px; }
+  .tl li:first-child { border-top: 0; }
+</style></head><body>
+<aside class="side">
+  <div class="logo">HOME<b>Z</b></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg>오늘</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>상품</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7M7 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3zM17 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3z"/></svg>주문</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.6c0-1 1-1.6 2.5-1.6s2.5.7 2.5 1.7-1 1.4-2.5 1.8-2.5.8-2.5 1.8 1 1.7 2.5 1.7 2.5-.6 2.5-1.6"/></svg>돈</div>
+  <hr>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3zM9 12l2 2 4-4"/></svg>승인 센터<span class="badge">2</span></div>
+  <div class="sp"></div>
+  <div class="nav sub"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>더보기 · 설정 · 도움말</div>
+</aside>
+<div class="main">
+  <header class="top">
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>상품명, 주문번호로 찾기</div>
+    <span class="pill brand"><i></i>운영자 승인 모드</span>
+    <span class="stop">긴급 정지</span>
+  </header>
+  <section class="content">
+    <h1>승인 센터</h1>
+    <p class="lead">쿠팡·온채널 같은 바깥으로 나가는 일은 전부 여기서 허락해야 실행돼요.</p>
+    <div class="modes">
+      <div class="m"><b>추천만</b><span>홈즈는 제안만 하고 아무것도 보내지 않아요</span></div>
+      <div class="m on"><b>운영자 승인 · 지금</b><span>제가 허용한 것만, 허용한 횟수만큼 나가요</span></div>
+      <div class="m"><b>자동</b><span>정해 둔 범위 안에서 알아서 (아직 쓰지 않아요)</span></div>
+    </div>
+
+    <div class="layout">
+      <div>
+        <div class="card req">
+          <div>
+            <div class="t">쿠팡 상품의 출고일을 2일로 수정</div>
+            <div class="muted" style="margin-top:2px">방수 생리팬티 · 쿠팡 상품번호 16415163636 · 지금 1일 → 2일</div>
+            <div class="w"><span class="chip">보내는 곳 <b>쿠팡</b></span><span class="chip">조회 <b>2회</b></span><span class="chip">수정 <b>1회</b></span><span class="chip">되돌리기 <b>다시 수정으로 가능</b></span></div>
+          </div>
+          <div class="acts"><span class="btn">허용</span><span class="btn no">거절</span></div>
+        </div>
+        <div class="card req">
+          <div>
+            <div class="t">온채널 판매신청 승인 확인</div>
+            <div class="muted" style="margin-top:2px">방수 생리팬티 · 온채널 상품 CH1837300 · 매시 1번</div>
+            <div class="w"><span class="chip">보내는 곳 <b>온채널</b></span><span class="chip">조회 <b>시간당 1회</b></span><span class="chip">수정·주문 <b>없음</b></span><span class="chip">남은 확인 <b>오늘 1회</b></span></div>
+          </div>
+          <div class="acts"><span class="btn ok">계속 허용 중</span><span class="btn ghost">멈추기</span></div>
+        </div>
+        <div class="card" style="background:#F0F1F5;border-style:dashed">
+          <b>허용 없이는 이런 일이 막혀요</b>
+          <div class="muted" style="font-size:14.5px;margin-top:4px">주문 취소 · 판매 중지 · 송장 등록 · 상품 등록 · 가격/재고 변경은 <b>허용한 횟수가 0이면 버튼 자체가 켜지지 않아요.</b></div>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <h3 style="margin-bottom:6px">오늘 바깥으로 나간 일</h3>
+          <ul class="tl">
+            <li><span>온채널 상품 조회</span><b class="num">6회</b></li>
+            <li><span>쿠팡 송장 등록</span><b class="num">0회</b></li>
+            <li><span>쿠팡 상품 수정</span><b class="num">0회</b></li>
+            <li><span>주문·취소·결제</span><b class="num">0회</b></li>
+          </ul>
+          <div class="faint" style="font-size:12.5px;margin-top:8px">기록은 모두 남아 있어서 나중에 확인할 수 있어요.</div>
+        </div>
+        <div class="card" style="background:var(--bad-soft);border-color:#F4C3CD">
+          <h3 style="color:var(--bad)">긴급 정지</h3>
+          <p class="muted" style="font-size:14.5px;margin:4px 0 12px">누르면 모든 바깥 전송이 즉시 멈춰요. 다시 켜기 전까지 아무것도 나가지 않아요.</p>
+          <span class="btn" style="background:var(--bad);width:100%">지금 모두 멈추기</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="foot">예시 화면 · 실제 화면과 다를 수 있어요</div>
+</body></html>

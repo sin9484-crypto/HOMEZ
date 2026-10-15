@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>오늘</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; margin-top: 22px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .step { padding: 16px 20px; border-right: 1px solid var(--line); position: relative; }
+  .step:last-child { border-right: 0; }
+  .step .n { font-size: 34px; font-weight: 800; line-height: 1.1; }
+  .step .l { font-size: 15px; font-weight: 700; margin-top: 2px; }
+  .step .d { font-size: 13px; color: var(--faint); }
+  .step.hot { background: var(--brand-soft); }
+  .step.hot .n { color: var(--brand-ink); }
+  .step .dot { position: absolute; right: 16px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .step:not(:last-child)::after { content: "›"; position: absolute; right: -8px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; line-height: 14px; text-align: center; background: #fff; border: 1px solid var(--line); border-radius: 50%; color: var(--faint); z-index: 2; font-size: 14px; }
+  .sec { display: flex; align-items: baseline; gap: 12px; margin: 26px 0 12px; }
+  .todo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .task { display: flex; flex-direction: column; gap: 10px; border-left: 5px solid var(--brand); }
+  .task .q { font-size: 20px; font-weight: 800; }
+  .task .why { color: var(--muted); font-size: 15px; }
+  .task .meta { display: flex; gap: 8px; flex-wrap: wrap; }
+  .task .go { margin-top: auto; display: flex; align-items: center; gap: 14px; }
+  .watch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .watch .card { padding: 16px 20px; }
+  .watch .t { font-weight: 700; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+  .watch .s { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .watch .when { color: var(--faint); font-size: 12.5px; margin-top: 8px; }
+</style></head><body>
+<aside class="side">
+  <div class="logo">HOME<b>Z</b></div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg>오늘</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>상품</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7M7 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3zM17 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3z"/></svg>주문</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.6c0-1 1-1.6 2.5-1.6s2.5.7 2.5 1.7-1 1.4-2.5 1.8-2.5.8-2.5 1.8 1 1.7 2.5 1.7 2.5-.6 2.5-1.6"/></svg>돈</div>
+  <hr>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3zM9 12l2 2 4-4"/></svg>승인 센터<span class="badge">2</span></div>
+  <div class="sp"></div>
+  <div class="nav sub"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>더보기 · 설정 · 도움말</div>
+</aside>
+<div class="main">
+  <header class="top">
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>상품명, 주문번호로 찾기</div>
+    <span class="pill brand"><i></i>운영자 승인 모드</span>
+    <span class="stop">긴급 정지</span>
+  </header>
+  <section class="content">
+    <h1>오늘 할 일 2건이 있어요</h1>
+    <p class="lead">10월 15일 목요일 · 내가 할 일 2건, 홈즈가 지켜보는 일 3건</p>
+
+    <div class="flow">
+      <div class="step"><div class="n num">7</div><div class="l">올릴 준비</div><div class="d">사진·가격 확인 중</div></div>
+      <div class="step hot"><span class="dot"></span><div class="n num">1</div><div class="l">판매 중</div><div class="d">출고일 확인 필요</div></div>
+      <div class="step"><div class="n num">0</div><div class="l">새 주문</div><div class="d">공급처에 넣을 주문 없음</div></div>
+      <div class="step"><div class="n num">1</div><div class="l">보내는 중</div><div class="d">롯데택배 이동 중</div></div>
+      <div class="step"><div class="n num">0</div><div class="l">정산 기다림</div><div class="d">배송 완료 후 시작</div></div>
+    </div>
+
+    <div class="sec"><h2>내가 할 일</h2><span class="faint">큰 버튼 하나만 누르면 돼요</span></div>
+    <div class="todo">
+      <div class="card task">
+        <div class="meta"><span class="pill warn">승인 필요</span><span class="pill gray">방수 생리팬티 · 쿠팡 판매 중</span></div>
+        <div class="q">출고일을 1일에서 2일로 바꿔요</div>
+        <div class="why">지금은 "주문 당일 출고"로 올라가 있어요. 공급처는 주문 다음 날 보내니, 2일로 해야 쿠팡에서 지연으로 잡히지 않아요.</div>
+        <div class="go"><span class="btn">확인하고 바꾸기</span><span class="faint">쿠팡에 수정 1회 · 승인 후 실행</span></div>
+      </div>
+      <div class="card task" style="border-left-color:var(--teal)">
+        <div class="meta"><span class="pill teal">AI가 거의 채웠어요</span><span class="pill gray">새 상품 6개</span></div>
+        <div class="q">상품 사진을 골라 주세요</div>
+        <div class="why">제목·옵션·고시정보는 자동으로 채웠어요. 사진 4장씩만 고르면 올릴 수 있어요.</div>
+        <div class="go"><span class="btn">이어서 하기</span><span class="faint">상품마다 약 2분</span></div>
+      </div>
+    </div>
+
+    <div class="sec"><h2>홈즈가 지켜보는 일</h2><span class="faint">할 일이 생기면 위로 올라와요</span></div>
+    <div class="watch">
+      <div class="card"><div class="t"><span class="pill gray">기다리는 중</span></div><div class="t" style="margin-top:10px">온채널 판매신청 승인</div><div class="s">방수 생리팬티 · 승인되면 알려드려요</div><div class="when">매시 1번 확인 · 마지막 18:33</div></div>
+      <div class="card"><div class="t"><span class="pill ok">정상</span></div><div class="t" style="margin-top:10px">쿠팡 주문 1건 배송 중</div><div class="s">백산수 20PET · 롯데택배 259606480560</div><div class="when">쿠팡에 송장 등록 완료</div></div>
+      <div class="card"><div class="t"><span class="pill ok">정상</span></div><div class="t" style="margin-top:10px">쿠팡 상품 승인 완료</div><div class="s">방수 생리팬티 · 판매가 10,130원</div><div class="when">예상 순이익 약 1,829원</div></div>
+    </div>
+  </section>
+</div>
+<div class="foot">예시 화면 · 실제 화면과 다를 수 있어요</div>
+</body></html>

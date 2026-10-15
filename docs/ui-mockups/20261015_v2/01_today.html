@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>오늘 할 일</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .recent td { padding: 10px 14px; font-size: 14.5px; }
+  .sec { font-size: 18px; font-weight: 800; margin: 22px 0 0; }
+  .why { color: var(--muted); font-size: 14.5px; margin-top: 8px; }
+  .big-n { font-size: 15px; color: var(--muted); }
+</style></head>
+<body data-active="today" data-badge="2">
+<section class="page">
+  <div class="title"><div><h1>오늘 할 일</h1><div class="sub-lead">내가 할 일 2건 · 홈즈가 지켜보는 일 2건 — 아래 큰 버튼 하나씩만 누르면 돼요.</div></div></div>
+  <div class="tabs"><div class="tab on">전체 업무</div><div class="tab">내가 할 일 2</div><div class="tab">지켜보는 중 2</div><div class="tab">처리 완료</div></div>
+  <div class="summary"><div>확인 필요 <b class="c-red">1</b></div><div>승인 필요 <b class="c-orange">1</b></div><div>지켜보는 중 <b class="c-blue">2</b></div><div>오늘 완료 <b class="c-green">2</b></div></div>
+
+  <table>
+    <thead><tr><th style="width:190px">업무</th><th>상품 · 주문</th><th style="width:150px">상태</th><th style="width:170px">다음 작업</th></tr></thead>
+    <tbody>
+      <tr class="hl">
+        <td><b style="font-size:16px">출고일 바꾸기</b><div class="muted" style="font-size:13.5px">지금 1일 → 2일</div></td>
+        <td><div class="cell"><div class="th" data-art="panty"></div><div><b>방수 생리팬티</b><small>쿠팡 판매 중 · 상품번호 16415163636</small></div></div></td>
+        <td><span class="warn">!</span>&nbsp; <span class="chip wait">승인 필요</span></td>
+        <td><span class="btn">확인하고 바꾸기</span></td>
+      </tr>
+      <tr>
+        <td><b style="font-size:16px">사진 고르기</b><div class="muted" style="font-size:13.5px">AI가 거의 채웠어요</div></td>
+        <td><div class="cell"><div class="th" data-art="stack"></div><div><b>새 상품 6개</b><small>사진 4장씩 선택하면 올릴 수 있어요</small></div></div></td>
+        <td><span class="info">i</span>&nbsp; <span class="chip blue">확인 필요</span></td>
+        <td><span class="btn ghost">이어서 작성</span></td>
+      </tr>
+      <tr>
+        <td><b style="font-size:16px">온채널 승인 기다림</b><div class="muted" style="font-size:13.5px">매시 1번 확인 · 마지막 18:33</div></td>
+        <td><div class="cell"><div class="th" data-art="eye"></div><div><b>방수 생리팬티</b><small>온채널 상품 CH1837300</small></div></div></td>
+        <td><span class="chip gray">기다리는 중</span></td>
+        <td><span class="btn line">상태 보기</span></td>
+      </tr>
+      <tr>
+        <td><b style="font-size:16px">배송 진행</b><div class="muted" style="font-size:13.5px">쿠팡에 송장 등록 완료</div></td>
+        <td><div class="cell"><div class="th" data-art="water"></div><div><b>백산수 500ml × 20병</b><small>쿠팡 주문 8103602504198 · 롯데택배 259606480560</small></div></div></td>
+        <td><span class="chip blue">배송 중</span></td>
+        <td><span class="btn line">배송 보기</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="sec">오늘 끝낸 일</div>
+  <table class="recent" style="margin-top:8px"><tbody>
+    <tr><td style="width:40px"><span class="check">✓</span></td><td><b>쿠팡에 송장 등록</b> <span class="muted">· 백산수 20병</span></td><td class="muted" style="width:150px">처리 완료 · 오후</td></tr>
+    <tr><td><span class="check">✓</span></td><td><b>발주 확인 처리</b> <span class="muted">· 쿠팡 주문 8103602504198</span></td><td class="muted">처리 완료 · 오후</td></tr>
+  </tbody></table>
+</section>
+
+<aside class="panel">
+  <div style="position:relative"><h2 style="padding-right:30px">출고일 바꾸기</h2><span style="position:absolute;right:0;top:2px" data-ic="close"></span></div>
+  <div class="cell" style="margin:16px 0 4px"><div class="th" data-art="panty"></div><div><b style="font-size:17px">방수 생리팬티</b><small>쿠팡 판매 중 · 승인완료</small></div></div>
+  <div class="box-warn" style="margin-top:14px"><span class="warn">!</span><div><b>지금은 "주문 당일 출고"로 올라가 있어요.</b><div style="margin-top:2px">공급처는 주문 다음 날 보내니, 2일로 해야 쿠팡에서 지연으로 잡히지 않아요.</div></div></div>
+  <div style="margin-top:14px">
+    <div class="kv"><span>지금</span><b>1일 (당일출고)</b></div>
+    <div class="kv"><span>바꿀 값</span><b class="c-green">2일 (다음 날)</b></div>
+    <div class="kv"><span>쿠팡에 보내는 횟수</span><b>조회 2회 · 수정 1회</b></div>
+    <div class="kv"><span>되돌리기</span><b>다시 수정하면 돼요</b></div>
+  </div>
+  <div style="margin-top:18px"><span class="btn big">확인하고 바꾸기</span><div class="faint" style="font-size:13px;margin-top:8px;text-align:center">누르면 "승인 센터"에서 허용한 횟수만큼만 쿠팡에 나가요</div></div>
+</aside>
+<script src="chrome.js"></script>
+</body></html>

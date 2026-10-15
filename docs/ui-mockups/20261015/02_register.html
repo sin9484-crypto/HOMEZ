@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>새 상품 올리기</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  body { height: 1100px; }
+  .steps { display: flex; gap: 0; margin-top: 18px; }
+  .st { flex: 1; display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #EEF0F4; color: var(--muted); font-weight: 700; font-size: 16px; }
+  .st:first-child { border-radius: 12px 0 0 12px; } .st:last-child { border-radius: 0 12px 12px 0; }
+  .st .c { width: 28px; height: 28px; border-radius: 50%; background: #fff; color: var(--muted); display: grid; place-items: center; font-size: 14px; }
+  .st.done { background: var(--ok-soft); color: var(--ok); } .st.done .c { background: var(--ok); color: #fff; }
+  .st.on { background: var(--brand); color: #fff; } .st.on .c { background: #fff; color: var(--brand); }
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 22px; margin-top: 20px; }
+  .grp { margin-bottom: 14px; }
+  .grp h3 { margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+  .f { display: grid; grid-template-columns: 150px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  .f:first-of-type { border-top: 0; }
+  .f .k { color: var(--muted); font-size: 14.5px; }
+  .f .v { font-weight: 700; font-size: 16px; }
+  .f .v small { display: block; font-weight: 400; font-size: 13px; color: var(--faint); }
+  .f.need { background: var(--warn-soft); margin: 0 -24px; padding: 10px 24px; }
+  .preview { display: flex; flex-direction: column; gap: 14px; }
+  .img { height: 150px; border-radius: 12px; background: linear-gradient(135deg, #F3D9E8, #E5DEF8); display: grid; place-items: center; color: #8B6FA8; font-weight: 700; }
+  .money { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; font-size: 14.5px; }
+  .money b { text-align: right; } .money .tot { border-top: 1px solid var(--line); padding-top: 8px; font-size: 16px; }
+  .check { display: flex; gap: 10px; align-items: flex-start; font-size: 14.5px; margin: 5px 0; }
+  .check .i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; flex: none; margin-top: 2px; }
+  .i.ok { background: var(--ok); } .i.no { background: var(--warn); }
+</style></head><body>
+<aside class="side">
+  <div class="logo">HOME<b>Z</b></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg>오늘</div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>상품</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7M7 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3zM17 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3z"/></svg>주문</div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.6c0-1 1-1.6 2.5-1.6s2.5.7 2.5 1.7-1 1.4-2.5 1.8-2.5.8-2.5 1.8 1 1.7 2.5 1.7 2.5-.6 2.5-1.6"/></svg>돈</div>
+  <hr>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3zM9 12l2 2 4-4"/></svg>승인 센터<span class="badge">2</span></div>
+  <div class="sp"></div>
+  <div class="nav sub"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>더보기 · 설정 · 도움말</div>
+</aside>
+<div class="main">
+  <header class="top">
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>상품명, 주문번호로 찾기</div>
+    <span class="pill brand"><i></i>운영자 승인 모드</span>
+    <span class="stop">긴급 정지</span>
+  </header>
+  <section class="content">
+    <div class="row"><h1>새 상품 올리기</h1><span class="pill gray">방수 생리팬티 · 쿠팡</span></div>
+    <div class="steps">
+      <div class="st done"><span class="c">✓</span>상품 주소 붙여넣기</div>
+      <div class="st on"><span class="c">2</span>AI가 채운 내용 확인</div>
+      <div class="st"><span class="c">3</span>쿠팡에 올리기</div>
+    </div>
+
+    <div class="layout">
+      <div>
+        <div class="card grp">
+          <h3>꼭 확인할 것 <span class="pill warn">2개</span></h3>
+          <div class="f need"><div class="k">판매가</div><div class="v">10,130원<small>직접 정한 값이에요</small></div><span class="btn ghost" style="padding:8px 14px;font-size:14px">맞아요</span></div>
+          <div class="f need"><div class="k">사진 사용 권리</div><div class="v">확인 전<small>공급처 사진을 써도 되는지 한 번 체크해 주세요</small></div><span class="btn ghost" style="padding:8px 14px;font-size:14px">사용해도 돼요</span></div>
+        </div>
+        <div class="card grp">
+          <h3>AI가 채웠어요 <span class="pill teal">자동</span></h3>
+          <div class="f"><div class="k">상품 이름</div><div class="v">방수 생리팬티 위생팬티</div><span class="faint">바꾸기</span></div>
+          <div class="f"><div class="k">옵션</div><div class="v">24개<small>색상과 사이즈 조합으로 만들었어요</small></div><span class="faint">보기</span></div>
+          <div class="f"><div class="k">사진</div><div class="v">10장 · 대표 사진 1장<small>쿠팡에 올릴 주소로 변환 완료</small></div><span class="faint">보기</span></div>
+          <div class="f"><div class="k">제품 정보 고시</div><div class="v">의류 기준으로 채움<small>소비자상담 전화번호는 저장해 둔 값</small></div><span class="faint">보기</span></div>
+        </div>
+        <div class="card grp" style="margin-bottom:0">
+          <h3>늘 쓰는 값이에요 <span class="pill gray">기본값</span></h3>
+          <div class="f"><div class="k">출고일</div><div class="v">주문 후 2일<small>공급처가 다음 날 보내기 때문이에요</small></div><span class="faint">바꾸기</span></div>
+          <div class="f"><div class="k">택배사 · 출고지</div><div class="v">CJ대한통운 · 에브리홈즈 출고지</div><span class="faint">바꾸기</span></div>
+        </div>
+      </div>
+
+      <div class="preview">
+        <div class="card">
+          <div class="img">쿠팡에 이렇게 보여요</div>
+          <h3 style="margin-top:12px">방수 생리팬티 위생팬티</h3>
+          <div class="muted" style="font-size:14px">블랙 · 스킨 / M · L · XL</div>
+          <div style="font-size:26px;font-weight:800;margin-top:6px" class="num">10,130원</div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:8px">남는 돈</h3>
+          <div class="money num"><span class="muted">판매가</span><b>10,130원</b><span class="muted">상품 원가 + 배송비</span><b>− 6,700원</b><span class="muted">쿠팡 수수료 10.8%</span><b>− 1,094원</b><span class="muted">반품 대비 5%</span><b>− 507원</b><span class="tot"><b>예상 순이익</b></span><b class="tot" style="color:var(--ok)">약 1,829원 (18%)</b></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:6px">올리기 전 점검 <span class="faint" style="font-weight:500">5 / 7</span></h3>
+          <div class="check"><span class="i ok">✓</span>옵션·사진·고시정보 입력 완료</div>
+          <div class="check"><span class="i ok">✓</span>수익이 최소 기준(18%) 이상</div>
+          <div class="check"><span class="i no">!</span>판매가 확인</div>
+          <div class="check"><span class="i no">!</span>사진 사용 권리 확인</div>
+          <div style="margin-top:12px"><span class="btn disabled big" style="width:100%">쿠팡에 올리기</span><div class="faint" style="font-size:13px;margin-top:6px;text-align:center">위의 "꼭 확인할 것" 2개를 끝내면 켜져요</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="foot">예시 화면 · 실제 화면과 다를 수 있어요</div>
+</body></html>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>새 상품 올리기</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  body { height: 1120px; }
+  .steps3 { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .s3 { padding: 13px 18px; display: flex; gap: 12px; align-items: center; font-size: 16px; font-weight: 700; color: var(--muted); background: #fff; border-right: 1px solid var(--line); }
+  .s3:last-child { border-right: 0; }
+  .s3 .n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; background: #D9DDE3; color: #fff; }
+  .s3.done { color: var(--g-dark); } .s3.done .n { background: var(--g); }
+  .s3.on { background: var(--g); color: #fff; } .s3.on .n { background: #fff; color: var(--g); }
+  .blk { border: 1px solid var(--line); border-radius: 8px; margin-top: 16px; }
+  .blk > h3 { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; background: var(--head); border-radius: 8px 8px 0 0; }
+  .f { display: grid; grid-template-columns: 150px 1fr auto; gap: 14px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .f:last-child { border-bottom: 0; }
+  .f .k { color: var(--muted); font-size: 14.5px; }
+  .f .v { font-weight: 700; font-size: 16px; } .f .v small { display: block; font-weight: 400; font-size: 13.5px; color: var(--muted); }
+  .f.need { background: #FFF8E6; }
+  .money { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; font-size: 15px; }
+  .money b { text-align: right; } .money .tot { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; font-size: 16.5px; }
+</style></head>
+<body data-active="products" data-badge="2">
+<section class="page">
+  <div class="title"><div><h1>새 상품 올리기</h1><div class="sub-lead">방수 생리팬티 · 쿠팡 · AI가 채운 내용을 확인하고 올려요.</div></div></div>
+  <div class="steps3">
+    <div class="s3 done"><span class="n">✓</span>상품 주소 붙여넣기</div>
+    <div class="s3 on"><span class="n">2</span>내용 확인</div>
+    <div class="s3"><span class="n">3</span>쿠팡에 올리기</div>
+  </div>
+
+  <div class="blk">
+    <h3>꼭 확인할 것 <span class="chip wait">2개</span></h3>
+    <div class="f need"><div class="k">판매가</div><div class="v">10,130원<small>제가 직접 정한 값이에요</small></div><span class="btn ghost sm">맞아요</span></div>
+    <div class="f need"><div class="k">사진 사용 권리</div><div class="v">확인 전<small>공급처 사진을 써도 되는지 한 번 체크해 주세요</small></div><span class="btn ghost sm">사용해도 돼요</span></div>
+  </div>
+  <div class="blk">
+    <h3>AI가 채웠어요 <span class="chip ok">자동</span></h3>
+    <div class="f"><div class="k">상품 이름</div><div class="v">방수 생리팬티 위생팬티</div><span class="link">바꾸기</span></div>
+    <div class="f"><div class="k">옵션</div><div class="v">24개<small>색상과 사이즈 조합으로 만들었어요</small></div><span class="link">보기</span></div>
+    <div class="f"><div class="k">사진</div><div class="v">10장 · 대표 사진 1장<small>쿠팡에 올릴 주소로 변환 완료</small></div><span class="link">보기</span></div>
+    <div class="f"><div class="k">제품 정보 고시</div><div class="v">의류 기준으로 채움<small>소비자상담 전화번호는 저장해 둔 값을 썼어요</small></div><span class="link">보기</span></div>
+  </div>
+  <div class="blk">
+    <h3>늘 쓰는 값이에요 <span class="chip gray">기본값</span></h3>
+    <div class="f"><div class="k">출고일</div><div class="v">주문 후 2일<small>공급처가 다음 날 보내기 때문이에요</small></div><span class="link">바꾸기</span></div>
+    <div class="f"><div class="k">택배사 · 출고지</div><div class="v">CJ대한통운 · 에브리홈즈 출고지</div><span class="link">바꾸기</span></div>
+  </div>
+</section>
+
+<aside class="panel">
+  <div class="th lg" data-art="panty" style="border-radius:8px"></div>
+  <h3 style="margin-top:12px;font-size:19px">방수 생리팬티 위생팬티</h3>
+  <div class="muted" style="font-size:14px">블랙 · 스킨 / M · L · XL</div>
+  <div style="font-size:28px;font-weight:800;margin-top:4px" class="num">10,130원</div>
+
+  <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
+    <h3 style="margin-bottom:10px">남는 돈</h3>
+    <div class="money num"><span class="muted">판매가</span><b>10,130원</b><span class="muted">상품 원가 + 배송비</span><b>− 6,700원</b><span class="muted">쿠팡 수수료 10.8%</span><b>− 1,094원</b><span class="muted">반품 대비 5%</span><b>− 507원</b><span class="tot"><b style="text-align:left">예상 순이익</b></span><b class="tot c-green">약 1,829원 (18%)</b></div>
+  </div>
+  <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
+    <h3 style="margin-bottom:6px">올리기 전 점검 <span class="muted" style="font-weight:500;font-size:15px">5 / 7</span></h3>
+    <ul class="steps">
+      <li><span class="check">✓</span>옵션·사진·고시정보 입력</li>
+      <li><span class="check">✓</span>수익이 최소 기준(18%) 이상</li>
+      <li class="w"><span class="warn">!</span>판매가 확인</li>
+      <li class="w"><span class="warn">!</span>사진 사용 권리 확인</li>
+    </ul>
+  </div>
+  <div style="margin-top:14px"><span class="btn gray big">쿠팡에 올리기</span><div class="faint" style="font-size:13px;margin-top:8px;text-align:center">"꼭 확인할 것" 2개를 끝내면 켜져요</div></div>
+</aside>
+<script src="chrome.js"></script>
+</body></html>

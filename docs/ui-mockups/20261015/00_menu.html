@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>메뉴 정리안</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  body { display: block; padding: 36px 44px; }
+  .head { display: flex; align-items: baseline; gap: 18px; }
+  .cols { display: grid; grid-template-columns: 1fr 76px 1fr; gap: 0; margin-top: 22px; }
+  .now { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 24px 26px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+  .chip { font-size: 13px; background: #F0F1F5; color: var(--muted); border-radius: 8px; padding: 5px 10px; }
+  .arrow { display: flex; align-items: center; justify-content: center; font-size: 38px; color: var(--brand); font-weight: 800; }
+  .after { display: grid; gap: 12px; }
+  .grp { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 16px 20px; display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: center; }
+  .grp .t { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 800; }
+  .grp .t svg { color: var(--brand); width: 26px; height: 26px; }
+  .grp .t small { display: block; font-size: 12.5px; font-weight: 500; color: var(--faint); }
+  .grp p { font-size: 14px; color: var(--muted); }
+  .grp.more { background: #F0F1F5; border-style: dashed; }
+  .big { font-size: 56px; font-weight: 800; line-height: 1; color: var(--bad); }
+  .big.good { color: var(--brand); }
+  .cap { font-size: 15px; color: var(--muted); margin-top: 6px; }
+  .rule { margin-top: 18px; display: flex; gap: 14px; }
+  .rule .card { flex: 1; padding: 14px 18px; font-size: 14px; color: var(--muted); }
+  .rule b { color: var(--ink); }
+</style></head><body>
+<div class="head"><h1>메뉴를 4개로 줄이고, 나머지는 필요할 때만 열어요</h1><span class="pill gray">시안 0 · 메뉴 정리안</span></div>
+<p class="lead">지금은 왼쪽에 40개가 한꺼번에 있어요. 하는 일 순서(올리기 → 팔기 → 보내기 → 돈 받기)대로 묶었습니다.</p>
+
+<div class="cols">
+  <div class="now">
+    <div class="row"><div class="big">40<span style="font-size:22px;color:var(--ink)">개</span></div><div class="cap">지금 메뉴 — 이름만 봐서는<br>어디로 가야 할지 알기 어려워요</div></div>
+    <div class="chips" id="chips"></div>
+  </div>
+  <div class="arrow">→</div>
+  <div>
+    <div class="row" style="margin-bottom:12px"><div class="big good">4<span style="font-size:22px;color:var(--ink)">개</span></div><div class="cap">+ 승인 센터 1개, 더보기 1개 — 매일 쓰는 건 4개뿐이에요</div></div>
+    <div class="after">
+      <div class="grp"><div class="t"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg><div>오늘<small>메뉴 6개 → 1개</small></div></div><p>대시보드 · 전체 업무 · AI 업무 제안 · 운영 우선순위 · 주문 예외 · 정산 차이를 <b>"오늘 할 일" 한 장</b>으로</p></div>
+      <div class="grp"><div class="t"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg><div>상품<small>메뉴 14개 → 1개</small></div></div><p>상품 후보 · AI 상품 등록 · 상품 등록 · 상품 목록 · 등록 현황 · 속성 비교 등을 <b>"올리기 → 판매 중" 목록</b>으로</p></div>
+      <div class="grp"><div class="t"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7M7 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3zM17 19a1.6 1.6 0 100-3 1.6 1.6 0 000 3z"/></svg><div>주문<small>메뉴 9개 → 1개</small></div></div><p>주문 현황 · 공급처·발주 · 배송 · 반품·교환 · 환불을 <b>주문 한 건의 진행 막대</b> 하나로</p></div>
+      <div class="grp"><div class="t"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.6c0-1 1-1.6 2.5-1.6s2.5.7 2.5 1.7-1 1.4-2.5 1.8-2.5.8-2.5 1.8 1 1.7 2.5 1.7 2.5-.6 2.5-1.6"/></svg><div>돈<small>메뉴 5개 → 1개</small></div></div><p>마진·수익 · 자금·정산 · 채널 정산 · 결제 수단을 <b>"들어온 돈 / 나갈 돈"</b>으로</p></div>
+      <div class="grp"><div class="t"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3zM9 12l2 2 4-4"/></svg><div>승인 센터<small>새로 만든 한 곳</small></div></div><p>쿠팡·온채널로 <b>나가는 일은 전부 여기서</b> 허용/거절 — 지금은 곳곳에 흩어져 있어요</p></div>
+      <div class="grp more"><div class="t"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg><div>더보기<small>메뉴 6개</small></div></div><p>트렌드·키워드 분석 · 사용자·권한 · 시스템 상태 · 설정 · 가이드 — 가끔만 쓰는 것</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="rule">
+  <div class="card"><b>원칙 1.</b> 한 화면에서 "다음에 할 일"은 큰 버튼 하나만.</div>
+  <div class="card"><b>원칙 2.</b> 어려운 말(차단·정합성·식별자)은 쓰지 않고, 하는 일 이름으로 말해요.</div>
+  <div class="card"><b>원칙 3.</b> 기존 화면은 없애지 않고 "고급 보기"로 남겨, 필요하면 그대로 열 수 있어요.</div>
+</div>
+<div class="foot">예시 화면 · 실제 화면과 다를 수 있어요</div>
+<script>
+  const names = "대시보드|전체 업무|AI 업무 제안|운영 우선순위|주문 예외 검토|주문 자동 감지|정산 차이 검토|구매 실행 연결|매입·발주 관리|상품 속성 비교|리콜·판매중지 차단|상품 후보|AI 상품 등록|상품 등록|상품 목록|등록 현황|판매채널 연동|채널별 판매 방식|주문 현황|공급처·발주|공급처 능력|배송|반품·교환|환불 관리|결제 수단|Decision AI|AI 학습 기반|트렌드 탐색|신제품 탐색|키워드 분석|마진·수익 분석|자금·정산|채널 정산|자동화 안전|환율 관리|가격·재고 안전 설정|사용자·권한|시스템 상태|설정 · 계정 및 보안|가이드".split("|");
+  document.getElementById("chips").innerHTML = names.map(n => `<span class="chip">${n}</span>`).join("");
+</script>
+</body></html>

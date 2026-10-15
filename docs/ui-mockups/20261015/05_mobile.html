@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>모바일</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  body { display: flex; width: 1000px; height: 860px; gap: 56px; justify-content: center; align-items: center; background: #E9EBF2; }
+  .phone { width: 372px; height: 780px; background: var(--bg); border: 10px solid #17171F; border-radius: 44px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+  .bar { height: 54px; padding: 0 20px; display: flex; align-items: center; background: var(--card); }
+  .bar .logo { padding: 0; font-size: 20px; } .bar .pill { margin-left: auto; font-size: 11.5px; padding: 5px 10px; }
+  .body { flex: 1; padding: 16px 16px 8px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+  .tabs { height: 72px; background: var(--card); border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 4px 0; }
+  .tab { text-align: center; font-size: 11.5px; font-weight: 700; color: var(--faint); position: relative; }
+  .tab svg { display: block; margin: 0 auto 2px; width: 24px; height: 24px; } .tab.on { color: var(--brand-ink); }
+  .tab .b { position: absolute; top: -2px; left: 56%; background: var(--bad); color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; }
+  h1 { font-size: 23px; } .sm { font-size: 14px; color: var(--muted); }
+  .mini { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .mini div { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px 4px; text-align: center; }
+  .mini b { font-size: 20px; display: block; } .mini span { font-size: 11px; color: var(--muted); }
+  .mini .hot { background: var(--brand-soft); border-color: transparent; } .mini .hot b { color: var(--brand-ink); }
+  .t { background: var(--card); border: 1px solid var(--line); border-left: 5px solid var(--brand); border-radius: 14px; padding: 14px 16px; }
+  .t b { font-size: 17px; display: block; margin: 6px 0 2px; } .t p { font-size: 13.5px; color: var(--muted); }
+  .t .btn { width: 100%; margin-top: 10px; padding: 12px; font-size: 16px; }
+  .w { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 13.5px; display: flex; gap: 10px; align-items: center; }
+  .cap { text-align: center; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .stp { display: flex; gap: 5px; margin: 8px 0 2px; } .stp i { flex: 1; height: 6px; border-radius: 3px; background: var(--ok); } .stp i.n { background: var(--brand); } .stp i.f { background: var(--line); }
+  .kv { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; } .kv b { font-size: 15px; }
+</style></head><body>
+<div>
+  <div class="phone">
+    <div class="bar"><div class="logo">HOME<b>Z</b></div><span class="pill brand"><i></i>운영자 승인</span></div>
+    <div class="body">
+      <div><h1>오늘 할 일 2건</h1><div class="sm">10월 15일 목요일</div></div>
+      <div class="mini"><div><b>7</b><span>올릴 준비</span></div><div class="hot"><b>1</b><span>판매 중</span></div><div><b>0</b><span>새 주문</span></div><div><b>1</b><span>보내는 중</span></div></div>
+      <div class="t"><span class="pill warn" style="font-size:11.5px;padding:3px 9px">승인 필요</span><b>출고일을 2일로 바꿔요</b><p>방수 생리팬티 · 지금은 당일출고로 올라가 있어요</p><span class="btn">확인하고 바꾸기</span></div>
+      <div class="t" style="border-left-color:var(--teal)"><span class="pill teal" style="font-size:11.5px;padding:3px 9px">AI가 거의 채웠어요</span><b>사진을 골라 주세요</b><p>새 상품 6개 · 상품마다 약 2분</p><span class="btn" style="background:var(--teal)">이어서 하기</span></div>
+      <div class="w"><span class="pill gray" style="font-size:11px;padding:3px 8px">기다리는 중</span>온채널 판매신청 승인 확인</div>
+    </div>
+    <div class="tabs">
+      <div class="tab on"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg>오늘</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>상품</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7"/></svg>주문</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/></svg>돈</div>
+      <div class="tab"><span class="b">2</span><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/></svg>승인</div>
+    </div>
+  </div>
+  <div class="cap">① 오늘 — 큰 버튼 하나씩</div>
+</div>
+<div>
+  <div class="phone">
+    <div class="bar"><div class="logo">HOME<b>Z</b></div><span class="pill brand"><i></i>운영자 승인</span></div>
+    <div class="body">
+      <div><h1>백산수 20병 × 1</h1><div class="sm">쿠팡 주문 8103602504198 · 고객 김*준</div></div>
+      <div><div class="stp"><i></i><i></i><i></i><i class="n"></i><i class="f"></i></div><div class="sm"><b style="color:var(--brand-ink)">4 / 5 쿠팡에 송장 등록</b></div></div>
+      <div class="t"><b style="margin-top:0">값이 맞는지 봐 주세요</b>
+        <div class="kv"><span>택배사</span><b>롯데택배</b></div>
+        <div class="kv"><span>송장번호</span><b class="num">259606480560</b></div>
+        <div class="kv"><span>쿠팡 상태</span><b style="color:var(--ok)">상품준비중</b></div>
+        <p style="margin-top:6px">한 번 등록하면 되돌릴 수 없어요.</p>
+        <span class="btn">쿠팡에 송장 등록</span>
+        <span class="btn ghost" style="margin-top:8px">이미 했어요</span></div>
+      <div class="w"><span class="pill ok" style="font-size:11px;padding:3px 8px">완료</span>공급처 발송 · 롯데택배 14:08</div>
+    </div>
+    <div class="tabs">
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></svg>오늘</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>상품</div>
+      <div class="tab on"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7"/></svg>주문</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/></svg>돈</div>
+      <div class="tab"><span class="b">1</span><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/></svg>승인</div>
+    </div>
+  </div>
+  <div class="cap">② 주문 한 건 — 진행 막대와 다음 할 일</div>
+</div>
+<div class="foot" style="left:0;right:0;bottom:6px;text-align:center">예시 화면 · 실제 화면과 다를 수 있어요</div>
+</body></html>

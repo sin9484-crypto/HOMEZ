@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>메뉴 정리안</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  body { display: block; padding: 40px 54px; }
+  .cols { display: grid; grid-template-columns: 1fr 70px 1.05fr; margin-top: 24px; }
+  .now { border: 1px solid var(--line); border-radius: 10px; padding: 24px 26px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+  .c { font-size: 13.5px; background: var(--head); color: var(--muted); border-radius: 6px; padding: 5px 10px; }
+  .arrow { display: flex; align-items: center; justify-content: center; font-size: 40px; color: var(--g); font-weight: 800; }
+  .big { font-size: 58px; font-weight: 800; line-height: 1; } .big small { font-size: 22px; color: var(--ink); }
+  .cap { font-size: 15.5px; color: var(--muted); }
+  .after { display: grid; gap: 10px; margin-top: 14px; }
+  .grp { border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: center; background: #fff; }
+  .grp .t { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 800; }
+  .grp .t .ic { width: 38px; height: 38px; border-radius: 8px; background: var(--g); color: #fff; display: grid; place-items: center; }
+  .grp .t small { display: block; font-size: 13px; font-weight: 500; color: var(--faint); }
+  .grp p { font-size: 14.5px; color: var(--muted); }
+  .grp p b { color: var(--ink); }
+  .grp.more { background: var(--head); border-style: dashed; } .grp.more .ic { background: #8C94A0; }
+  .grp.appr { border-color: var(--g-line); background: var(--g-soft); }
+  .rules { margin-top: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .rules div { border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; font-size: 14.5px; color: var(--muted); } .rules b { color: var(--ink); }
+  .foot { right: 54px; }
+</style></head><body>
+<div style="display:flex;align-items:baseline;gap:16px"><h1>메뉴를 4개로 줄이고, 나머지는 필요할 때만 열어요</h1><span class="chip gray">시안 0 · 메뉴 정리안</span></div>
+<p class="sub-lead">지금은 왼쪽에 40개가 한꺼번에 있어요. 하는 일 순서(올리기 → 팔기 → 보내기 → 돈 받기)대로 묶었고, 메뉴 이름은 전달해 주신 시안 그대로예요.</p>
+<div class="cols">
+  <div class="now">
+    <div style="display:flex;gap:16px;align-items:center"><div class="big c-red">40<small>개</small></div><div class="cap">지금 메뉴 — 이름만 봐서는<br>어디로 가야 할지 알기 어려워요</div></div>
+    <div class="chips" id="chips"></div>
+  </div>
+  <div class="arrow">→</div>
+  <div>
+    <div style="display:flex;gap:16px;align-items:center"><div class="big c-green">4<small>개</small></div><div class="cap">+ 승인 센터 1개, 더보기 1개 — 매일 쓰는 건 4개뿐이에요</div></div>
+    <div class="after">
+      <div class="grp"><div class="t"><span class="ic" data-ic="today"></span><div>오늘 할 일<small>메뉴 6개 → 1개</small></div></div><p>대시보드 · 전체 업무 · AI 업무 제안 · 운영 우선순위 · 주문 예외 · 정산 차이를 <b>"오늘 할 일" 한 장</b>으로</p></div>
+      <div class="grp"><div class="t"><span class="ic" data-ic="box"></span><div>상품<small>메뉴 14개 → 1개</small></div></div><p>상품 후보 · AI 상품 등록 · 상품 등록 · 상품 목록 · 등록 현황 · 속성 비교 등을 <b>"올리기 → 판매 중" 목록</b>으로</p></div>
+      <div class="grp"><div class="t"><span class="ic" data-ic="truck"></span><div>주문·배송<small>메뉴 9개 → 1개</small></div></div><p>주문 현황 · 공급처·발주 · 배송 · 반품·교환 · 환불을 <b>주문 한 건의 진행 막대</b> 하나로</p></div>
+      <div class="grp"><div class="t"><span class="ic" data-ic="money"></span><div>정산·수익<small>메뉴 5개 → 1개</small></div></div><p>마진·수익 · 자금·정산 · 채널 정산 · 결제 수단을 <b>"들어온 돈 / 나갈 돈"</b>으로</p></div>
+      <div class="grp appr"><div class="t"><span class="ic" data-ic="shield"></span><div>승인 센터<small>새로 만든 한 곳</small></div></div><p>쿠팡·온채널로 <b>나가는 일은 전부 여기서</b> 허용/거절 — 지금은 곳곳에 흩어져 있어요</p></div>
+      <div class="grp more"><div class="t"><span class="ic" data-ic="gear"></span><div>더보기 · 설정<small>메뉴 6개</small></div></div><p>트렌드·키워드 분석 · 사용자·권한 · 시스템 상태 · 설정 · 가이드 — 가끔만 쓰는 것</p></div>
+    </div>
+  </div>
+</div>
+<div class="rules">
+  <div><b>원칙 1.</b> 한 화면에서 "다음에 할 일"은 큰 버튼 하나만.</div>
+  <div><b>원칙 2.</b> 어려운 말(차단·정합성·식별자) 대신, 하는 일 이름으로 말해요.</div>
+  <div><b>원칙 3.</b> 기존 화면은 없애지 않고 "고급 보기"로 남겨, 필요하면 그대로 열 수 있어요.</div>
+</div>
+<script src="chrome.js"></script>
+<script>
+  const names = "대시보드|전체 업무|AI 업무 제안|운영 우선순위|주문 예외 검토|주문 자동 감지|정산 차이 검토|구매 실행 연결|매입·발주 관리|상품 속성 비교|리콜·판매중지 차단|상품 후보|AI 상품 등록|상품 등록|상품 목록|등록 현황|판매채널 연동|채널별 판매 방식|주문 현황|공급처·발주|공급처 능력|배송|반품·교환|환불 관리|결제 수단|Decision AI|AI 학습 기반|트렌드 탐색|신제품 탐색|키워드 분석|마진·수익 분석|자금·정산|채널 정산|자동화 안전|환율 관리|가격·재고 안전 설정|사용자·권한|시스템 상태|설정 · 계정 및 보안|가이드".split("|");
+  document.getElementById("chips").innerHTML = names.map(n => `<span class="c">${n}</span>`).join("");
+</script>
+</body></html>
