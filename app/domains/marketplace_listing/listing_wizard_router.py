@@ -122,6 +122,9 @@ from app.domains.marketplace_listing.listing_wizard_schema import (
 from app.domains.marketplace_listing.listing_wizard_schema import (
     WizardBulkSubmitResponse,
 )
+from app.domains.marketplace_listing.registration_assistant import (
+    AssistantRequest as RegistrationAssistantRequest,
+)
 from app.domains.marketplace_listing.listing_wizard_schema import (
     CoupangContentsFromMediaRequest,
 )
@@ -555,6 +558,62 @@ def auto_upload_coupang_images(
     )
     db.commit()
     return {"images": images}
+
+
+def _assistant_metadata(db: Session, company_id: int, wizard, data) -> dict:
+    """등록 도우미용 카테고리 메타데이터(쿠팡 조회 1회) — 상세 조회 엔드포인트와 같은 공급자·지문을 쓴다."""
+
+    from app.core.exceptions import ServiceUnavailableException
+    from app.domains.marketplace_listing.category_metadata import metadata_fingerprint
+    from app.domains.marketplace_listing.coupang_category_metadata_provider import (
+        CategoryMetadataProviderError,
+    )
+    from app.domains.marketplace_listing.registration_assistant import metadata_to_dict
+
+    try:
+        metadata = _coupang_metadata_provider(
+            db, company_id, _wizard_account_resolver(wizard, data.marketplace_account_id),
+        ).get(data.display_category_code)
+    except CategoryMetadataProviderError as exc:
+        raise ServiceUnavailableException(str(exc)) from exc
+    return metadata_to_dict(metadata, metadata_fingerprint(metadata))
+
+
+@router.post("/{wizard_id}/registration-assistant/propose")
+def registration_assistant_propose(
+    wizard_id: int,
+    data: RegistrationAssistantRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+):
+    """등록 도우미(읽기 전용) — 5단계 입력 제안과 특이점·주의점. 쿠팡 카테고리 조회 1회, DB 쓰기 없음."""
+
+    from app.domains.marketplace_listing.registration_assistant_service import (
+        RegistrationAssistantService, proposal_to_dict,
+    )
+
+    wizard = ListingWizardService(db).get(wizard_id, current_user.company_id)
+    metadata = _assistant_metadata(db, current_user.company_id, wizard, data)
+    proposal = RegistrationAssistantService(db).propose(wizard_id, current_user.company_id, data, metadata)
+    return {"ready": proposal.ready, **proposal_to_dict(proposal)}
+
+
+@router.post("/{wizard_id}/registration-assistant/apply")
+def registration_assistant_apply(
+    wizard_id: int,
+    data: RegistrationAssistantRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+):
+    """등록 도우미 — 제안을 기존 5단계 저장 검증에 그대로 통과시켜 저장하고 특이점·주의점을 근거로 남긴다."""
+
+    from app.domains.marketplace_listing.registration_assistant_service import RegistrationAssistantService
+
+    wizard = ListingWizardService(db).get(wizard_id, current_user.company_id)
+    metadata = _assistant_metadata(db, current_user.company_id, wizard, data)
+    return RegistrationAssistantService(db).apply(
+        wizard_id, current_user.company_id, current_user.id, data, metadata,
+    )
 
 
 @router.post("/{wizard_id}/coupang/contents-from-media")
