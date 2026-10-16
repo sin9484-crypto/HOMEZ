@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from datetime import timedelta
 from typing import Callable
@@ -36,6 +37,23 @@ logger = logging.getLogger("homez")
 EVENT_ACTION = "COUPANG_AFTER_SALES_EVENT"
 SETTLEMENT_EVERY = timedelta(hours=6)
 RETURN_STATUS_DONE = "RETURNS_COMPLETED"
+
+
+_MASKED_ID = re.compile(r'("id":)\*+\d*')
+
+
+def parse_event(description) -> dict | None:
+    """기록의 JSON을 읽는다. 중앙 가림 규칙이 긴 번호(`"id":1919873062`)를 `******3062`로 바꿔 JSON이 깨진 예전 기록도 읽는다
+    (번호는 따로 저장된 entity_id에서 되살린다)."""
+
+    try:
+        return json.loads(description)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return json.loads(_MASKED_ID.sub(r'\1"?"', str(description)))
+    except (TypeError, ValueError):
+        return None
 
 
 def pack_order_id(value) -> str | None:
@@ -68,10 +86,8 @@ class AfterSalesMonitorService:
         ).first()
         if row is None:
             return None
-        try:
-            return json.loads(row[0]).get("s")
-        except (TypeError, ValueError):
-            return None
+        payload = parse_event(row[0])
+        return payload.get("s") if payload else None
 
     def _record(self, company_id: int, entity_id: str, payload: dict, new_events: list[dict]) -> None:
         if self._latest_state(entity_id) == payload.get("s"):
@@ -137,7 +153,7 @@ class AfterSalesMonitorService:
         if returns is not None:
             for r in returns.rows:
                 self._record(company_id, f"RETURN:{r['receipt_id']}", {
-                    "k": "RETURN", "id": r["receipt_id"], "o": pack_order_id(r["order_id"]), "s": r["status"] or "UNKNOWN", "ty": r["receipt_type"],
+                    "k": "RETURN", "o": pack_order_id(r["order_id"]), "s": r["status"] or "UNKNOWN", "ty": r["receipt_type"],
                     "t": r["created_at"], "m": r["modified_at"], "rc": r["reason_category"], "f": r["fault_by"], "n": r["count"],
                 }, summary["new_events"])
         if summary["blocked"]:
@@ -152,7 +168,7 @@ class AfterSalesMonitorService:
                 continue
             for r in result.rows:
                 self._record(company_id, f"{tag}:{r['inquiry_id']}", {
-                    "k": tag, "id": r["inquiry_id"], "o": pack_order_id((r["order_ids"] or [None])[0]), "s": "ANSWERED" if r["answered"] else "UNANSWERED",
+                    "k": tag, "o": pack_order_id((r["order_ids"] or [None])[0]), "s": "ANSWERED" if r["answered"] else "UNANSWERED",
                     "t": r["inquiry_at"], "p": r.get("seller_product_id"),
                 }, summary["new_events"])
 
@@ -189,14 +205,16 @@ class AfterSalesMonitorService:
         for entity_id, description in rows:
             if entity_id in seen:
                 continue
-            try:
-                payload = json.loads(description)
-            except (TypeError, ValueError):
+            payload = parse_event(description)
+            if payload is None:
                 continue
             if payload.get("o"):
                 payload["o"] = unpack_order_id(payload["o"])
+            # 긴 접수번호·문의번호는 중앙 가림 규칙이 가릴 수 있어(`******3062`), 항상 따로 저장된 entity_id의 번호를 쓴다.
+            if payload.get("k") in ("RETURN", "INQ_ONLINE", "INQ_CALL") and ":" in entity_id:
+                payload["id"] = entity_id.split(":", 1)[1]
             seen[entity_id] = {"entity_id": entity_id, **payload}
         return list(seen.values())
 
 
-__all__ = ["AfterSalesMonitorService", "EVENT_ACTION", "RETURN_STATUS_DONE", "pack_order_id", "unpack_order_id"]
+__all__ = ["AfterSalesMonitorService", "EVENT_ACTION", "RETURN_STATUS_DONE", "pack_order_id", "parse_event", "unpack_order_id"]

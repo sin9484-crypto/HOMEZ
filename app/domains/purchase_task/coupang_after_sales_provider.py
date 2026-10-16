@@ -218,7 +218,12 @@ class _AfterSalesMixin:
         response, failure = self._after_sales_get(SETTLEMENT_HISTORIES_PATH, query)
         if failure is not None:
             return failure
-        data = (_body(response) or {}).get("data")
+        # 실제 응답(2026-10-16 첫 호출)은 최상위가 배열이다(내역이 없으면 `[]`). 문서 예시의 `{"data": [...]}` 모양도 함께 받는다.
+        try:
+            raw = response.json()
+        except ValueError:
+            return AfterSalesRead(False, detail="정산 응답 해석 불가", http_status=200)
+        data = raw.get("data") if isinstance(raw, dict) else raw
         if isinstance(data, dict):
             data = data.get("settlementHistories") if isinstance(data.get("settlementHistories"), list) else [data]
         if not isinstance(data, list):

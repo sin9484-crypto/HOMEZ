@@ -19,6 +19,7 @@ import json
 import re
 import unittest
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
@@ -78,6 +79,11 @@ def settle_body(status="SUBJECT", final=7608):
         "settlementType": "WEEKLY", "settlementDate": "2026-10-23", "revenueRecognitionYearMonth": "2026-10", "totalSale": 12050,
         "serviceFee": 1181, "settlementTargetAmount": 10869, "settlementAmount": 7608, "lastAmount": 3261, "finalAmount": final,
         "status": status, "bankAccountHolder": PII[0], "bankName": PII[3], "bankAccount": PII[4]}]}
+
+
+def bare_settlement(rows=None):
+    """실제 쿠팡 응답(2026-10-16): 최상위가 배열이다. 내역이 없으면 `[]`."""
+    return rows if rows is not None else []
 
 
 class AfterSalesTransport:
@@ -266,7 +272,7 @@ class EventTests(Base_):
     def test_a_settlement_that_gets_paid_is_a_new_event(self):
         self.monitor().refresh(1)
         self.transport.queues["settlement"] = [response(200, settle_body(status="DONE"))]
-        self.clock[0] = datetime(2026, 10, 16, 13, 0)  # 6시간 뒤
+        self.clock[0] = datetime.utcnow() + timedelta(hours=6, minutes=5)  # 호출 기록은 실제 시계를 쓰므로 그 기준으로 6시간 뒤
         summary = self.monitor().refresh(1)
         self.assertTrue(any(e["k"] == "SETTLEMENT" and e["st"] == "DONE" for e in summary["new_events"]))
 
@@ -276,6 +282,52 @@ class EventTests(Base_):
         dump += " ".join(str(r) for r in self.db.execute(text("SELECT * FROM external_call_logs")).fetchall())
         for secret in PII:
             self.assertNotIn(secret, dump, secret)
+
+
+class RealResponseShapeTests(Base_):
+    """2026-10-16 첫 실호출에서 나온 모양을 고정한다(최상위 배열 정산 응답, 가려진 긴 접수번호)."""
+
+    def setUp(self):
+        super().setUp()
+        self.grant()
+
+    def test_a_bare_empty_array_settlement_response_is_an_empty_result_not_a_failure(self):
+        self.transport.queues["settlement"] = [response(200, bare_settlement())]
+        summary = self.monitor().refresh(1)
+        self.assertFalse([f for f in summary["failures"] if f.startswith("settlement")])
+        self.assertEqual([e for e in summary["new_events"] if e["k"] == "SETTLEMENT"], [])
+
+    def test_a_bare_array_with_rows_is_read(self):
+        self.transport.queues["settlement"] = [response(200, settle_body()["data"])]
+        summary = self.monitor().refresh(1)
+        self.assertTrue(any(e["k"] == "SETTLEMENT" for e in summary["new_events"]))
+
+    def test_an_old_record_whose_id_was_masked_is_still_read_and_not_rewritten_every_cycle(self):
+        """2026-10-16 실기록 `{"k":"RETURN","id":******3062,...}` — JSON이 깨져 읽히지 않으면 화면에 안 뜨고 10분마다 중복 기록된다."""
+        self.db.execute(text("INSERT INTO audit_logs (company_id, action, entity, entity_id, description) VALUES (1,'COUPANG_AFTER_SALES_EVENT','after_sales','RETURN:1919873062', :d)"),
+                        {"d": '{"k":"RETURN","id":******3062,"o":"8103_6025_0419_8","s":"RETURNS_UNCHECKED","ty":"RETURN","rc":"고객변심","f":"CUSTOMER","n":1}'})
+        self.db.commit()
+        latest = {e["entity_id"]: e for e in AfterSalesMonitorService.latest_events(self.db)}
+        self.assertEqual((latest["RETURN:1919873062"]["id"], latest["RETURN:1919873062"]["s"]), ("1919873062", "RETURNS_UNCHECKED"))
+        self.transport.queues["returns"] = [response(200, return_body(receipt=1919873062))]
+        before = len(self.events())
+        self.monitor().refresh(1)
+        self.assertEqual([e for e in self.events() if e["entity_id"] == "RETURN:1919873062"].__len__(), 1)
+        self.assertEqual(len(self.events()), before + 4)  # 반품은 다시 쓰지 않고 문의 2건·정산 2건만 새로 기록
+
+    def test_a_non_json_settlement_body_is_a_failure(self):
+        self.transport.queues["settlement"] = [response(200, None)]
+        self.assertTrue([f for f in self.monitor().refresh(1)["failures"] if f.startswith("settlement")])
+
+    def test_a_ten_digit_receipt_id_survives_the_central_masking(self):
+        self.transport.queues["returns"] = [response(200, return_body(receipt=1919873062))]
+        self.monitor().refresh(1)
+        latest = {e["entity_id"]: e for e in AfterSalesMonitorService.latest_events(self.db)}
+        self.assertEqual(latest["RETURN:1919873062"]["id"], "1919873062")
+        self.assertEqual(latest["RETURN:1919873062"]["o"], "8103602504198")
+        raw = self.db.execute(text("SELECT description FROM audit_logs WHERE entity_id='RETURN:1919873062'")).scalar()
+        self.assertNotIn("1919873062", raw)
+        self.assertNotIn("*", raw)  # 새 기록은 가려질 번호를 JSON에 넣지 않는다
 
 
 class RobustnessTests(Base_):
@@ -313,10 +365,10 @@ class RobustnessTests(Base_):
     def test_settlement_is_read_only_every_six_hours(self):
         self.monitor().refresh(1)
         self.assertEqual(self.transport.count("settlement"), 2)
-        self.clock[0] = datetime(2026, 10, 16, 8, 0)
+        self.clock[0] = datetime.utcnow() + timedelta(hours=1)
         self.monitor().refresh(1)
         self.assertEqual(self.transport.count("settlement"), 2)
-        self.clock[0] = datetime(2026, 10, 16, 13, 0)
+        self.clock[0] = datetime.utcnow() + timedelta(hours=6, minutes=5)
         self.monitor().refresh(1)
         self.assertEqual(self.transport.count("settlement"), 4)
 

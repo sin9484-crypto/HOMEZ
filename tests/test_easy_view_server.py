@@ -369,9 +369,9 @@ class AfterSalesEventTests(Base_):
         self.event("INQ_CALL:21", {"k": "INQ_CALL", "id": 21, "o": None, "s": "ANSWERED"})
         self.event("SETTLEMENT:2026-10:WEEKLY:2026-10-23", {"k": "SETTLEMENT", "id": "2026-10", "s": "SUBJECT:7608", "st": "SUBJECT", "ty": "WEEKLY", "d": "2026-10-23", "fin": 7608, "sale": 12050})
         after = self.svc.build_today(1)["after_sales"]
-        self.assertEqual([r["id"] for r in after["returns_open"]], [1])
-        self.assertEqual([r["id"] for r in after["returns_done"]], [2])
-        self.assertEqual([q["id"] for q in after["inquiries_open"]], [11])
+        self.assertEqual([r["id"] for r in after["returns_open"]], ["1"])
+        self.assertEqual([r["id"] for r in after["returns_done"]], ["2"])
+        self.assertEqual([q["id"] for q in after["inquiries_open"]], ["11"])
         self.assertEqual(after["settlements"][0]["fin"], 7608)
         self.assertEqual(after["returns_open"][0]["o"], "8103602504198")  # 읽을 때 원래 주문번호로
 
@@ -379,7 +379,7 @@ class AfterSalesEventTests(Base_):
         self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED"})
         self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "8103_6025_0419_8", "s": "RETURNS_COMPLETED"})
         after = self.svc.build_today(1)["after_sales"]
-        self.assertEqual((after["returns_open"], [r["id"] for r in after["returns_done"]]), ([], [1]))
+        self.assertEqual((after["returns_open"], [r["id"] for r in after["returns_done"]]), ([], ["1"]))
 
     def test_events_are_attached_to_their_order(self):
         order = self.order(number="8103602504198")
