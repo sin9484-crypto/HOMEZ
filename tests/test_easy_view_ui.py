@@ -44,7 +44,7 @@ DYNAMIC = {
     "easy.flow.": ["prepare", "selling", "new_orders", "shipping", "settlement"],
     "easy.kind.": ["read", "write"], "easy.sys.": ["coupang", "onch"],
     "easy.step.": ["ordered", "supplier_order", "supplier_shipped", "invoice", "delivered"],
-    "easy.next.": ["register_invoice", "order_from_supplier", "wait_supplier_shipment", "check_coupang_order", "wait_delivery", "done"],
+    "easy.next.": ["register_invoice", "order_from_supplier", "wait_supplier_shipment", "check_coupang_order", "wait_delivery", "return_in_progress", "done"],
     "easy.outcome.": ["allowed", "succeeded", "failed", "logged"],
     "easy.cs.": ["accept", "instruct", "departure", "delivering", "final_delivery", "none_tracking"],
     "easy.rs.": ["release_stop_unchecked", "returns_unchecked", "vendor_warehouse_confirm", "request_coupang_check", "returns_completed"],
@@ -331,6 +331,14 @@ class AfterSalesRowTests(unittest.TestCase):
     def test_the_after_sales_allowance_is_granted_from_the_approval_center_with_a_password(self):
         self.assertIn('purpose: "AFTER_SALES_CHECK", mode: "STANDING", per_hour_limit: 30, hours: 24', JS)
         self.assertIn('["AFTER_SALES_CHECK", "easy.purpose.after"]', JS)
+
+
+class ReturnInProgressRowTests(unittest.TestCase):
+
+    def test_an_order_with_an_open_return_is_something_for_me_to_do_and_explains_itself(self):
+        self.assertIn('"RETURN_IN_PROGRESS"].includes(o.next_action.code)', JS)
+        self.assertIn('code === "RETURN_IN_PROGRESS"', function_body("renderOrderPanel"))
+        self.assertIn("정산을 기다리는 주문이 아니에요", text_block("ko-KR"))
 
 
 class StyleAndServingTests(unittest.TestCase):

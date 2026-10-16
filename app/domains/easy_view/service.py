@@ -94,6 +94,7 @@ class EasyViewService:
 
         tasks = self.db.query(PurchaseTask).filter(PurchaseTask.company_id == company_id).all()
         unresolved = self._unresolved_orders(company_id)
+        returning_order_ids = self._returning_order_ids(company_id, tasks)
         pipeline = {
             "prepare": len(open_wizards),
             "selling": len(submitted),
@@ -101,7 +102,10 @@ class EasyViewService:
             # 상품이 재고 SKU에 연결되지 않아 아직 구매 작업이 되지 못한 새 주문도 "새 주문"이다(조용히 빠지지 않게 함께 센다).
             "new_orders": len([t for t in tasks if t.status in _TASK_BEFORE_SUPPLIER and (t.source_order_id or 0) > 0]) + len(unresolved),
             "shipping": len([t for t in tasks if t.status == PurchaseTaskStatus.SHIPPED]),
-            "settlement": len([t for t in tasks if t.status in (PurchaseTaskStatus.DELIVERED, PurchaseTaskStatus.REFUND_PENDING)]),
+            # 반품이 진행 중인 주문은 정산을 기다리는 것이 아니라 반품 처리 중이다.
+            "settlement": len([t for t in tasks if t.status in (PurchaseTaskStatus.DELIVERED, PurchaseTaskStatus.REFUND_PENDING)
+                               and t.source_order_id not in returning_order_ids]),
+            "returning": len({t.source_order_id for t in tasks if t.source_order_id in returning_order_ids}),
         }
         return {
             "pipeline": pipeline,
@@ -119,6 +123,19 @@ class EasyViewService:
                 if o["next_action"]["code"] == "REGISTER_INVOICE"
             ],
         }
+
+    def _returning_order_ids(self, company_id: int, tasks: list) -> set[int]:
+        """쿠팡에 반품이 접수돼 아직 끝나지 않은 주문의 HOMEZ 주문 번호 집합(읽기 전용)."""
+
+        open_channel_ids = {
+            str(e.get("o")) for e in self._after_sales_events()
+            if e.get("k") == "RETURN" and e.get("s") != "RETURNS_COMPLETED" and e.get("o")
+        }
+        source_ids = {t.source_order_id for t in tasks if t.source_order_id}
+        if not open_channel_ids or not source_ids:
+            return set()
+        rows = self.db.query(Order.id, Order.channel_order_id).filter(Order.company_id == company_id, Order.id.in_(source_ids)).all()
+        return {oid for oid, channel_id in rows if str(channel_id) in open_channel_ids}
 
     def _unresolved_orders(self, company_id: int) -> list[dict]:
         """쿠팡에서 들어왔지만 상품이 재고 SKU에 연결되지 않아 구매 작업이 되지 못한 주문 품목(수량 0은 제외)."""
@@ -265,6 +282,10 @@ class EasyViewService:
                 tasks_by_order.get(order.id, []), tracking, attempts_ok, invoice_done,
             )
             row["after_sales"] = [self._public_event(e) for e in by_order.get(str(order.channel_order_id), [])]
+            # 쿠팡에 반품이 접수돼 아직 끝나지 않았으면, 배송이 끝났어도 "정산 기다림"이 아니라 "반품 처리 중"이다.
+            row["return_open"] = any(e.get("k") == "RETURN" and e.get("s") != "RETURNS_COMPLETED" for e in by_order.get(str(order.channel_order_id), []))
+            if row["return_open"] and row["next_action"]["code"] in ("DONE", "WAIT_DELIVERY"):
+                row["next_action"] = {"code": "RETURN_IN_PROGRESS", "view": None}
             result.append(row)
         return {"items": result}
 

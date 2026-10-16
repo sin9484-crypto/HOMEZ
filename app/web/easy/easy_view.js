@@ -675,7 +675,7 @@
     const shipping = items.filter((o) => o.now_step >= 3 && o.next_action.code !== "DONE").length;
     const finished = items.filter((o) => o.next_action.code === "DONE").length;
     const tab = S.selected.orderTab || "ALL";
-    const visible = items.filter((o) => tab === "ALL" || (tab === "TODO" ? ["REGISTER_INVOICE", "ORDER_FROM_SUPPLIER", "CHECK_COUPANG_ORDER"].includes(o.next_action.code) : o.next_action.code === "DONE"));
+    const visible = items.filter((o) => tab === "ALL" || (tab === "TODO" ? ["REGISTER_INVOICE", "ORDER_FROM_SUPPLIER", "CHECK_COUPANG_ORDER", "RETURN_IN_PROGRESS"].includes(o.next_action.code) : o.next_action.code === "DONE"));
 
     root.innerHTML = `
       <div class="ez-head"><div><h1>${esc(T("easy.nav.orders"))}</h1><div class="ez-lead">${esc(T("easy.orders.lead"))}</div></div>
@@ -731,6 +731,8 @@
     } else if (code === "CHECK_COUPANG_ORDER") {
       action = `<div class="ez-note warn"><span class="ez-dot warn">!</span><div>${esc(T("easy.orders.need_coupang"))}</div></div>
         <div style="margin-top:14px"><button type="button" class="ez-btn big" id="ez-open-detect">${esc(T("easy.orders.open_detect"))}</button></div>`;
+    } else if (code === "RETURN_IN_PROGRESS") {
+      action = `<div class="ez-note warn"><span class="ez-dot warn">!</span><div>${esc(T("easy.orders.return_note"))}</div></div>`;
     } else if (code === "WAIT_DELIVERY") {
       action = `<div class="ez-note ok"><div>${esc(T("easy.orders.wait_delivery"))}</div></div>`;
     } else {

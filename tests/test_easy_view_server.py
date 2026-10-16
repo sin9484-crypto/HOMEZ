@@ -389,6 +389,38 @@ class AfterSalesEventTests(Base_):
         row = self.svc.build_orders(1)["items"][0]
         self.assertEqual([e["entity_id"] for e in row["after_sales"]], ["RETURN:1"])
 
+    def delivered_order_with_task(self, number="8103602504198"):
+        order = self.order(number=number, status="SHIPPED")
+        task = self.task(order, status="DELIVERED", key=f"k{number}")
+        self.add(make(PurchaseTaskTrackingInfo, company_id=1, purchase_task_id=task.id, courier="롯데택배", courier_confirmed=True,
+                      tracking_number="1", delivery_status="DELIVERED", is_partial_shipment=False))
+        self.box(order, raw="FINAL_DELIVERY")
+        return order
+
+    def test_a_delivered_order_with_an_open_return_is_returning_not_waiting_for_settlement(self):
+        self.delivered_order_with_task()
+        before = self.svc.build_today(1)["pipeline"]
+        self.assertEqual((before["settlement"], before["returning"]), (1, 0))
+        self.assertEqual(self.svc.build_orders(1)["items"][0]["next_action"]["code"], "DONE")
+        self.event("RETURN:1919873062", {"k": "RETURN", "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED"})
+        after = self.svc.build_today(1)["pipeline"]
+        self.assertEqual((after["settlement"], after["returning"]), (0, 1))
+        row = self.svc.build_orders(1)["items"][0]
+        self.assertEqual((row["next_action"]["code"], row["return_open"]), ("RETURN_IN_PROGRESS", True))
+
+    def test_a_finished_return_puts_the_order_back_to_normal(self):
+        self.delivered_order_with_task()
+        self.event("RETURN:1919873062", {"k": "RETURN", "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED"})
+        self.event("RETURN:1919873062", {"k": "RETURN", "o": "8103_6025_0419_8", "s": "RETURNS_COMPLETED"})
+        pipeline = self.svc.build_today(1)["pipeline"]
+        self.assertEqual((pipeline["settlement"], pipeline["returning"]), (1, 0))
+        self.assertEqual(self.svc.build_orders(1)["items"][0]["next_action"]["code"], "DONE")
+
+    def test_a_return_for_another_order_does_not_affect_this_one(self):
+        self.delivered_order_with_task()
+        self.event("RETURN:7", {"k": "RETURN", "o": "9999_9999_9", "s": "RETURNS_UNCHECKED"})
+        self.assertEqual(self.svc.build_today(1)["pipeline"]["returning"], 0)
+
     def test_without_events_or_without_the_log_table_the_views_still_work(self):
         self.assertEqual(self.svc.build_today(1)["after_sales"], {"returns_open": [], "returns_done": [], "inquiries_open": [], "settlements": []})
         self.db.execute(text("DROP TABLE audit_logs"))
