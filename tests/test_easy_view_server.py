@@ -30,6 +30,7 @@ from app.domains.easy_view.service import mask_name
 from app.domains.marketplace_listing.model import ListingWizard
 from app.domains.marketplace_listing.model import MarketplaceSubmission
 from app.domains.order.collection_model import OrderChannelFulfillment
+from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.purchase_task.constants import ChannelActionStatus
@@ -336,6 +337,106 @@ class TodayTests(Base_):
         self.assertEqual([(t["task_id"], t["channel_order_id"]) for t in todo], [(task.id, "9001")])
         self.ledger(order)
         self.assertEqual(self.svc.build_today(1)["invoice_todo"], [])
+
+
+class UnresolvedOrderTests(Base_):
+    """2026-10-16 — 재고 상품에 연결되지 않은 새 주문이 "오늘 할 일"에서 조용히 빠지지 않는다."""
+
+    def setUp(self):
+        super().setUp()
+        Base.metadata.create_all(self.engine, tables=[UnresolvedOrderItem.__table__])
+
+    def unresolved(self, number="8200000001", status="MAPPING_REQUIRED", qty=1, company=1, item="1", name="러닝 무릎보호대"):
+        box = self.add(make(OrderChannelFulfillment, company_id=company, store_connection_id=1, channel_order_id=number,
+                            shipment_box_id=f"b{number}{item}{company}", raw_status="ACCEPT", ordered_at=NOW))
+        return self.add(make(UnresolvedOrderItem, company_id=company, fulfillment_id=box.id, channel_item_id=item, vendor_item_id="v1",
+                             channel_sku="SKU-X", product_name_snapshot=name, quantity=qty, status=status))
+
+    def test_an_unlinked_new_order_is_listed_and_counted_as_a_new_order(self):
+        self.unresolved()
+        today = self.svc.build_today(1)
+        self.assertEqual(today["pipeline"]["new_orders"], 1)
+        row = today["unresolved_orders"][0]
+        self.assertEqual((row["channel_order_id"], row["product_name"], row["quantity"]), ("8200000001", "러닝 무릎보호대", 1))
+
+    def test_linked_zero_quantity_and_other_company_items_are_not_listed(self):
+        self.unresolved(number="1", status="RESOLVED")
+        self.unresolved(number="2", qty=0)
+        self.unresolved(number="3", company=2)
+        today = self.svc.build_today(1)
+        self.assertEqual(today["unresolved_orders"], [])
+        self.assertEqual(today["pipeline"]["new_orders"], 0)
+
+    def test_it_adds_to_the_count_of_orders_that_already_became_tasks(self):
+        order = self.order(number="7001")
+        self.task(order)
+        self.unresolved(number="7002")
+        self.assertEqual(self.svc.build_today(1)["pipeline"]["new_orders"], 2)
+
+    def test_without_the_table_the_aggregation_still_works(self):
+        UnresolvedOrderItem.__table__.drop(self.engine)
+        today = self.svc.build_today(1)
+        self.assertEqual(today["unresolved_orders"], [])
+
+
+class DetectionToTodayTests(Base_):
+    """2026-10-16 — 쿠팡에서 새 주문이 감지되면(가짜 쿠팡 응답) "오늘 할 일"의 새 주문으로 나타난다. 외부 호출은 없다."""
+
+    def setUp(self):
+        super().setUp()
+        from app.core.windows_credential_store import InMemoryCredentialStore
+        from app.domains.order.collection_model import OrderCollectionCursor
+        from app.domains.order.collection_model import OrderSkuResolution
+        from app.domains.store_connection.model import StoreConnection
+
+        Base.metadata.create_all(self.engine, tables=[
+            UnresolvedOrderItem.__table__, OrderCollectionCursor.__table__, OrderSkuResolution.__table__, StoreConnection.__table__,
+        ])
+        self.store = InMemoryCredentialStore()
+        self.store.save("cred-1", {"vendor_id": "A0001", "access_key": "access", "secret_key": "secret"})
+        self.connection = StoreConnection(
+            company_id=1, marketplace_code="COUPANG", display_name="쿠팡", seller_identifier="seller", credential_reference="cred-1",
+            masked_credential_hint="***", connection_status="CONNECTED", credential_version=1, created_by=1,
+            creation_idempotency_key="create-1", creation_request_fingerprint="a" * 64,
+        )
+        self.db.add(self.connection)
+        self.db.commit()
+
+    def collect(self, orders):
+        from app.domains.order.adapters.coupang_collection import CoupangOrderCollectionResult
+        from app.domains.order.adapters.coupang_collection import CoupangOrderPage
+        from app.domains.order.coupang_collection_service import CoupangOrderCollectionService
+
+        class _Provider:
+            def __init__(self, result):
+                self.result = result
+
+            def collect(self, **_kwargs):
+                return self.result
+
+        result = CoupangOrderCollectionResult(True, pages=(CoupangOrderPage(tuple(orders), None),), http_status=200)
+        service = CoupangOrderCollectionService(self.db, self.store, provider_factory=lambda credentials: _Provider(result))
+        return service.run(1, self.connection.id, "ACCEPT")
+
+    def test_a_newly_detected_order_for_an_unlinked_product_shows_up_as_a_new_order_to_link(self):
+        from tests.test_coupang_order_normalizer import order
+
+        before = self.svc.build_today(1)
+        self.assertEqual((before["pipeline"]["new_orders"], before["unresolved_orders"]), (0, []))
+        response = self.collect([order()])
+        self.assertEqual(response.new_fulfillment_count, 1)
+        self.assertEqual(response.new_unresolved_item_count, 1)
+        after = self.svc.build_today(1)
+        self.assertEqual(after["pipeline"]["new_orders"], 1)
+        self.assertEqual(len(after["unresolved_orders"]), 1)
+        self.assertTrue(after["unresolved_orders"][0]["channel_order_id"])
+
+    def test_detecting_the_same_order_again_does_not_add_another_row(self):
+        from tests.test_coupang_order_normalizer import order
+
+        self.collect([order()])
+        self.collect([order()])
+        self.assertEqual(self.svc.build_today(1)["pipeline"]["new_orders"], 1)
 
 
 class ReadOnlyTests(unittest.TestCase):

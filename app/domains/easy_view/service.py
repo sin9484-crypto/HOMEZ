@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.domains.marketplace_listing.model import ListingWizard
 from app.domains.marketplace_listing.model import MarketplaceSubmission
 from app.domains.order.collection_model import OrderChannelFulfillment
+from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.purchase_task.constants import ChannelActionStatus
@@ -91,11 +92,13 @@ class EasyViewService:
         submitted = self._submitted_products(company_id, wizards)
 
         tasks = self.db.query(PurchaseTask).filter(PurchaseTask.company_id == company_id).all()
+        unresolved = self._unresolved_orders(company_id)
         pipeline = {
             "prepare": len(open_wizards),
             "selling": len(submitted),
             # 실제 주문에서 생긴 작업만(주문번호 없는 수동·시험 작업은 "새 주문"이 아니다).
-            "new_orders": len([t for t in tasks if t.status in _TASK_BEFORE_SUPPLIER and (t.source_order_id or 0) > 0]),
+            # 상품이 재고 SKU에 연결되지 않아 아직 구매 작업이 되지 못한 새 주문도 "새 주문"이다(조용히 빠지지 않게 함께 센다).
+            "new_orders": len([t for t in tasks if t.status in _TASK_BEFORE_SUPPLIER and (t.source_order_id or 0) > 0]) + len(unresolved),
             "shipping": len([t for t in tasks if t.status == PurchaseTaskStatus.SHIPPED]),
             "settlement": len([t for t in tasks if t.status in (PurchaseTaskStatus.DELIVERED, PurchaseTaskStatus.REFUND_PENDING)]),
         }
@@ -103,6 +106,7 @@ class EasyViewService:
             "pipeline": pipeline,
             "outbound_days_todo": self._outbound_days_todo(company_id, submitted),
             # 같은 상품을 여러 번 시도한 이력이 있어도 화면에는 상품당 한 건만 보이도록 "현재" 위저드 번호를 준다.
+            "unresolved_orders": unresolved,
             "selling_wizard_ids": [p["wizard_id"] for p in submitted if p["wizard_id"] is not None],
             "invoice_todo": [
                 {
@@ -113,6 +117,31 @@ class EasyViewService:
                 if o["next_action"]["code"] == "REGISTER_INVOICE"
             ],
         }
+
+    def _unresolved_orders(self, company_id: int) -> list[dict]:
+        """쿠팡에서 들어왔지만 상품이 재고 SKU에 연결되지 않아 구매 작업이 되지 못한 주문 품목(수량 0은 제외)."""
+
+        if not (_has(self.db, UnresolvedOrderItem.__tablename__) and _has(self.db, OrderChannelFulfillment.__tablename__)):
+            return []
+        rows = (
+            self.db.query(UnresolvedOrderItem, OrderChannelFulfillment)
+            .join(OrderChannelFulfillment, OrderChannelFulfillment.id == UnresolvedOrderItem.fulfillment_id)
+            .filter(
+                UnresolvedOrderItem.company_id == company_id,
+                UnresolvedOrderItem.status == "MAPPING_REQUIRED",
+                UnresolvedOrderItem.quantity > 0,
+            )
+            .order_by(UnresolvedOrderItem.id.asc())
+            .all()
+        )
+        return [
+            {
+                "id": item.id, "channel_order_id": fulfillment.channel_order_id, "product_name": item.product_name_snapshot,
+                "quantity": item.quantity, "channel_sku": item.channel_sku,
+                "ordered_at": fulfillment.ordered_at.isoformat() if fulfillment.ordered_at else None,
+            }
+            for item, fulfillment in rows
+        ]
 
     def _submitted_products(self, company_id: int, wizards: list) -> list[dict]:
         """쿠팡에 제출 성공한 상품(상품번호별 1건) — 어느 위저드에서 만들었는지와 저장된 기준 출고일을 함께."""

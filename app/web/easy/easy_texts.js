@@ -8,6 +8,7 @@
 window.HOMEZ_EASY_TEXTS = {
   "ko-KR": {
     "easy.won": "원", "easy.orders.qty_n": "수량 {n}",
+    "easy.today.unres_title": "새 주문 — 상품 연결이 필요해요", "easy.today.unres_sub": "쿠팡 상품을 우리 재고 상품에 이어 줘야 공급처 주문으로 넘어가요.", "easy.today.unres_action": "연결하러 가기", "easy.today.unres_why": "이 주문의 상품이 아직 재고 상품과 연결돼 있지 않아 구매 작업이 만들어지지 않았어요. 주문 현황에서 재고 상품을 골라 연결해 주세요.",
     "easy.nav.analysis": "분석", "easy.an.lead": "어떤 상품이 팔릴지 점수와 판단으로 한눈에 봐요. 숫자는 후보 상품을 분석한 결과예요.",
     "easy.an.k_cand": "후보 상품", "easy.an.k_cand_s": "검토 대기 {d} · 검토 완료 {a}", "easy.an.k_new": "신상품 후보", "easy.an.k_new_s": "새로 나온 상품",
     "easy.an.k_dec": "판단 기다림", "easy.an.k_dec_s": "사람이 확인할 판단", "easy.an.k_ai": "AI 학습 후보", "easy.an.k_ai_s": "모델 후보 수",
@@ -121,6 +122,7 @@ window.HOMEZ_EASY_TEXTS = {
   },
   "en-US": {
     "easy.won": " KRW", "easy.orders.qty_n": "Qty {n}",
+    "easy.today.unres_title": "New order — link the product", "easy.today.unres_sub": "Link the Coupang product to your stock item so the order can move on to the supplier.", "easy.today.unres_action": "Go link it", "easy.today.unres_why": "This order's product is not linked to a stock item yet, so no purchase task was created. Pick the stock item in Order status and link it.",
     "easy.nav.analysis": "Analysis", "easy.an.lead": "See which products may sell, by score and review. Numbers come from the analysis of candidate products.",
     "easy.an.k_cand": "Candidate products", "easy.an.k_cand_s": "To review {d} · Reviewed {a}", "easy.an.k_new": "New product candidates", "easy.an.k_new_s": "Newly released items",
     "easy.an.k_dec": "Waiting for review", "easy.an.k_dec_s": "Reviews that need a person", "easy.an.k_ai": "AI learning candidates", "easy.an.k_ai_s": "Number of model candidates",

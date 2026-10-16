@@ -259,6 +259,20 @@ class AnalysisScreenTests(unittest.TestCase):
         self.assertLess(body.index("easy.an.no_score"), body.index("toFixed"))
 
 
+class UnresolvedOrderRowTests(unittest.TestCase):
+
+    def test_today_lists_unlinked_new_orders_as_things_for_me_to_do(self):
+        body = function_body("loadToday")
+        self.assertIn("today.unresolved_orders", body)
+        self.assertIn('group: "CHECK"', body.split("today.unresolved_orders")[1].split("// 3)")[0])
+        self.assertIn('B.navigateTo("order-fulfillment")', body)
+
+    def test_the_row_only_navigates_and_never_calls_outside(self):
+        block = function_body("loadToday").split("today.unresolved_orders")[1].split("// 3)")[0]
+        for forbidden in ("api(", 'method: "POST"', "coupang-invoice", "/trigger"):
+            self.assertNotIn(forbidden, block)
+
+
 class StyleAndServingTests(unittest.TestCase):
 
     def test_every_rule_is_scoped_so_turning_the_view_off_restores_the_classic_look(self):

@@ -329,6 +329,15 @@
       facts: [[T("easy.fact.order"), o.channel_order_id]], detail: T("easy.today.invoice_sub"),
     }));
 
+    // 2-b) 상품이 재고 상품에 연결되지 않아 구매 작업이 되지 못한 새 주문 — 조용히 빠지지 않게 "내가 할 일"로 올린다
+    ((today && today.unresolved_orders) || []).forEach((u) => rows.push({
+      key: `unres:${u.id}`, group: "CHECK", title: T("easy.today.unres_title"), sub: T("easy.today.unres_sub"),
+      product: { name: u.product_name, sub: u.channel_order_id, thumb: null, icon: "bag" },
+      chip: chip("red", T("easy.state.check")),
+      action: { label: T("easy.today.unres_action"), run: () => B.navigateTo("order-fulfillment") },
+      facts: [[T("easy.fact.order"), u.channel_order_id], [T("easy.col.qty"), String(u.quantity)]], detail: T("easy.today.unres_why"),
+    }));
+
     // 3) 주문 자동 감지 상태 — 켜져 있지 않거나 실패하면 알린다(정상이면 아래 "지켜보는 일"에만 보인다)
     const health = collect && collect.health;
     if (health && health !== "OK" && health !== "WAITING") {
