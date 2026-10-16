@@ -408,6 +408,13 @@ class AfterSalesEventTests(Base_):
         row = self.svc.build_orders(1)["items"][0]
         self.assertEqual((row["next_action"]["code"], row["return_open"]), ("RETURN_IN_PROGRESS", True))
 
+    def test_the_returns_and_inquiries_waiting_count_comes_from_what_coupang_reported(self):
+        self.event("RETURN:1", {"k": "RETURN", "o": "1111", "s": "RETURNS_UNCHECKED"})
+        self.event("RETURN:2", {"k": "RETURN", "o": "2222", "s": "RETURNS_COMPLETED"})
+        self.event("INQ_ONLINE:3", {"k": "INQ_ONLINE", "o": "3333", "s": "UNANSWERED"})
+        self.event("INQ_CALL:4", {"k": "INQ_CALL", "o": "4444", "s": "ANSWERED"})
+        self.assertEqual(self.svc.build_today(1)["pipeline"]["after_sales"], 2)
+
     def test_a_finished_return_puts_the_order_back_to_normal(self):
         self.delivered_order_with_task()
         self.event("RETURN:1919873062", {"k": "RETURN", "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED"})

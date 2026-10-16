@@ -106,6 +106,9 @@ class EasyViewService:
             "settlement": len([t for t in tasks if t.status in (PurchaseTaskStatus.DELIVERED, PurchaseTaskStatus.REFUND_PENDING)
                                and t.source_order_id not in returning_order_ids]),
             "returning": len({t.source_order_id for t in tasks if t.source_order_id in returning_order_ids}),
+            # 쿠팡에 접수돼 끝나지 않은 반품과 답변이 필요한 문의(주문 연결과 관계없이 쿠팡이 알려 준 건수)
+            "after_sales": len([e for e in self._after_sales_events() if e.get("k") == "RETURN" and e.get("s") != "RETURNS_COMPLETED"])
+                           + len([e for e in self._after_sales_events() if str(e.get("k", "")).startswith("INQ") and e.get("s") == "UNANSWERED"]),
         }
         return {
             "pipeline": pipeline,

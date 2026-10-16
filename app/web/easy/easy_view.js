@@ -403,7 +403,7 @@
     const hotPrepare = rows.some((r) => r.key.startsWith("wizard:") && r.group === "CHECK");
     const flow = [
       ["prepare", p.prepare, hotPrepare], ["selling", p.selling, hotSelling], ["new_orders", p.new_orders, (p.new_orders || 0) > 0],
-      ["shipping", p.shipping, hotShipping], ["settlement", p.settlement, false],
+      ["shipping", p.shipping, hotShipping], ["after_sales", p.after_sales, (p.after_sales || 0) > 0], ["settlement", p.settlement, false],
     ].map(([key, n, hot]) => `<div class="${hot ? "hot" : ""}"><div class="n ez-num">${n === undefined ? "—" : n}</div><div class="l">${esc(T(`easy.flow.${key}`))}</div><div class="d">${esc(T(`easy.flow.${key}_d`))}</div></div>`).join("");
 
     const mode = safety && safety.schema_ready ? B.safetyModeLabel(safety.mode) : "—";

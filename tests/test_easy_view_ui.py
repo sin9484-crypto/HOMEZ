@@ -41,7 +41,7 @@ def keys_of(block):
 
 # 동적으로 만드는 키(`T(`easy.xxx.${값}`)`)의 가능한 값
 DYNAMIC = {
-    "easy.flow.": ["prepare", "selling", "new_orders", "shipping", "settlement"],
+    "easy.flow.": ["prepare", "selling", "new_orders", "shipping", "after_sales", "settlement"],
     "easy.kind.": ["read", "write"], "easy.sys.": ["coupang", "onch"],
     "easy.step.": ["ordered", "supplier_order", "supplier_shipped", "invoice", "delivered"],
     "easy.next.": ["register_invoice", "order_from_supplier", "wait_supplier_shipment", "check_coupang_order", "wait_delivery", "return_in_progress", "done"],
@@ -339,6 +339,19 @@ class ReturnInProgressRowTests(unittest.TestCase):
         self.assertIn('"RETURN_IN_PROGRESS"].includes(o.next_action.code)', JS)
         self.assertIn('code === "RETURN_IN_PROGRESS"', function_body("renderOrderPanel"))
         self.assertIn("정산을 기다리는 주문이 아니에요", text_block("ko-KR"))
+
+
+class FlowLabelTests(unittest.TestCase):
+
+    def test_the_flow_shows_a_returns_and_inquiries_tile_before_settlement(self):
+        self.assertLess(JS.index('["after_sales", p.after_sales'), JS.index('["settlement", p.settlement'))
+        self.assertIn("repeat(6, 1fr)", re.search(r"\.ez-flow \{[^}]*\}", CSS).group(0))
+
+    def test_the_wording_is_the_requested_one(self):
+        ko = text_block("ko-KR")
+        self.assertIn('"easy.flow.after_sales": "반품 및 민원 처리 대기"', ko)
+        self.assertIn('"easy.flow.settlement": "정산 대기"', ko)
+        self.assertNotIn("정산 기다림", ko)
 
 
 class StyleAndServingTests(unittest.TestCase):

@@ -47,7 +47,7 @@ window.HOMEZ_EASY_TEXTS = {
     "easy.fact.kind": "종류", "easy.fact.why": "왜 필요한가요", "easy.fact.calls": "쿠팡에 보내는 일", "easy.fact.order": "쿠팡 주문", "easy.fact.status": "상태", "easy.fact.count": "건수",
 
     "easy.flow.aria": "일의 흐름", "easy.flow.prepare": "올릴 준비", "easy.flow.prepare_d": "사진·가격 확인 중", "easy.flow.selling": "판매 중", "easy.flow.selling_d": "쿠팡에 올라간 상품",
-    "easy.flow.new_orders": "새 주문", "easy.flow.new_orders_d": "공급처에 넣을 주문", "easy.flow.shipping": "보내는 중", "easy.flow.shipping_d": "공급처가 보낸 주문", "easy.flow.settlement": "정산 기다림", "easy.flow.settlement_d": "배송 완료 후 정산",
+    "easy.flow.new_orders": "새 주문", "easy.flow.new_orders_d": "공급처에 넣을 주문", "easy.flow.shipping": "보내는 중", "easy.flow.shipping_d": "공급처가 보낸 주문", "easy.flow.after_sales": "반품 및 민원 처리 대기", "easy.flow.after_sales_d": "반품 접수·답변이 필요한 문의", "easy.flow.settlement": "정산 대기", "easy.flow.settlement_d": "배송 완료 후 정산",
     "easy.today.lead": "내가 할 일 {mine}건 · 홈즈가 지켜보는 일 {watch}건 — 큰 버튼 하나씩만 누르면 돼요.",
     "easy.today.empty_title": "지금 할 일이 없어요", "easy.today.empty_sub": "새로 생기면 여기에 바로 올라와요.",
     "easy.today.days_title": "출고일 바꾸기", "easy.today.days_sub_saved": "지금 {days}일로 올라가 있어요", "easy.today.days_sub_unset": "출고일 저장 값이 없어요(기본 {days}일)",
@@ -172,7 +172,7 @@ window.HOMEZ_EASY_TEXTS = {
     "easy.fact.kind": "Type", "easy.fact.why": "Why it matters", "easy.fact.calls": "What goes to Coupang", "easy.fact.order": "Coupang order", "easy.fact.status": "Status", "easy.fact.count": "Count",
 
     "easy.flow.aria": "Flow of work", "easy.flow.prepare": "Getting ready", "easy.flow.prepare_d": "Checking photos and prices", "easy.flow.selling": "On sale", "easy.flow.selling_d": "Products on Coupang",
-    "easy.flow.new_orders": "New orders", "easy.flow.new_orders_d": "To place with the supplier", "easy.flow.shipping": "Shipping", "easy.flow.shipping_d": "Sent by the supplier", "easy.flow.settlement": "Awaiting payout", "easy.flow.settlement_d": "After delivery",
+    "easy.flow.new_orders": "New orders", "easy.flow.new_orders_d": "To place with the supplier", "easy.flow.shipping": "Shipping", "easy.flow.shipping_d": "Sent by the supplier", "easy.flow.after_sales": "Returns and inquiries waiting", "easy.flow.after_sales_d": "Return requests and inquiries needing an answer", "easy.flow.settlement": "Awaiting settlement", "easy.flow.settlement_d": "After delivery",
     "easy.today.lead": "{mine} for you · {watch} being watched — just press one big button at a time.",
     "easy.today.empty_title": "Nothing to do right now", "easy.today.empty_sub": "New tasks show up here right away.",
     "easy.today.days_title": "Change dispatch days", "easy.today.days_sub_saved": "Currently set to {days} day(s)", "easy.today.days_sub_unset": "No saved value (default {days} day)",

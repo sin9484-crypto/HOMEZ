@@ -129,7 +129,7 @@ body.easy-view .view-root { background: #fff; }
 .ez-kv:first-child { border-top: 0; } .ez-kv span { color: var(--ez-muted); } .ez-kv b { font-size: 16px; text-align: right; }
 
 /* 흐름 띠(오늘) */
-.ez-flow { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 16px; border: 1px solid var(--ez-line); border-radius: 10px; overflow: hidden; background: #fff; }
+.ez-flow { display: grid; grid-template-columns: repeat(6, 1fr); margin-top: 16px; border: 1px solid var(--ez-line); border-radius: 10px; overflow: hidden; background: #fff; }
 .ez-flow > div { padding: 14px 18px; border-right: 1px solid var(--ez-line); position: relative; }
 .ez-flow > div:last-child { border-right: 0; }
 .ez-flow .n { font-size: 32px; font-weight: 800; line-height: 1.1; } .ez-flow .l { font-weight: 700; font-size: 15px; } .ez-flow .d { font-size: 12.5px; color: var(--ez-faint); }
