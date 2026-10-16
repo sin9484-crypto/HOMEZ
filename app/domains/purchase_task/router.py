@@ -862,6 +862,72 @@ def check_channel_connection_member_point(
 
 
 # --------------------------------------------------
+# 공급처(온채널) 반품 요청 — 쿠팡에 반품이 접수되면 공급처에 반품을 요청하고 그 결과를 이어서 기록한다(2026-10-16).
+# 온채널 OpenAPI에는 반품 요청 API가 없어 접수는 온채널 판매자 화면에서 하고, HOMEZ는 요청할 내용을 준비·기록하고 결과를 읽어 확인한다.
+# --------------------------------------------------
+
+@router.get("/supplier-returns")
+def list_supplier_returns(
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    from app.domains.order.supplier_return_service import SupplierReturnService
+
+    return SupplierReturnService(db).candidates(current_user.company_id)
+
+
+@router.post("/supplier-returns/{receipt_id}/requested")
+def mark_supplier_return_requested(
+    receipt_id: str,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """"온채널 화면에서 반품을 요청했다"고 기록한다(온채널로 아무것도 보내지 않는다, 같은 접수에는 한 번만)."""
+
+    from app.domains.order.supplier_return_service import SupplierReturnService
+
+    if not receipt_id.isdigit():
+        raise BadRequestException("접수번호 형식이 올바르지 않습니다.")
+    return SupplierReturnService(db).mark_requested(current_user.company_id, receipt_id, current_user.id)
+
+
+@router.post("/supplier-returns/{receipt_id}/check")
+def check_supplier_return(
+    receipt_id: str,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    service: PurchaseChannelConnectionService = Depends(get_purchase_channel_connection_service),
+):
+    """온채널 주문 상태를 읽어(GET 1회, 실제 네트워크 요청) 반품 진행을 기록한다. 온채널에는 아무것도 쓰지 않는다."""
+
+    from app.domains.order.supplier_return_service import SupplierReturnService
+    from app.domains.purchase_task.model import PurchaseChannelConnection
+    from app.domains.purchase_task.onchannel_client import OnchannelApiError
+
+    if not receipt_id.isdigit():
+        raise BadRequestException("접수번호 형식이 올바르지 않습니다.")
+    supplier = SupplierReturnService(db)
+    candidate = supplier.candidate(current_user.company_id, receipt_id)
+    if not candidate["supplier_order_code"]:
+        raise BadRequestException("이 주문의 공급처(온채널) 발주를 찾지 못했습니다.")
+    connection = (
+        db.query(PurchaseChannelConnection)
+        .filter(PurchaseChannelConnection.company_id == current_user.company_id,
+                PurchaseChannelConnection.mall_code == "ONCHANNEL", PurchaseChannelConnection.status == "CONNECTED")
+        .order_by(PurchaseChannelConnection.id.asc()).first()
+    )
+    if connection is None:
+        raise BadRequestException("연결된 온채널 구매 채널이 없습니다.")
+    try:
+        result = service.lookup_order(connection.id, current_user.company_id, candidate["supplier_order_code"], triggered_by=current_user.id)
+    except OnchannelApiError as exc:
+        _translate_onchannel_error(exc)
+    except PurchaseChannelAdapterError as exc:
+        raise BadRequestException(str(exc)) from exc
+    return supplier.apply_supplier_status(current_user.company_id, receipt_id, result.status_text, current_user.id)
+
+
+# --------------------------------------------------
 # 매입처 사건 기록·자동 일시중지(Phase 9B, 7-11)
 # --------------------------------------------------
 

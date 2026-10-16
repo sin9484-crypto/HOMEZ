@@ -358,6 +358,24 @@
       facts: [[T("easy.fact.order"), q.o || "—"]], detail: T("easy.today.inq_detail"),
     }));
 
+    // 2-d) 공급처(온채널) 반품 요청 — 쿠팡에 반품이 접수되면 공급처에도 반품을 요청해야 한다(접수는 온채널 화면, HOMEZ는 준비·기록·확인).
+    ((today && today.supplier_returns) || []).forEach((c) => {
+      const state = c.supplier_state;
+      const done = state === "CONFIRMED" || state === "REFUNDED";
+      rows.push({
+        key: `supret:${c.receipt_id}`, group: state === "NOT_REQUESTED" ? "CHECK" : "PROGRESS", title: T("easy.sr.title"),
+        sub: T(state === "NOT_REQUESTED" ? "easy.sr.sub_todo" : (done ? "easy.sr.sub_done" : "easy.sr.sub_wait")),
+        product: { name: c.product_title || c.channel_order_id, sub: T("easy.sr.order_code", { code: c.supplier_order_code || "—" }), thumb: null, icon: "bag" },
+        chip: state === "NOT_REQUESTED" ? chip("red", T("easy.sr.chip_todo")) : (done ? chip("ok", T("easy.sr.chip_done")) : chip("wait", T("easy.sr.chip_wait"))),
+        action: state === "NOT_REQUESTED"
+          ? { label: T("easy.sr.action_todo"), run: () => supplierReturnDialog(c) }
+          : (done ? { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") } : { label: T("easy.sr.action_check"), run: () => supplierReturnCheck(c) }),
+        facts: [[T("easy.fact.order"), c.channel_order_id], [T("easy.sr.f_receipt"), c.receipt_id], [T("easy.sr.f_code"), c.supplier_order_code || "—"],
+          [T("easy.sr.f_state"), T(done ? "easy.sr.chip_done" : (state === "NOT_REQUESTED" ? "easy.sr.chip_todo" : "easy.sr.chip_wait"))]],
+        detail: T("easy.sr.detail"),
+      });
+    });
+
     // 3) 주문 자동 감지 상태 — 켜져 있지 않거나 실패하면 알린다(정상이면 아래 "지켜보는 일"에만 보인다)
     const health = collect && collect.health;
     if (health && health !== "OK" && health !== "WAITING") {
@@ -771,6 +789,33 @@
       <div id="ez-track-result"></div>
       ${done ? "" : `<div style="margin-top:10px"><button type="button" class="ez-btn line" id="ez-track-now">${esc(T("easy.orders.track_now"))}</button>
         <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.orders.track_calls"))}</div></div>`}</div>`;
+  }
+
+  // 공급처(온채널) 반품 요청 내용: 온채널 화면에서 이 주문의 "반품/교환 요청"을 접수한 뒤 "요청했어요"로 기록한다. 온채널로 보내는 것은 없다.
+  async function supplierReturnDialog(c) {
+    const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+    const body = `<div>${kv(T("easy.sr.f_code"), c.supplier_order_code || "—")}${kv(T("easy.sr.f_product"), `${c.product_title || "—"} × ${c.task_quantity || "—"}`)}
+      ${kv(T("easy.sr.f_receipt"), c.receipt_id)}${kv(T("easy.today.return_reason"), c.reason_category || "—")}
+      ${kv(T("easy.today.return_fault"), tryT(`easy.fault.${String(c.fault_by).toLowerCase()}`, String(c.fault_by || "—")))}</div>
+      <div class="ez-note info" style="margin-top:12px"><span class="ez-dot info">i</span><div>${esc(T("easy.sr.howto"))}</div></div>`;
+    const result = await ezDialog({ title: T("easy.sr.dialog_title"), bodyHtml: body, okLabel: T("easy.sr.mark") });
+    if (!result) return;
+    try {
+      await api(`/purchase-tasks/supplier-returns/${encodeURIComponent(c.receipt_id)}/requested`, { method: "POST" });
+      B.toast(T("easy.sr.marked"), "success");
+      loadToday();
+    } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+  }
+
+  // 온채널 주문 상태를 읽어(온채널 조회 1회, 버튼을 눌렀을 때만) 반품이 접수됐는지 확인한다.
+  async function supplierReturnCheck(c) {
+    const ok = await B.askConfirm(T("easy.sr.check_body", { code: c.supplier_order_code || "—" }), { title: T("easy.sr.check_title"), okLabel: T("easy.sr.action_check") });
+    if (!ok) return;
+    try {
+      const r = await api(`/purchase-tasks/supplier-returns/${encodeURIComponent(c.receipt_id)}/check`, { method: "POST" });
+      B.toast(T(r.supplier_state === "REQUESTED" ? "easy.sr.check_not_yet" : "easy.sr.check_ok", { status: r.supplier_status_text || "—" }), r.supplier_state === "REQUESTED" ? "info" : "success");
+      loadToday();
+    } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
   }
 
   // 반품 회수 택배: 고객이 보낸 송장이 아직 없으면 그렇게 알려 준다.

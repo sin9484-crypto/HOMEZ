@@ -27,6 +27,7 @@ from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+from app.domains.order.supplier_return_service import SupplierReturnService
 from app.domains.purchase_task.constants import ChannelActionStatus
 from app.domains.purchase_task.constants import ChannelActionType
 from app.domains.purchase_task.constants import PurchaseTaskStatus
@@ -116,6 +117,7 @@ class EasyViewService:
             # 같은 상품을 여러 번 시도한 이력이 있어도 화면에는 상품당 한 건만 보이도록 "현재" 위저드 번호를 준다.
             "unresolved_orders": unresolved,
             "after_sales": self.build_after_sales(),
+            "supplier_returns": self._supplier_returns(company_id),
             "selling_wizard_ids": [p["wizard_id"] for p in submitted if p["wizard_id"] is not None],
             "invoice_todo": [
                 {
@@ -295,6 +297,14 @@ class EasyViewService:
     # ------------------------------------------------------------
     # 배송 이후(반품·민원·정산) — 감사 기록에 남은 쿠팡 이벤트를 읽기만 한다
     # ------------------------------------------------------------
+
+    def _supplier_returns(self, company_id: int) -> list[dict]:
+        """쿠팡에 반품이 접수된 주문 중 공급처 발주가 있는 것과 공급처 반품 요청 상태(읽기 전용)."""
+
+        try:
+            return SupplierReturnService(self.db).candidates(company_id)
+        except Exception:  # noqa: BLE001 — audit_logs가 없는 환경 등에서는 비어 있는 것으로 본다
+            return []
 
     def _after_sales_events(self) -> list[dict]:
         try:
