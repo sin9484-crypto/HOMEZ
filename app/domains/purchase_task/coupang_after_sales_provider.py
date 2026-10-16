@@ -126,6 +126,9 @@ class _AfterSalesMixin:
             if not isinstance(item, dict) or _int(item.get("receiptId")) is None:
                 continue
             items = item.get("returnItems") if isinstance(item.get("returnItems"), list) else []
+            # 회수 택배(고객이 반품을 보낸 송장): 택배사 코드와 송장번호만. 수취인·주소·연락처 등 나머지 배송 정보는 읽지 않는다.
+            dtos = [d for d in (item.get("returnDeliveryDtos") if isinstance(item.get("returnDeliveryDtos"), list) else []) if isinstance(d, dict)]
+            pick = next((d for d in dtos if _text(d.get("deliveryInvoiceNo"))), dtos[0] if dtos else {})
             rows.append({
                 "receipt_id": _int(item.get("receiptId")), "order_id": _text(item.get("orderId")),
                 "receipt_type": _text(item.get("receiptType")), "status": _text(item.get("receiptStatus")),
@@ -133,6 +136,8 @@ class _AfterSalesMixin:
                 "complete_at": _text(item.get("completeConfirmDate")), "reason_category": _text(item.get("cancelReasonCategory1")),
                 "fault_by": _text(item.get("faultByType")), "release_stop": _text(item.get("releaseStopStatus")),
                 "count": sum(_int(i.get("cancelCount")) or 0 for i in items if isinstance(i, dict)),
+                "return_courier": _text(pick.get("deliveryCompanyCode")), "return_invoice": _text(pick.get("deliveryInvoiceNo")),
+                "return_delivery_type": _text(item.get("returnDeliveryType")),
             })
         return AfterSalesRead(True, tuple(rows), "", 200)
 

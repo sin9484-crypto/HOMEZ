@@ -45,16 +45,16 @@ from tests.test_external_call_enforcement import _install
 
 NOW = datetime(2026, 10, 16, 6, 30, 0)  # UTC → 한국 15:30
 
-PII = ("홍길동", "010-1234-5678", "buyer@example.com", "국민은행", "123-456-789012", "배송 언제 오나요", "개인 사정으로 반품합니다")
+PII = ("홍길동", "010-1234-5678", "buyer@example.com", "국민은행", "123-456-789012", "배송 언제 오나요", "개인 사정으로 반품합니다", "서울시 반품 주소 1-2", "회수 기사 김철수")
 
 
-def return_body(status="RETURNS_UNCHECKED", receipt=500001, order=8103602504198):
+def return_body(status="RETURNS_UNCHECKED", receipt=500001, order=8103602504198, invoice=""):
     return {"code": 200, "message": "OK", "data": [{
         "receiptId": receipt, "orderId": order, "receiptType": "RETURN", "receiptStatus": status,
         "createdAt": "2026-10-16T15:30:00", "modifiedAt": "2026-10-16T15:31:00", "cancelReasonCategory1": "구매자 변심",
         "cancelReason": PII[6], "faultByType": "CUSTOMER", "requesterName": PII[0], "requesterPhoneNumber": PII[1],
         "returnItems": [{"vendorItemId": 111, "cancelCount": 1, "purchaseCount": 1, "shipmentBoxId": 742634322542636}],
-        "returnDeliveryDtos": [{"deliveryCompanyCode": "HYUNDAI", "deliveryInvoiceNo": "123"}],
+        "returnDeliveryType": "RETURN", "returnDeliveryDtos": [{"deliveryCompanyCode": "HYUNDAI", "deliveryInvoiceNo": invoice, "returnAddress": PII[7], "senderName": PII[8]}],
     }], "nextToken": ""}
 
 
@@ -284,6 +284,49 @@ class EventTests(Base_):
             self.assertNotIn(secret, dump, secret)
 
 
+class ReturnPickupTests(Base_):
+    """2026-10-16 — 반품 회수 택배(고객이 보낸 송장): 택배사·송장번호만 읽고, 송장이 생기면 새 이벤트."""
+
+    def setUp(self):
+        super().setUp()
+        self.grant()
+
+    def latest_return(self):
+        return {e["entity_id"]: e for e in AfterSalesMonitorService.latest_events(self.db)}["RETURN:500001"]
+
+    def test_no_pickup_invoice_yet_is_recorded_as_none(self):
+        self.monitor().refresh(1)
+        event = self.latest_return()
+        self.assertEqual((event["dc"], event["di"], event["dt"]), ("HYUNDAI", None, "RETURN"))
+
+    def test_a_pickup_invoice_that_appears_is_a_new_event_even_if_the_status_is_the_same(self):
+        self.monitor().refresh(1)
+        self.transport.queues["returns"] = [response(200, return_body(invoice="259606480561"))]
+        summary = self.monitor().refresh(1)
+        self.assertEqual([e["entity_id"] for e in summary["new_events"]], ["RETURN:500001"])
+        self.assertEqual(self.latest_return()["di"], "259606480561")
+        self.assertEqual(self.latest_return()["s"], "RETURNS_UNCHECKED")
+
+    def test_the_same_invoice_and_status_is_not_written_again(self):
+        self.transport.queues["returns"] = [response(200, return_body(invoice="259606480561"))]
+        self.monitor().refresh(1)
+        self.assertEqual([e for e in self.monitor().refresh(1)["new_events"] if e["k"] == "RETURN"], [])
+
+    def test_the_invoice_is_stored_in_a_form_the_central_masking_leaves_alone(self):
+        self.transport.queues["returns"] = [response(200, return_body(invoice="259606480561"))]
+        self.monitor().refresh(1)
+        raw = self.db.execute(text("SELECT description FROM audit_logs WHERE entity_id='RETURN:500001'")).scalar()
+        self.assertIn("2596_0648_0561", raw)
+        self.assertNotIn("*", raw)
+
+    def test_return_address_and_pickup_driver_are_not_read(self):
+        self.transport.queues["returns"] = [response(200, return_body(invoice="259606480561"))]
+        self.monitor().refresh(1)
+        dump = " ".join(str(r[0]) for r in self.db.execute(text("SELECT description FROM audit_logs")))
+        for secret in (PII[7], PII[8]):
+            self.assertNotIn(secret, dump)
+
+
 class RealResponseShapeTests(Base_):
     """2026-10-16 첫 실호출에서 나온 모양을 고정한다(최상위 배열 정산 응답, 가려진 긴 접수번호)."""
 
@@ -312,8 +355,11 @@ class RealResponseShapeTests(Base_):
         self.transport.queues["returns"] = [response(200, return_body(receipt=1919873062))]
         before = len(self.events())
         self.monitor().refresh(1)
-        self.assertEqual([e for e in self.events() if e["entity_id"] == "RETURN:1919873062"].__len__(), 1)
-        self.assertEqual(len(self.events()), before + 4)  # 반품은 다시 쓰지 않고 문의 2건·정산 2건만 새로 기록
+        # 수정 전에 쓴 기록에는 회수 택배 필드가 없으므로, 새 필드가 생기는 첫 한 번만 갱신한다(그 뒤로는 같은 값이면 쓰지 않는다).
+        self.assertEqual(len([e for e in self.events() if e["entity_id"] == "RETURN:1919873062"]), 2)
+        self.assertEqual(len(self.events()), before + 5)
+        self.monitor().refresh(1)
+        self.assertEqual(len([e for e in self.events() if e["entity_id"] == "RETURN:1919873062"]), 2)
 
     def test_a_non_json_settlement_body_is_a_failure(self):
         self.transport.queues["settlement"] = [response(200, None)]

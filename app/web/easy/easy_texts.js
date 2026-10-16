@@ -8,7 +8,7 @@
 window.HOMEZ_EASY_TEXTS = {
   "ko-KR": {
     "easy.won": "원", "easy.orders.qty_n": "수량 {n}",
-    "easy.next.return_in_progress": "반품 처리 중", "easy.orders.return_note": "쿠팡에 반품이 접수됐어요. 반품이 끝날 때까지는 정산을 기다리는 주문이 아니에요. 수령 확인 같은 처리는 쿠팡 WING에서 해 주세요.",
+    "easy.next.return_in_progress": "반품 처리 중", "easy.today.return_pickup": "회수 택배", "easy.today.return_pickup_none": "아직 없음(고객이 송장을 입력하기 전)", "easy.orders.return_note": "쿠팡에 반품이 접수됐어요. 반품이 끝날 때까지는 정산을 기다리는 주문이 아니에요. 수령 확인 같은 처리는 쿠팡 WING에서 해 주세요.",
     "easy.today.return_title": "반품 요청이 들어왔어요", "easy.today.return_sub": "쿠팡에 접수된 반품이에요. 쿠팡 WING에서 확인·처리해 주세요.", "easy.today.return_receipt": "접수번호 {id}", "easy.today.return_action": "주문 보기", "easy.today.return_state": "반품 상태", "easy.today.return_reason": "사유 분류", "easy.today.return_fault": "책임", "easy.today.return_detail": "HOMEZ는 쿠팡이 알려 준 반품 상태를 읽어 보여 줄 뿐, 승인·수령 확인·환불은 하지 않아요. 처리는 쿠팡 WING에서 해 주세요.",
     "easy.today.inq_title": "답변이 필요한 문의", "easy.today.inq_sub": "고객 문의가 답변을 기다려요. 쿠팡 WING에서 답해 주세요.", "easy.today.inq_online": "상품 문의 {id}", "easy.today.inq_call": "콜센터 문의 {id}", "easy.today.inq_unanswered": "답변 필요", "easy.today.inq_action": "주문 보기", "easy.today.inq_detail": "문의 내용은 개인정보라 HOMEZ에 저장하지 않아요. 쿠팡 WING에서 확인하고 답변해 주세요.",
     "easy.rs.release_stop_unchecked": "출고중지 요청(확인 전)", "easy.rs.returns_unchecked": "반품 접수(확인 전)", "easy.rs.vendor_warehouse_confirm": "입고 확인", "easy.rs.request_coupang_check": "쿠팡 확인 요청", "easy.rs.returns_completed": "반품 완료",
@@ -133,7 +133,7 @@ window.HOMEZ_EASY_TEXTS = {
   },
   "en-US": {
     "easy.won": " KRW", "easy.orders.qty_n": "Qty {n}",
-    "easy.next.return_in_progress": "Return in progress", "easy.orders.return_note": "A return was filed on Coupang. Until it finishes, this order is not waiting for settlement. Please handle steps such as receipt confirmation in Coupang WING.",
+    "easy.next.return_in_progress": "Return in progress", "easy.today.return_pickup": "Return pickup", "easy.today.return_pickup_none": "None yet (the customer has not entered a tracking number)", "easy.orders.return_note": "A return was filed on Coupang. Until it finishes, this order is not waiting for settlement. Please handle steps such as receipt confirmation in Coupang WING.",
     "easy.today.return_title": "A return request came in", "easy.today.return_sub": "A return was filed on Coupang. Please check and handle it in Coupang WING.", "easy.today.return_receipt": "Receipt {id}", "easy.today.return_action": "View order", "easy.today.return_state": "Return status", "easy.today.return_reason": "Reason category", "easy.today.return_fault": "Fault", "easy.today.return_detail": "HOMEZ only reads and shows the return status Coupang reports. It does not approve, confirm receipt, or refund. Please handle it in Coupang WING.",
     "easy.today.inq_title": "Inquiry waiting for an answer", "easy.today.inq_sub": "A customer inquiry is waiting. Please answer it in Coupang WING.", "easy.today.inq_online": "Product inquiry {id}", "easy.today.inq_call": "Call center inquiry {id}", "easy.today.inq_unanswered": "Needs answer", "easy.today.inq_action": "View order", "easy.today.inq_detail": "Inquiry text is personal data, so HOMEZ does not store it. Please read and answer it in Coupang WING.",
     "easy.rs.release_stop_unchecked": "Shipment stop requested (unchecked)", "easy.rs.returns_unchecked": "Return received (unchecked)", "easy.rs.vendor_warehouse_confirm": "Warehouse confirmed", "easy.rs.request_coupang_check": "Coupang check requested", "easy.rs.returns_completed": "Return completed",

@@ -346,7 +346,8 @@
       chip: chip("red", tryT(`easy.rs.${String(r.s).toLowerCase()}`, String(r.s || ""))),
       action: { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") },
       facts: [[T("easy.fact.order"), r.o || "—"], [T("easy.today.return_state"), tryT(`easy.rs.${String(r.s).toLowerCase()}`, String(r.s || ""))],
-        [T("easy.today.return_reason"), r.rc || "—"], [T("easy.today.return_fault"), tryT(`easy.fault.${String(r.f).toLowerCase()}`, String(r.f || "—"))]],
+        [T("easy.today.return_reason"), r.rc || "—"], [T("easy.today.return_fault"), tryT(`easy.fault.${String(r.f).toLowerCase()}`, String(r.f || "—"))],
+        [T("easy.today.return_pickup"), returnPickupText(r)]],
       detail: T("easy.today.return_detail"),
     }));
     (afterSales.inquiries_open || []).forEach((q) => rows.push({
@@ -772,12 +773,19 @@
         <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.orders.track_calls"))}</div></div>`}</div>`;
   }
 
+  // 반품 회수 택배: 고객이 보낸 송장이 아직 없으면 그렇게 알려 준다.
+  function returnPickupText(r) {
+    if (!r.di) return T("easy.today.return_pickup_none");
+    const name = COURIERS[r.dc] || r.dc || "";
+    return `${name} ${r.di}`.trim();
+  }
+
   // 배송 이후(반품·문의): 이 주문에 대해 쿠팡이 알려 준 것. 10분마다 읽고, 처리는 쿠팡 WING에서 한다.
   function afterHtml(order) {
     const list = order.after_sales || [];
     if (!order.task) return "";
     const line = (e) => {
-      if (e.k === "RETURN") return [T("easy.after.return"), tryT(`easy.rs.${String(e.s).toLowerCase()}`, String(e.s || "")), e.rc ? ` · ${e.rc}` : ""];
+      if (e.k === "RETURN") return [T("easy.after.return"), tryT(`easy.rs.${String(e.s).toLowerCase()}`, String(e.s || "")), `${e.rc ? ` · ${e.rc}` : ""} · ${T("easy.today.return_pickup")}: ${returnPickupText(e)}`];
       return [T(e.k === "INQ_CALL" ? "easy.after.inq_call" : "easy.after.inq_online"), T(e.s === "ANSWERED" ? "easy.after.answered" : "easy.today.inq_unanswered"), ""];
     };
     const rows = list.length ? list.map((e) => { const [k, v, extra] = line(e); return `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v + extra)}</b></div>`; }).join("")

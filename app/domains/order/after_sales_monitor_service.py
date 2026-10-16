@@ -87,10 +87,10 @@ class AfterSalesMonitorService:
         if row is None:
             return None
         payload = parse_event(row[0])
-        return payload.get("s") if payload else None
+        return (payload.get("g") or payload.get("s")) if payload else None
 
     def _record(self, company_id: int, entity_id: str, payload: dict, new_events: list[dict]) -> None:
-        if self._latest_state(entity_id) == payload.get("s"):
+        if self._latest_state(entity_id) == (payload.get("g") or payload.get("s")):
             return
         description = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))[:490]
         write_audit_log(
@@ -155,6 +155,9 @@ class AfterSalesMonitorService:
                 self._record(company_id, f"RETURN:{r['receipt_id']}", {
                     "k": "RETURN", "o": pack_order_id(r["order_id"]), "s": r["status"] or "UNKNOWN", "ty": r["receipt_type"],
                     "t": r["created_at"], "m": r["modified_at"], "rc": r["reason_category"], "f": r["fault_by"], "n": r["count"],
+                    # 회수 택배: 송장번호는 긴 숫자라 중앙 가림 규칙을 피해 4자리씩 밑줄로 저장한다. 상태가 같아도 송장이 생기면 새 이벤트(g).
+                    "dc": r.get("return_courier"), "di": pack_order_id(r.get("return_invoice")), "dt": r.get("return_delivery_type"),
+                    "g": f"{r['status'] or 'UNKNOWN'}|{r.get('return_courier') or ''}|{pack_order_id(r.get('return_invoice')) or ''}",
                 }, summary["new_events"])
         if summary["blocked"]:
             self.db.commit()
@@ -210,6 +213,8 @@ class AfterSalesMonitorService:
                 continue
             if payload.get("o"):
                 payload["o"] = unpack_order_id(payload["o"])
+            if payload.get("di"):
+                payload["di"] = unpack_order_id(payload["di"])
             # 긴 접수번호·문의번호는 중앙 가림 규칙이 가릴 수 있어(`******3062`), 항상 따로 저장된 entity_id의 번호를 쓴다.
             if payload.get("k") in ("RETURN", "INQ_ONLINE", "INQ_CALL") and ":" in entity_id:
                 payload["id"] = entity_id.split(":", 1)[1]
