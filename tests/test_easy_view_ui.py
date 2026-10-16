@@ -240,7 +240,7 @@ class StyleAndServingTests(unittest.TestCase):
 
     def test_the_detail_panel_never_overlaps_the_list(self):
         # 2026-10-16 실제 화면 확인: 1280px 폭에서 표(720px)가 오른쪽 패널 위로 넘쳤다.
-        self.assertIn("@media (max-width: 1280px)", CSS)
+        self.assertIn("@media (max-width: 1320px)", CSS)
         self.assertIn("overflow-x: auto", re.search(r"\.ez-main \{[^}]*\}", CSS).group(0))
         self.assertIn("function revealPanel(", JS)
 

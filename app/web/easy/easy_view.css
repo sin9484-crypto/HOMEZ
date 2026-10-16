@@ -72,9 +72,9 @@ body.easy-view .view-root { background: #fff; }
 .ez-summary > div:last-child { border-right: 0; }
 .ez-summary b { font-size: 21px; margin-left: 6px; }
 .ez-c-orange { color: #D97706; } .ez-c-blue { color: var(--ez-blue); } .ez-c-red { color: var(--ez-red); } .ez-c-green { color: var(--ez-g); }
-.ez-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 0; margin-top: 4px; }
+.ez-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 0; margin-top: 4px; }
 .ez-layout.ez-no-panel { grid-template-columns: minmax(0, 1fr); }
-.ez-main { min-width: 0; padding-right: 22px; overflow-x: auto; }
+.ez-main { min-width: 0; padding-right: 16px; overflow-x: auto; }
 .ez-panel { border-left: 1px solid var(--ez-line); padding: 8px 4px 8px 24px; min-width: 0; }
 .ez-panel h2 { font-size: 20px; font-weight: 800; margin: 0; }
 .ez-sec { font-size: 18px; font-weight: 800; margin: 24px 0 8px; display: flex; align-items: baseline; gap: 10px; }
@@ -206,7 +206,7 @@ dialog.ez-dialog::backdrop { background: rgba(20, 24, 30, .45); }
 .ez-dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
 /* 중간 폭(노트북 작은 창): 상세 패널을 목록 아래로 내려 표와 겹치지 않게 한다 */
-@media (max-width: 1280px) {
+@media (max-width: 1320px) {
   .ez-layout { grid-template-columns: minmax(0, 1fr); }
   .ez-main { padding-right: 0; }
   .ez-panel { border-left: 0; border-top: 1px solid var(--ez-line); padding: 18px 0 0; margin-top: 18px; }
