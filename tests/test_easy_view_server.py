@@ -289,6 +289,13 @@ class TodayTests(Base_):
         self.assertEqual(self.todo(), [])
         self.assertEqual(self.svc.build_today(1)["pipeline"]["selling"], 0)
 
+    def test_the_last_coupang_check_time_is_exposed_for_each_order(self):
+        order = self.order(number="7101")
+        self.task(order, key="k7101")
+        box = self.box(order)
+        row = self.svc.build_orders(1)["items"][0]
+        self.assertEqual(row["coupang_checked_at"], box.updated_at.isoformat() if box.updated_at else None)
+
     def test_the_latest_wizard_of_a_listing_supplies_the_saved_value(self):
         self.listing_wizard(1, 10, days=None, name="옛 이름")
         self.listing_wizard(2, 10, days=2, name="새 이름")

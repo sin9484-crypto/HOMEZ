@@ -1141,6 +1141,19 @@ def mark_coupang_invoice_registered(
     return CoupangInvoiceService(db).mark_registered(task_id, current_user.company_id, current_user.id)
 
 
+@router.post("/{task_id}/delivery/refresh")
+def refresh_coupang_delivery_status(
+    task_id: int,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """이 주문의 쿠팡 상태를 지금 한 번 읽는다(쿠팡 발주서 조회 GET 1회, 허용 필요). 쿠팡에는 아무것도 쓰지 않는다."""
+
+    from app.domains.order.delivery_tracking_service import DeliveryTrackingService
+
+    return DeliveryTrackingService(db).refresh_task(task_id, current_user.company_id, triggered_by=current_user.id)
+
+
 @router.post("/{task_id}/coupang-invoice/reconcile")
 def reconcile_coupang_invoice(
     task_id: int,

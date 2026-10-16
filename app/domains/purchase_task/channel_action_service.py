@@ -559,13 +559,17 @@ class CoupangChannelActions:
     def invoice_key(channel_order_id: str, shipment_box_id: str) -> str:
         return f"order:{str(channel_order_id).strip()}:box:{str(shipment_box_id).strip()}"
 
-    def read_order_sheet(self, *, company_id: int, store_connection_id: int, shipment_box_id: str):
-        """발주서 1건 읽기(GET 1회). (스냅샷, None) 또는 (None, 실패 ActionResult). 장부를 쓰지 않는다."""
+    def read_order_sheet(
+        self, *, company_id: int, store_connection_id: int, shipment_box_id: str,
+        purpose: str = ChannelActionType.INVOICE_UPLOAD,
+    ):
+        """발주서 1건 읽기(GET 1회). (스냅샷, None) 또는 (None, 실패 ActionResult). 장부를 쓰지 않는다.
+        `purpose`는 어떤 허용으로 부를지(기본 송장 등록, 주문·배송 상태 확인은 `ORDER_TRACKING`)다."""
 
         provider, failure = self._provider(company_id, store_connection_id)
         if failure is not None:
             return None, failure
-        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.INVOICE_UPLOAD)
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, purpose)
         if denied is not None:
             return None, denied
         try:

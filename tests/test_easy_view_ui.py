@@ -46,6 +46,7 @@ DYNAMIC = {
     "easy.step.": ["ordered", "supplier_order", "supplier_shipped", "invoice", "delivered"],
     "easy.next.": ["register_invoice", "order_from_supplier", "wait_supplier_shipment", "check_coupang_order", "wait_delivery", "done"],
     "easy.outcome.": ["allowed", "succeeded", "failed", "logged"],
+    "easy.cs.": ["accept", "instruct", "departure", "delivering", "final_delivery", "none_tracking"],
 }
 
 
@@ -139,7 +140,7 @@ class ExternalCallTimingTests(unittest.TestCase):
     def test_opening_a_screen_never_reads_coupang_or_onchannel(self):
         for name in ("loadToday", "loadProducts", "loadProductDetail", "loadOrders", "loadMoney", "loadApprovals", "loadMore", "renderOrderPanel"):
             body = function_body(name)
-            for forbidden in ("coupang-invoice/preview", "outbound-days/preview", "coupang-invoice/send", "outbound-days/send", "/collection-ops/trigger"):
+            for forbidden in ("coupang-invoice/preview", "outbound-days/preview", "coupang-invoice/send", "outbound-days/send", "/collection-ops/trigger", "/delivery/refresh"):
                 self.assertNotIn(forbidden, body, f"{name}: {forbidden}")
 
     def test_the_outside_reads_only_run_from_button_handlers(self):
@@ -271,6 +272,30 @@ class UnresolvedOrderRowTests(unittest.TestCase):
         block = function_body("loadToday").split("today.unresolved_orders")[1].split("// 3)")[0]
         for forbidden in ("api(", 'method: "POST"', "coupang-invoice", "/trigger"):
             self.assertNotIn(forbidden, block)
+
+
+class DeliveryTrackingRowTests(unittest.TestCase):
+
+    def test_the_coupang_status_check_only_runs_from_its_button(self):
+        self.assertIn('trackBtn.addEventListener("click", () => trackNow(order))', JS)
+        for name in ("trackHtml", "renderOrderPanel", "loadOrders"):
+            self.assertNotIn("/delivery/refresh", function_body(name), name)
+        self.assertIn("/delivery/refresh", function_body("trackNow"))
+        self.assertIn('method: "POST"', function_body("trackNow"))
+
+    def test_a_blocked_check_points_to_the_approval_center_instead_of_retrying(self):
+        body = function_body("trackNow")
+        self.assertIn("r.blocked", body)
+        self.assertIn('B.navigateTo("easy-approvals")', body)
+        self.assertNotIn("setInterval", body)
+
+    def test_the_tracking_allowance_can_be_granted_from_the_approval_center_with_a_password(self):
+        self.assertIn('purpose: "ORDER_TRACKING", mode: "STANDING", per_hour_limit: 30, hours: 24', JS)
+        self.assertIn('["ORDER_TRACKING", "easy.purpose.tracking"]', JS)
+        self.assertLess(function_body("grantDialog").index("B.promptRecentAuthToken()"), function_body("grantDialog").index('"X-Recent-Auth-Token": token'))
+
+    def test_a_finished_delivery_has_no_check_button(self):
+        self.assertIn('const done = s === "FINAL_DELIVERY";', function_body("trackHtml"))
 
 
 class StyleAndServingTests(unittest.TestCase):

@@ -721,7 +721,10 @@
       <h2>${esc(order.product_name || order.channel_order_id)} × ${order.quantity || 1}</h2>
       <div class="ez-muted" style="font-size:14px;margin-top:2px">${esc(T("easy.orders.head_sub", { id: order.channel_order_id, time: maskedTime(order.ordered_at) }))}</div>
       ${progressHtml(order)}
+      ${trackHtml(order)}
       ${action}`;
+    const trackBtn = $("ez-track-now");
+    if (trackBtn) trackBtn.addEventListener("click", () => trackNow(order));
 
     const previewBtn = $("ez-inv-preview");
     if (previewBtn) previewBtn.addEventListener("click", () => invoicePreview(order));
@@ -731,6 +734,42 @@
     if (openTask) openTask.addEventListener("click", () => B.navigateTo(order.next_action.view || "purchase-task", order.task ? { id: order.task.id } : {}));
     const openDetect = $("ez-open-detect");
     if (openDetect) openDetect.addEventListener("click", () => B.navigateTo("order-collection-ops"));
+  }
+
+  // 쿠팡 주문·배송 현황: 쿠팡이 알려 준 상태와 마지막 확인 시각. 10분마다 자동으로 읽고, 여기서 지금 한 번 읽을 수도 있다.
+  function trackHtml(order) {
+    if (!order.task) return "";
+    const s = String(order.coupang_status || "");
+    const label = s ? tryT(`easy.cs.${s.toLowerCase()}`, s) : "—";
+    const done = s === "FINAL_DELIVERY";
+    const checked = order.coupang_checked_at ? B.fmtDate(order.coupang_checked_at) : T("easy.orders.track_never");
+    return `<div class="ez-block" style="margin-top:16px"><h3 style="margin:0 0 6px;font-size:17px">${esc(T("easy.orders.track_title"))}</h3>
+      ${[[T("easy.orders.coupang_state"), label], [T("easy.orders.track_checked"), checked]].map(([k, v]) => `<div class="ez-kv"><span>${esc(k)}</span><b class="ez-num">${esc(v)}</b></div>`).join("")}
+      <div id="ez-track-result"></div>
+      ${done ? "" : `<div style="margin-top:10px"><button type="button" class="ez-btn line" id="ez-track-now">${esc(T("easy.orders.track_now"))}</button>
+        <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.orders.track_calls"))}</div></div>`}</div>`;
+  }
+
+  async function trackNow(order) {
+    const box = $("ez-track-result");
+    const btn = $("ez-track-now");
+    if (btn) btn.disabled = true;
+    box.innerHTML = loadingHtml();
+    try {
+      const r = await api(`/purchase-tasks/${order.task.id}/delivery/refresh`, { method: "POST" });
+      if (r.ok) {
+        B.toast(T(r.delivered_marked ? "easy.orders.track_delivered" : (r.changed ? "easy.orders.track_changed" : "easy.orders.track_same")), "success");
+        loadOrders({ orderId: order.order_id });
+        return;
+      }
+      const blocked = r.blocked;
+      box.innerHTML = `<div class="ez-note ${blocked ? "warn" : "bad"}" style="margin-top:10px"><div>${esc(blocked ? T("easy.orders.track_blocked") : (r.detail || T("easy.error")))}</div>${blocked ? `<button type="button" class="ez-btn sm" id="ez-track-allow" style="margin-top:8px">${esc(T("easy.orders.track_allow"))}</button>` : ""}</div>`;
+      const allow = $("ez-track-allow");
+      if (allow) allow.addEventListener("click", () => B.navigateTo("easy-approvals"));
+    } catch (err) {
+      box.innerHTML = `<div class="ez-note bad" style="margin-top:10px"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+    }
+    if (btn) btn.disabled = false;
   }
 
   async function invoiceMarkDone(order) {
@@ -873,7 +912,7 @@
           ${table(pendingRows, "easy.ap.pending_none")}
           <div class="ez-sec">${esc(T("easy.ap.active_title"))} <small>${esc(T("easy.count", { n: (ext.active || []).length }))}</small></div>
           ${table(activeRows, "easy.ap.active_none")}
-          ${installed ? `<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="ez-btn ghost" id="ez-ap-grant-detect">${esc(T("easy.ap.grant_detect"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-custom">${esc(T("easy.ap.grant_custom"))}</button></div>` : ""}
+          ${installed ? `<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="ez-btn ghost" id="ez-ap-grant-detect">${esc(T("easy.ap.grant_detect"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-track">${esc(T("easy.ap.grant_track"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-custom">${esc(T("easy.ap.grant_custom"))}</button></div>` : ""}
           <div class="ez-sec" id="ez-days-anchor">${esc(T("easy.ap.days_title"))}<small>${esc(T("easy.ap.days_sub"))}</small></div>
           <div id="ez-days-box">${todo.length ? todo.map((p) => `<div class="ez-block" style="margin-top:10px"><div class="ez-field" style="grid-template-columns:1fr auto"><div class="v">${esc(p.product_name)}<small>${esc(T("easy.today.coupang_no", { id: p.seller_product_id }))} · ${esc(p.saved_days ? T("easy.today.days_sub_saved", { days: p.saved_days }) : T("easy.today.days_sub_unset", { days: 1 }))}</small></div>
             <button type="button" class="ez-btn sm" data-ez-days="${esc(p.seller_product_id)}">${esc(T("easy.ap.days_check"))}</button></div><div id="ez-days-${esc(p.seller_product_id)}" style="padding:0 18px 12px"></div></div>`).join("") : `<div class="ez-empty">${esc(T("easy.ap.days_none"))}</div>`}</div>
@@ -901,6 +940,8 @@
     }));
     const detect = $("ez-ap-grant-detect");
     if (detect) detect.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "ORDER_DETECTION", mode: "STANDING", per_hour_limit: 14, hours: 24 }));
+    const track = $("ez-ap-grant-track");
+    if (track) track.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "ORDER_TRACKING", mode: "STANDING", per_hour_limit: 30, hours: 24 }));
     const custom = $("ez-ap-grant-custom");
     if (custom) custom.addEventListener("click", () => grantDialog(null));
     root.querySelectorAll("[data-ez-days]").forEach((btn) => btn.addEventListener("click", () => daysPreview(btn.dataset.ezDays)));
@@ -929,7 +970,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>

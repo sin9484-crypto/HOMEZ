@@ -40,6 +40,7 @@ from app.domains.external_call.constants import AllowanceStatus
 from app.domains.external_call.constants import CallKind
 from app.domains.external_call.constants import CallPurpose
 from app.domains.external_call.constants import DEFAULT_ORDER_DETECTION_PER_HOUR
+from app.domains.external_call.constants import DEFAULT_ORDER_TRACKING_PER_HOUR
 from app.domains.external_call.constants import DEFAULT_STANDING_HOURS
 from app.domains.external_call.constants import ExternalSystem
 from app.domains.external_call.constants import LogOutcome
@@ -51,6 +52,7 @@ logger = logging.getLogger("homez")
 # 허용 요청이 처음 만들어질 때 제안하는 값(사용자가 승인 때 바꿀 수 있다).
 _DEFAULT_REQUEST = {
     (CallPurpose.ORDER_DETECTION, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_ORDER_DETECTION_PER_HOUR),
+    (CallPurpose.ORDER_TRACKING, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_ORDER_TRACKING_PER_HOUR),
     (CallPurpose.INVOICE_UPLOAD, CallKind.READ): (AllowanceMode.COUNTED, 2, None),
     (CallPurpose.INVOICE_UPLOAD, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     (CallPurpose.PRODUCT_OUTBOUND_DAYS, CallKind.READ): (AllowanceMode.COUNTED, 3, None),

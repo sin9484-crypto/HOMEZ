@@ -334,6 +334,7 @@ class EasyViewService:
                 if has_tracking else None
             ),
             "coupang_status": sorted(coupang_raw)[0] if coupang_raw else None,
+            "coupang_checked_at": (max(f.updated_at for f in fulfillments if f.updated_at).isoformat() if any(f.updated_at for f in fulfillments) else None),
             "shipment_box_id": box.shipment_box_id if box else None,
             "steps": steps, "now_step": now_index + 1 if now_index < len(done) else len(done),
             "next_action": next_action,

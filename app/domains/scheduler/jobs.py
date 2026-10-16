@@ -95,6 +95,9 @@ BACKUP_REHEARSAL_JOB_ID = "weekly_backup_restore_rehearsal"
 RECALL_NOTICE_CHECK_JOB_ID = "daily_recall_notice_check"
 ORDER_COLLECTION_TICK_JOB_ID = "order_collection_tick"
 ORDER_COLLECTION_TICK_INTERVAL_MINUTES = 1
+# 2026-10-16 진행 중 쿠팡 주문·배송 상태 확인(10분마다) — 허용(ORDER_TRACKING)이 없으면 쿠팡을 부르지 않는다.
+DELIVERY_TRACKING_JOB_ID = "coupang_delivery_tracking"
+DELIVERY_TRACKING_INTERVAL_MINUTES = 10
 
 
 def run_backup_rehearsal_job(
@@ -285,6 +288,36 @@ def run_order_collection_tick_job(
         db.close()
 
 
+def run_delivery_tracking_job(session_factory=None) -> None:
+    """진행 중인 쿠팡 주문의 상태를 10분마다 읽어 HOMEZ에 반영한다(`DeliveryTrackingService`). 허용·비상 정지가 막으면 호출하지 않고,
+    한 번의 실패가 스케줄러를 죽이지 않는다."""
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    db = session_factory()
+    try:
+        from app.domains.order.delivery_tracking_service import DeliveryTrackingService
+        from app.domains.purchase_task.model import PurchaseTask
+
+        service = DeliveryTrackingService(db)
+        company_ids = [r[0] for r in db.query(PurchaseTask.company_id).distinct().all()]
+        for company_id in company_ids:
+            if not service.tracked_task_ids(company_id):
+                continue
+            summary = service.refresh_all(company_id)
+            logger.info(
+                "쿠팡 주문·배송 상태 확인: 회사 %s 확인 %d·변경 %d·배송완료 %d·취소감지 %d·실패 %d%s",
+                company_id, summary["checked"], summary["changed"], summary["delivered"], summary["cancelled"], summary["failed"],
+                " · 허용 필요로 중단" if summary["blocked"] else "",
+            )
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("쿠팡 주문·배송 상태 확인 Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -341,10 +374,16 @@ def register_all_jobs() -> None:
         job_id=ORDER_COLLECTION_TICK_JOB_ID,
     )
 
+    SchedulerService.add_interval_job(
+        run_delivery_tracking_job,
+        minutes=DELIVERY_TRACKING_INTERVAL_MINUTES,
+        job_id=DELIVERY_TRACKING_JOB_ID,
+    )
+
     logger.info(
-        "Scheduler jobs registered: %s, %s, %s",
+        "Scheduler jobs registered: %s, %s, %s, %s",
         BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
-        ORDER_COLLECTION_TICK_JOB_ID,
+        ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID,
     )
 
 

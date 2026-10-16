@@ -8,6 +8,8 @@
 window.HOMEZ_EASY_TEXTS = {
   "ko-KR": {
     "easy.won": "원", "easy.orders.qty_n": "수량 {n}",
+    "easy.orders.track_title": "쿠팡 배송 현황", "easy.orders.track_checked": "마지막 확인", "easy.orders.track_never": "아직 확인 안 함", "easy.orders.track_now": "지금 쿠팡에서 확인", "easy.orders.track_calls": "쿠팡 조회 1회 · 10분마다 자동으로도 확인해요", "easy.orders.track_blocked": "쿠팡 주문·배송 상태 확인 허용이 없어 읽지 않았어요. 승인 센터에서 허용해 주세요.", "easy.orders.track_allow": "허용하러 가기", "easy.orders.track_delivered": "쿠팡이 배송완료로 알려 줘서 배송완료로 바꿨어요", "easy.orders.track_changed": "쿠팡 상태가 바뀌어 반영했어요", "easy.orders.track_same": "쿠팡 상태는 그대로예요(확인 시각만 갱신)",
+    "easy.cs.accept": "결제완료", "easy.cs.instruct": "상품준비중", "easy.cs.departure": "배송지시", "easy.cs.delivering": "배송중", "easy.cs.final_delivery": "배송완료", "easy.cs.none_tracking": "업체직송(추적 없음)", "easy.purpose.tracking": "주문·배송 상태 확인", "easy.ap.grant_track": "주문·배송 상태 확인 허용하기",
     "easy.today.unres_title": "새 주문 — 상품 연결이 필요해요", "easy.today.unres_sub": "쿠팡 상품을 우리 재고 상품에 이어 줘야 공급처 주문으로 넘어가요.", "easy.today.unres_action": "연결하러 가기", "easy.today.unres_why": "이 주문의 상품이 아직 재고 상품과 연결돼 있지 않아 구매 작업이 만들어지지 않았어요. 주문 현황에서 재고 상품을 골라 연결해 주세요.",
     "easy.nav.analysis": "분석", "easy.an.lead": "어떤 상품이 팔릴지 점수와 판단으로 한눈에 봐요. 숫자는 후보 상품을 분석한 결과예요.",
     "easy.an.k_cand": "후보 상품", "easy.an.k_cand_s": "검토 대기 {d} · 검토 완료 {a}", "easy.an.k_new": "신상품 후보", "easy.an.k_new_s": "새로 나온 상품",
@@ -122,6 +124,8 @@ window.HOMEZ_EASY_TEXTS = {
   },
   "en-US": {
     "easy.won": " KRW", "easy.orders.qty_n": "Qty {n}",
+    "easy.orders.track_title": "Coupang delivery status", "easy.orders.track_checked": "Last checked", "easy.orders.track_never": "Not checked yet", "easy.orders.track_now": "Check Coupang now", "easy.orders.track_calls": "1 Coupang lookup · also checked automatically every 10 minutes", "easy.orders.track_blocked": "Order and delivery status checks are not allowed yet, so nothing was read. Allow it in the approval center.", "easy.orders.track_allow": "Go allow it", "easy.orders.track_delivered": "Coupang reported delivery complete, so it was marked delivered", "easy.orders.track_changed": "Coupang status changed and was applied", "easy.orders.track_same": "Coupang status is unchanged (only the check time was updated)",
+    "easy.cs.accept": "Payment complete", "easy.cs.instruct": "Preparing", "easy.cs.departure": "Dispatch ordered", "easy.cs.delivering": "In delivery", "easy.cs.final_delivery": "Delivered", "easy.cs.none_tracking": "Direct delivery (no tracking)", "easy.purpose.tracking": "Order and delivery status check", "easy.ap.grant_track": "Allow order and delivery checks",
     "easy.today.unres_title": "New order — link the product", "easy.today.unres_sub": "Link the Coupang product to your stock item so the order can move on to the supplier.", "easy.today.unres_action": "Go link it", "easy.today.unres_why": "This order's product is not linked to a stock item yet, so no purchase task was created. Pick the stock item in Order status and link it.",
     "easy.nav.analysis": "Analysis", "easy.an.lead": "See which products may sell, by score and review. Numbers come from the analysis of candidate products.",
     "easy.an.k_cand": "Candidate products", "easy.an.k_cand_s": "To review {d} · Reviewed {a}", "easy.an.k_new": "New product candidates", "easy.an.k_new_s": "Newly released items",
