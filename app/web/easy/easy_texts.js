@@ -74,7 +74,7 @@ window.HOMEZ_EASY_TEXTS = {
 
     "easy.orders.lead": "주문 한 건이 어디까지 왔는지, 다음에 뭘 할지 보여 줘요.", "easy.orders.tab_todo": "내가 할 일", "easy.orders.tab_done": "끝난 주문",
     "easy.orders.sum_todo": "내가 할 일", "easy.orders.sum_shipping": "보내는 중", "easy.orders.sum_done": "끝난 주문",
-    "easy.orders.empty_title": "주문이 없어요", "easy.orders.empty_sub": "쿠팡에서 새 주문이 들어오면 여기에 나타나요.", "easy.orders.done": "완료", "easy.orders.now": "지금 할 일", "easy.orders.chip_invoice": "송장 등록 필요",
+    "easy.orders.empty_title": "주문이 없어요", "easy.orders.empty_sub": "쿠팡에서 새 주문이 들어오면 여기에 나타나요.", "easy.orders.done": "완료", "easy.orders.now": "지금 단계", "easy.orders.chip_invoice": "송장 등록 필요",
     "easy.orders.head_sub": "쿠팡 주문 {id} · {time}",
     "easy.step.ordered": "주문", "easy.step.supplier_order": "발주", "easy.step.supplier_shipped": "발송", "easy.step.invoice": "송장", "easy.step.delivered": "도착",
     "easy.next.register_invoice": "송장 등록", "easy.next.order_from_supplier": "공급처에 주문", "easy.next.wait_supplier_shipment": "발송 기다림", "easy.next.check_coupang_order": "주문 정보 확인", "easy.next.wait_delivery": "배송 기다림", "easy.next.done": "완료",
@@ -187,7 +187,7 @@ window.HOMEZ_EASY_TEXTS = {
 
     "easy.orders.lead": "See how far each order has come and what to do next.", "easy.orders.tab_todo": "My tasks", "easy.orders.tab_done": "Finished",
     "easy.orders.sum_todo": "My tasks", "easy.orders.sum_shipping": "Shipping", "easy.orders.sum_done": "Finished",
-    "easy.orders.empty_title": "No orders", "easy.orders.empty_sub": "New Coupang orders appear here.", "easy.orders.done": "Done", "easy.orders.now": "Do this now", "easy.orders.chip_invoice": "Invoice needed",
+    "easy.orders.empty_title": "No orders", "easy.orders.empty_sub": "New Coupang orders appear here.", "easy.orders.done": "Done", "easy.orders.now": "Current step", "easy.orders.chip_invoice": "Invoice needed",
     "easy.orders.head_sub": "Coupang order {id} · {time}",
     "easy.step.ordered": "Order", "easy.step.supplier_order": "Supplier", "easy.step.supplier_shipped": "Shipped", "easy.step.invoice": "Invoice", "easy.step.delivered": "Arrived",
     "easy.next.register_invoice": "Register invoice", "easy.next.order_from_supplier": "Order from supplier", "easy.next.wait_supplier_shipment": "Wait for shipment", "easy.next.check_coupang_order": "Check order info", "easy.next.wait_delivery": "Wait for delivery", "easy.next.done": "Done",
