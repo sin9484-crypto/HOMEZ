@@ -7,7 +7,7 @@
 
 window.HOMEZ_EASY_TEXTS = {
   "ko-KR": {
-    "easy.won": "원", "easy.times": "{n}회", "easy.times_short": "회", "easy.count": "{n}건", "easy.open": "열기", "easy.error": "처리하지 못했어요. 잠시 뒤 다시 해 주세요.",
+    "easy.won": "원", "easy.orders.qty_n": "수량 {n}", "easy.times": "{n}회", "easy.times_short": "회", "easy.count": "{n}건", "easy.open": "열기", "easy.error": "처리하지 못했어요. 잠시 뒤 다시 해 주세요.",
     "easy.nav.aria": "주요 메뉴", "easy.nav.today": "오늘 할 일", "easy.nav.products": "상품", "easy.nav.orders": "주문·배송", "easy.nav.money": "정산·수익",
     "easy.nav.approvals": "승인 센터", "easy.nav.more": "더보기 · 설정", "easy.nav.help": "도움말",
     "easy.menu_turn_off": "쉬운 보기 끄기(기존 화면)", "easy.menu_turn_on": "쉬운 보기 켜기",
@@ -105,7 +105,7 @@ window.HOMEZ_EASY_TEXTS = {
     "easy.more.switch_title": "쉬운 보기", "easy.more.switch_sub": "끄면 예전 메뉴 구성(고급 보기)으로 돌아가요. 계정 메뉴에서 다시 켤 수 있어요.", "easy.more.switch_off": "쉬운 보기 끄기"
   },
   "en-US": {
-    "easy.won": " KRW", "easy.times": "{n} times", "easy.times_short": "x", "easy.count": "{n}", "easy.open": "Open", "easy.error": "That did not work. Please try again in a moment.",
+    "easy.won": " KRW", "easy.orders.qty_n": "Qty {n}", "easy.times": "{n} times", "easy.times_short": "x", "easy.count": "{n}", "easy.open": "Open", "easy.error": "That did not work. Please try again in a moment.",
     "easy.nav.aria": "Main menu", "easy.nav.today": "To do today", "easy.nav.products": "Products", "easy.nav.orders": "Orders & shipping", "easy.nav.money": "Settlement & profit",
     "easy.nav.approvals": "Approval center", "easy.nav.more": "More · Settings", "easy.nav.help": "Help",
     "easy.menu_turn_off": "Turn off Easy view (classic screens)", "easy.menu_turn_on": "Turn on Easy view",

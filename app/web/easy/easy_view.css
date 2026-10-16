@@ -46,7 +46,7 @@ body.easy-view #ez-side { display: flex; }
 .ez-nav-spacer { flex: 1; }
 .ez-nav.ez-sub { font-weight: 500; font-size: 15px; }
 
-body.easy-view .topbar { height: 66px; border-bottom: 1px solid var(--ez-line); background: #fff; }
+body.easy-view .topbar { min-height: 66px; height: auto; border-bottom: 1px solid var(--ez-line); background: #fff; }
 body.easy-view #badge-version, body.easy-view #badge-schema, body.easy-view #badge-conn { display: none; }
 body.easy-view #badge-mode, body.easy-view #badge-estop { font-weight: 700; }
 body.easy-view .topbar-search input { background: #F7F8FA; border-radius: 8px; }
@@ -72,9 +72,9 @@ body.easy-view .view-root { background: #fff; }
 .ez-summary > div:last-child { border-right: 0; }
 .ez-summary b { font-size: 21px; margin-left: 6px; }
 .ez-c-orange { color: #D97706; } .ez-c-blue { color: var(--ez-blue); } .ez-c-red { color: var(--ez-red); } .ez-c-green { color: var(--ez-g); }
-.ez-layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 0; margin-top: 4px; }
+.ez-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 0; margin-top: 4px; }
 .ez-layout.ez-no-panel { grid-template-columns: minmax(0, 1fr); }
-.ez-main { min-width: 0; padding-right: 22px; }
+.ez-main { min-width: 0; padding-right: 22px; overflow-x: auto; }
 .ez-panel { border-left: 1px solid var(--ez-line); padding: 8px 4px 8px 24px; min-width: 0; }
 .ez-panel h2 { font-size: 20px; font-weight: 800; margin: 0; }
 .ez-sec { font-size: 18px; font-weight: 800; margin: 24px 0 8px; display: flex; align-items: baseline; gap: 10px; }
@@ -205,9 +205,14 @@ dialog.ez-dialog::backdrop { background: rgba(20, 24, 30, .45); }
 .ez-dialog input, .ez-dialog select { width: 100%; padding: 9px 12px; border: 1px solid #CBD2D9; border-radius: 6px; font: inherit; }
 .ez-dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
+/* 중간 폭(노트북 작은 창): 상세 패널을 목록 아래로 내려 표와 겹치지 않게 한다 */
+@media (max-width: 1280px) {
+  .ez-layout { grid-template-columns: minmax(0, 1fr); }
+  .ez-main { padding-right: 0; }
+  .ez-panel { border-left: 0; border-top: 1px solid var(--ez-line); padding: 18px 0 0; margin-top: 18px; }
+}
 /* ---------- 좁은 화면(모바일): 아래 탭 + 한 열 ---------- */
 @media (max-width: 860px) {
-  body.easy-view .sidenav { display: none; }
   body.easy-view.ez-mobile-tabs #ez-bottom { display: grid; }
   body.easy-view .view-root { padding-bottom: 84px; }
   .ez-layout { grid-template-columns: minmax(0, 1fr); }

@@ -108,6 +108,12 @@
   }
 
   // 같은 화면 안에서 항목 선택·표시를 다시 그릴 때 쓰는 작은 도우미
+  // 상세 패널이 목록 아래로 내려가 있는 폭(좁은 창·모바일)에서는, 행을 눌렀을 때 패널이 보이게 내려 준다.
+  function revealPanel(panel) {
+    if (!panel || !panel.parentElement || typeof panel.scrollIntoView !== "function") return;
+    if (panel.offsetWidth >= panel.parentElement.offsetWidth - 2) panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+
   function bindRows(root, selector, handler) {
     root.querySelectorAll(selector).forEach((row) => {
       row.addEventListener("click", (event) => {
@@ -423,7 +429,7 @@
         B.lwHydrateThumbs($("ez-today-panel"));
         $("ez-today-panel").querySelector("[data-ez-panel-run]").addEventListener("click", () => row.action.run());
       };
-      bindRows(main, "tbody tr", select);
+      bindRows(main, "tbody tr", (key) => { select(key); revealPanel($("ez-today-panel")); });
       main.querySelectorAll("[data-ez-run]").forEach((btn) => btn.addEventListener("click", () => {
         const row = visible.find((r) => r.key === btn.dataset.ezRun);
         if (row) row.action.run();
@@ -461,7 +467,10 @@
     try {
       [wizards, today] = await Promise.all([api("/listing-wizards"), api("/easy-view/today").catch(() => null)]);
     } catch (err) { errorBox(root, err); return; }
-    const list = (Array.isArray(wizards) ? wizards : (wizards && wizards.items) || []).filter((w) => !w.deleted_at);
+    const allWizards = (Array.isArray(wizards) ? wizards : (wizards && wizards.items) || []).filter((w) => !w.deleted_at);
+    // 같은 상품을 여러 번 올려 본 이력은 숨기고 "지금 판매 중인" 위저드만 한 건씩 보여 준다(이력은 지우지 않는다).
+    const currentIds = today && Array.isArray(today.selling_wizard_ids) ? new Set(today.selling_wizard_ids) : null;
+    const list = allWizards.filter((w) => !currentIds || w.status !== "SUCCEEDED" || currentIds.has(w.id));
     S.wizards = list;
     const todoByWizard = new Set(((today && today.outbound_days_todo) || []).map((p) => p.wizard_id));
     const tab = S.selected.productTab || "OPEN";
@@ -616,7 +625,11 @@
   function stepDetailText(step) {
     if (step.state === "now") return T("easy.orders.now");
     if (!step.detail) return "";
-    if (step.key === "ordered") return B.fmtDate(step.detail).slice(5, 11).trim();
+    if (step.key === "ordered") {
+      const full = B.fmtDate(step.detail);
+      const m = String(full).match(/\d{4}\.\s*(\d{1,2}\.\s*\d{1,2}\.)/);
+      return m ? m[1] : String(full);
+    }
     return String(step.detail);
   }
 
@@ -651,7 +664,7 @@
     main.innerHTML = `<table class="ez-table"><thead><tr><th>${esc(T("easy.col.order"))}</th><th>${esc(T("easy.col.qty"))}</th><th>${esc(T("easy.col.step"))}</th><th>${esc(T("easy.col.next"))}</th></tr></thead>
       <tbody>${visible.map((o) => `<tr data-key="${o.order_id}" tabindex="0">
         <td><span class="ez-cell"><span class="ez-thumb">${icon("bag")}</span><span><b>${esc(o.channel_order_id)}</b><small>${esc(o.product_name)} · ${esc(o.buyer_masked)}</small></span></span></td>
-        <td class="ez-num">${o.quantity || 1}</td>
+        <td class="ez-num">${esc(T("easy.orders.qty_n", { n: o.quantity || 1 }))}</td>
         <td>${stepBadgeChip(o)}<div class="ez-faint ez-num" style="font-size:12px;margin-top:4px">${o.now_step} / 5</div></td>
         <td><button type="button" class="ez-btn ${o.next_action.code === "REGISTER_INVOICE" ? "" : "line"} sm" data-ez-stop data-ez-ord="${o.order_id}">${esc(T(`easy.next.${o.next_action.code.toLowerCase()}`))}</button></td></tr>`).join("")}</tbody></table>`;
     const select = (key) => {
@@ -659,8 +672,8 @@
       main.querySelectorAll("tbody tr").forEach((tr) => tr.classList.toggle("hl", tr.dataset.key === String(key)));
       renderOrderPanel(visible.find((o) => String(o.order_id) === String(key)) || visible[0]);
     };
-    bindRows(main, "tbody tr", select);
-    main.querySelectorAll("[data-ez-ord]").forEach((btn) => btn.addEventListener("click", () => select(btn.dataset.ezOrd)));
+    bindRows(main, "tbody tr", (key) => { select(key); revealPanel($("ez-orders-panel")); });
+    main.querySelectorAll("[data-ez-ord]").forEach((btn) => btn.addEventListener("click", () => { select(btn.dataset.ezOrd); revealPanel($("ez-orders-panel")); }));
     select(visible.some((o) => o.order_id === S.selected.orderId) ? S.selected.orderId : visible[0].order_id);
   }
 

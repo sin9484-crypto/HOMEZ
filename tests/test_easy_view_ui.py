@@ -238,6 +238,23 @@ class StyleAndServingTests(unittest.TestCase):
         for forbidden in ("login-gate", "confirm-dialog", "#shell {"):
             self.assertNotIn(forbidden, CSS)
 
+    def test_the_detail_panel_never_overlaps_the_list(self):
+        # 2026-10-16 실제 화면 확인: 1280px 폭에서 표(720px)가 오른쪽 패널 위로 넘쳤다.
+        self.assertIn("@media (max-width: 1280px)", CSS)
+        self.assertIn("overflow-x: auto", re.search(r"\.ez-main \{[^}]*\}", CSS).group(0))
+        self.assertIn("function revealPanel(", JS)
+
+    def test_the_classic_drawer_stays_reachable_on_phones(self):
+        # 2026-10-16: 모바일에서 사이드바를 숨기면 더보기·설정으로 갈 길이 없었다. 기존 서랍 메뉴를 막지 않는다.
+        mobile = CSS.split("@media (max-width: 860px) {")[1].split("\n}\n")[0]
+        self.assertNotIn(".sidenav", mobile)
+
+    def test_the_top_bar_may_wrap_on_narrow_screens(self):
+        self.assertNotRegex(CSS, r"body\.easy-view \.topbar \{[^}]*[^-]height: 66px")
+
+    def test_the_order_step_date_is_cut_by_pattern_not_by_position(self):
+        self.assertNotIn("fmtDate(step.detail).slice(", JS)
+
     def test_motion_is_reduced_for_people_who_ask(self):
         self.assertIn("prefers-reduced-motion", CSS)
 

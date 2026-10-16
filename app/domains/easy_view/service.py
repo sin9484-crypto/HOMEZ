@@ -102,6 +102,8 @@ class EasyViewService:
         return {
             "pipeline": pipeline,
             "outbound_days_todo": self._outbound_days_todo(company_id, submitted),
+            # 같은 상품을 여러 번 시도한 이력이 있어도 화면에는 상품당 한 건만 보이도록 "현재" 위저드 번호를 준다.
+            "selling_wizard_ids": [p["wizard_id"] for p in submitted if p["wizard_id"] is not None],
             "invoice_todo": [
                 {
                     "task_id": o["task"]["id"], "order_id": o["order_id"], "channel_order_id": o["channel_order_id"],

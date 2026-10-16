@@ -294,6 +294,16 @@ class TodayTests(Base_):
         self.submission(10, "16400000001")
         self.assertEqual(self.todo(), [])
 
+    def test_repeated_attempts_for_one_product_show_only_the_current_wizard(self):
+        for wizard_id in (1, 2, 3):
+            self.listing_wizard(wizard_id, 10)
+        self.listing_wizard(4, 11)
+        self.submission(10, "16400000001")
+        self.submission(11, "16400000002")
+        today = self.svc.build_today(1)
+        self.assertEqual(sorted(today["selling_wizard_ids"]), [3, 4])
+        self.assertEqual(today["pipeline"]["selling"], 2)
+
     def test_other_companies_are_invisible(self):
         self.listing_wizard(1, 10, company=2)
         self.submission(10, "16400000001", company=2)
