@@ -32,17 +32,19 @@
     shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3zM9 12l2 2 4-4"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.6a7 7 0 00-2 1.2l-2.3-.9-2 3.4 2 1.5A7 7 0 005 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-.9a7 7 0 002 1.2l.4 2.6h4l.4-2.6a7 7 0 002-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/>',
     help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 114 2c-.9.6-1.5 1-1.5 2M12 17v.01"/>',
+    chart: '<path d="M5 20V11M12 20V4M19 20v-6"/>',
     bag: '<path d="M6 7h12l1 13H5zM9 7a3 3 0 016 0"/>',
     image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/>',
   };
   const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
 
-  const EASY_VIEWS = new Set(["easy-today", "easy-products", "easy-product-detail", "easy-orders", "easy-money", "easy-approvals", "easy-more"]);
+  const EASY_VIEWS = new Set(["easy-today", "easy-products", "easy-product-detail", "easy-orders", "easy-money", "easy-analysis", "easy-approvals", "easy-more"]);
   const NAV = [
     { id: "today", view: "easy-today", icon: "today", key: "easy.nav.today" },
     { id: "products", view: "easy-products", icon: "box", key: "easy.nav.products" },
     { id: "orders", view: "easy-orders", icon: "truck", key: "easy.nav.orders" },
     { id: "money", view: "easy-money", icon: "money", key: "easy.nav.money" },
+    { id: "analysis", view: "easy-analysis", icon: "chart", key: "easy.nav.analysis" },
     { sep: true },
     { id: "approvals", view: "easy-approvals", icon: "shield", key: "easy.nav.approvals", badge: true },
     { spacer: true },
@@ -50,7 +52,7 @@
     { id: "help", view: "guides", icon: "help", key: "easy.nav.help", sub: true },
   ];
   // 기존 화면이 속한 업무 → 쉬운 보기 메뉴 강조
-  const SECTION_TO_NAV = { today: "today", products: "products", orders: "orders", money: "money", analysis: "more", settings: "more" };
+  const SECTION_TO_NAV = { today: "today", products: "products", orders: "orders", money: "money", analysis: "analysis", settings: "more" };
 
   const S = { enabled: false, badge: 0, wizards: [], ordersCache: null, selected: {} };
 
@@ -1008,6 +1010,127 @@
   }
 
   // =========================================================
+  // 분석(트렌드·신상품·판단·AI 학습을 한 화면에서) — 읽기 전용, 기존 화면의 데이터를 그대로 쓴다
+  // =========================================================
+
+  const REC_KEY = {
+    INSUFFICIENT_DATA: "decision.recommendation.insufficient_data", REVIEW_REQUIRED: "decision.recommendation.review_required",
+    RECOMMEND_REJECT: "decision.recommendation.recommend_reject", RECOMMEND_HOLD: "decision.recommendation.recommend_hold",
+    RECOMMEND_APPROVE: "decision.recommendation.recommend_approve",
+  };
+  const REC_CHIP = { RECOMMEND_APPROVE: "ok", RECOMMEND_REJECT: "red", RECOMMEND_HOLD: "wait", REVIEW_REQUIRED: "blue", INSUFFICIENT_DATA: "gray" };
+  const CAND_SEG = { DISCOVERED: 1, ANALYZED: 2, RECOMMENDED: 3, APPROVED: 2, HELD: 4, REJECTED: 5, EXPIRED: 4 };
+  const AI_CHIP = { DRAFT: "gray", OFFLINE_EVALUATED: "blue", REGRESSION_COMPARED: "blue", APPROVED: "ok", REJECTED: "red" };
+
+  function tryT(key, fallback) {
+    const text = T(key);
+    return text === key ? fallback : text;
+  }
+
+  // 0~1 점수를 막대와 숫자로(높을수록 초록, 낮을수록 주황·빨강). 점수가 없으면 "점수 없음".
+  function scoreCell(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return `<span class="ez-faint">${esc(T("easy.an.no_score"))}</span>`;
+    const v = Math.max(0, Math.min(1, Number(value)));
+    const tone = v >= 0.66 ? "" : (v >= 0.33 ? "mid" : "neg");
+    return `<div class="ez-score"><div class="ez-num">${v.toFixed(2)}</div><div class="ez-bar ${tone}"><i style="width:${Math.round(v * 100)}%"></i></div></div>`;
+  }
+
+  async function loadAnalysis() {
+    const root = $("ez-root-easy-analysis");
+    root.innerHTML = loadingHtml();
+    const [cRes, dRes, aRes] = await Promise.allSettled([
+      api("/product-candidates?limit=200"), api("/decisions/pending-review?limit=200"), api("/ai-learning/model-candidates"),
+    ]);
+    if (cRes.status === "rejected" && dRes.status === "rejected" && aRes.status === "rejected") { errorBox(root, cRes.reason); return; }
+    const asList = (res) => (res.status === "fulfilled" ? (Array.isArray(res.value) ? res.value : (res.value && res.value.items) || []) : null);
+    const cands = asList(cRes), decisions = asList(dRes), models = asList(aRes);
+    const partial = cands === null || decisions === null || models === null;
+    const byId = new Map((cands || []).map((c) => [c.id, c]));
+    const nameOf = (id) => (byId.get(id) && byId.get(id).product_name) || T("easy.an.unknown_product", { id });
+    const count = (list, pred) => (list ? list.filter(pred).length : null);
+    const dash = (n) => (n === null ? "—" : n);
+
+    const discovered = count(cands, (c) => c.status === "DISCOVERED"), analyzed = count(cands, (c) => c.status === "ANALYZED");
+    const trendRows = (cands || []).filter((c) => c.trend_score !== null && c.trend_score !== undefined).sort((a, b) => b.trend_score - a.trend_score);
+    const newRows = (cands || []).filter((c) => c.is_new_product === true);
+    const tab = S.selected.analysisTab || "CAND";
+
+    // 상태별 분포(가로 막대): 같은 색 번호의 상태는 한 덩어리로 합친다.
+    const dist = {};
+    (cands || []).forEach((c) => {
+      const k = CAND_SEG[c.status] || 4;
+      dist[k] = dist[k] || { n: 0, names: new Set() };
+      dist[k].n += 1;
+      dist[k].names.add(tryT(`candidates.status.${String(c.status).toLowerCase()}`, c.status));
+    });
+    const segs = Object.keys(dist).sort();
+    const total = (cands || []).length;
+
+    const tabs = [["CAND", "easy.an.tab_cand", total], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
+      ["DEC", "easy.an.tab_dec", (decisions || []).length], ["AI", "easy.an.tab_ai", (models || []).length]];
+
+    root.innerHTML = `
+      <div class="ez-head"><div><h1>${esc(T("easy.nav.analysis"))}</h1><div class="ez-lead">${esc(T("easy.an.lead"))}</div></div></div>
+      ${partial ? `<div class="ez-note warn"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(T("easy.an.partial"))}</div></div>` : ""}
+      <div class="ez-cards">
+        <div class="ez-card accent"><div class="k">${esc(T("easy.an.k_cand"))}</div><div class="v">${dash(cands ? total : null)}</div><div class="s">${esc(T("easy.an.k_cand_s", { d: dash(discovered), a: dash(analyzed) }))}</div></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.an.k_new"))}</div><div class="v">${dash(cands ? newRows.length : null)}</div><div class="s">${esc(T("easy.an.k_new_s"))}</div></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.an.k_dec"))}</div><div class="v ${decisions && decisions.length ? "ez-c-orange" : ""}">${dash(decisions ? decisions.length : null)}</div><div class="s">${esc(T("easy.an.k_dec_s"))}</div></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.an.k_ai"))}</div><div class="v">${dash(models ? models.length : null)}</div><div class="s">${esc(T("easy.an.k_ai_s"))}</div></div>
+      </div>
+      ${total ? `<div class="ez-sec">${esc(T("easy.an.dist"))}<small>${esc(T("easy.an.dist_sub"))}</small></div>
+        <div class="ez-stack" role="img" aria-label="${esc(T("easy.an.dist"))}">${segs.map((k) => `<i class="ez-seg-${k}" style="width:${(dist[k].n / total) * 100}%"></i>`).join("")}</div>
+        <div class="ez-legend">${segs.map((k) => `<span><u class="ez-seg-${k}" aria-hidden="true"></u>${esc([...dist[k].names].join(" · "))}<b class="ez-num">${dist[k].n}</b></span>`).join("")}</div>` : ""}
+      <div class="ez-tabs" role="tablist" style="margin-top:22px">${tabs.map(([id, key, n]) =>
+        `<button type="button" class="ez-tab" role="tab" data-ez-atab="${id}" aria-selected="${tab === id}">${esc(T(key))} <span class="ez-num">${n}</span></button>`).join("")}</div>
+      <div id="ez-an-list"></div>
+      <div class="ez-sec">${esc(T("easy.an.more_title"))}<small>${esc(T("easy.an.more_sub"))}</small></div>
+      <div class="ez-groups">${[["trend", "easy.an.tab_trend"], ["new-product", "easy.an.tab_new"], ["decision", "easy.an.tab_dec"], ["ai-learning", "easy.an.tab_ai"]].map(([v, k]) =>
+        `<div class="ez-group"><h3>${esc(T(k))}</h3><button type="button" data-ez-go="${v}">${esc(T("easy.an.open_old"))} ›</button></div>`).join("")}</div>`;
+
+    root.querySelectorAll("[data-ez-atab]").forEach((btn) => btn.addEventListener("click", () => { S.selected.analysisTab = btn.dataset.ezAtab; loadAnalysis(); }));
+    root.querySelectorAll("[data-ez-go]").forEach((btn) => btn.addEventListener("click", () => B.navigateTo(btn.dataset.ezGo)));
+
+    const host = $("ez-an-list");
+    const candName = (c) => `<span class="ez-cell"><span class="ez-thumb">${icon("bag")}</span><span><b>${esc(c.product_name)}</b><small>${esc(c.market || "")}</small></span></span>`;
+    const candChip = (c) => `<span class="ez-chip ${c.status === "APPROVED" || c.status === "ANALYZED" ? "ok" : (c.status === "REJECTED" ? "red" : "gray")}">${esc(tryT(`candidates.status.${String(c.status).toLowerCase()}`, c.status))}</span>`;
+    const th = (...keys) => `<thead><tr>${keys.map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead>`;
+    const candTable = (rows, headKeys, cells, emptyKeys) => {
+      if (!rows.length) { host.innerHTML = emptyHtml(emptyKeys[0], emptyKeys[1]); return; }
+      host.innerHTML = `<table class="ez-table">${th(...headKeys)}<tbody>${rows.map((r) => `<tr data-key="${r.id}" tabindex="0">${cells(r)}</tr>`).join("")}</tbody></table>`;
+      bindRows(host, "tbody tr", (key) => B.navigateTo("candidate-detail", { id: Number(key) }));
+    };
+
+    if (tab === "CAND") {
+      candTable((cands || []).slice().sort((a, b) => (b.trend_score || 0) - (a.trend_score || 0) || b.id - a.id),
+        ["easy.col.product", "easy.an.col_trend", "easy.col.state"], (c) => `<td>${candName(c)}</td><td>${scoreCell(c.trend_score)}</td><td>${candChip(c)}</td>`, ["easy.an.empty_cand", "easy.an.empty_cand_s"]);
+    } else if (tab === "TREND") {
+      candTable(trendRows, ["easy.col.product", "easy.an.col_trend", "easy.an.col_conf", "easy.col.state"],
+        (c) => `<td>${candName(c)}</td><td>${scoreCell(c.trend_score)}</td><td>${scoreCell(c.confidence)}</td><td>${candChip(c)}</td>`, ["easy.an.empty_trend", "easy.an.empty_trend_s"]);
+    } else if (tab === "NEW") {
+      candTable(newRows, ["easy.col.product", "easy.an.col_release", "easy.an.col_novel", "easy.col.state"],
+        (c) => `<td>${candName(c)}</td><td class="ez-num">${esc(c.release_date || "—")}</td><td>${scoreCell(c.novelty_score)}</td><td>${candChip(c)}</td>`, ["easy.an.empty_new", "easy.an.empty_new_s"]);
+    } else if (tab === "DEC") {
+      const rows = decisions || [];
+      if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_dec", "easy.an.empty_dec_s"); return; }
+      host.innerHTML = `<table class="ez-table">${th("easy.col.product", "easy.an.col_score", "easy.an.col_conf", "easy.an.col_rec", "easy.an.col_block")}<tbody>${rows.map((d) => `<tr data-key="${d.id}" tabindex="0">
+        <td><span class="ez-cell"><span class="ez-thumb">${icon("bag")}</span><span><b>${esc(nameOf(d.candidate_id))}</b><small>#${d.candidate_id}</small></span></span></td>
+        <td>${scoreCell(d.total_score)}</td><td>${scoreCell(d.confidence)}</td>
+        <td><span class="ez-chip ${REC_CHIP[d.recommendation] || "gray"}">${esc(REC_KEY[d.recommendation] ? T(REC_KEY[d.recommendation]) : String(d.recommendation))}</span></td>
+        <td>${d.blocked_by_safety ? `<span class="ez-chip red">${esc(T("easy.an.blocked"))}</span>` : '<span class="ez-faint">—</span>'}</td></tr>`).join("")}</tbody></table>`;
+      bindRows(host, "tbody tr", (key) => B.navigateTo("decision-detail", { id: Number(key) }));
+    } else {
+      const rows = models || [];
+      if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_ai", "easy.an.empty_ai_s"); return; }
+      host.innerHTML = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.an.ai_note"))}</div></div>
+        <table class="ez-table">${th("easy.col.product", "easy.an.col_ver", "easy.an.col_sample", "easy.col.state")}<tbody>${rows.map((m) => `<tr data-key="${m.id}" tabindex="0">
+        <td><b>${esc(m.name)}</b></td><td class="ez-num">${esc(m.version)}</td><td class="ez-num">${m.sample_size_used === null || m.sample_size_used === undefined ? "—" : esc(m.sample_size_used)}</td>
+        <td><span class="ez-chip ${AI_CHIP[m.status] || "gray"}">${esc(tryT(`ail.status.${String(m.status).toLowerCase()}`, m.status))}</span></td></tr>`).join("")}</tbody></table>`;
+      bindRows(host, "tbody tr", () => B.navigateTo("ai-learning"));
+    }
+  }
+
+  // =========================================================
   // 설치
   // =========================================================
 
@@ -1016,6 +1139,7 @@
   B.registerView("easy-product-detail", loadProductDetail);
   B.registerView("easy-orders", loadOrders);
   B.registerView("easy-money", loadMoney);
+  B.registerView("easy-analysis", loadAnalysis);
   B.registerView("easy-approvals", loadApprovals);
   B.registerView("easy-more", loadMore);
   B.hooks.shellShown.push(onShellShown);

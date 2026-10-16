@@ -210,7 +210,7 @@ class ShellTests(unittest.TestCase):
         self.assertIn("display: none !important", CSS)
 
     def test_every_screen_has_a_container_and_a_loader(self):
-        views = ["easy-today", "easy-products", "easy-product-detail", "easy-orders", "easy-money", "easy-approvals", "easy-more"]
+        views = ["easy-today", "easy-products", "easy-product-detail", "easy-orders", "easy-money", "easy-analysis", "easy-approvals", "easy-more"]
         for view in views:
             self.assertIn(f'"{view}"', JS)
             self.assertIn(f'B.registerView("{view}"', JS)
@@ -219,6 +219,44 @@ class ShellTests(unittest.TestCase):
         body = function_body("refreshBadge")
         self.assertIn("ext.pending", body)
         self.assertIn("outbound_days_todo", body)
+
+
+class AnalysisScreenTests(unittest.TestCase):
+
+    def test_the_analysis_screen_only_reads_and_never_calls_outside(self):
+        body = function_body("loadAnalysis")
+        for forbidden in ('method: "POST"', 'method: "PUT"', 'method: "DELETE"', "coupang", "onch", "/send", "/trigger"):
+            self.assertNotIn(forbidden, body, forbidden)
+        for path in ("/product-candidates?limit=200", "/decisions/pending-review?limit=200", "/ai-learning/model-candidates"):
+            self.assertIn(f'"{path}"', body)
+
+    def test_one_failing_source_does_not_hide_the_rest(self):
+        body = function_body("loadAnalysis")
+        self.assertIn("Promise.allSettled", body)
+        self.assertIn("easy.an.partial", body)
+
+    def test_the_labels_it_borrows_from_the_classic_screens_exist_in_both_languages(self):
+        keys = set(re.findall(r'"(decision\.recommendation\.[a-z_]+)"', JS))
+        keys |= {f"candidates.status.{s}" for s in ("discovered", "analyzed", "recommended", "approved", "held", "rejected", "expired")}
+        keys |= {f"ail.status.{s}" for s in ("draft", "offline_evaluated", "regression_compared", "approved", "rejected")}
+        self.assertGreaterEqual(len(keys), 17)
+        for key in sorted(keys):
+            self.assertIn(f'"{key}":', KO, key)
+            self.assertIn(f'"{key}":', EN, key)
+
+    def test_rows_open_the_existing_detail_screens(self):
+        body = function_body("loadAnalysis")
+        for view in ('"candidate-detail"', '"decision-detail"', '"ai-learning"'):
+            self.assertIn(view, body)
+
+    def test_the_menu_highlights_analysis_for_the_classic_analysis_screens(self):
+        self.assertIn('analysis: "analysis"', JS)
+        self.assertIn('id: "analysis", view: "easy-analysis"', JS)
+
+    def test_a_missing_score_is_shown_as_no_score_not_zero(self):
+        body = function_body("scoreCell")
+        self.assertIn("easy.an.no_score", body)
+        self.assertLess(body.index("easy.an.no_score"), body.index("toFixed"))
 
 
 class StyleAndServingTests(unittest.TestCase):

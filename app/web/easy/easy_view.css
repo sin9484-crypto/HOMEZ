@@ -183,7 +183,14 @@ body.easy-view .view-root { background: #fff; }
 .ez-card .s { font-size: 12.5px; color: var(--ez-faint); margin-top: 2px; }
 .ez-card.accent { border-color: var(--ez-g-line); background: var(--ez-g-soft); }
 .ez-bar { height: 8px; border-radius: 4px; background: #E9EBEE; overflow: hidden; min-width: 90px; } .ez-bar i { display: block; height: 100%; background: var(--ez-g); border-radius: 4px; }
-.ez-bar.neg i { background: var(--ez-red); }
+.ez-bar.neg i { background: var(--ez-red); } .ez-bar.mid i { background: var(--ez-orange); }
+.ez-stack { display: flex; height: 16px; border-radius: 8px; overflow: hidden; background: #E9EBEE; margin-top: 14px; }
+.ez-stack i { display: block; height: 100%; min-width: 4px; } .ez-stack i + i { border-left: 2px solid #fff; }
+.ez-seg-1 { background: var(--ez-blue); } .ez-seg-2 { background: var(--ez-g); } .ez-seg-3 { background: var(--ez-orange); } .ez-seg-4 { background: #8C94A0; } .ez-seg-5 { background: var(--ez-red); }
+.ez-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; font-size: 14px; color: var(--ez-muted); }
+.ez-legend u { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; text-decoration: none; }
+.ez-legend b { color: var(--ez-ink); margin-left: 4px; }
+.ez-score { min-width: 130px; } .ez-score .ez-num { font-weight: 700; margin-bottom: 4px; font-size: 14px; }
 
 /* 더보기 */
 .ez-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
