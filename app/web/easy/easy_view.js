@@ -338,6 +338,25 @@
       facts: [[T("easy.fact.order"), u.channel_order_id], [T("easy.col.qty"), String(u.quantity)]], detail: T("easy.today.unres_why"),
     }));
 
+    // 2-c) 배송 이후 — 쿠팡에 들어온 반품 요청(끝나기 전)과 답변이 필요한 문의. HOMEZ는 읽어 알려 줄 뿐 처리는 쿠팡 WING에서 한다.
+    const afterSales = (today && today.after_sales) || {};
+    (afterSales.returns_open || []).forEach((r) => rows.push({
+      key: `return:${r.id}`, group: "CHECK", title: T("easy.today.return_title"), sub: T("easy.today.return_sub"),
+      product: { name: r.o || "—", sub: T("easy.today.return_receipt", { id: r.id }), thumb: null, icon: "bag" },
+      chip: chip("red", tryT(`easy.rs.${String(r.s).toLowerCase()}`, String(r.s || ""))),
+      action: { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") },
+      facts: [[T("easy.fact.order"), r.o || "—"], [T("easy.today.return_state"), tryT(`easy.rs.${String(r.s).toLowerCase()}`, String(r.s || ""))],
+        [T("easy.today.return_reason"), r.rc || "—"], [T("easy.today.return_fault"), tryT(`easy.fault.${String(r.f).toLowerCase()}`, String(r.f || "—"))]],
+      detail: T("easy.today.return_detail"),
+    }));
+    (afterSales.inquiries_open || []).forEach((q) => rows.push({
+      key: `inq:${q.entity_id}`, group: "CHECK", title: T("easy.today.inq_title"), sub: T("easy.today.inq_sub"),
+      product: { name: q.o || "—", sub: T(q.k === "INQ_CALL" ? "easy.today.inq_call" : "easy.today.inq_online", { id: q.id }), thumb: null, icon: "bag" },
+      chip: chip("wait", T("easy.today.inq_unanswered")),
+      action: { label: T("easy.today.inq_action"), run: () => B.navigateTo("easy-orders") },
+      facts: [[T("easy.fact.order"), q.o || "—"]], detail: T("easy.today.inq_detail"),
+    }));
+
     // 3) 주문 자동 감지 상태 — 켜져 있지 않거나 실패하면 알린다(정상이면 아래 "지켜보는 일"에만 보인다)
     const health = collect && collect.health;
     if (health && health !== "OK" && health !== "WAITING") {
@@ -722,6 +741,7 @@
       <div class="ez-muted" style="font-size:14px;margin-top:2px">${esc(T("easy.orders.head_sub", { id: order.channel_order_id, time: maskedTime(order.ordered_at) }))}</div>
       ${progressHtml(order)}
       ${trackHtml(order)}
+      ${afterHtml(order)}
       ${action}`;
     const trackBtn = $("ez-track-now");
     if (trackBtn) trackBtn.addEventListener("click", () => trackNow(order));
@@ -748,6 +768,20 @@
       <div id="ez-track-result"></div>
       ${done ? "" : `<div style="margin-top:10px"><button type="button" class="ez-btn line" id="ez-track-now">${esc(T("easy.orders.track_now"))}</button>
         <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.orders.track_calls"))}</div></div>`}</div>`;
+  }
+
+  // 배송 이후(반품·문의): 이 주문에 대해 쿠팡이 알려 준 것. 10분마다 읽고, 처리는 쿠팡 WING에서 한다.
+  function afterHtml(order) {
+    const list = order.after_sales || [];
+    if (!order.task) return "";
+    const line = (e) => {
+      if (e.k === "RETURN") return [T("easy.after.return"), tryT(`easy.rs.${String(e.s).toLowerCase()}`, String(e.s || "")), e.rc ? ` · ${e.rc}` : ""];
+      return [T(e.k === "INQ_CALL" ? "easy.after.inq_call" : "easy.after.inq_online"), T(e.s === "ANSWERED" ? "easy.after.answered" : "easy.today.inq_unanswered"), ""];
+    };
+    const rows = list.length ? list.map((e) => { const [k, v, extra] = line(e); return `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v + extra)}</b></div>`; }).join("")
+      : `<div class="ez-muted" style="font-size:14px">${esc(T("easy.after.none"))}</div>`;
+    return `<div class="ez-block" style="margin-top:16px"><h3 style="margin:0 0 6px;font-size:17px">${esc(T("easy.after.title"))}</h3>${rows}
+      <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.after.note"))}</div></div>`;
   }
 
   async function trackNow(order) {
@@ -825,12 +859,22 @@
   // 정산·수익
   // =========================================================
 
+  // 쿠팡이 알려 준 정산 현황(읽기 전용): 지급 예정·지급 완료와 금액. 주문 당시 예상값과 다를 수 있다.
+  function settlementBlock(today) {
+    const list = (today && today.after_sales && today.after_sales.settlements) || [];
+    const rows = list.length ? `<table class="ez-table"><thead><tr><th>${esc(T("easy.settle.month"))}</th><th>${esc(T("easy.settle.type"))}</th><th>${esc(T("easy.settle.date"))}</th><th>${esc(T("easy.settle.sale"))}</th><th>${esc(T("easy.settle.final"))}</th><th>${esc(T("easy.col.state"))}</th></tr></thead>
+      <tbody>${list.map((s) => `<tr style="cursor:default"><td class="ez-num">${esc(s.id || "—")}</td><td>${esc(tryT(`easy.settle.type_${String(s.ty).toLowerCase()}`, String(s.ty || "—")))}</td><td class="ez-num">${esc(s.d || "—")}</td>
+        <td class="ez-num">${won(s.sale)}</td><td class="ez-num"><b>${won(s.fin)}</b></td><td><span class="ez-chip ${s.st === "DONE" ? "ok" : "wait"}">${esc(tryT(`easy.settle.st_${String(s.st).toLowerCase()}`, String(s.st || "—")))}</span></td></tr>`).join("")}</tbody></table>`
+      : `<div class="ez-muted" style="font-size:14px;margin:6px 0">${esc(T("easy.settle.none"))}</div>`;
+    return `<div class="ez-sec">${esc(T("easy.settle.title"))}<small>${esc(T("easy.settle.sub"))}</small></div>${rows}`;
+  }
+
   async function loadMoney() {
     const root = $("ez-root-easy-money");
     root.innerHTML = loadingHtml();
-    let tasks, wq;
+    let tasks, wq, today;
     try {
-      [tasks, wq] = await Promise.all([api("/purchase-tasks"), B.wq.fetchItems().catch(() => null)]);
+      [tasks, wq, today] = await Promise.all([api("/purchase-tasks"), B.wq.fetchItems().catch(() => null), api("/easy-view/today").catch(() => null)]);
     } catch (err) { errorBox(root, err); return; }
     const list = (Array.isArray(tasks) ? tasks : (tasks && tasks.items) || []).filter((t) => (t.source_order_id || 0) > 0);
     const num = (v) => (v === null || v === undefined ? 0 : Number(v));
@@ -852,6 +896,7 @@
         <div class="ez-card"><div class="k">${esc(T("easy.money.margin"))}</div><div class="v">${avg === null ? "—" : `${Math.round(avg * 10) / 10}%`}</div><div class="s">${esc(diffs === null ? T("easy.money.diff_unknown") : T("easy.money.diff_s", { n: diffs }))}</div></div>
       </div>
       <div class="ez-note info" style="margin-top:14px"><span class="ez-dot info">i</span><div>${esc(T("easy.money.note"))}</div></div>
+      ${settlementBlock(today)}
       <div class="ez-sec">${esc(T("easy.money.by_order"))}</div>
       ${list.length ? `<table class="ez-table"><thead><tr><th>${esc(T("easy.col.product"))}</th><th>${esc(T("easy.money.revenue"))}</th><th>${esc(T("easy.money.fee"))}</th><th>${esc(T("easy.money.profit"))}</th><th>${esc(T("easy.money.margin"))}</th></tr></thead>
         <tbody>${list.map((x) => `<tr style="cursor:default"><td><span class="ez-cell"><span class="ez-thumb">${icon("bag")}</span><span><b>${esc(x.product_title)}</b><small>#${x.source_order_id} · ${esc(B.taskStatusLabel(x.status))}</small></span></span></td>
@@ -912,7 +957,7 @@
           ${table(pendingRows, "easy.ap.pending_none")}
           <div class="ez-sec">${esc(T("easy.ap.active_title"))} <small>${esc(T("easy.count", { n: (ext.active || []).length }))}</small></div>
           ${table(activeRows, "easy.ap.active_none")}
-          ${installed ? `<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="ez-btn ghost" id="ez-ap-grant-detect">${esc(T("easy.ap.grant_detect"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-track">${esc(T("easy.ap.grant_track"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-custom">${esc(T("easy.ap.grant_custom"))}</button></div>` : ""}
+          ${installed ? `<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="ez-btn ghost" id="ez-ap-grant-detect">${esc(T("easy.ap.grant_detect"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-track">${esc(T("easy.ap.grant_track"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-after">${esc(T("easy.ap.grant_after"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-custom">${esc(T("easy.ap.grant_custom"))}</button></div>` : ""}
           <div class="ez-sec" id="ez-days-anchor">${esc(T("easy.ap.days_title"))}<small>${esc(T("easy.ap.days_sub"))}</small></div>
           <div id="ez-days-box">${todo.length ? todo.map((p) => `<div class="ez-block" style="margin-top:10px"><div class="ez-field" style="grid-template-columns:1fr auto"><div class="v">${esc(p.product_name)}<small>${esc(T("easy.today.coupang_no", { id: p.seller_product_id }))} · ${esc(p.saved_days ? T("easy.today.days_sub_saved", { days: p.saved_days }) : T("easy.today.days_sub_unset", { days: 1 }))}</small></div>
             <button type="button" class="ez-btn sm" data-ez-days="${esc(p.seller_product_id)}">${esc(T("easy.ap.days_check"))}</button></div><div id="ez-days-${esc(p.seller_product_id)}" style="padding:0 18px 12px"></div></div>`).join("") : `<div class="ez-empty">${esc(T("easy.ap.days_none"))}</div>`}</div>
@@ -942,6 +987,8 @@
     if (detect) detect.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "ORDER_DETECTION", mode: "STANDING", per_hour_limit: 14, hours: 24 }));
     const track = $("ez-ap-grant-track");
     if (track) track.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "ORDER_TRACKING", mode: "STANDING", per_hour_limit: 30, hours: 24 }));
+    const after = $("ez-ap-grant-after");
+    if (after) after.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "AFTER_SALES_CHECK", mode: "STANDING", per_hour_limit: 30, hours: 24 }));
     const custom = $("ez-ap-grant-custom");
     if (custom) custom.addEventListener("click", () => grantDialog(null));
     root.querySelectorAll("[data-ez-days]").forEach((btn) => btn.addEventListener("click", () => daysPreview(btn.dataset.ezDays)));
@@ -970,7 +1017,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>

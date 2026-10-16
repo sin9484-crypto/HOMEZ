@@ -26,6 +26,7 @@ from app.domains.order.collection_model import OrderChannelFulfillment
 from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
+from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
 from app.domains.purchase_task.constants import ChannelActionStatus
 from app.domains.purchase_task.constants import ChannelActionType
 from app.domains.purchase_task.constants import PurchaseTaskStatus
@@ -107,6 +108,7 @@ class EasyViewService:
             "outbound_days_todo": self._outbound_days_todo(company_id, submitted),
             # 같은 상품을 여러 번 시도한 이력이 있어도 화면에는 상품당 한 건만 보이도록 "현재" 위저드 번호를 준다.
             "unresolved_orders": unresolved,
+            "after_sales": self.build_after_sales(),
             "selling_wizard_ids": [p["wizard_id"] for p in submitted if p["wizard_id"] is not None],
             "invoice_todo": [
                 {
@@ -251,13 +253,42 @@ class EasyViewService:
                 attempts_ok.add(row.purchase_task_id)
         invoice_done = self._invoice_ledger(company_id)
 
+        events = self._after_sales_events()
+        by_order: dict[str, list[dict]] = {}
+        for event in events:
+            if event.get("o") and event.get("k") in ("RETURN", "INQ_ONLINE", "INQ_CALL"):
+                by_order.setdefault(str(event["o"]), []).append(event)
         result = []
         for order in orders:
-            result.append(self._order_row(
+            row = self._order_row(
                 order, items_by_order.get(order.id, []), fulfillments.get(order.id, []),
                 tasks_by_order.get(order.id, []), tracking, attempts_ok, invoice_done,
-            ))
+            )
+            row["after_sales"] = [self._public_event(e) for e in by_order.get(str(order.channel_order_id), [])]
+            result.append(row)
         return {"items": result}
+
+    # ------------------------------------------------------------
+    # 배송 이후(반품·민원·정산) — 감사 기록에 남은 쿠팡 이벤트를 읽기만 한다
+    # ------------------------------------------------------------
+
+    def _after_sales_events(self) -> list[dict]:
+        try:
+            return AfterSalesMonitorService.latest_events(self.db)
+        except Exception:  # noqa: BLE001 — audit_logs가 없는 환경 등에서는 비어 있는 것으로 본다
+            return []
+
+    @staticmethod
+    def _public_event(event: dict) -> dict:
+        return {k: event.get(k) for k in ("entity_id", "k", "id", "o", "s", "ty", "t", "m", "rc", "f", "n", "d", "st", "sale", "fee", "fin", "p") if k in event}
+
+    def build_after_sales(self) -> dict:
+        events = self._after_sales_events()
+        returns_open = [self._public_event(e) for e in events if e.get("k") == "RETURN" and e.get("s") != "RETURNS_COMPLETED"]
+        returns_done = [self._public_event(e) for e in events if e.get("k") == "RETURN" and e.get("s") == "RETURNS_COMPLETED"]
+        inquiries_open = [self._public_event(e) for e in events if str(e.get("k", "")).startswith("INQ") and e.get("s") == "UNANSWERED"]
+        settlements = sorted((self._public_event(e) for e in events if e.get("k") == "SETTLEMENT"), key=lambda e: (str(e.get("d") or ""), str(e.get("id") or "")), reverse=True)
+        return {"returns_open": returns_open, "returns_done": returns_done, "inquiries_open": inquiries_open, "settlements": settlements[:6]}
 
     def _invoice_ledger(self, company_id: int) -> set[str]:
         """작업 장부에서 송장 등록이 끝난(SUCCEEDED) 대상 키 집합."""

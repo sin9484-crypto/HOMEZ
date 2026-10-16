@@ -47,6 +47,10 @@ DYNAMIC = {
     "easy.next.": ["register_invoice", "order_from_supplier", "wait_supplier_shipment", "check_coupang_order", "wait_delivery", "done"],
     "easy.outcome.": ["allowed", "succeeded", "failed", "logged"],
     "easy.cs.": ["accept", "instruct", "departure", "delivering", "final_delivery", "none_tracking"],
+    "easy.rs.": ["release_stop_unchecked", "returns_unchecked", "vendor_warehouse_confirm", "request_coupang_check", "returns_completed"],
+    "easy.fault.": ["customer", "vendor", "coupang", "wms", "general"],
+    "easy.settle.type_": ["monthly", "weekly", "additional", "reserve"],
+    "easy.settle.st_": ["subject", "done"],
 }
 
 
@@ -296,6 +300,37 @@ class DeliveryTrackingRowTests(unittest.TestCase):
 
     def test_a_finished_delivery_has_no_check_button(self):
         self.assertIn('const done = s === "FINAL_DELIVERY";', function_body("trackHtml"))
+
+
+class AfterSalesRowTests(unittest.TestCase):
+
+    def test_today_lists_open_returns_and_unanswered_inquiries_as_things_to_check(self):
+        body = function_body("loadToday")
+        block = body.split("today.after_sales")[1].split("// 3)")[0]
+        self.assertIn("returns_open", block)
+        self.assertIn("inquiries_open", block)
+        self.assertEqual(block.count('group: "CHECK"'), 2)
+
+    def test_the_rows_only_navigate_and_the_screens_never_call_outside_on_open(self):
+        block = function_body("loadToday").split("today.after_sales")[1].split("// 3)")[0]
+        for forbidden in ("api(", 'method: "POST"', "/after-sales/refresh"):
+            self.assertNotIn(forbidden, block)
+        for name in ("afterHtml", "settlementBlock", "loadMoney", "loadOrders", "renderOrderPanel"):
+            self.assertNotIn("/after-sales/refresh", function_body(name), name)
+
+    def test_the_texts_say_that_handling_happens_in_wing_and_nothing_is_done_automatically(self):
+        ko = text_block("ko-KR")
+        self.assertIn("승인·수령 확인·환불은 하지 않아요", ko)
+        self.assertIn("개인정보라 HOMEZ에 저장하지 않아요", ko)
+
+    def test_the_settlement_block_shows_coupang_values_with_a_caveat_and_money_loads_it_in_parallel(self):
+        self.assertIn("settlementBlock(today)", function_body("loadMoney"))
+        self.assertIn('api("/easy-view/today").catch(() => null)', function_body("loadMoney"))
+        self.assertIn("easy.settle.sub", function_body("settlementBlock"))
+
+    def test_the_after_sales_allowance_is_granted_from_the_approval_center_with_a_password(self):
+        self.assertIn('purpose: "AFTER_SALES_CHECK", mode: "STANDING", per_hour_limit: 30, hours: 24', JS)
+        self.assertIn('["AFTER_SALES_CHECK", "easy.purpose.after"]', JS)
 
 
 class StyleAndServingTests(unittest.TestCase):

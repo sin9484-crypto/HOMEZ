@@ -98,6 +98,9 @@ ORDER_COLLECTION_TICK_INTERVAL_MINUTES = 1
 # 2026-10-16 진행 중 쿠팡 주문·배송 상태 확인(10분마다) — 허용(ORDER_TRACKING)이 없으면 쿠팡을 부르지 않는다.
 DELIVERY_TRACKING_JOB_ID = "coupang_delivery_tracking"
 DELIVERY_TRACKING_INTERVAL_MINUTES = 10
+# 배송 이후(반품·문의·정산) 확인 — 허용(AFTER_SALES_CHECK)이 없으면 쿠팡을 부르지 않는다.
+AFTER_SALES_JOB_ID = "coupang_after_sales_check"
+AFTER_SALES_INTERVAL_MINUTES = 10
 
 
 def run_backup_rehearsal_job(
@@ -318,6 +321,34 @@ def run_delivery_tracking_job(session_factory=None) -> None:
         db.close()
 
 
+def run_after_sales_job(session_factory=None) -> None:
+    """쿠팡 반품·상품 문의·콜센터 문의(10분마다)와 정산(6시간마다)을 읽어 상태가 바뀐 것만 기록한다. 허용·비상 정지가 막으면
+    호출하지 않고, 한 번의 실패가 스케줄러를 죽이지 않는다. 자동 처리(승인·환불·답변)는 하지 않는다."""
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    db = session_factory()
+    try:
+        from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+        from app.domains.store_connection.model import StoreConnection
+
+        company_ids = [r[0] for r in db.query(StoreConnection.company_id).filter(
+            StoreConnection.marketplace_code == "COUPANG", StoreConnection.connection_status == "CONNECTED").distinct().all()]
+        for company_id in company_ids:
+            summary = AfterSalesMonitorService(db).refresh(company_id)
+            logger.info(
+                "쿠팡 반품·문의·정산 확인: 회사 %s 호출 %d·새 이벤트 %d·실패 %d%s",
+                company_id, summary["calls"], len(summary["new_events"]), len(summary["failures"]),
+                " · 허용 필요로 중단" if summary["blocked"] else "",
+            )
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("쿠팡 반품·문의·정산 확인 Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -380,10 +411,16 @@ def register_all_jobs() -> None:
         job_id=DELIVERY_TRACKING_JOB_ID,
     )
 
+    SchedulerService.add_interval_job(
+        run_after_sales_job,
+        minutes=AFTER_SALES_INTERVAL_MINUTES,
+        job_id=AFTER_SALES_JOB_ID,
+    )
+
     logger.info(
-        "Scheduler jobs registered: %s, %s, %s, %s",
+        "Scheduler jobs registered: %s, %s, %s, %s, %s",
         BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
-        ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID,
+        ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID, AFTER_SALES_JOB_ID,
     )
 
 

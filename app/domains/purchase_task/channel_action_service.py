@@ -383,7 +383,7 @@ class CoupangChannelActions:
 
     def _external_authorize(
         self, company_id: int, kind: str, action_type: str, *, triggered_by: int | None = None,
-        method: str | None = None,
+        method: str | None = None, target: str | None = None,
     ) -> tuple[CallTicket | None, ActionResult | None]:
         """(통과표, None) 또는 (None, 막힌 이유 ActionResult). 허용이 없으면 요청을 보내지 않는다."""
 
@@ -394,7 +394,7 @@ class CoupangChannelActions:
         try:
             ticket = policy.authorize(
                 company_id, ExtSystem.COUPANG, kind, purpose, actor_user_id=triggered_by,
-                method=method or (default_method if kind == ExtKind.WRITE else "GET"),
+                method=method or (default_method if kind == ExtKind.WRITE else "GET"), target=target,
             )
             return ticket, None
         except ExternalCallNotAllowed as exc:
@@ -580,6 +580,33 @@ class CoupangChannelActions:
             return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "발주서 조회에 실패했다")
         self._external_finish(ticket, succeeded=bool(snapshot.ok), http_status=snapshot.http_status)
         return snapshot, None
+
+    _AFTER_SALES_READS = {
+        "returns": "read_return_requests", "online": "read_online_inquiries", "call": "read_call_center_inquiries",
+        "settlement": "read_settlement_histories",
+    }
+
+    def read_after_sales(self, *, company_id: int, store_connection_id: int, what: str, **params):
+        """배송 이후(반품·문의·정산) 읽기. `what`은 returns|online|call|settlement. (결과, None) 또는 (None, 막힌/실패 ActionResult).
+        허용(AFTER_SALES_CHECK)이 없으면 호출하지 않는다. 장부를 쓰지 않고 쿠팡에 쓰지 않는다."""
+
+        method_name = self._AFTER_SALES_READS.get(what)
+        if method_name is None:
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "알 수 없는 조회 종류")
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ExtPurpose.AFTER_SALES_CHECK, target=what)
+        if denied is not None:
+            return None, denied
+        try:
+            result = getattr(provider, method_name)(**params)
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 배송 이후 조회 예외(%s): %s", what, type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "조회에 실패했다")
+        self._external_finish(ticket, succeeded=bool(result.ok), http_status=result.http_status)
+        return result, None
 
     def register_invoice(
         self, *, company_id: int, store_connection_id: int, channel_order_id: str,

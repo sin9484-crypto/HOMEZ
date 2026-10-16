@@ -197,6 +197,9 @@ def _int_or_zero(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+from app.domains.purchase_task.coupang_after_sales_provider import _AfterSalesMixin  # noqa: E402
+
+
 class _InvoiceMixin:
     """송장 등록(쓰기)과 발주서 조회(읽기). `CoupangChannelControlProvider`에 합쳐 쓴다."""
 
@@ -423,7 +426,7 @@ class _ProductDaysMixin:
         return ProviderReadResult(True, all(d == days for d in snapshot.days), "", 200)
 
 
-class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin):
+class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin):
     """쿠팡 옵션 판매중지·주문 취소(쓰기)와 결과 대조(읽기). 자동 재시도·스케줄 없음 —
     재시도 정책은 호출하는 작업 장부 서비스의 몫이다."""
 

@@ -224,6 +224,24 @@ def trigger_collection_ops_now(
     )
 
 
+@router.post("/after-sales/refresh")
+def refresh_after_sales_now(
+    include_settlement: bool = True,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """배송 이후(반품·상품 문의·콜센터 문의·정산)를 쿠팡에서 지금 한 번 읽는다(GET만, `AFTER_SALES_CHECK` 허용 필요).
+    쿠팡에 쓰지 않고, 반품 승인·환불·답변 같은 처리는 하지 않는다. 허용이 없으면 호출하지 않는다."""
+
+    from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+
+    summary = AfterSalesMonitorService(db).refresh(current_user.company_id, settlement=include_settlement)
+    return {
+        "ok": summary["ok"], "blocked": summary["blocked"], "no_connection": summary["no_connection"],
+        "failures": summary["failures"], "calls": summary["calls"], "new_events": len(summary["new_events"]),
+    }
+
+
 @router.get(
     "/collection-ops/test-budget-plan",
     response_model=OrderCollectionTestBudgetPlanResponse,

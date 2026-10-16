@@ -21,6 +21,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import create_engine
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.exceptions import BadRequestException
@@ -344,6 +345,61 @@ class TodayTests(Base_):
         self.assertEqual([(t["task_id"], t["channel_order_id"]) for t in todo], [(task.id, "9001")])
         self.ledger(order)
         self.assertEqual(self.svc.build_today(1)["invoice_todo"], [])
+
+
+class AfterSalesEventTests(Base_):
+    """2026-10-16 — 감사 기록에 남은 쿠팡 반품·문의·정산 이벤트를 오늘 할 일·주문별로 모아 보여 준다(읽기만)."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.execute(text(
+            "CREATE TABLE audit_logs (id INTEGER NOT NULL PRIMARY KEY, company_id INTEGER, user_id INTEGER, action VARCHAR(100) NOT NULL, "
+            "entity VARCHAR(100) NOT NULL, entity_id VARCHAR(100) NOT NULL, description VARCHAR(500), ip_address VARCHAR(50), created_at VARCHAR(40))"))
+        self.db.commit()
+
+    def event(self, entity_id, payload):
+        self.db.execute(text("INSERT INTO audit_logs (company_id, action, entity, entity_id, description) VALUES (1, 'COUPANG_AFTER_SALES_EVENT', 'after_sales', :e, :d)"),
+                        {"e": entity_id, "d": json.dumps(payload, ensure_ascii=False)})
+        self.db.commit()
+
+    def test_open_returns_unanswered_inquiries_and_settlements_are_grouped(self):
+        self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED", "rc": "구매자 변심", "f": "CUSTOMER"})
+        self.event("RETURN:2", {"k": "RETURN", "id": 2, "o": "9999", "s": "RETURNS_COMPLETED"})
+        self.event("INQ_ONLINE:11", {"k": "INQ_ONLINE", "id": 11, "o": "8103_6025_0419_8", "s": "UNANSWERED"})
+        self.event("INQ_CALL:21", {"k": "INQ_CALL", "id": 21, "o": None, "s": "ANSWERED"})
+        self.event("SETTLEMENT:2026-10:WEEKLY:2026-10-23", {"k": "SETTLEMENT", "id": "2026-10", "s": "SUBJECT:7608", "st": "SUBJECT", "ty": "WEEKLY", "d": "2026-10-23", "fin": 7608, "sale": 12050})
+        after = self.svc.build_today(1)["after_sales"]
+        self.assertEqual([r["id"] for r in after["returns_open"]], [1])
+        self.assertEqual([r["id"] for r in after["returns_done"]], [2])
+        self.assertEqual([q["id"] for q in after["inquiries_open"]], [11])
+        self.assertEqual(after["settlements"][0]["fin"], 7608)
+        self.assertEqual(after["returns_open"][0]["o"], "8103602504198")  # 읽을 때 원래 주문번호로
+
+    def test_only_the_latest_state_of_an_item_counts(self):
+        self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED"})
+        self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "8103_6025_0419_8", "s": "RETURNS_COMPLETED"})
+        after = self.svc.build_today(1)["after_sales"]
+        self.assertEqual((after["returns_open"], [r["id"] for r in after["returns_done"]]), ([], [1]))
+
+    def test_events_are_attached_to_their_order(self):
+        order = self.order(number="8103602504198")
+        self.task(order, key="kas")
+        self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "8103_6025_0419_8", "s": "RETURNS_UNCHECKED"})
+        self.event("INQ_ONLINE:11", {"k": "INQ_ONLINE", "id": 11, "o": "5555", "s": "UNANSWERED"})
+        row = self.svc.build_orders(1)["items"][0]
+        self.assertEqual([e["entity_id"] for e in row["after_sales"]], ["RETURN:1"])
+
+    def test_without_events_or_without_the_log_table_the_views_still_work(self):
+        self.assertEqual(self.svc.build_today(1)["after_sales"], {"returns_open": [], "returns_done": [], "inquiries_open": [], "settlements": []})
+        self.db.execute(text("DROP TABLE audit_logs"))
+        self.db.commit()
+        self.assertEqual(self.svc.build_today(1)["after_sales"]["returns_open"], [])
+
+    def test_no_personal_fields_are_exposed(self):
+        self.event("RETURN:1", {"k": "RETURN", "id": 1, "o": "1", "s": "X", "name": "홍길동", "phone": "010-1111-2222"})
+        text_dump = json.dumps(self.svc.build_today(1)["after_sales"], ensure_ascii=False)
+        self.assertNotIn("홍길동", text_dump)
+        self.assertNotIn("010-1111", text_dump)
 
 
 class UnresolvedOrderTests(Base_):
