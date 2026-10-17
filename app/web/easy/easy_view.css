@@ -97,6 +97,8 @@ body.easy-view .view-root { background: #fff; }
 
 /* 표 */
 .ez-table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+.ez-selcol { width: 36px; padding-right: 0 !important; cursor: default; } .ez-selcol input { width: 18px; height: 18px; accent-color: var(--ez-g); cursor: pointer; } .ez-selcol input:disabled { cursor: not-allowed; opacity: .4; }
+.ez-selbar { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 10px 14px; background: var(--ez-g-soft); border: 1px solid var(--ez-g-line); border-radius: 8px; font-weight: 700; } .ez-selbar[hidden] { display: none; }
 .ez-table th { background: var(--ez-head); text-align: left; font-size: 14px; font-weight: 700; color: #3B4450; padding: 11px 14px; white-space: nowrap; }
 .ez-table td { padding: 12px 14px; border-bottom: 1px solid var(--ez-line); vertical-align: middle; font-size: 15px; }
 .ez-table tbody tr { cursor: pointer; }

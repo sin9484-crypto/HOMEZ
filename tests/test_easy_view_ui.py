@@ -354,6 +354,43 @@ class FlowLabelTests(unittest.TestCase):
         self.assertNotIn("정산 기다림", ko)
 
 
+class ProductSelectionDeleteTests(unittest.TestCase):
+    """2026-10-17 — 쉬운 보기 상품 목록의 "선택 삭제"(기존 대기 상품 정리 API 재사용)."""
+
+    def _products(self):
+        return JS.split("async function loadProducts()")[1].split("// ---- 올리기 준비 화면")[0]
+
+    def test_only_deletable_rows_can_be_selected(self):
+        body = self._products()
+        self.assertIn("filter((w) => w.deletable)", body)
+        self.assertIn('${w.deletable ? "" : "disabled"}', body)
+        self.assertIn("w.block_reason", body)
+
+    def test_the_delete_uses_the_existing_archive_api_after_a_confirmation(self):
+        body = self._products()
+        self.assertIn('api("/listing-wizards/bulk-archive"', body)
+        self.assertIn("wizard_ids: ids", body)
+        self.assertNotIn("select_all_matching_filter", body)
+        self.assertLess(body.index("await ezDialog("), body.index('api("/listing-wizards/bulk-archive"'))
+        self.assertNotIn("method: \"DELETE\"", body)
+
+    def test_the_selection_clicks_do_not_open_the_row(self):
+        self.assertIn('class="ez-selcol" data-ez-stop', self._products())
+
+    def test_the_names_in_the_confirmation_are_escaped(self):
+        self.assertIn("esc((w && w.product_name)", self._products())
+
+    def test_the_selection_texts_exist_in_both_languages(self):
+        for lang in ("ko-KR", "en-US"):
+            keys = keys_of(text_block(lang))
+            for key in ("sel_delete", "sel_all", "sel_one", "sel_blocked", "sel_count", "sel_confirm_title", "sel_confirm_body", "sel_reason", "sel_done", "sel_partial", "sel_has_failure"):
+                self.assertIn(f"easy.products.{key}", keys, (lang, key))
+
+    def test_the_selection_styles_are_scoped(self):
+        self.assertIn(".ez-selbar", CSS)
+        self.assertIn(".ez-selcol", CSS)
+
+
 class StyleAndServingTests(unittest.TestCase):
 
     def test_every_rule_is_scoped_so_turning_the_view_off_restores_the_classic_look(self):

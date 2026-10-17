@@ -54,7 +54,7 @@
   // 기존 화면이 속한 업무 → 쉬운 보기 메뉴 강조
   const SECTION_TO_NAV = { today: "today", products: "products", orders: "orders", money: "money", analysis: "analysis", settings: "more" };
 
-  const S = { enabled: false, badge: 0, wizards: [], ordersCache: null, selected: {} };
+  const S = { enabled: false, badge: 0, wizards: [], ordersCache: null, selected: {}, delIds: new Set() };
 
   // =========================================================
   // 공통 도우미
@@ -536,13 +536,17 @@
           `<button type="button" class="ez-tab" role="tab" data-ez-ptab="${id}" aria-selected="${tab === id}">${esc(T(key))} <span class="ez-num">${n}</span></button>`).join("")}
       </div>
       <div class="ez-summary"><div>${esc(T("easy.products.sum_open"))}<b class="ez-c-blue ez-num">${open.length}</b></div><div>${esc(T("easy.products.sum_attention"))}<b class="ez-c-orange ez-num">${attention.length}</b></div><div>${esc(T("easy.products.sum_done"))}<b class="ez-c-green ez-num">${done.length}</b></div><div>${esc(T("easy.products.sum_days"))}<b class="ez-c-red ez-num">${todoByWizard.size}</b></div></div>
+      <div class="ez-selbar" id="ez-sel-bar" hidden><span id="ez-sel-count"></span><button type="button" class="ez-btn danger sm" id="ez-sel-delete">${esc(T("easy.products.sel_delete"))}</button></div>
       <div id="ez-products-list"></div>`;
     $("ez-new-product").addEventListener("click", startNewProduct);
     root.querySelectorAll("[data-ez-ptab]").forEach((btn) => btn.addEventListener("click", () => { S.selected.productTab = btn.dataset.ezPtab; loadProducts(); }));
 
     const host = $("ez-products-list");
     if (!visible.length) { host.innerHTML = emptyHtml("easy.products.empty_title", "easy.products.empty_sub"); return; }
-    host.innerHTML = `<table class="ez-table"><thead><tr><th>${esc(T("easy.col.product"))}</th><th>${esc(T("easy.col.channel"))}</th><th>${esc(T("easy.col.progress"))}</th><th>${esc(T("easy.col.state"))}</th><th>${esc(T("easy.col.check"))}</th><th>${esc(T("easy.col.next"))}</th></tr></thead>
+    // 지울 수 있는 위저드만 고를 수 있다(서버가 계산한 deletable). 이미 올라간 상품·진행 중인 건은 막힌다.
+    const deletableIds = new Set(visible.filter((w) => w.deletable).map((w) => w.id));
+    S.delIds = new Set([...S.delIds].filter((id) => deletableIds.has(id)));
+    host.innerHTML = `<table class="ez-table"><thead><tr><th class="ez-selcol" data-ez-stop><input type="checkbox" id="ez-sel-all" aria-label="${esc(T("easy.products.sel_all"))}"></th><th>${esc(T("easy.col.product"))}</th><th>${esc(T("easy.col.channel"))}</th><th>${esc(T("easy.col.progress"))}</th><th>${esc(T("easy.col.state"))}</th><th>${esc(T("easy.col.check"))}</th><th>${esc(T("easy.col.next"))}</th></tr></thead>
       <tbody>${visible.map((w) => {
         const n = w.step_number || 0;
         const total = w.step_total || 10;
@@ -551,6 +555,7 @@
         const attn = (w.attention || []).slice(0, 2).map((code) => `<span class="ez-dot warn" aria-hidden="true">!</span> ${esc(T(`lw.attention.${String(code).toLowerCase()}`))}`).join("<br>");
         const needDays = todoByWizard.has(w.id) ? `<br><span class="ez-chip wait">${esc(T("easy.products.days_chip"))}</span>` : "";
         return `<tr data-key="${w.id}" tabindex="0">
+          <td class="ez-selcol" data-ez-stop><input type="checkbox" data-ez-sel="${w.id}" ${w.deletable ? "" : "disabled"} ${S.delIds.has(w.id) ? "checked" : ""} title="${esc(w.deletable ? "" : (w.block_reason || T("easy.products.sel_blocked")))}" aria-label="${esc(T("easy.products.sel_one"))}"></td>
           <td><span class="ez-cell">${thumbHtml(w.thumbnail_asset_id)}<span><b>${esc(w.product_name || `#${w.id}`)}</b><small>${esc(w.supplier_label || "")}</small></span></span></td>
           <td>${esc(channels)}</td>
           <td style="min-width:130px"><div class="ez-num" style="font-size:13px;margin-bottom:4px">${w.status === "SUCCEEDED" ? esc(T("easy.products.finished")) : `${n} / ${total}`}</div><div class="ez-bar"><i style="width:${pct}%"></i></div></td>
@@ -561,6 +566,49 @@
     B.lwHydrateThumbs(host);
     bindRows(host, "tbody tr", (key) => B.navigateTo("easy-product-detail", { wizardId: Number(key) }));
     host.querySelectorAll("[data-ez-open]").forEach((btn) => btn.addEventListener("click", () => B.navigateTo("easy-product-detail", { wizardId: Number(btn.dataset.ezOpen) })));
+    bindProductSelection(root, host, deletableIds);
+  }
+
+  // 선택 삭제: 기존 "대기 상품 정리"(POST /listing-wizards/bulk-archive)를 그대로 쓴다. 보관 처리라 지우는 것이 아니라 숨기는 것이고, 서버가 지울 수 없는 건을 건너뛴다.
+  function syncSelectionBar(root, host, deletableIds) {
+    const n = S.delIds.size;
+    const bar = $("ez-sel-bar");
+    bar.hidden = n === 0;
+    $("ez-sel-count").textContent = T("easy.products.sel_count", { count: n });
+    const all = $("ez-sel-all");
+    all.disabled = deletableIds.size === 0;
+    all.checked = deletableIds.size > 0 && n === deletableIds.size;
+    all.indeterminate = n > 0 && n < deletableIds.size;
+    host.querySelectorAll("[data-ez-sel]").forEach((cb) => { cb.checked = S.delIds.has(Number(cb.dataset.ezSel)); });
+  }
+
+  function bindProductSelection(root, host, deletableIds) {
+    host.querySelectorAll("[data-ez-sel]").forEach((cb) => cb.addEventListener("change", () => {
+      const id = Number(cb.dataset.ezSel);
+      if (cb.checked) S.delIds.add(id); else S.delIds.delete(id);
+      syncSelectionBar(root, host, deletableIds);
+    }));
+    $("ez-sel-all").addEventListener("change", (event) => {
+      S.delIds = event.target.checked ? new Set(deletableIds) : new Set();
+      syncSelectionBar(root, host, deletableIds);
+    });
+    $("ez-sel-delete").addEventListener("click", async () => {
+      const ids = [...S.delIds];
+      if (!ids.length) return;
+      const names = ids.map((id) => { const w = S.wizards.find((x) => x.id === id); return `<li>${esc((w && w.product_name) || `#${id}`)}</li>`; }).join("");
+      const ok = await ezDialog({ title: T("easy.products.sel_confirm_title"), danger: true, okLabel: T("easy.products.sel_delete"),
+        bodyHtml: `<p>${esc(T("easy.products.sel_confirm_body", { count: ids.length }))}</p><ul style="margin:8px 0 0 18px">${names}</ul>` });
+      if (!ok) return;
+      try {
+        const r = await api("/listing-wizards/bulk-archive", { method: "POST", body: JSON.stringify({
+          wizard_ids: ids, reason: T("easy.products.sel_reason"), deletion_request_id: `ez-bulk-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) });
+        const done = (r.succeeded || []).length, skipped = (r.skipped || []).length, failed = (r.failed || []).length;
+        B.toast(failed ? T("easy.products.sel_has_failure") : (skipped ? T("easy.products.sel_partial", { done, skipped }) : T("easy.products.sel_done", { done })), failed ? "error" : "success");
+        S.delIds = new Set();
+        loadProducts();
+      } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+    });
+    syncSelectionBar(root, host, deletableIds);
   }
 
   // ---- 올리기 준비 화면(위저드 한 건) ----

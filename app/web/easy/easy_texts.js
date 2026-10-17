@@ -68,6 +68,9 @@ window.HOMEZ_EASY_TEXTS = {
 
     "easy.products.lead": "올리는 중인 상품과 판매 중인 상품을 한눈에 봐요.", "easy.products.new": "새 상품 올리기", "easy.products.tab_open": "올리는 중", "easy.products.tab_done": "판매 중",
     "easy.products.sum_open": "올리는 중", "easy.products.sum_attention": "확인 필요", "easy.products.sum_done": "판매 중", "easy.products.sum_days": "출고일 확인",
+    "easy.products.sel_delete": "선택 삭제", "easy.products.sel_all": "전체 선택", "easy.products.sel_one": "이 상품 선택", "easy.products.sel_blocked": "이 상품은 지금 지울 수 없어요", "easy.products.sel_count": "{count}개 선택됨",
+    "easy.products.sel_confirm_title": "선택한 상품을 지울까요?", "easy.products.sel_confirm_body": "{count}개를 목록에서 지워요. 쿠팡에 올라간 상품은 지워지지 않고, 지운 뒤에도 복구할 수 있어요.", "easy.products.sel_reason": "쉬운 보기에서 선택 삭제",
+    "easy.products.sel_done": "{done}개를 지웠어요", "easy.products.sel_partial": "{done}개를 지웠고 {skipped}개는 지울 수 없어 남겨 뒀어요", "easy.products.sel_has_failure": "일부를 지우지 못했어요. 목록을 확인해 주세요",
     "easy.products.empty_title": "상품이 없어요", "easy.products.empty_sub": "'새 상품 올리기'로 상품 주소를 붙여넣으면 AI가 내용을 채워 줘요.", "easy.products.finished": "올리기 완료",
     "easy.products.open_prep": "올리기 준비", "easy.products.open_result": "결과 보기", "easy.products.days_chip": "출고일 확인",
     "easy.wstatus.draft": "초안", "easy.wstatus.needs_correction": "고칠 것 있음", "easy.wstatus.ready": "승인 대기", "easy.wstatus.approved": "승인됨", "easy.wstatus.submitting": "올리는 중",
@@ -199,6 +202,9 @@ window.HOMEZ_EASY_TEXTS = {
 
     "easy.products.lead": "See products being prepared and products on sale at a glance.", "easy.products.new": "List a new product", "easy.products.tab_open": "Preparing", "easy.products.tab_done": "On sale",
     "easy.products.sum_open": "Preparing", "easy.products.sum_attention": "Needs check", "easy.products.sum_done": "On sale", "easy.products.sum_days": "Dispatch days",
+    "easy.products.sel_delete": "Delete selected", "easy.products.sel_all": "Select all", "easy.products.sel_one": "Select this product", "easy.products.sel_blocked": "This product cannot be removed right now", "easy.products.sel_count": "{count} selected",
+    "easy.products.sel_confirm_title": "Remove the selected products?", "easy.products.sel_confirm_body": "{count} will be removed from the list. Products already listed on Coupang are not removed, and you can restore them later.", "easy.products.sel_reason": "Bulk removal from the easy view",
+    "easy.products.sel_done": "Removed {done}", "easy.products.sel_partial": "Removed {done}; {skipped} could not be removed and were kept", "easy.products.sel_has_failure": "Some could not be removed. Please check the list",
     "easy.products.empty_title": "No products yet", "easy.products.empty_sub": "Paste a product link under 'List a new product' and AI fills in the details.", "easy.products.finished": "Listed",
     "easy.products.open_prep": "Prepare to list", "easy.products.open_result": "View result", "easy.products.days_chip": "Check dispatch days",
     "easy.wstatus.draft": "Draft", "easy.wstatus.needs_correction": "Needs fixes", "easy.wstatus.ready": "Awaiting approval", "easy.wstatus.approved": "Approved", "easy.wstatus.submitting": "Listing",
