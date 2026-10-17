@@ -61,6 +61,8 @@ _DEFAULT_REQUEST = {
     (CallPurpose.ORDER_TRACKING, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_ORDER_TRACKING_PER_HOUR),
     (CallPurpose.AFTER_SALES_CHECK, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_AFTER_SALES_PER_HOUR),
     (CallPurpose.PRODUCT_STATUS_CHECK, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_PRODUCT_STATUS_PER_HOUR),
+    (CallPurpose.AI_DRAFT, CallKind.WRITE): (AllowanceMode.COUNTED, 5, None),  # AI 호출은 사용료가 들어 횟수로만 허용한다(상시 불가)
+    (CallPurpose.AI_ANALYSIS, CallKind.WRITE): (AllowanceMode.COUNTED, 5, None),
     (CallPurpose.INVOICE_UPLOAD, CallKind.READ): (AllowanceMode.COUNTED, 2, None),
     (CallPurpose.INVOICE_UPLOAD, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     (CallPurpose.PRODUCT_OUTBOUND_DAYS, CallKind.READ): (AllowanceMode.COUNTED, 3, None),

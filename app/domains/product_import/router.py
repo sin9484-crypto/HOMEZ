@@ -9,6 +9,9 @@ URL 상품 가져오기(2026-10-14) API.
   POST /product-import/search           URL 1건을 읽어 상품 정보 제안을 돌려준다(저장 없음)
   POST /product-import/margin-proposal  원가·수수료·목표 마진율로 판매가 제안과 마진 계산(저장 없음)
   POST /product-import/create-draft     사용자가 확인한 값으로 상품 후보와 위저드 초안을 만든다
+  POST /product-import/analyze          URL 1건을 읽고 AI가 상품을 해석한다(AI 호출 1회 — 월 한도·승인 센터 허용 필요)
+  POST /product-import/calculate        단가·이익 계산과 판정(AI 없음, 결정적 계산, 저장 없음)
+  GET/PUT /product-import/channel-fees  플랫폼 수수료율(사용자가 확인한 값) 조회·저장
 
 쿠팡 호출은 없다. 외부 접근은 /search의 페이지 읽기(+ 온채널이면 공식 API 상품 조회)와 /create-draft의 선택한 이미지
 다운로드뿐이다. 권한은 위저드 생성 권한(listing_wizard.create)을 쓴다.
@@ -20,14 +23,21 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
+from app.core.audit_db import write_audit_log
 from app.core.exceptions import BadRequestException
+from app.core.windows_credential_store import CredentialStore
+from app.core.windows_credential_store import WindowsCredentialStore
 from app.domains.marketplace_listing.listing_wizard_permission_guard import ListingWizardPermissionGuard
 from app.domains.marketplace_listing.listing_wizard_permissions import LISTING_WIZARD_CREATE
 from app.domains.media_asset.url_import import RequestsTransport
 from app.domains.media_asset.url_import import Transport
+from app.domains.marketplace_listing.ai_draft_service import AiDraftService
 from app.domains.product_import import schema
+from app.domains.product_import.channel_fee_source import UserConfirmedFeeStore
 from app.domains.product_import.service import ProductImportError
 from app.domains.product_import.service import ProductImportService
+from app.domains.product_import.url_analysis_service import CalcInput
+from app.domains.product_import.url_analysis_service import UrlAnalysisService
 from app.domains.purchase_task.router import get_purchase_channel_connection_service
 from app.domains.user.model import User
 
@@ -87,3 +97,75 @@ def suggest_notice_information(
 
     service = ProductImportService(db, transport=None)
     return service.notice_suggestions(data.candidate_id, data.labels, current_user.company_id)
+
+
+def get_llm_credential_store() -> CredentialStore:
+    """AI 키 저장소 — 항상 실제 Windows 자격증명 저장소. 테스트는 이 의존성을 덮어쓴다."""
+
+    return WindowsCredentialStore()
+
+
+@router.post("/analyze")
+def analyze_product_url(
+    data: schema.AnalyzeRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+    transport: Transport = Depends(get_transport),
+    connection_service=Depends(get_purchase_channel_connection_service),
+    credential_store: CredentialStore = Depends(get_llm_credential_store),
+):
+    """페이지 읽기 1회(+온채널 API 1회) 뒤 AI 해석 1회. 우리 가격·원가는 AI에 보내지 않는다. 계산은 /calculate가 한다."""
+
+    service = UrlAnalysisService(db, ProductImportService(db, transport, connection_service), AiDraftService(db, credential_store))
+    try:
+        return service.analyze(data.url, current_user.company_id, current_user.id)
+    except ProductImportError as exc:
+        raise BadRequestException(str(exc)) from exc
+
+
+@router.post("/calculate")
+def calculate_product_economics(
+    data: schema.CalculateRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_llm_credential_store),
+):
+    """결정적 계산과 판정(AI·바깥 호출 없음, 저장 없음). 모르는 값이 있으면 계산하지 않고 보류로 돌려준다."""
+
+    inp = CalcInput(
+        channel=data.channel.strip().upper(), category_code=data.category_code, supply_price=data.supply_price,
+        vat_state=data.vat_state, shipping_cost=data.shipping_cost, sell_quantity=data.sell_quantity,
+        packaging_cost=data.packaging_cost, return_reserve_rate=data.return_reserve_rate, payment_fee_rate=data.payment_fee_rate,
+        sale_price=data.sale_price, pack_count=data.pack_count, unit_volume=data.unit_volume, unit=data.unit,
+        risk_codes=list(data.risk_codes), acknowledged_risks=list(data.acknowledged_risks),
+        ai_sourced=list(data.ai_sourced), ai_values_confirmed=data.ai_values_confirmed,
+    )
+    service = UrlAnalysisService(db, ProductImportService(db, RequestsTransport()), AiDraftService(db, credential_store))
+    return service.calculate(current_user.company_id, current_user.id, inp)
+
+
+@router.get("/channel-fees")
+def list_channel_fees(
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+):
+    return {"entries": UserConfirmedFeeStore(db).entries(current_user.id, current_user.company_id)}
+
+
+@router.put("/channel-fees")
+def save_channel_fee(
+    data: schema.ChannelFeeSaveRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+):
+    """사용자가 플랫폼(예: 쿠팡 WING)에서 직접 확인한 수수료율을 저장한다. 출처는 USER_CONFIRMED로 남고 감사 기록이 생긴다."""
+
+    entry = UserConfirmedFeeStore(db).save(
+        current_user.id, current_user.company_id, channel=data.channel, category_code=data.category_code, rate=data.rate, note=data.note,
+    )
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id, action="CHANNEL_FEE_CONFIRMED", entity="channel_fee",
+        entity_id=f"{data.channel.strip().upper()}:{data.category_code}"[:100], description=f"플랫폼 수수료율 사용자 확인 저장({entry['rate']})",
+    )
+    db.commit()
+    return entry

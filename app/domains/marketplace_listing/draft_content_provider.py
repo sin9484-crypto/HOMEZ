@@ -134,6 +134,13 @@ DRAFT_CONTENT_PROVIDERS_BY_CODE: dict[str, DraftContentProvider] = {
 
 def get_draft_content_provider(code: str) -> DraftContentProvider:
 
+    if code == "LLM":
+        # 2026-10-18 — 실제 AI(Claude) Provider. 클라이언트 없이 만들면 생성 시 fail-closed로 막힌다. 전역 등록부(기본 FAKE/DISABLED)는
+        # 바꾸지 않고 호출마다 새로 만든다(순환 import 때문에 지연 import, 등록부 오염 방지).
+        from app.domains.marketplace_listing.llm_draft_provider import LlmDraftProvider
+
+        return LlmDraftProvider()
+
     provider = DRAFT_CONTENT_PROVIDERS_BY_CODE.get(code)
     if provider is None:
         raise DraftContentProviderError(f"알 수 없는 Provider입니다: {code}")

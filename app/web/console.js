@@ -10722,7 +10722,7 @@
   // URL 검색 → 기재 내용 확인 → 수익 계산 → 상품 후보·위저드 초안 생성. 읽은 값은 전부 제안이고, 브랜드·원산지·
   // 사용권·정보고시 확인과 후보 승인·8단계 승인·쿠팡 전송은 이 화면이 하지 않는다(쿠팡 호출 없음).
 
-  const lwUrlImportState = { search: null, proposal: null, idempotencyKey: null };
+  const lwUrlImportState = { search: null, proposal: null, idempotencyKey: null, report: null };
 
   function lwUiT(key, vars) {
     return HomezI18n.t(`lw.urlimp.${key}`, vars);
@@ -10743,6 +10743,7 @@
     el("lw-wizard-panel").hidden = true;
     el("lw-url-import-panel").hidden = false;
     el("lw-ui-error").textContent = "";
+    lwAiaEnsureManual();
     el("lw-ui-url").focus();
   }
 
@@ -10822,6 +10823,8 @@
           ${img.note ? `<small class="stat-sub">${escapeHtml(img.note)}</small>` : ""}
         </div>`).join("")}</div>` : `<p class="empty-text">${lwUiT("images_none")}</p>`}
 
+      <div id="lw-aia-host"></div>
+
       <h3>${lwUiT("step_margin")}</h3>
       <div class="lw-ui-grid">
         <label class="field"><span class="field-label">${lwUiT("cost_label")}</span>
@@ -10849,6 +10852,8 @@
       <p class="field-error" id="lw-ui-create-error" role="alert"></p>
       <div id="lw-ui-created" aria-live="polite"></div>`;
     el("lw-ui-result").hidden = false;
+    lwUrlImportState.report = null;
+    lwAiaAttach(el("lw-aia-host"), data);
 
     el("lw-ui-calc-btn").addEventListener("click", lwUrlImportCalc);
     el("lw-ui-apply-btn").addEventListener("click", () => {
@@ -10954,6 +10959,7 @@
             product_name: name, description: el("lw-ui-desc").value.trim() || null,
             category_hint: el("lw-ui-category").value.trim() || null, keywords,
             image_urls_main: mainUrls, image_urls_detail: detailUrls, margin,
+            analysis_report: lwUrlImportState.report || null,
             notice_rows: (data.notice_rows || []).map((r) => ({ label: r.label, value: r.value })),
             creation_idempotency_key: lwUrlImportState.idempotencyKey,
           }),
@@ -10998,6 +11004,261 @@
       toast(err.message || HomezI18n.t("lw.create_error"), "error");
     }
   }
+
+  // ---- AI 분석 · 단가 · 이익 계산 (2026-10-18, Phase E5) ----
+  // AI는 페이지 글에서 사실을 뽑고 해석만 한다(사용자가 누를 때 1회, 월 한도·승인 센터 허용 필요). 금액은 서버의 결정적 계산이 낸다.
+  // 모르는 값(공급가·부가세·배송비·수수료율)이 있으면 계산하지 않고 보류로 보여 준다. 부가세는 URL이든 직접 입력이든 선택해야 한다.
+
+  const aiaT = (key, vars) => HomezI18n.t(`lw.aia_${key}`, vars);
+  const AIA_VERDICT = { CANDIDATE: ["ok", "verdict_candidate"], HOLD: ["warn", "verdict_hold"], NOT_RECOMMENDED: ["warn", "verdict_no"] };
+  const AIA_SOURCE = { ONCH_API: "src_api", AI_PAGE: "src_ai" };
+  const aiaPct = (percent) => String(Number((Number(percent) / 100).toFixed(6)));
+  const aiaPlain = (value) => String(Number(value));
+
+  function aiaSourceNote(entry) {
+    if (!entry) return "";
+    const label = AIA_SOURCE[entry.source] ? aiaT(AIA_SOURCE[entry.source]) : "";
+    const quote = entry.evidence ? ` — “${escapeHtml(entry.evidence)}”` : "";
+    return label ? `<small class="stat-sub">${escapeHtml(label)}${quote}</small>` : "";
+  }
+
+  function aiaFieldValue(prefill, key) {
+    const entry = (prefill || {})[key];
+    return entry && entry.value != null ? String(entry.value) : "";
+  }
+
+  function lwAiaMountCalc(host, { prefill, analysis, withAnalyze }) {
+    prefill = prefill || {};
+    const state = { analysis: analysis || null, report: null, prefill };
+    // AI가 페이지에서 읽은 값 중 사용자가 아직 손대지 않은 것 — 이 값으로 계산하려면 페이지에서 직접 확인했다는 표시가 필요하다.
+    const aiSourced = new Set(["supply_price", "vat_state", "shipping_cost"].filter((k) => prefill[k] && prefill[k].source === "AI_PAGE"));
+    const risks = ((analysis && analysis.risks) || []);
+    const highRisks = risks.filter((r) => r.severity === "HIGH");
+    host.innerHTML = `
+      <div class="lw-ui-grid">
+        <label class="field"><span class="field-label">${aiaT("f_supply")}</span>
+          <input type="number" min="0" step="1" data-aia="supply_price" value="${escapeHtml(aiaFieldValue(prefill, "supply_price"))}">${aiaSourceNote(prefill.supply_price)}</label>
+        <label class="field"><span class="field-label">${aiaT("f_vat")}</span>
+          <select data-aia="vat_state">
+            <option value="">${aiaT("vat_choose")}</option>
+            ${["INCLUDED", "EXCLUDED", "EXEMPT"].map((v) => `<option value="${v}" ${aiaFieldValue(prefill, "vat_state") === v ? "selected" : ""}>${aiaT(`vat_${v.toLowerCase()}`)}</option>`).join("")}
+          </select>${aiaSourceNote(prefill.vat_state)}</label>
+        <label class="field"><span class="field-label">${aiaT("f_shipping")}</span>
+          <input type="number" min="0" step="1" data-aia="shipping_cost" value="${escapeHtml(aiaFieldValue(prefill, "shipping_cost"))}">${aiaSourceNote(prefill.shipping_cost)}</label>
+        <label class="field"><span class="field-label">${aiaT("f_qty")}</span>
+          <input type="number" min="1" max="1000" step="1" data-aia="sell_quantity" value="1"></label>
+        <label class="field"><span class="field-label">${aiaT("f_pack")}</span>
+          <input type="number" min="1" step="1" data-aia="pack_count" value="${escapeHtml(aiaFieldValue(prefill, "pack_count"))}">${aiaSourceNote(prefill.pack_count)}</label>
+        <label class="field"><span class="field-label">${aiaT("f_volume")}</span>
+          <input type="number" min="0" step="any" data-aia="unit_volume" value="${escapeHtml(aiaFieldValue(prefill, "unit_volume"))}">${aiaSourceNote(prefill.unit_volume)}</label>
+        <label class="field"><span class="field-label">${aiaT("f_unit")}</span>
+          <input type="text" maxlength="10" data-aia="unit" value="${escapeHtml((prefill.unit_volume && prefill.unit_volume.unit) || "")}"></label>
+        <label class="field"><span class="field-label">${aiaT("f_category")}</span>
+          <input type="text" inputmode="numeric" data-aia="category_code" placeholder="${escapeHtml(aiaT("f_category_hint"))}"></label>
+        <label class="field"><span class="field-label">${aiaT("f_packaging")}</span>
+          <input type="number" min="0" step="1" data-aia="packaging_cost" value="0"></label>
+        <label class="field"><span class="field-label">${aiaT("f_reserve")}</span>
+          <input type="number" min="0" max="50" step="0.1" data-aia="return_reserve_pct" value="3"></label>
+        <label class="field"><span class="field-label">${aiaT("f_price")}</span>
+          <input type="number" min="0" step="10" data-aia="sale_price"></label>
+      </div>
+      ${aiSourced.size ? `<label class="lw-checklist-item"><input type="checkbox" data-aia-ai-confirm><span>${aiaT("ai_confirm")}</span></label>` : ""}
+      ${highRisks.length ? `<fieldset class="lw-checklist"><legend>${aiaT("risk_ack")}</legend>${highRisks.map((r) => `
+        <label class="lw-checklist-item"><input type="checkbox" data-aia-ack="${escapeHtml(r.code)}"><span>${escapeHtml(r.label)}${r.reason ? ` — ${escapeHtml(r.reason)}` : ""}</span></label>`).join("")}</fieldset>` : ""}
+      <div class="field-inline">
+        <button type="button" class="btn btn-secondary" data-aia-calc>${aiaT("calc_btn")}</button>
+        <button type="button" class="btn btn-ghost" data-aia-apply hidden>${aiaT("apply_btn")}</button>
+      </div>
+      <div data-aia-fee></div>
+      <div data-aia-report aria-live="polite"></div>`;
+
+    const field = (name) => host.querySelector(`[data-aia="${name}"]`);
+    const out = host.querySelector("[data-aia-report]");
+    const feeHost = host.querySelector("[data-aia-fee]");
+    const applyBtn = host.querySelector("[data-aia-apply]");
+
+    ['supply_price', 'vat_state', 'shipping_cost'].forEach((name) => {
+      const input = field(name);
+      if (input) input.addEventListener("input", () => aiSourced.delete(name));
+      if (input) input.addEventListener("change", () => aiSourced.delete(name));
+    });
+    const body = () => {
+      const val = (name) => field(name).value.trim();
+      const body = {
+        channel: "COUPANG", sell_quantity: Number(val("sell_quantity") || 1),
+        packaging_cost: val("packaging_cost") || "0",
+        return_reserve_rate: aiaPct(val("return_reserve_pct") || 0),
+        risk_codes: risks.map((r) => r.code),
+        ai_sourced: Array.from(aiSourced),
+        ai_values_confirmed: !!(host.querySelector("[data-aia-ai-confirm]") && host.querySelector("[data-aia-ai-confirm]").checked),
+        acknowledged_risks: Array.from(host.querySelectorAll("[data-aia-ack]")).filter((c) => c.checked).map((c) => c.dataset.aiaAck),
+      };
+      if (val("supply_price")) body.supply_price = val("supply_price");
+      if (val("vat_state")) body.vat_state = val("vat_state");
+      if (val("shipping_cost")) body.shipping_cost = val("shipping_cost");
+      if (val("category_code")) body.category_code = val("category_code");
+      if (val("sale_price")) body.sale_price = val("sale_price");
+      if (val("pack_count")) body.pack_count = Number(val("pack_count"));
+      if (val("unit_volume")) { body.unit_volume = val("unit_volume"); if (val("unit")) body.unit = val("unit"); }
+      return body;
+    };
+
+    const renderFeeBox = (report) => {
+      const fee = report.fee || {};
+      if (fee.source === "USER_CONFIRMED" && fee.rate) {
+        const scope = fee.scope === "channel_default" ? aiaT("fee_scope_default") : aiaT("fee_scope_category");
+        feeHost.innerHTML = `<p class="stat-sub">${escapeHtml(aiaT("fee_confirmed", { rate: (Number(fee.rate) * 100).toFixed(2), scope, at: fee.confirmed_at ? HomezI18n.formatDate(lsParseUtc(fee.confirmed_at)) : "" }))}</p>`;
+        return;
+      }
+      feeHost.innerHTML = `
+        <div class="lw-checklist"><strong>${aiaT("fee_missing_title")}</strong>
+          <p class="stat-sub">${aiaT("fee_missing_hint")}</p>
+          <div class="lw-ui-grid">
+            <label class="field"><span class="field-label">${aiaT("fee_rate_label")}</span><input type="number" min="0" max="50" step="0.01" data-aia-fee-rate></label>
+            <label class="field"><span class="field-label">${aiaT("fee_code_label")}</span><input type="text" data-aia-fee-code placeholder="${escapeHtml(aiaT("fee_code_hint"))}"></label>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" data-aia-fee-save>${aiaT("fee_save_btn")}</button>
+        </div>`;
+      feeHost.querySelector("[data-aia-fee-save]").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const rate = Number(feeHost.querySelector("[data-aia-fee-rate]").value);
+        const code = (feeHost.querySelector("[data-aia-fee-code]").value.trim() || field("category_code").value.trim() || "*");
+        if (!(rate > 0)) { toast(aiaT("fee_rate_required"), "error"); return; }
+        try {
+          await apiFetch("/product-import/channel-fees", { method: "PUT", body: JSON.stringify({ channel: "COUPANG", category_code: code, rate: aiaPct(rate) }) });
+          toast(aiaT("fee_saved"), "success");
+          await calc();
+        } catch (err) {
+          toast(err.message || aiaT("fee_save_failed"), "error");
+        }
+      }));
+    };
+
+    const money = (v) => (v == null ? "-" : lwUiMoney(v));
+    const renderReport = (report) => {
+      state.report = report;
+      const [tone, verdictKey] = AIA_VERDICT[report.verdict] || ["warn", "verdict_hold"];
+      const missing = (report.missing || []).map((m) => `<li>${escapeHtml(m.message)}</li>`).join("");
+      const reasons = (report.reasons || []).map((m) => `<li>${escapeHtml(m)}</li>`).join("");
+      const rows = (report.scenarios || []).map((s) => `<tr>
+          <td>${lwUiPercent(s.target_margin_rate)}</td><td>${money(s.sale_price)}원</td><td>${money(s.margin_amount)}원</td>
+          <td>${s.margin_rate != null ? lwUiPercent(s.margin_rate) : "-"}</td><td>${s.price_per_unit != null ? escapeHtml(`${s.price_per_unit}/${(report.unit && report.unit.label) || ""}`) : "-"}</td></tr>`).join("");
+      const assumptions = (report.assumptions || []).map((a) => `<li>${escapeHtml(a.label)}: ${escapeHtml(a.value)}</li>`).join("");
+      const sens = (report.sensitivity || []).map((s) => `<li>${escapeHtml(s.label)} → ${lwUiPercent(s.margin_rate)}</li>`).join("");
+      const entered = report.entered_sale_price;
+      out.innerHTML = `
+        <p><span class="pill ${tone}">${aiaT(verdictKey)}</span> ${escapeHtml(aiaT("min_rate", { rate: (Number(report.min_margin_rate) * 100).toFixed(0) }))}</p>
+        ${reasons ? `<ul>${reasons}</ul>` : ""}
+        ${missing ? `<p class="field-error">${aiaT("missing_title")}</p><ul>${missing}</ul>` : ""}
+        ${rows ? `<table class="data-table"><thead><tr><th>${aiaT("col_target")}</th><th>${aiaT("col_price")}</th><th>${aiaT("col_margin")}</th><th>${aiaT("col_rate")}</th><th>${aiaT("col_unit")}</th></tr></thead><tbody>${rows}</tbody></table>` : ""}
+        ${report.unit ? `<p class="stat-sub">${escapeHtml(aiaT("unit_cost", { cost: report.unit.cost_per_unit, unit: report.unit.label || "", total: aiaPlain(report.unit.total_units), unit_total: report.unit.label || "" }))}</p>` : ""}
+        ${entered ? `<p class="stat-sub">${escapeHtml(aiaT("entered", { price: money(entered.sale_price), rate: (Number(entered.margin_rate) * 100).toFixed(2) }))}</p>` : ""}
+        ${sens ? `<details><summary>${aiaT("sens_title")}</summary><ul>${sens}</ul></details>` : ""}
+        ${assumptions ? `<details open><summary>${aiaT("assume_title")}</summary><ul>${assumptions}</ul></details>` : ""}
+        <p class="stat-sub">${aiaT("no_competitor")}</p>`;
+      applyBtn.hidden = !(report.scenarios || []).some((s) => s.sale_price);
+      renderFeeBox(report);
+    };
+
+    async function calc() {
+      out.innerHTML = "";
+      try {
+        renderReport(await apiFetch("/product-import/calculate", { method: "POST", body: JSON.stringify(body()) }));
+        lwUrlImportState.report = lwAiaSnapshot(state, body());
+      } catch (err) {
+        out.innerHTML = `<p class="field-error">${escapeHtml(err.message || aiaT("calc_failed"))}</p>`;
+      }
+    }
+
+    host.querySelector("[data-aia-calc]").addEventListener("click", (event) => withButtonGuard(event.currentTarget, calc));
+    applyBtn.addEventListener("click", () => {
+      const report = state.report;
+      const first = report && (report.scenarios || []).find((s) => s.sale_price);
+      if (!first || !el("lw-ui-cost")) return;
+      el("lw-ui-cost").value = Math.round(Number(report.cost_of_goods));
+      const ship = field("shipping_cost").value.trim();
+      if (el("lw-ui-shipping") && ship) el("lw-ui-shipping").value = ship;
+      if (el("lw-ui-fee") && report.fee && report.fee.rate) el("lw-ui-fee").value = (Number(report.fee.rate) * 100).toFixed(2);
+      if (el("lw-ui-reserve")) el("lw-ui-reserve").value = field("return_reserve_pct").value || "3";
+      if (el("lw-ui-target")) el("lw-ui-target").value = (Number(report.min_margin_rate) * 100).toFixed(2);
+      if (el("lw-ui-price")) el("lw-ui-price").value = Math.round(Number(first.sale_price));
+      toast(aiaT("applied"), "success");
+    });
+    return state;
+  }
+
+  // 후보 근거로 남길 화면 스냅샷(작게) — 어떤 값이 어디서 왔고 무엇이 가정이었는지 나중에 볼 수 있게 한다.
+  function lwAiaSnapshot(state, request) {
+    const report = state.report || {};
+    const sources = {};
+    Object.entries(state.prefill || {}).forEach(([key, entry]) => { sources[key] = entry.source; });
+    return {
+      v: 1, verdict: report.verdict, min_margin_rate: report.min_margin_rate, fee: report.fee, missing: (report.missing || []).map((m) => m.code),
+      reasons: report.reasons, cost_of_goods: report.cost_of_goods,
+      scenarios: (report.scenarios || []).map((s) => ({ t: s.target_margin_rate, p: s.sale_price, m: s.margin_rate })),
+      risks: report.risks, assumptions: (report.assumptions || []).map((a) => a.key),
+      inputs: { supply_price: request.supply_price, vat_state: request.vat_state, shipping_cost: request.shipping_cost, sell_quantity: request.sell_quantity, category_code: request.category_code },
+      prefill_sources: sources,
+    };
+  }
+
+  function lwAiaRenderAnalysis(data) {
+    const a = data.analysis || {};
+    const facts = a.facts || {};
+    const risks = (a.risks || []).map((r) => `<li><span class="pill ${r.severity === "MEDIUM" ? "" : "warn"}">${escapeHtml(r.label)}</span> ${escapeHtml(r.reason || "")}</li>`).join("");
+    const rejected = Object.entries(a.rejected || {}).map(([k, why]) => `<li>${escapeHtml(k)}: ${escapeHtml(why)}</li>`).join("");
+    const pack = facts.pack_count ? aiaT("pack_line", { n: facts.pack_count.value }) : "";
+    const vol = facts.unit_volume ? aiaT("volume_line", { v: facts.unit_volume.value, u: facts.unit_volume.unit }) : "";
+    const usage = data.usage || {};
+    return `
+      <dl class="lw-ui-info">
+        ${facts.product_type ? `<dd><span>${aiaT("a_type")}</span> ${escapeHtml(facts.product_type)}</dd>` : ""}
+        ${facts.brand ? `<dd><span>${aiaT("a_brand")}</span> ${escapeHtml(facts.brand)}</dd>` : ""}
+        ${(pack || vol) ? `<dd><span>${aiaT("a_composition")}</span> ${escapeHtml([pack, vol].filter(Boolean).join(" · "))}</dd>` : ""}
+        ${(a.category_candidates || []).length ? `<dd><span>${aiaT("a_category")}</span> ${escapeHtml(a.category_candidates.join(", "))}</dd>` : ""}
+      </dl>
+      ${risks ? `<p class="stat-sub">${aiaT("a_risks")}</p><ul>${risks}</ul>` : ""}
+      ${(a.unknowns || []).length ? `<p class="stat-sub">${aiaT("a_unknowns")}</p><ul>${a.unknowns.map((u) => `<li>${escapeHtml(u)}</li>`).join("")}</ul>` : ""}
+      ${(data.conflicts || []).length ? `<ul class="lw-ui-warnings">${data.conflicts.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : ""}
+      ${a.rationale ? `<p>${escapeHtml(a.rationale)}</p>` : ""}
+      ${rejected ? `<details><summary>${aiaT("a_rejected")}</summary><ul>${rejected}</ul></details>` : ""}
+      <p class="stat-sub">${escapeHtml(aiaT("a_usage", { cost: usage.cost_krw, used: Math.round(usage.month_used_krw || 0), limit: usage.monthly_limit_krw }))}</p>`;
+  }
+
+  function lwAiaAttach(host, searchData) {
+    host.innerHTML = `
+      <h3>${aiaT("title")}</h3>
+      <p class="stat-sub">${aiaT("hint")}</p>
+      <button type="button" class="btn btn-secondary" data-aia-run>${aiaT("run_btn")}</button>
+      <div data-aia-analysis aria-live="polite"></div>
+      <div data-aia-calc-host></div>`;
+    const calcHost = host.querySelector("[data-aia-calc-host]");
+    const analysisHost = host.querySelector("[data-aia-analysis]");
+    lwAiaMountCalc(calcHost, { prefill: {}, analysis: null });
+    host.querySelector("[data-aia-run]").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const ok = await askConfirm(aiaT("confirm_body"), { title: aiaT("confirm_title"), okLabel: aiaT("run_btn") });
+      if (!ok) return;
+      analysisHost.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        const data = await apiFetch("/product-import/analyze", { method: "POST", body: JSON.stringify({ url: searchData.source_url }) });
+        analysisHost.innerHTML = lwAiaRenderAnalysis(data);
+        lwAiaMountCalc(calcHost, { prefill: data.prefill, analysis: data.analysis });
+      } catch (err) {
+        analysisHost.innerHTML = `<p class="field-error">${escapeHtml(err.message || aiaT("run_failed"))}</p>`;
+      }
+    }));
+  }
+
+  // URL 없이 직접 계산(판매자가 공급가를 직접 아는 경우) — 부가세 선택은 똑같이 필수다.
+  function lwAiaEnsureManual() {
+    const panel = el("lw-url-import-panel");
+    if (!panel || panel.querySelector("[data-aia-manual]")) return;
+    const details = document.createElement("details");
+    details.setAttribute("data-aia-manual", "");
+    details.innerHTML = `<summary>${aiaT("manual_title")}</summary><p class="stat-sub">${aiaT("manual_hint")}</p><div data-aia-manual-host></div>`;
+    panel.append(details);
+    lwAiaMountCalc(details.querySelector("[data-aia-manual-host]"), { prefill: {}, analysis: null });
+  }
+  // ---- /AI 분석 · 단가 · 이익 계산 ----
 
   async function lwOpenWizard(id) {
     try {
@@ -11716,6 +11977,142 @@
     };
 
     lwWireAutosaveInputs(content);
+    lwAttachAiDraft(content);
+  }
+
+  // 2026-10-18 — 등록 도우미 AI 초안(Phase B). AI는 제안만 하고, 사용자가 필드마다 고른 것만 3단계 초안에 저장된다.
+  // 보내는 것은 상품 정보뿐이고(가격·원가·연락처·주문 정보 없음), 월 한도·승인 센터 허용·호출별 사용 기록으로 비용을 막는다.
+  function lwAttachAiDraft(content) {
+    content.querySelector("[data-lw-ai]")?.remove();
+    const wizardId = lwState.wizard.id;
+    const base = `/listing-wizards/${wizardId}/ai-draft`;
+    const panel = document.createElement("section");
+    panel.setAttribute("data-lw-ai", "");
+    panel.style.cssText = "border:1px solid var(--border,#d0d7de);border-radius:8px;padding:12px 14px;margin:14px 0;";
+    panel.innerHTML = `
+      <h3 style="margin:0 0 4px;">${HomezI18n.t("lw.ai_title")}</h3>
+      <p class="stat-sub" style="margin:0 0 8px;">${HomezI18n.t("lw.ai_hint")}</p>
+      <p data-lw-ai-status class="stat-sub"></p>
+      <details data-lw-ai-settings style="margin:6px 0;">
+        <summary>${HomezI18n.t("lw.ai_settings_title")}</summary>
+        <div class="lw-field-grid" style="margin-top:8px;">
+          <label class="field"><span class="field-label">${HomezI18n.t("lw.ai_model")}</span>
+            <input type="text" data-lw-ai-model autocomplete="off"></label>
+          <label class="field"><span class="field-label">${HomezI18n.t("lw.ai_limit")}</span>
+            <input type="number" min="1" step="1" data-lw-ai-limit></label>
+          <label class="field"><span class="field-label">${HomezI18n.t("lw.ai_in_price")}</span>
+            <input type="number" min="0" step="any" data-lw-ai-in></label>
+          <label class="field"><span class="field-label">${HomezI18n.t("lw.ai_out_price")}</span>
+            <input type="number" min="0" step="any" data-lw-ai-out></label>
+          <label class="field"><span class="field-label">${HomezI18n.t("lw.ai_key")}</span>
+            <input type="password" data-lw-ai-key autocomplete="new-password" placeholder="${escapeHtml(HomezI18n.t("lw.ai_key_placeholder"))}"></label>
+        </div>
+        <p class="stat-sub">${HomezI18n.t("lw.ai_settings_hint")}</p>
+        <button type="button" class="btn btn-secondary btn-sm" data-lw-ai-save>${HomezI18n.t("lw.ai_save_btn")}</button>
+      </details>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" data-lw-ai-propose>${HomezI18n.t("lw.ai_propose_btn")}</button>
+        <button type="button" class="btn btn-primary btn-sm" data-lw-ai-apply disabled>${HomezI18n.t("lw.ai_apply_btn")}</button>
+      </div>
+      <div data-lw-ai-result style="margin-top:10px;"></div>`;
+    const anchor = content.querySelector("#lw-draft-error");
+    if (anchor) anchor.before(panel); else content.append(panel);
+    const statusEl = panel.querySelector("[data-lw-ai-status]");
+    const result = panel.querySelector("[data-lw-ai-result]");
+    const applyBtn = panel.querySelector("[data-lw-ai-apply]");
+    const field = (name) => panel.querySelector(`[data-lw-ai-${name}]`);
+    let proposal = null;
+
+    const loadStatus = async () => {
+      try {
+        const st = await apiFetch(`${base}/status`);
+        field("model").value = st.model || "";
+        field("limit").value = st.monthly_limit_krw || "";
+        field("in").value = st.in_price ?? "";
+        field("out").value = st.out_price ?? "";
+        statusEl.textContent = st.configured
+          ? HomezI18n.t("lw.ai_status_ready", { used: Math.round(st.month_used_krw), limit: st.monthly_limit_krw, calls: st.month_calls })
+          : HomezI18n.t("lw.ai_status_not_ready");
+        panel.querySelector("[data-lw-ai-settings]").open = !st.configured;
+        field("key").placeholder = st.key_saved ? HomezI18n.t("lw.ai_key_saved") : HomezI18n.t("lw.ai_key_placeholder");
+      } catch (err) {
+        statusEl.textContent = err.message || "";
+      }
+    };
+    loadStatus();
+
+    field("save").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const body = {
+        model: field("model").value.trim(), monthly_limit_krw: Number(field("limit").value),
+        in_price: Number(field("in").value), out_price: Number(field("out").value),
+        api_key: field("key").value.trim() || null,
+      };
+      const token = await promptRecentAuthToken();
+      if (token === null) return;
+      try {
+        await apiFetch(`${base}/settings`, { method: "PUT", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(body) });
+        field("key").value = "";
+        toast(HomezI18n.t("lw.ai_saved"), "success");
+        await loadStatus();
+      } catch (err) {
+        toast(err.message || HomezI18n.t("lw.ai_save_failed"), "error");
+      }
+    }));
+
+    const labels = { product_name: "lw.ai_f_name", keywords: "lw.ai_f_keywords", description: "lw.ai_f_description" };
+    const renderProposal = (data) => {
+      proposal = data;
+      const cur = data.current || {};
+      const rows = Object.keys(labels).filter((key) => key in (data.fields || {})).map((key) => {
+        const value = Array.isArray(data.fields[key]) ? data.fields[key].join(", ") : data.fields[key];
+        const before = key === "keywords" ? (cur.keywords || []).join(", ") : (cur[key] || "");
+        return `<div style="margin:0 0 10px;">
+          <label class="lw-checklist-item"><input type="checkbox" data-lw-ai-pick="${key}" checked>
+            <span><strong>${escapeHtml(HomezI18n.t(labels[key]))}</strong></span></label>
+          <div class="stat-sub">${escapeHtml(HomezI18n.t("lw.ai_before"))}: ${escapeHtml(before || "—")}</div>
+          <textarea data-lw-ai-edit="${key}" rows="${key === "description" ? 4 : 2}" style="width:100%;">${escapeHtml(value)}</textarea></div>`;
+      }).join("");
+      const rejected = Object.values(data.rejected || {}).map((why) => `<li>${escapeHtml(why)}</li>`).join("");
+      const usage = data.usage || {};
+      result.innerHTML = `
+        ${rows || `<p class="field-error">${HomezI18n.t("lw.ai_none_passed")}</p>`}
+        ${rejected ? `<p class="stat-sub">${HomezI18n.t("lw.ai_rejected")}</p><ul>${rejected}</ul>` : ""}
+        <p class="stat-sub">${escapeHtml(HomezI18n.t("lw.ai_usage", { cost: usage.cost_krw, used: Math.round(usage.month_used_krw || 0), limit: usage.monthly_limit_krw }))}</p>
+        <p class="stat-sub">${HomezI18n.t("lw.ai_next")}</p>`;
+      applyBtn.disabled = !rows;
+      loadStatus();
+    };
+
+    field("propose").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const ok = await askConfirm(HomezI18n.t("lw.ai_confirm_body"), { title: HomezI18n.t("lw.ai_confirm_title"), okLabel: HomezI18n.t("lw.ai_propose_btn") });
+      if (!ok) return;
+      result.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        renderProposal(await apiFetch(`${base}/propose`, { method: "POST" }));
+      } catch (err) {
+        result.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("lw.ai_propose_failed"))}</p>`;
+      }
+    }));
+
+    applyBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      if (!proposal) return;
+      const body = { expected_version: lwState.wizard.version };
+      panel.querySelectorAll("[data-lw-ai-pick]").forEach((box) => {
+        if (!box.checked) return;
+        const key = box.dataset.lwAiPick;
+        const raw = panel.querySelector(`[data-lw-ai-edit="${key}"]`).value.trim();
+        body[key] = key === "keywords" ? raw.split(",").map((v) => v.trim()).filter(Boolean) : raw;
+      });
+      if (Object.keys(body).length === 1) { toast(HomezI18n.t("lw.ai_pick_none"), "error"); return; }
+      try {
+        const done = await apiFetch(`${base}/apply`, { method: "POST", body: JSON.stringify(body) });
+        lwState.wizard = await apiFetch(`/listing-wizards/${wizardId}`);
+        toast(HomezI18n.t("lw.ai_applied", { fields: done.applied.length }), "success");
+        lwRenderDraftStep(content);
+      } catch (err) {
+        toast(err.message || HomezI18n.t("lw.ai_apply_failed"), "error");
+      }
+    }));
   }
 
   // ---- 3단계: 이미지 ----

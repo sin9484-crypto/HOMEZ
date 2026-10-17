@@ -39,6 +39,7 @@ from fastapi import Header
 from fastapi import Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from sqlalchemy.orm import Session
 
@@ -615,6 +616,104 @@ def registration_assistant_apply(
     metadata = _assistant_metadata(db, current_user.company_id, wizard, data)
     return RegistrationAssistantService(db).apply(
         wizard_id, current_user.company_id, current_user.id, data, metadata,
+    )
+
+
+class AiDraftSettingsRequest(BaseModel):
+    """AI 초안 설정 — API 키는 쓰기 전용이다(응답·조회에 돌려주지 않는다). 비워 두면 기존 키를 유지한다."""
+
+    model: str
+    monthly_limit_krw: int
+    in_price: float
+    out_price: float
+    api_key: str | None = None
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+
+class AiDraftApplyRequest(BaseModel):
+    expected_version: int
+    product_name: str | None = None
+    keywords: list[str] | None = None
+    description: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def _ai_draft_service(db: Session, credential_store: CredentialStore):
+    from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+
+    return AiDraftService(db, credential_store)
+
+
+@router.get("/{wizard_id}/ai-draft/status")
+def ai_draft_status(
+    wizard_id: int,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """AI 초안 설정·이번 달 사용량(읽기 전용, 바깥 호출 없음). 키는 저장 여부만 알려 준다."""
+
+    ListingWizardService(db).get(wizard_id, current_user.company_id)
+    return _ai_draft_service(db, credential_store).status(current_user.id, current_user.company_id)
+
+
+@router.put("/{wizard_id}/ai-draft/settings")
+def ai_draft_save_settings(
+    wizard_id: int,
+    data: AiDraftSettingsRequest,
+    current_user: User = Depends(SuperAdminGuard),
+    recent_auth_token: str | None = Header(default=None, alias="X-Recent-Auth-Token"),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """모델·월 한도·단가·API 키 저장. 비용과 비밀값을 다루므로 비밀번호 재확인이 먼저다."""
+
+    from app.core.audit_db import write_audit_log
+    from app.core.exceptions import ForbiddenException
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise ForbiddenException("현재 비밀번호 재확인이 필요합니다.")
+    ListingWizardService(db).get(wizard_id, current_user.company_id)
+    result = _ai_draft_service(db, credential_store).save_settings(
+        current_user.id, current_user.company_id, model=data.model, monthly_limit_krw=data.monthly_limit_krw,
+        in_price=data.in_price, out_price=data.out_price, api_key=data.api_key,
+    )
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id, action="AI_DRAFT_SETTINGS_SAVED",
+        entity="ai_draft", entity_id="SETTINGS",
+        description=f"AI 초안 설정 저장(모델 {result['model']}, 월 한도 {result['monthly_limit_krw']}원, 키 {'교체' if data.api_key else '유지'})",
+    )
+    db.commit()
+    return result
+
+
+@router.post("/{wizard_id}/ai-draft/propose")
+def ai_draft_propose(
+    wizard_id: int,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """AI(Claude)에게 상품 정보를 보내 상품명·검색어·설명 초안을 받는다 — 위저드는 바꾸지 않는다. 월 한도·승인 센터 허용이 있어야 나간다."""
+
+    return _ai_draft_service(db, credential_store).propose(wizard_id, current_user.company_id, current_user.id)
+
+
+@router.post("/{wizard_id}/ai-draft/apply")
+def ai_draft_apply(
+    wizard_id: int,
+    data: AiDraftApplyRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """사용자가 고른 필드만 3단계 초안에 저장한다(같은 검증을 서버가 다시 한다). 바깥 호출 없음."""
+
+    accepted = {k: v for k, v in (("product_name", data.product_name), ("keywords", data.keywords), ("description", data.description)) if v is not None}
+    return _ai_draft_service(db, credential_store).apply(
+        wizard_id, current_user.company_id, current_user.id, accepted, data.expected_version,
     )
 
 

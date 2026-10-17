@@ -373,12 +373,19 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         stop_condition="해당 없음(순수 계산, 부작용 없음)",
         external_provider=None,
         model_prompt_policy_version="calculator-v1",
-        provider_status="NO_AI — 순수 Decimal 계산 함수(CALCULATOR), 추론 없음",
+        provider_status=(
+            "NO_AI — 순수 Decimal 계산 함수(CALCULATOR), 추론 없음. 2026-10-18부터 URL 상품 분석 화면은 "
+            "계산 앞 단계에서 AI(Claude)가 페이지의 구성·부가세 표기·배송비를 읽어 오지만, 그 값은 페이지 "
+            "원문 인용 검증을 통과한 '제안'일 뿐이고 금액·마진 계산과 판정은 이 계산기와 규칙이 한다"
+            "(AI는 금액을 계산하지 않는다). 모르는 값은 계산을 보류한다."
+        ),
         actual_entry_points=(
             "app/domains/channel_policy/service.py::"
             "ChannelPolicyService.estimate_margin()",
             "app/domains/marketplace_listing/listing_wizard_service.py::"
             "ListingWizardService.update_economics()",
+            "app/domains/product_import/url_analysis_service.py::"
+            "calculate_report() (URL 상품 분석 — 결정적 계산 + 규칙 판정)",
         ),
         unimplemented_dependencies=(),
         implementation_reference=(
@@ -417,22 +424,31 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         external_provider=None,
         model_prompt_policy_version="fake-draft-v1",
         provider_status=(
-            "NO_REAL_PROVIDER — FakeDraftContentProvider(결정론적 해시 "
-            "템플릿)만 존재, 실 LLM 미연동. DisabledDraftContentProvider가 "
-            "fail-closed 기본값."
+            "후보 파이프라인(start_pipeline)의 기본 경로는 여전히 "
+            "FakeDraftContentProvider(결정론적 해시 템플릿)이고 "
+            "DisabledDraftContentProvider가 fail-closed 기본값이다. "
+            "2026-10-18부터 별개 경로로 실 LLM Provider(LlmDraftProvider, "
+            "Claude Messages API)가 구현돼 있다 — 등록 위저드 3단계 'AI 초안'에서 "
+            "사용자가 누를 때만 호출되며 월 한도·승인 센터 허용(LLM/AI_DRAFT)·"
+            "호출별 사용 기록·응답 필드별 검증을 거친다. 이 구현 시점에는 단위 테스트(가짜 "
+            "전송)만 통과했고 실제 API 호출·화면 실사용 검증은 아직 하지 않았다."
         ),
         actual_entry_points=(
             "app/domains/marketplace_listing/candidate_pipeline_service.py::"
             "CandidatePipelineService.start_pipeline()",
+            "app/domains/marketplace_listing/ai_draft_service.py::"
+            "AiDraftService.propose()/apply() (위저드 /ai-draft/* 엔드포인트)",
         ),
         unimplemented_dependencies=(
-            "실 LLM Provider 없음",
+            "후보 파이프라인 경로에는 실 LLM Provider가 연결돼 있지 않다(위저드 AI 초안 경로에만 있음)",
             "허위 효능/인증/원산지 방지는 run_content_policy_checklist()"
             "가 별도 담당 — 이 capability 자체는 문구 생성만 수행",
         ),
         implementation_reference=(
             "app/domains/marketplace_listing/draft_content_provider.py::"
-            "FakeDraftContentProvider / DisabledDraftContentProvider(fail-closed)"
+            "FakeDraftContentProvider / DisabledDraftContentProvider(fail-closed); "
+            "app/domains/marketplace_listing/llm_draft_provider.py::LlmDraftProvider + validate_response "
+            "(실 LLM 경로, 사용자 클릭 시에만)"
         ),
     ),
     CapabilityContract(

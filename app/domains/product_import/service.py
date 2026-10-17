@@ -18,6 +18,7 @@ URL 상품 가져오기(2026-10-14) — 검색 → 수익 계산 → 상품 후�
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from decimal import Decimal
@@ -48,6 +49,7 @@ from app.domains.product_candidate.service import ProductCandidateService
 from app.domains.product_import import schema
 from app.domains.product_import.generic_extractor import claim_words_in
 from app.domains.product_import.generic_extractor import extract_generic
+from app.domains.product_import.html_tree import parse_html
 from app.domains.product_import.notice_suggestions import decode_notice_rows
 from app.domains.product_import.notice_suggestions import encode_notice_rows
 from app.domains.product_import.notice_suggestions import suggest_notice_values
@@ -142,15 +144,22 @@ class ProductImportService:
         return _decode_html(response.body, content_type), current
 
     def search(self, url: str, company_id: int, user_id: int | None) -> schema.UrlSearchResponse:
+        return self.search_with_text(url, company_id, user_id)[0]
+
+    def search_with_text(self, url: str, company_id: int, user_id: int | None) -> tuple[schema.UrlSearchResponse, str]:
+        """`search`와 같은 읽기(페이지 1회, 온채널이면 공식 API 상품 조회 1회)에 보이는 페이지 글을 함께 돌려준다.
+        URL 상품 분석(AI)이 근거 인용을 확인할 때 쓴다 — 추가 접근은 없다."""
+
         url = url.strip()
         try:
             html, final_url = self._fetch_html(url)
         except UrlImportError as exc:
             raise ProductImportError(str(exc)) from exc
 
+        page_text = re.sub(r"\s+", " ", parse_html(html).text() or "").strip()
         if is_onchannel_product_url(final_url):
-            return self._search_onchannel(html, final_url, company_id, user_id)
-        return self._search_generic(html, final_url)
+            return self._search_onchannel(html, final_url, company_id, user_id), page_text
+        return self._search_generic(html, final_url), page_text
 
     def _search_onchannel(
         self, html: str, url: str, company_id: int, user_id: int | None,
@@ -426,6 +435,14 @@ class ProductImportService:
             self.db.add(ProductCandidateEvidence(
                 candidate_id=candidate.id, evidence_type=EvidenceType.RAW_SOURCE,
                 payload_summary=encode_notice_rows([(r.label, r.value) for r in request.notice_rows]),
+            ))
+            self.db.commit()
+
+        if request.analysis_report:
+            snapshot = json.dumps(request.analysis_report, ensure_ascii=False, separators=(",", ":"))
+            self.db.add(ProductCandidateEvidence(
+                candidate_id=candidate.id, evidence_type=EvidenceType.RAW_SOURCE,
+                payload_summary=("AI_ANALYSIS_REPORT:(화면 스냅샷) " + snapshot)[:3900],
             ))
             self.db.commit()
 

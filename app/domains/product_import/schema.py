@@ -124,6 +124,8 @@ class DraftCreateRequest(BaseModel):
     image_urls_detail: list[str] = Field(default_factory=list)
     # 원가·판매가·비율을 모두 주면 위저드 6단계 경제성 입력까지 채운다(없으면 건너뛴다).
     margin: MarginProposalRequest | None = None
+    # 2026-10-18 — URL 분석 화면의 계산 결과 스냅샷(화면 기준). 있으면 후보 근거(append-only)에 보관해 나중에 추적한다.
+    analysis_report: dict | None = None
     creation_idempotency_key: str = Field(min_length=1, max_length=160)
 
     model_config = ConfigDict(extra="forbid")
@@ -164,3 +166,51 @@ class NoticeSuggestionResponse(BaseModel):
 
     suggestions: dict[str, str] = Field(default_factory=dict)
     source_found: bool = False
+
+
+# ----------------------------------------------------------------------
+# 2026-10-18 URL 상품 분석(AI) · 단가 · 이익 계산
+# ----------------------------------------------------------------------
+
+VatState = Literal["INCLUDED", "EXCLUDED", "EXEMPT"]
+
+
+class AnalyzeRequest(BaseModel):
+
+    url: str = Field(min_length=8, max_length=2000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CalculateRequest(BaseModel):
+    """계산 입력 — 모르는 값(공급가·부가세·배송비)은 비워 두면 계산하지 않고 보류로 돌려준다(0으로 채우지 않는다)."""
+
+    channel: str = Field(default="COUPANG", min_length=2, max_length=20)
+    category_code: str | None = Field(default=None, max_length=20)
+    supply_price: Decimal | None = Field(default=None, ge=0)
+    vat_state: VatState | None = None
+    shipping_cost: Decimal | None = Field(default=None, ge=0)
+    sell_quantity: int = Field(default=1, ge=1, le=1000)
+    packaging_cost: Decimal = Field(default=Decimal("0"), ge=0)
+    return_reserve_rate: Decimal = Field(default=Decimal("0.03"), ge=0, le=Decimal("0.5"))
+    payment_fee_rate: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("0.5"))
+    sale_price: Decimal | None = Field(default=None, ge=0)
+    pack_count: int | None = Field(default=None, ge=1, le=1000)
+    unit_volume: Decimal | None = Field(default=None, gt=0, le=100000)
+    unit: str | None = Field(default=None, max_length=10)
+    risk_codes: list[str] = Field(default_factory=list, max_length=10)
+    acknowledged_risks: list[str] = Field(default_factory=list, max_length=10)
+    ai_sourced: list[Literal["supply_price", "vat_state", "shipping_cost"]] = Field(default_factory=list, max_length=3)
+    ai_values_confirmed: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChannelFeeSaveRequest(BaseModel):
+
+    channel: str = Field(min_length=2, max_length=20)
+    category_code: str = Field(min_length=1, max_length=20)
+    rate: Decimal
+    note: str | None = Field(default=None, max_length=40)
+
+    model_config = ConfigDict(extra="forbid")

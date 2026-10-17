@@ -13,9 +13,10 @@ File : app/domains/external_call/constants.py
 class ExternalSystem:
     COUPANG = "COUPANG"
     ONCH = "ONCH"
+    LLM = "LLM"  # 2026-10-18 — 글 초안을 만드는 AI 서비스(Claude). 상품 정보 글을 바깥으로 보내고 사용료가 든다.
 
-    ALL = (COUPANG, ONCH)
-    LABELS = {COUPANG: "쿠팡", ONCH: "온채널"}
+    ALL = (COUPANG, ONCH, LLM)
+    LABELS = {COUPANG: "쿠팡", ONCH: "온채널", LLM: "AI 글쓰기(Claude)"}
 
 
 class CallKind:
@@ -33,22 +34,26 @@ class CallPurpose:
     ORDER_TRACKING = "ORDER_TRACKING"              # 진행 중 주문·배송 상태 확인(쿠팡 발주서 단건 조회, 10분마다)
     AFTER_SALES_CHECK = "AFTER_SALES_CHECK"        # 배송 이후 반품·문의·정산 확인(쿠팡 조회, 10분마다·정산은 하루 몇 번)
     PRODUCT_STATUS_CHECK = "PRODUCT_STATUS_CHECK"  # 등록한 상품의 쿠팡 심사·판매 상태 확인(상품 조회·상태 이력 조회, 30분마다)
+    AI_DRAFT = "AI_DRAFT"                          # 등록 도우미 AI 초안(상품 정보 글을 AI 서비스에 보내 상품명·검색어·설명 초안을 받는다 — 호출마다 사용료)
+    AI_ANALYSIS = "AI_ANALYSIS"                    # URL 상품 분석 AI(페이지 글을 AI 서비스에 보내 상품 해석·위험 신호를 받는다 — 호출마다 사용료)
     INVOICE_UPLOAD = "INVOICE_UPLOAD"              # 쿠팡 송장 등록(발주서 조회·송장 전송)
     PRODUCT_OUTBOUND_DAYS = "PRODUCT_OUTBOUND_DAYS"  # 등록 상품 기준 출고일 변경(상품 조회·수정)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
         AFTER_SALES_CHECK: "반품·민원·정산 확인",
         PRODUCT_STATUS_CHECK: "상품 상태 확인",
+        AI_DRAFT: "등록 도우미 AI 초안",
+        AI_ANALYSIS: "URL 상품 AI 분석",
         INVOICE_UPLOAD: "쿠팡 송장 등록",
         PRODUCT_OUTBOUND_DAYS: "상품 출고일 변경",
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS})
 
 
 class AllowanceMode:
