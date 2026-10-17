@@ -29,6 +29,7 @@ from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+from app.domains.order.product_rejection_advice import classify_rejection
 from app.domains.order.product_status_monitor_service import ProductStatusMonitorService
 from app.domains.order.supplier_return_service import SupplierReturnService
 from app.domains.purchase_task.constants import ChannelActionStatus
@@ -234,6 +235,8 @@ class EasyViewService:
                 "checked_at": info.get("checked_at"),
                 "reason": (info.get("reason") or "") if reason_current else "",
                 "reason_state": info.get("reason_state") if reason_current else None,
+                # 사유 문구를 규칙으로 분류한 고치는 방법 안내 종류(AI 없음). 사유가 현재 것이 아니면 붙이지 않는다.
+                "advice": classify_rejection(info.get("reason")) if reason_current else [],
             })
         return items
 

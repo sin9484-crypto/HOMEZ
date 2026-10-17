@@ -886,9 +886,16 @@
     const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
     const reason = p.reason ? `<div class="ez-note warn" style="margin-top:12px"><span class="ez-dot warn">!</span><div>${esc(p.reason)}</div></div>`
       : `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info">i</span><div>${esc(T(p.reason_state === "NO_REASON" ? "easy.pstatus.no_reason" : "easy.pstatus.reason_pending"))}</div></div>`;
+    // 사유 문구를 규칙으로 분류한 고치는 방법(AI 없음). 관측한 문구는 "이 사유는", 미관측 문구는 "예상되는 원인"으로만 표시한다.
+    const advice = (Array.isArray(p.advice) ? p.advice : []).map((a) => {
+      const steps = [1, 2, 3, 4].map((n) => tryT(`easy.advice.${a.code}.s${n}`, "")).filter(Boolean);
+      const head = a.code === "UNKNOWN" ? "" : `<span class="ez-muted" style="font-size:12px">${esc(T(a.observed ? "easy.advice.observed" : "easy.advice.guess"))}</span> `;
+      return `<div class="ez-note info" style="margin-top:10px"><span class="ez-dot info">i</span><div>${head}<b>${esc(tryT(`easy.advice.${a.code}.t`, ""))}</b>`
+        + `<ol style="margin:6px 0 0 18px;padding:0">${steps.map((t) => `<li>${esc(t)}</li>`).join("")}</ol></div></div>`;
+    }).join("");
     await ezDialog({
       title: T("easy.pstatus.dialog_title"), okLabel: T("dialog.confirm.cancel"),
-      bodyHtml: `<div>${kv(T("easy.pstatus.f_product"), p.product_name)}${kv(T("easy.today.coupang_no", { id: p.seller_product_id }), "")}${kv(T("easy.pstatus.f_checked"), p.checked_at || "—")}</div>${reason}
+      bodyHtml: `<div>${kv(T("easy.pstatus.f_product"), p.product_name)}${kv(T("easy.today.coupang_no", { id: p.seller_product_id }), "")}${kv(T("easy.pstatus.f_checked"), p.checked_at || "—")}</div>${reason}${advice}
         <p class="ez-muted" style="font-size:13px;margin-top:10px">${esc(T("easy.pstatus.howto"))}</p>`,
     });
   }
