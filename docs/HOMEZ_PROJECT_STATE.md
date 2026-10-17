@@ -12871,3 +12871,14 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 사용자 승인("제안 보기 쿠팡 get 1회 승인"): 위저드 #22 5단계에서 "제안 보기" 1회 실행 — 쿠팡 카테고리 메타데이터 GET **정확히 1회**(예산 기록 일치), POST·PUT 0, 예산 0 복귀. 결과 "저장할 수 있어요·옵션 조합 1개", 고정값(WING 아이디·택배사·상담 전화) 사용, 이미지·상세설명·사용권 유지 안내. 저장("이 제안으로 저장")은 누르지 않음.
 - **발견한 결함**: 제안의 판매자 SKU가 임시 규칙(`PC3-CH1147184-01`)이라, 저장하면 기존 SKU(`PC3-CH1147184-3945580`)가 바뀌어 재고 SKU #27·채널 매핑 #2·공급 옵션 연결 #3이 끊어질 수 있었음. **보완**: `keep_saved_item_identity` — 저장된 아이템이 하나일 때 SKU·아이템 이름·상품 식별자를 그대로 유지(`SAVED_SKU_KEPT`), 여러 개이고 SKU가 달라지면 `SAVED_SKUS_CHANGE` 주의점. 테스트 4건 추가(호출 제거 변이 시 실패, 복원 확인), 도우미 3개 모듈 68건 통과.
 - **주의**: 실행 중인 앱(재시작 45차)은 이 보완 이전 코드다 — 재시작 전에는 "이 제안으로 저장"을 누르지 말 것(#22는 제출 완료라 영향 없음). 보완은 미커밋.
+
+## 2026-10-17 — 연동 안정화 A 단계 구현(A1~A4, 미커밋·앱 재시작 전)
+
+사용자 승인("A단계 Whitelist승인 구현진행")에 따라 구현. 외부 호출 0, Migration 0, 개발 가드(저장소 밖) 변경 없음. 상세는 `docs/HOMEZ_INTEGRATION_RELIABILITY_20261017.md`.
+
+- **A1** `coupang_collection_service.classify_provider_exception`: 막힘 표지(`CALL_BLOCK_MARKERS`, "범위 한정 가드")로 시작하는 `RuntimeError`를 `ORDER_PROVIDER_CALL_BLOCKED`로 분류 → 연속 실패로 세지 않아 가드 만료로 자동 감지가 ERROR로 내려가지 않음(오늘 13:44 사고의 직접 원인). 진짜 내부 오류는 기존대로 3회 연속이면 자동 중지. 테스트 `tests/test_collection_call_blocked_classification.py` 6건.
+- **A2** `external_call` 서비스·라우터: `renewable()`(상시 조회 허용 중 만료 12시간 이하·만료 7일 이내, 목적별 최신 항목만, 사용자가 취소·거절한 것과 쓰기·횟수형은 제외), `renew_expiring()`, `POST /external-calls/renew-expiring`(비밀번호 재확인 필수·감사 `EXTERNAL_CALL_RENEWED`), 요약 응답 `renewable`. 쉬운 보기: 승인 센터 "모두 24시간 연장"(확인창→비밀번호), 오늘 할 일 "허용이 곧 만료돼요". 테스트 `tests/test_external_allowance_renew_all.py` 12건.
+- **A3** 신규 `listing_wizard_reapproval_service.py`, 위저드 라우터 `GET …/reapproval-status`·`POST …/reapprove`(SuperAdmin·비밀번호 재확인·감사 `WIZARD_FINAL_APPROVAL_RENEWED`): 만료된 최종 승인(유효 1시간)을 8단계 승인 그대로(지문 일치)이고 제출이 아직 전송 전일 때만 다시 1시간 받음. 결과 화면에 남은 시간·"최종 승인 다시 받기". 테스트 `tests/test_wizard_reapproval.py` 11건(기반 클래스의 수백 개 시험을 물려받지 않도록 `load_tests`로 자기 시험만 로드).
+- **A4** 9단계 버튼 "지금 등록 실행"→"제출(내부 준비)" + 안내 문구(쿠팡에는 아직 안 보냄, 결과 화면에서 전송 전 검사 후 "쿠팡으로 전송", 승인 1시간). 테스트 `tests/test_wizard_submit_wording_ui.py` 5건.
+- **정정**: 앞선 "제출이 곧바로 쿠팡 POST까지 갔다"는 기록은 틀렸다 — 제출 #19 생성 05:09:50, 쿠팡 POST 05:10:14, 감사 05:10:16(사용자가 제출 직후 "쿠팡으로 전송"을 따로 누름). 제출과 전송은 별개 단계다.
+- **온채널 문서 재확인(사용자 승인, 공개 문서 읽기)**: OpenAPI v0.1, 경로 20개(이전 18개 + 공급사용 상품 등록·수정 요청 2개) — 판매자용 반품·교환·취소·환불 요청 API는 여전히 없음(주문 단계 4: 취소반품·5: 부분환불은 읽기만).

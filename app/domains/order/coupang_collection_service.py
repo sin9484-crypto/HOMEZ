@@ -32,8 +32,13 @@ from app.domains.store_connection.model import StoreConnection
 from app.core.logger import logger
 
 
+# 실행 환경(개발용 범위 한정 가드 등)이 호출을 막을 때 쓰는 접두 표지. 가드가 `PermissionError`가 아닌 `RuntimeError`로 막는 경우가 있어
+# (2026-10-17: 가드 규칙 만료 → `RuntimeError("범위 한정 가드: …")`가 INTERNAL_ERROR로 세어져 3회 연속 실패로 자동 중지됐다) 접두로 알아본다.
+CALL_BLOCK_MARKERS = ("범위 한정 가드",)
+
+
 def classify_provider_exception(exc: BaseException) -> str:
-    """쿠팡 주문 조회 중 난 예외를 **원인 종류별 코드**로 바꾼다(2026-10-16). 예외 메시지는 쓰지 않는다."""
+    """쿠팡 주문 조회 중 난 예외를 **원인 종류별 코드**로 바꾼다(2026-10-16). 예외 메시지는 기록하지 않고, 막힘 표지(접두)만 본다."""
 
     import requests
 
@@ -42,6 +47,8 @@ def classify_provider_exception(exc: BaseException) -> str:
     if isinstance(exc, requests.RequestException):
         return "ORDER_PROVIDER_NETWORK_ERROR"
     if isinstance(exc, PermissionError):
+        return "ORDER_PROVIDER_CALL_BLOCKED"
+    if isinstance(exc, RuntimeError) and str(exc).startswith(CALL_BLOCK_MARKERS):
         return "ORDER_PROVIDER_CALL_BLOCKED"
     return "ORDER_PROVIDER_INTERNAL_ERROR"
 

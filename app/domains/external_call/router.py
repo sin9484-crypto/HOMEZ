@@ -13,6 +13,9 @@ File : app/domains/external_call/router.py
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Header
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from app.core.audit_db import write_audit_log
@@ -67,6 +70,34 @@ def grant_allowance(
     )
     db.commit()
     return {"id": allowance.id, "status": allowance.status}
+
+
+class RenewRequest(BaseModel):
+    """만료 임박·만료 상시 조회 허용을 같은 한도로 일괄 연장한다."""
+
+    within_hours: int = Field(default=12, ge=1, le=168)
+    hours: int = Field(default=24, ge=1, le=72)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/renew-expiring")
+def renew_expiring(
+    data: RenewRequest, current_user: User = Depends(AdminGuard), db: Session = Depends(get_db),
+    recent_auth_token: str | None = Header(default=None, alias="X-Recent-Auth-Token"),
+):
+    _require_recent_auth(recent_auth_token, current_user)
+    created = ExternalCallPolicyService(db).renew_expiring(
+        current_user.company_id, user_id=current_user.id, within_hours=data.within_hours, hours=data.hours,
+    )
+    for allowance in created:
+        write_audit_log(
+            db, user_id=current_user.id, company_id=current_user.company_id, action="EXTERNAL_CALL_RENEWED",
+            entity="external_call_allowance", entity_id=str(allowance.id),
+            description=f"바깥 호출 허용 일괄 연장: {_describe(allowance)}",
+        )
+    db.commit()
+    return {"renewed": [{"id": a.id, "purpose": a.purpose, "per_hour_limit": a.per_hour_limit} for a in created]}
 
 
 @router.post("/requests/{allowance_id}/approve")

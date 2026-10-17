@@ -51,6 +51,10 @@ from app.domains.external_call.model import ExternalCallLog
 logger = logging.getLogger("homez")
 
 # 허용 요청이 처음 만들어질 때 제안하는 값(사용자가 승인 때 바꿀 수 있다).
+# 일괄 연장 대상: 만료까지 이 시간 이하로 남았거나 이미 만료됐고(최근 이 일수 안에), 사용자가 취소·거절하지 않은 상시 조회 허용.
+DEFAULT_RENEW_WITHIN_HOURS = 12
+RENEW_LOOKBACK_DAYS = 7
+
 _DEFAULT_REQUEST = {
     (CallPurpose.ORDER_DETECTION, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_ORDER_DETECTION_PER_HOUR),
     (CallPurpose.ORDER_TRACKING, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_ORDER_TRACKING_PER_HOUR),
@@ -354,6 +358,64 @@ class ExternalCallPolicyService:
             allowance.expires_at = now + timedelta(hours=int(hours))
 
     # ------------------------------------------------------------
+    # 만료 임박·만료 상시 허용 일괄 연장(2026-10-17, 연동 안정화 A2)
+    #
+    # 상시 허용은 기간이 끝나면 자동 감지가 멈추는데(오늘 13:44 사고), 항목마다 따로 비밀번호를 넣어 다시 허용해야 했다. 사용자가 한 번의
+    # 비밀번호 확인으로 "같은 한도·같은 목적"을 다시 허용하게 한다. 새 권한을 만들지 않는다: 이미 상시로 허용했던 조회(읽기)만 대상이고,
+    # 사용자가 직접 취소·거절한 것과 변경(쓰기) 허용은 건드리지 않는다.
+    # ------------------------------------------------------------
+
+    def renewable(self, company_id: int, *, within_hours: int = DEFAULT_RENEW_WITHIN_HOURS) -> list[dict]:
+        now = self._now()
+        rows = (
+            self.db.query(ExternalCallAllowance)
+            .filter(
+                ExternalCallAllowance.company_id == company_id,
+                ExternalCallAllowance.mode == AllowanceMode.STANDING,
+                ExternalCallAllowance.kind == CallKind.READ,
+            )
+            .order_by(ExternalCallAllowance.id.desc())
+            .all()
+        )
+        seen: set[tuple[str, str, str]] = set()
+        items: list[dict] = []
+        for row in rows:
+            key = (row.system, row.kind, row.purpose)
+            if key in seen:
+                continue  # 같은 목적은 가장 최근 항목만 본다(이미 새로 허용했으면 그것이 최신이다)
+            seen.add(key)
+            if row.expires_at is None or row.per_hour_limit is None:
+                continue
+            if row.status not in (AllowanceStatus.ACTIVE, AllowanceStatus.EXPIRED):
+                continue  # 취소·거절·대기 중인 것은 사용자의 결정을 존중한다
+            hours_left = (row.expires_at - now).total_seconds() / 3600
+            if row.expires_at < now - timedelta(days=RENEW_LOOKBACK_DAYS):
+                continue  # 오래전에 끝난 허용은 되살리지 않는다(상태가 아직 ACTIVE로 남아 있어도 같다)
+            if row.status == AllowanceStatus.ACTIVE and hours_left > within_hours:
+                continue
+            state = "EXPIRING" if hours_left > 0 else "EXPIRED"
+            items.append({
+                "allowance_id": row.id, "system": row.system, "kind": row.kind, "purpose": row.purpose,
+                "purpose_label": CallPurpose.LABELS.get(row.purpose, row.purpose),
+                "system_label": ExternalSystem.LABELS.get(row.system, row.system),
+                "per_hour_limit": int(row.per_hour_limit), "expires_at": row.expires_at.isoformat(),
+                "hours_left": round(hours_left, 1), "state": state,
+            })
+        return items
+
+    def renew_expiring(
+        self, company_id: int, *, user_id: int | None, within_hours: int = DEFAULT_RENEW_WITHIN_HOURS,
+        hours: int = DEFAULT_STANDING_HOURS,
+    ) -> list[ExternalCallAllowance]:
+        created: list[ExternalCallAllowance] = []
+        for item in self.renewable(company_id, within_hours=within_hours):
+            created.append(self.grant(
+                company_id, system=item["system"], kind=item["kind"], purpose=item["purpose"], mode=AllowanceMode.STANDING,
+                per_hour_limit=item["per_hour_limit"], hours=hours, reason="만료 임박·만료 허용 일괄 연장", user_id=user_id,
+            ))
+        return created
+
+    # ------------------------------------------------------------
     # 조회(승인 센터)
     # ------------------------------------------------------------
 
@@ -413,6 +475,7 @@ class ExternalCallPolicyService:
             "installed": True,
             "pending": [_row(a) for a in pending],
             "active": [_row(a) for a in active],
+            "renewable": self.renewable(company_id),
             "today": today,
             "recent": [
                 {

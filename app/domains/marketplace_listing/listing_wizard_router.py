@@ -1473,6 +1473,58 @@ def record_registration_attribute_comparison(
     return _present(ProductAttributeMatchService(db), run)
 
 
+@router.get("/{wizard_id}/submissions/{submission_id}/reapproval-status")
+def reapproval_status(
+    wizard_id: int,
+    submission_id: int,
+    current_user: User = Depends(
+        ListingWizardPermissionGuard(LISTING_WIZARD_SUBMIT),
+    ),
+    db: Session = Depends(get_db),
+):
+    """읽기 전용(외부 호출 없음) — 최종 승인(유효 1시간)의 남은 시간과 다시 받을 수 있는지."""
+
+    from app.domains.marketplace_listing.listing_wizard_reapproval_service import (
+        ListingWizardReapprovalService,
+    )
+
+    return ListingWizardReapprovalService(db).status(
+        wizard_id, submission_id, current_user.company_id,
+    )
+
+
+@router.post("/{wizard_id}/submissions/{submission_id}/reapprove")
+def reapprove_submission(
+    wizard_id: int,
+    submission_id: int,
+    current_user: User = Depends(SuperAdminGuard),
+    recent_auth_token: str | None = Header(
+        default=None, alias="X-Recent-Auth-Token",
+    ),
+    db: Session = Depends(get_db),
+):
+    """만료된 최종 승인을 **8단계에서 승인한 그대로의 내용**일 때만 다시 1시간 받는다. 비밀번호 재확인이 먼저다. 쿠팡 호출은 없다."""
+
+    from app.core.audit_db import write_audit_log
+    from app.core.exceptions import ForbiddenException
+    from app.domains.marketplace_listing.listing_wizard_reapproval_service import (
+        ListingWizardReapprovalService,
+    )
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise ForbiddenException("현재 비밀번호 재확인이 필요합니다.")
+    result = ListingWizardReapprovalService(db).reapprove(
+        wizard_id, submission_id, current_user.company_id, current_user.id,
+    )
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id, action="WIZARD_FINAL_APPROVAL_RENEWED",
+        entity="marketplace_submission_approval", entity_id=str(result["approval_id"]),
+        description=f"위저드 #{wizard_id} 제출 #{submission_id} 최종 승인 재승인(만료 {result['expires_at']})",
+    )
+    db.commit()
+    return result
+
+
 @router.post(
     "/{wizard_id}/submissions/{submission_id}/send-live",
     response_model=WizardLiveSendResponse,

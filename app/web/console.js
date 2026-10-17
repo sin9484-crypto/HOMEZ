@@ -14997,6 +14997,7 @@
       <h2>${HomezI18n.t("lw.step.execution")}</h2>
       <button class="btn btn-secondary" id="lw-draft-save-btn">${HomezI18n.t("lw.execution_draft_btn")}</button>
       <button class="btn btn-primary" id="lw-submit-btn">${HomezI18n.t("lw.execution_submit_btn")}</button>
+      <p class="field-hint" id="lw-execution-hint">${HomezI18n.t("lw.execution_submit_hint")}</p>
       <p class="field-error" id="lw-execution-error"></p>`;
     lwSaveCurrentStep = null;
 
@@ -15563,6 +15564,49 @@
     });
   }
 
+  // 최종 승인(유효 1시간)의 남은 시간을 보여 주고, 만료됐으면 비밀번호 재확인 뒤 같은 내용으로 다시 받게 한다(2026-10-17, 연동 안정화 A3).
+  // 새 권한이 아니다 — 서버가 8단계 승인 그대로일 때만 허용한다. 쿠팡에는 아무것도 보내지 않는다.
+  function lwAttachReapproval(content) {
+    content.querySelectorAll(".lw-reapprove").forEach(async (host) => {
+      const submissionId = host.dataset.submissionId;
+      const base = `/listing-wizards/${lwState.wizard.id}/submissions/${submissionId}`;
+      let status;
+      try {
+        status = await apiFetch(`${base}/reapproval-status`);
+      } catch (err) {
+        host.textContent = "";
+        return;
+      }
+      if (status.state === "VALID") {
+        host.textContent = HomezI18n.t("lw.reapprove_valid", { minutes: status.minutes_left });
+        return;
+      }
+      if (status.state !== "EXPIRED") {
+        host.textContent = status.state === "NONE" ? HomezI18n.t("lw.reapprove_none") : HomezI18n.t("lw.reapprove_other");
+        return;
+      }
+      host.innerHTML = `<span class="field-error">${escapeHtml(HomezI18n.t("lw.reapprove_expired"))}</span>
+        ${status.can_reapprove ? `<button type="button" class="btn btn-secondary btn-sm">${escapeHtml(HomezI18n.t("lw.reapprove_btn"))}</button>` : `<span>${escapeHtml(HomezI18n.t("lw.reapprove_blocked"))}</span>`}`;
+      const button = host.querySelector("button");
+      if (!button) return;
+      button.addEventListener("click", () => withButtonGuard(button, async () => {
+        const ok = await askConfirm(HomezI18n.t("lw.reapprove_confirm_body"), {
+          title: HomezI18n.t("lw.reapprove_confirm_title"), okLabel: HomezI18n.t("lw.reapprove_btn"),
+        });
+        if (!ok) return;
+        const token = await promptRecentAuthToken();
+        if (token === null) return;
+        try {
+          await apiFetch(`${base}/reapprove`, { method: "POST", headers: { "X-Recent-Auth-Token": token } });
+          toast(HomezI18n.t("lw.reapprove_done"), "success");
+          await lwRenderResultsStep(content);
+        } catch (err) {
+          toast(err.message || HomezI18n.t("lw.reapprove_failed"), "error");
+        }
+      }));
+    });
+  }
+
   async function lwRenderResultsStep(content) {
     content.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
     lwSaveCurrentStep = null;
@@ -15599,7 +15643,8 @@
                      data-account-id="${c.marketplace_account_id}">${HomezI18n.t("lw.attr_record_btn")}</button>
                    <button class="btn btn-primary btn-sm lw-live-send-btn"
                      data-submission-id="${c.submission_id}" disabled>${HomezI18n.t("lw.live_send_btn")}</button>
-                   <div class="field-hint lw-live-message" data-submission-id="${c.submission_id}"></div>`
+                   <div class="field-hint lw-live-message" data-submission-id="${c.submission_id}"></div>
+                   <div class="field-hint lw-reapprove" data-submission-id="${c.submission_id}"></div>`
                 : ""}${c.status === "SUBMITTED" && c.submission_id
                 ? `<button class="btn btn-secondary btn-sm lw-live-status-btn"
                      data-submission-id="${c.submission_id}">${HomezI18n.t("lw.live_status_check_btn")}</button>
@@ -15628,6 +15673,7 @@
           : ""}
         <p class="field-error" id="lw-results-error"></p>`;
 
+      lwAttachReapproval(content);
       const retryBtn = el("lw-retry-failed-btn");
       if (retryBtn) {
         retryBtn.addEventListener("click", () => withButtonGuard(retryBtn, async () => {

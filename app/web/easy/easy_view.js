@@ -376,6 +376,21 @@
       });
     });
 
+    // 2-e) 상시 허용 만료 임박·만료 — 만료되면 자동 확인이 멈추므로 미리 알린다(승인 센터에서 비밀번호 한 번으로 일괄 연장).
+    const renewable = (ext && Array.isArray(ext.renewable)) ? ext.renewable : [];
+    if (renewable.length) {
+      const expired = renewable.some((r) => r.state === "EXPIRED");
+      rows.push({
+        key: "renew", group: "APPROVAL", title: T("easy.today.renew_title"),
+        sub: T("easy.today.renew_sub", { n: renewable.length }),
+        product: { name: T("easy.today.renew_name"), sub: renewable.map((r) => r.purpose_label).join(" · "), thumb: null, icon: "bag" },
+        chip: expired ? chip("red", T("easy.ap.renew_expired")) : chip("wait", T("easy.ap.renew_soon")),
+        action: { label: T("easy.today.renew_action"), run: () => B.navigateTo("easy-approvals") },
+        facts: renewable.map((r) => [r.purpose_label, r.state === "EXPIRED" ? T("easy.ap.renew_expired") : T("easy.ap.renew_hours", { h: r.hours_left })]),
+        detail: T("easy.today.renew_detail"),
+      });
+    }
+
     // 3) 주문 자동 감지 상태 — 켜져 있지 않거나 실패하면 알린다(정상이면 아래 "지켜보는 일"에만 보인다)
     const health = collect && collect.health;
     if (health && health !== "OK" && health !== "WAITING") {
@@ -1049,6 +1064,12 @@
     const todayCounts = Object.entries(ext.today || {}).map(([system, kinds]) => Object.entries(kinds).map(([kind, n]) => `<li><span>${esc(T(`easy.sys.${system.toLowerCase()}`))} ${esc(T(`easy.kind.${kind.toLowerCase()}`))}</span><b class="ez-num">${esc(T("easy.times", { n }))}</b></li>`).join("")).join("");
     const recent = (ext.recent || []).slice(0, 6).map((r) => `<li><span>${esc(r.system_label)} ${esc(r.kind_label)} · ${esc(r.purpose_label)}</span><b>${esc(T(`easy.outcome.${String(r.outcome).toLowerCase()}`))}</b></li>`).join("");
 
+    const renewable = Array.isArray(ext.renewable) ? ext.renewable : [];
+    const renewBlock = renewable.length ? `<div class="ez-note warn" style="margin:0 0 14px"><span class="ez-dot warn">!</span><div>
+        <b>${esc(T("easy.ap.renew_title", { n: renewable.length }))}</b> ${esc(T("easy.ap.renew_sub"))}
+        <ul style="margin:8px 0 10px 18px">${renewable.map((r) => `<li>${esc(r.purpose_label)} · ${esc(T("easy.ap.l_hour"))} ${r.per_hour_limit}${esc(T("easy.times_short"))} — ${esc(r.state === "EXPIRED" ? T("easy.ap.renew_expired") : T("easy.ap.renew_hours", { h: r.hours_left }))}</li>`).join("")}</ul>
+        <button type="button" class="ez-btn sm" id="ez-ap-renew">${esc(T("easy.ap.renew_btn"))}</button></div></div>` : "";
+
     root.innerHTML = `
       <div class="ez-head"><div><h1>${esc(T("easy.nav.approvals"))}</h1><div class="ez-lead">${esc(T("easy.ap.lead"))}</div></div>
         <button type="button" class="ez-btn line" id="ez-ap-mode">${esc(T("easy.ap.mode_link"))}</button></div>
@@ -1056,6 +1077,7 @@
       ${installed ? "" : `<div class="ez-note warn"><span class="ez-dot warn">!</span><div>${esc(T("easy.ap.not_installed"))}</div></div>`}
       <div class="ez-layout">
         <div class="ez-main">
+          ${renewBlock}
           <div class="ez-sec">${esc(T("easy.ap.pending_title"))} <small>${esc(T("easy.count", { n: (ext.pending || []).length }))}</small></div>
           ${table(pendingRows, "easy.ap.pending_none")}
           <div class="ez-sec">${esc(T("easy.ap.active_title"))} <small>${esc(T("easy.count", { n: (ext.active || []).length }))}</small></div>
@@ -1077,6 +1099,8 @@
       </div>`;
 
     $("ez-ap-mode").addEventListener("click", () => B.navigateTo("safety"));
+    const renewBtn = $("ez-ap-renew");
+    if (renewBtn) renewBtn.addEventListener("click", () => renewAllDialog(renewable));
     root.querySelectorAll("[data-ez-approve]").forEach((btn) => btn.addEventListener("click", () => approveDialog((ext.pending || []).find((a) => String(a.id) === btn.dataset.ezApprove))));
     root.querySelectorAll("[data-ez-reject]").forEach((btn) => btn.addEventListener("click", async () => {
       try { await api(`/external-calls/requests/${btn.dataset.ezReject}/reject`, { method: "POST" }); B.toast(T("easy.ap.rejected"), "success"); loadApprovals(); }
@@ -1115,6 +1139,20 @@
     try {
       await api(`/external-calls/requests/${allowance.id}/approve`, { method: "POST", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(payload) });
       B.toast(T("easy.ap.approved"), "success");
+      loadApprovals();
+    } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+  }
+
+  // 만료 임박·만료 상시 조회 허용을 같은 한도로 24시간 일괄 연장한다. 확인창 → 비밀번호 재확인 순서이고, 변경(쓰기) 허용은 연장하지 않는다.
+  async function renewAllDialog(items) {
+    const list = `<ul style="margin:8px 0 0 18px">${items.map((r) => `<li>${esc(r.purpose_label)} · ${esc(T("easy.ap.l_hour"))} ${r.per_hour_limit}${esc(T("easy.times_short"))}</li>`).join("")}</ul>`;
+    const result = await ezDialog({ title: T("easy.ap.renew_confirm_title"), bodyHtml: `<p>${esc(T("easy.ap.renew_confirm_body"))}</p>${list}`, okLabel: T("easy.ap.renew_btn") });
+    if (!result) return;
+    const token = await B.promptRecentAuthToken();
+    if (token === null) return;
+    try {
+      const r = await api("/external-calls/renew-expiring", { method: "POST", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify({}) });
+      B.toast(T("easy.ap.renew_done", { n: (r.renewed || []).length }), "success");
       loadApprovals();
     } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
   }
