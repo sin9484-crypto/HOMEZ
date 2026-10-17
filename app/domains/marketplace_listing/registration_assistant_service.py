@@ -118,6 +118,34 @@ def carry_saved_content(request: AssistantRequest, entry: dict) -> tuple[Assista
     return (request.model_copy(update=updates) if updates else request), carried
 
 
+def keep_saved_item_identity(proposal: Proposal, entry: dict) -> None:
+    """이미 저장된 아이템의 판매자 SKU·아이템 이름을 지켜 준다. 도우미가 SKU를 임시 규칙(`PC{후보}-{코드}-NN`)으로 다시 만들면 재고 SKU·채널 매핑·
+    공급 옵션 연결이 SKU 문자열로 묶여 있어 끊어진다. 옵션이 하나씩일 때만 짝이 분명하므로 그때만 이어 받고, 그 밖에는 주의점으로 알린다."""
+
+    saved_items = ((entry or {}).get("required_fields") or {}).get("items") or []
+    items = proposal.selection["required_fields"].get("items") or []
+    if not saved_items or not items:
+        return
+    if len(saved_items) == 1 and len(items) == 1 and saved_items[0].get("externalVendorSku"):
+        items[0]["externalVendorSku"] = saved_items[0]["externalVendorSku"]
+        if saved_items[0].get("itemName"):
+            items[0]["itemName"] = saved_items[0]["itemName"]
+        proposal.selection["channel_policy_attributes"]["product_identifier"] = items[0]["externalVendorSku"]
+        proposal.notes[:] = [n for n in proposal.notes if n.code != "OPTION_SKU_PLACEHOLDER"]
+        proposal.notes.append(AssistantNote(
+            "INFO", "SAVED_SKU_KEPT",
+            f"저장돼 있던 판매자 SKU({items[0]['externalVendorSku']})를 그대로 둔다 — 재고 SKU·채널 매핑·공급 옵션 연결이 이 값에 묶여 있다.",
+        ))
+        return
+    saved_skus = {i.get("externalVendorSku") for i in saved_items}
+    if not saved_skus <= {i["externalVendorSku"] for i in items}:
+        proposal.notes.append(AssistantNote(
+            "CAUTION", "SAVED_SKUS_CHANGE",
+            "옵션이 여러 개라 저장돼 있던 판매자 SKU를 그대로 이어 받지 못한다 — 이 제안을 저장하면 SKU가 바뀌어, 이미 연결한 재고 SKU·채널 매핑·"
+            "공급 옵션 연결을 다시 맞춰야 한다.",
+        ))
+
+
 def proposal_to_dict(proposal: Proposal) -> dict:
     attrs = proposal.selection["channel_policy_attributes"]
     return {
@@ -219,6 +247,7 @@ class RegistrationAssistantService:
             outbound_code=prior_outbound or saved.get("outbound_shipping_place_code"),
             return_center_code=prior_return or saved.get("return_center_code"), request=request,
         )
+        keep_saved_item_identity(proposal, saved)
         if rows_from_saved:
             proposal.notes.append(AssistantNote(
                 "INFO", "NOTICE_FROM_SAVED_VALUES",

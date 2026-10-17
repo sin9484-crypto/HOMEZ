@@ -22,6 +22,7 @@ from app.domains.marketplace_listing.registration_assistant import AssistantRequ
 from app.domains.marketplace_listing.registration_assistant import build_items
 from app.domains.marketplace_listing.registration_assistant import build_proposal
 from app.domains.marketplace_listing.registration_assistant_service import carry_saved_content
+from app.domains.marketplace_listing.registration_assistant_service import keep_saved_item_identity
 from app.domains.marketplace_listing.registration_assistant_service import merge_saved_defaults
 from app.domains.marketplace_listing.registration_assistant_service import rows_from_saved_selection
 from app.domains.marketplace_listing.registration_assistant_service import saved_entry_for_account
@@ -214,6 +215,47 @@ class GroupedOptionTests(unittest.TestCase):
         self.assertEqual(proposal.item_count, 1)
 
 
+class SavedSkuTests(unittest.TestCase):
+    """저장돼 있던 판매자 SKU는 재고 SKU·채널 매핑·공급 옵션 연결의 열쇠라 도우미가 바꾸면 안 된다."""
+
+    SAVED_WITH_ITEM = {**SAVED, "required_fields": {**SAVED["required_fields"], "items": [
+        {"itemName": "기본형", "externalVendorSku": "PC3-CH1147184-3945580", "unitCount": 1, "salePrice": 12900, "originalPrice": 12900, "maximumBuyCount": 1},
+    ]}}
+
+    def _proposal(self, saved):
+        defaults, _ = merge_saved_defaults({}, saved)
+        carried_request, _ = carry_saved_content(request(confirm_notice=True), saved)
+        proposal = build_proposal(
+            wizard_draft=DRAFT, candidate_id=3, source_reference="ONCHANNEL:CH1147184", account_id=1,
+            onch_rows=rows_from_saved_selection(saved), metadata=METADATA, seller_defaults=defaults,
+            outbound_code="111", return_center_code="222", request=carried_request,
+        )
+        keep_saved_item_identity(proposal, saved)
+        return proposal
+
+    def test_a_single_saved_item_keeps_its_sku_and_name(self):
+        proposal = self._proposal(self.SAVED_WITH_ITEM)
+        item = proposal.selection["required_fields"]["items"][0]
+        self.assertEqual(item["externalVendorSku"], "PC3-CH1147184-3945580")
+        self.assertEqual(item["itemName"], "기본형")
+        self.assertEqual(proposal.selection["channel_policy_attributes"]["product_identifier"], "PC3-CH1147184-3945580")
+        codes = [n.code for n in proposal.notes]
+        self.assertIn("SAVED_SKU_KEPT", codes)
+        self.assertNotIn("OPTION_SKU_PLACEHOLDER", codes)
+
+    def test_without_saved_items_the_placeholder_rule_and_its_caution_stay(self):
+        proposal = self._proposal(SAVED)
+        self.assertEqual(proposal.selection["required_fields"]["items"][0]["externalVendorSku"], "PC3-CH1147184-01")
+        self.assertIn("OPTION_SKU_PLACEHOLDER", [n.code for n in proposal.notes])
+
+    def test_a_multi_option_change_of_skus_is_warned_not_hidden(self):
+        saved = {**self.SAVED_WITH_ITEM, "required_fields": {**self.SAVED_WITH_ITEM["required_fields"], "items": [
+            {"itemName": "a", "externalVendorSku": "OLD-1"}, {"itemName": "b", "externalVendorSku": "OLD-2"},
+        ]}}
+        proposal = self._proposal(saved)
+        self.assertIn("SAVED_SKUS_CHANGE", [n.code for n in proposal.notes])
+
+
 class WiringTests(unittest.TestCase):
 
     def test_the_service_falls_back_to_saved_values_only_when_there_is_no_import_evidence(self):
@@ -221,6 +263,10 @@ class WiringTests(unittest.TestCase):
         self.assertLess(body.index("self._onch_rows(candidate.id)"), body.index("rows_from_saved_selection(saved)"))
         self.assertIn("if not rows:", body)
         self.assertIn("raise BadRequestException", body)
+
+    def test_propose_keeps_saved_sku_identity_before_returning(self):
+        body = SERVICE.split("def propose(")[1].split("def apply(")[0]
+        self.assertIn("keep_saved_item_identity(proposal, saved)", body)
 
     def test_apply_still_saves_through_the_existing_validation_path(self):
         body = SERVICE.split("def apply(")[1]
