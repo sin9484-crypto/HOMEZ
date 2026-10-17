@@ -102,6 +102,10 @@ DELIVERY_TRACKING_INTERVAL_MINUTES = 10
 AFTER_SALES_JOB_ID = "coupang_after_sales_check"
 AFTER_SALES_INTERVAL_MINUTES = 10
 
+# 등록한 상품의 쿠팡 심사·판매 상태 확인(승인반려 감지·사유) — 허용(PRODUCT_STATUS_CHECK)이 없으면 쿠팡을 부르지 않는다.
+PRODUCT_STATUS_JOB_ID = "coupang_product_status_check"
+PRODUCT_STATUS_INTERVAL_MINUTES = 30
+
 
 def run_backup_rehearsal_job(
     *,
@@ -349,6 +353,34 @@ def run_after_sales_job(session_factory=None) -> None:
         db.close()
 
 
+def run_product_status_job(session_factory=None) -> None:
+    """등록한 상품의 쿠팡 상태(승인대기·승인반려·승인완료 등)를 30분마다 읽어 바뀐 것만 기록한다(반려면 사유 이력도 한 번). 허용이 없으면
+    호출하지 않고, 한 번의 실패가 스케줄러를 죽이지 않는다. 쿠팡에 쓰지 않는다."""
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    db = session_factory()
+    try:
+        from app.domains.order.product_status_monitor_service import ProductStatusMonitorService
+        from app.domains.store_connection.model import StoreConnection
+
+        company_ids = [r[0] for r in db.query(StoreConnection.company_id).filter(
+            StoreConnection.marketplace_code == "COUPANG", StoreConnection.connection_status == "CONNECTED").distinct().all()]
+        for company_id in company_ids:
+            summary = ProductStatusMonitorService(db).refresh(company_id)
+            logger.info(
+                "쿠팡 상품 상태 확인: 회사 %s 확인 %d·호출 %d·새 이벤트 %d·실패 %d%s",
+                company_id, summary["checked"], summary["calls"], len(summary["new_events"]), len(summary["failures"]),
+                " · 허용 필요로 중단" if summary["blocked"] else "",
+            )
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("쿠팡 상품 상태 확인 Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -417,10 +449,16 @@ def register_all_jobs() -> None:
         job_id=AFTER_SALES_JOB_ID,
     )
 
+    SchedulerService.add_interval_job(
+        run_product_status_job,
+        minutes=PRODUCT_STATUS_INTERVAL_MINUTES,
+        job_id=PRODUCT_STATUS_JOB_ID,
+    )
+
     logger.info(
-        "Scheduler jobs registered: %s, %s, %s, %s, %s",
+        "Scheduler jobs registered: %s, %s, %s, %s, %s, %s",
         BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
-        ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID, AFTER_SALES_JOB_ID,
+        ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID, AFTER_SALES_JOB_ID, PRODUCT_STATUS_JOB_ID,
     )
 
 

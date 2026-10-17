@@ -376,6 +376,24 @@
       });
     });
 
+    // 2-d2) 쿠팡에 전송한 상품의 심사 상태 — 승인반려는 바로 확인해야 하고(사유 보기), 심사 중이면 진행 중으로 보여 준다(승인완료는 표시하지 않는다).
+    ((today && today.product_status) || []).forEach((p) => {
+      if (!p.status || p.status === "APPROVED" || p.status === "DELETED") return;
+      const denied = p.status === "DENIED";
+      rows.push({
+        key: `pstatus:${p.seller_product_id}`, group: denied ? "CHECK" : "PROGRESS",
+        title: T(denied ? "easy.pstatus.denied_title" : "easy.pstatus.review_title"),
+        sub: T(denied ? "easy.pstatus.denied_sub" : "easy.pstatus.review_sub"),
+        product: { name: p.product_name, sub: T("easy.today.coupang_no", { id: p.seller_product_id }), thumb: null, icon: "bag" },
+        chip: denied ? chip("red", T("easy.pstatus.chip_denied")) : chip("wait", T("easy.pstatus.chip_review")),
+        action: denied
+          ? { label: T("easy.pstatus.reason_btn"), run: () => productReasonDialog(p) }
+          : { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-products") },
+        facts: [[T("easy.pstatus.f_status"), T(denied ? "easy.pstatus.chip_denied" : "easy.pstatus.chip_review")], [T("easy.pstatus.f_checked"), p.checked_at || "—"]],
+        detail: T(denied ? "easy.pstatus.denied_detail" : "easy.pstatus.review_detail"),
+      });
+    });
+
     // 2-e) 상시 허용 만료 임박·만료 — 만료되면 자동 확인이 멈추므로 미리 알린다(승인 센터에서 비밀번호 한 번으로 일괄 연장).
     const renewable = (ext && Array.isArray(ext.renewable)) ? ext.renewable : [];
     if (renewable.length) {
@@ -519,6 +537,15 @@
     return chip(kind, T(key));
   }
 
+  // 쿠팡에 전송한 상품이면 마지막으로 읽은 쿠팡 심사 상태를 칩으로 덧붙인다(읽은 적이 없으면 아무것도 붙이지 않는다).
+  function productStatusChip(w, today) {
+    const entry = ((today && today.product_status) || []).find((p) => p.wizard_id === w.id && p.status);
+    if (!entry) return "";
+    const map = { APPROVED: ["ok", "easy.pstatus.chip_approved"], DENIED: ["red", "easy.pstatus.chip_denied"], DELETED: ["gray", "easy.pstatus.chip_deleted"] };
+    const [kind, key] = map[entry.status] || ["wait", "easy.pstatus.chip_review"];
+    return `<br>${chip(kind, T(key))}`;
+  }
+
   function startNewProduct() {
     B.navigateTo("listing-wizard");
     setTimeout(() => { const btn = $("lw-url-import-btn"); if (btn) btn.click(); }, 450);
@@ -574,7 +601,7 @@
           <td><span class="ez-cell">${thumbHtml(w.thumbnail_asset_id)}<span><b>${esc(w.product_name || `#${w.id}`)}</b><small>${esc(w.supplier_label || "")}</small></span></span></td>
           <td>${esc(channels)}</td>
           <td style="min-width:130px"><div class="ez-num" style="font-size:13px;margin-bottom:4px">${w.status === "SUCCEEDED" ? esc(T("easy.products.finished")) : `${n} / ${total}`}</div><div class="ez-bar"><i style="width:${pct}%"></i></div></td>
-          <td>${wizardChip(w.status)}</td>
+          <td>${wizardChip(w.status)}${productStatusChip(w, today)}</td>
           <td style="font-size:13.5px">${attn || '<span class="ez-faint">—</span>'}${needDays}</td>
           <td><button type="button" class="ez-btn ${w.status === "SUCCEEDED" ? "line" : ""} sm" data-ez-stop data-ez-open="${w.id}">${esc(T(w.status === "SUCCEEDED" ? "easy.products.open_result" : "easy.products.open_prep"))}</button></td></tr>`;
       }).join("")}</tbody></table>`;
@@ -854,6 +881,18 @@
         <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.orders.track_calls"))}</div></div>`}</div>`;
   }
 
+  // 쿠팡 승인반려 사유 보기: 쿠팡 상태 이력에 적힌 문구를 그대로 보여 준다(사유가 없으면 WING 확인을 안내). 재제출·수정은 하지 않는다.
+  async function productReasonDialog(p) {
+    const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+    const reason = p.reason ? `<div class="ez-note warn" style="margin-top:12px"><span class="ez-dot warn">!</span><div>${esc(p.reason)}</div></div>`
+      : `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info">i</span><div>${esc(T(p.reason_state === "NO_REASON" ? "easy.pstatus.no_reason" : "easy.pstatus.reason_pending"))}</div></div>`;
+    await ezDialog({
+      title: T("easy.pstatus.dialog_title"), okLabel: T("dialog.confirm.cancel"),
+      bodyHtml: `<div>${kv(T("easy.pstatus.f_product"), p.product_name)}${kv(T("easy.today.coupang_no", { id: p.seller_product_id }), "")}${kv(T("easy.pstatus.f_checked"), p.checked_at || "—")}</div>${reason}
+        <p class="ez-muted" style="font-size:13px;margin-top:10px">${esc(T("easy.pstatus.howto"))}</p>`,
+    });
+  }
+
   // 공급처(온채널) 반품 요청 내용: 온채널 화면에서 이 주문의 "반품/교환 요청"을 접수한 뒤 "요청했어요"로 기록한다. 온채널로 보내는 것은 없다.
   async function supplierReturnDialog(c) {
     const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
@@ -984,7 +1023,9 @@
       <tbody>${list.map((s) => `<tr style="cursor:default"><td class="ez-num">${esc(s.id || "—")}</td><td>${esc(tryT(`easy.settle.type_${String(s.ty).toLowerCase()}`, String(s.ty || "—")))}</td><td class="ez-num">${esc(s.d || "—")}</td>
         <td class="ez-num">${won(s.sale)}</td><td class="ez-num"><b>${won(s.fin)}</b></td><td><span class="ez-chip ${s.st === "DONE" ? "ok" : "wait"}">${esc(tryT(`easy.settle.st_${String(s.st).toLowerCase()}`, String(s.st || "—")))}</span></td></tr>`).join("")}</tbody></table>`
       : `<div class="ez-muted" style="font-size:14px;margin:6px 0">${esc(T("easy.settle.none"))}</div>`;
-    return `<div class="ez-sec">${esc(T("easy.settle.title"))}<small>${esc(T("easy.settle.sub"))}</small></div>${rows}`;
+    const checked = today && today.settlement_checked_at;
+    const checkedLine = `<div class="ez-faint" style="font-size:13px;margin:4px 0 8px">${esc(checked ? T("easy.settle.checked", { at: B.fmtDate(checked) }) : T("easy.settle.not_checked"))}</div>`;
+    return `<div class="ez-sec">${esc(T("easy.settle.title"))}<small>${esc(T("easy.settle.sub"))}</small></div>${checkedLine}${rows}`;
   }
 
   async function loadMoney() {
@@ -1082,7 +1123,7 @@
           ${table(pendingRows, "easy.ap.pending_none")}
           <div class="ez-sec">${esc(T("easy.ap.active_title"))} <small>${esc(T("easy.count", { n: (ext.active || []).length }))}</small></div>
           ${table(activeRows, "easy.ap.active_none")}
-          ${installed ? `<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="ez-btn ghost" id="ez-ap-grant-detect">${esc(T("easy.ap.grant_detect"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-track">${esc(T("easy.ap.grant_track"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-after">${esc(T("easy.ap.grant_after"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-custom">${esc(T("easy.ap.grant_custom"))}</button></div>` : ""}
+          ${installed ? `<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="ez-btn ghost" id="ez-ap-grant-detect">${esc(T("easy.ap.grant_detect"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-track">${esc(T("easy.ap.grant_track"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-after">${esc(T("easy.ap.grant_after"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-pstatus">${esc(T("easy.ap.grant_pstatus"))}</button><button type="button" class="ez-btn ghost" id="ez-ap-grant-custom">${esc(T("easy.ap.grant_custom"))}</button></div>` : ""}
           <div class="ez-sec" id="ez-days-anchor">${esc(T("easy.ap.days_title"))}<small>${esc(T("easy.ap.days_sub"))}</small></div>
           <div id="ez-days-box">${todo.length ? todo.map((p) => `<div class="ez-block" style="margin-top:10px"><div class="ez-field" style="grid-template-columns:1fr auto"><div class="v">${esc(p.product_name)}<small>${esc(T("easy.today.coupang_no", { id: p.seller_product_id }))} · ${esc(p.saved_days ? T("easy.today.days_sub_saved", { days: p.saved_days }) : T("easy.today.days_sub_unset", { days: 1 }))}</small></div>
             <button type="button" class="ez-btn sm" data-ez-days="${esc(p.seller_product_id)}">${esc(T("easy.ap.days_check"))}</button></div><div id="ez-days-${esc(p.seller_product_id)}" style="padding:0 18px 12px"></div></div>`).join("") : `<div class="ez-empty">${esc(T("easy.ap.days_none"))}</div>`}</div>
@@ -1116,6 +1157,8 @@
     if (track) track.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "ORDER_TRACKING", mode: "STANDING", per_hour_limit: 30, hours: 24 }));
     const after = $("ez-ap-grant-after");
     if (after) after.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "AFTER_SALES_CHECK", mode: "STANDING", per_hour_limit: 30, hours: 24 }));
+    const pstatus = $("ez-ap-grant-pstatus");
+    if (pstatus) pstatus.addEventListener("click", () => grantDialog({ system: "COUPANG", kind: "READ", purpose: "PRODUCT_STATUS_CHECK", mode: "STANDING", per_hour_limit: 12, hours: 24 }));
     const custom = $("ez-ap-grant-custom");
     if (custom) custom.addEventListener("click", () => grantDialog(null));
     root.querySelectorAll("[data-ez-days]").forEach((btn) => btn.addEventListener("click", () => daysPreview(btn.dataset.ezDays)));
@@ -1158,7 +1201,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>

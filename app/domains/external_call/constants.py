@@ -32,21 +32,23 @@ class CallPurpose:
     ORDER_DETECTION = "ORDER_DETECTION"            # 신규 주문 자동 감지(쿠팡 주문 조회, 5분마다)
     ORDER_TRACKING = "ORDER_TRACKING"              # 진행 중 주문·배송 상태 확인(쿠팡 발주서 단건 조회, 10분마다)
     AFTER_SALES_CHECK = "AFTER_SALES_CHECK"        # 배송 이후 반품·문의·정산 확인(쿠팡 조회, 10분마다·정산은 하루 몇 번)
+    PRODUCT_STATUS_CHECK = "PRODUCT_STATUS_CHECK"  # 등록한 상품의 쿠팡 심사·판매 상태 확인(상품 조회·상태 이력 조회, 30분마다)
     INVOICE_UPLOAD = "INVOICE_UPLOAD"              # 쿠팡 송장 등록(발주서 조회·송장 전송)
     PRODUCT_OUTBOUND_DAYS = "PRODUCT_OUTBOUND_DAYS"  # 등록 상품 기준 출고일 변경(상품 조회·수정)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
         AFTER_SALES_CHECK: "반품·민원·정산 확인",
+        PRODUCT_STATUS_CHECK: "상품 상태 확인",
         INVOICE_UPLOAD: "쿠팡 송장 등록",
         PRODUCT_OUTBOUND_DAYS: "상품 출고일 변경",
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS})
 
 
 class AllowanceMode:
@@ -82,4 +84,5 @@ MAX_PER_HOUR = 120
 DEFAULT_ORDER_DETECTION_PER_HOUR = 14   # 5분마다 1회 = 시간당 12회 + 여유
 DEFAULT_ORDER_TRACKING_PER_HOUR = 30    # 10분마다 진행 중 주문 수만큼(주문 5건 = 시간당 30회)
 DEFAULT_AFTER_SALES_PER_HOUR = 30        # 10분마다 반품·상품 문의·콜센터 문의 3종(문의 쪽수만큼 더) + 하루 몇 번의 정산
+DEFAULT_PRODUCT_STATUS_PER_HOUR = 12     # 30분마다 한 번에 최대 5개 상품(상태 조회 + 반려 사유 이력 조회) — 평소에는 훨씬 적다
 DEFAULT_STANDING_HOURS = 24

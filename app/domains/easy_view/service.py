@@ -18,8 +18,10 @@ import json
 from datetime import datetime
 
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.domains.external_call.model import ExternalCallLog
 from app.domains.marketplace_listing.model import ListingWizard
 from app.domains.marketplace_listing.model import MarketplaceSubmission
 from app.domains.order.collection_model import OrderChannelFulfillment
@@ -27,6 +29,7 @@ from app.domains.order.collection_model import UnresolvedOrderItem
 from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+from app.domains.order.product_status_monitor_service import ProductStatusMonitorService
 from app.domains.order.supplier_return_service import SupplierReturnService
 from app.domains.purchase_task.constants import ChannelActionStatus
 from app.domains.purchase_task.constants import ChannelActionType
@@ -118,6 +121,8 @@ class EasyViewService:
             "unresolved_orders": unresolved,
             "after_sales": self.build_after_sales(),
             "supplier_returns": self._supplier_returns(company_id),
+            "product_status": self._product_status(submitted),
+            "settlement_checked_at": self._settlement_checked_at(company_id),
             "selling_wizard_ids": [p["wizard_id"] for p in submitted if p["wizard_id"] is not None],
             "invoice_todo": [
                 {
@@ -210,6 +215,44 @@ class EasyViewService:
                 "saved_days": saved_days, "submission_id": submission.id,
             }
         return list(products.values())
+
+    def _product_status(self, submitted: list[dict]) -> list[dict]:
+        """쿠팡에 전송한 상품마다 마지막으로 읽은 쿠팡 상태·반려 사유(읽기 전용). 아직 읽은 적이 없으면 status가 비어 있다."""
+
+        try:
+            latest = ProductStatusMonitorService.latest_by_product(self.db)
+        except Exception:  # noqa: BLE001 — audit_logs가 없는 환경 등에서는 비어 있는 것으로 본다
+            latest = {}
+        items = []
+        for product in submitted:
+            info = latest.get(product["seller_product_id"]) or {}
+            denied = info.get("status") == "DENIED"
+            reason_current = bool(denied and info.get("reason_for") == info.get("checked_at"))
+            items.append({
+                "seller_product_id": product["seller_product_id"], "product_name": product["product_name"],
+                "wizard_id": product["wizard_id"], "status": info.get("status"), "raw_status": info.get("raw"),
+                "checked_at": info.get("checked_at"),
+                "reason": (info.get("reason") or "") if reason_current else "",
+                "reason_state": info.get("reason_state") if reason_current else None,
+            })
+        return items
+
+    def _settlement_checked_at(self, company_id: int) -> str | None:
+        """쿠팡 정산 내역을 마지막으로 성공해서 읽은 시각(UTC ISO) — 정산 자동 확인이 도는지 화면에서 보이게 한다(읽기 전용 조회)."""
+
+        try:
+            value = (
+                self.db.query(func.max(ExternalCallLog.created_at))
+                .filter(
+                    ExternalCallLog.company_id == company_id, ExternalCallLog.purpose == "AFTER_SALES_CHECK",
+                    ExternalCallLog.target == "settlement", ExternalCallLog.outcome == "SUCCEEDED",
+                )
+                .scalar()
+            )
+        except Exception:  # noqa: BLE001 — 허용 기록 표가 없는 환경에서는 읽은 기록이 없는 것으로 본다
+            self.db.rollback()
+            return None
+        return value.isoformat() if value else None
 
     def _outbound_days_todo(self, company_id: int, submitted: list[dict]) -> list[dict]:
         done: set[str] = set()
