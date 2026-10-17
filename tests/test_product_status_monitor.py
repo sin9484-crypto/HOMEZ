@@ -230,8 +230,8 @@ class DeniedReasonTests(Base_):
         self.allow()
         self.product_transport.status["16417638496"] = "승인반려"
         self.product_transport.history["16417638496"] = [
-            {"status": "승인대기", "comment": "컨텐츠 확인 대기중", "createdBy": "홍길동", "createdAt": "2026-10-17T14:00:00"},
-            {"status": "승인반려", "comment": REASON, "createdBy": "쿠팡", "createdAt": "2026-10-17T14:30:00"},
+            {"statusName": "승인대기중", "comment": "컨텐츠 확인 대기중", "createdBy": "홍길동", "createdAt": "2026-10-17T14:00:00"},
+            {"statusName": "승인반려", "comment": REASON, "createdBy": "쿠팡", "createdAt": "2026-10-17T14:30:00"},
         ]
 
     def test_the_reason_is_read_once_and_recorded(self):
@@ -244,7 +244,7 @@ class DeniedReasonTests(Base_):
         self.assertNotIn("홍길동", json.dumps(self.events(), ensure_ascii=False))
 
     def test_a_denial_without_wording_is_recorded_as_no_reason(self):
-        self.product_transport.history["16417638496"] = [{"status": "승인대기", "comment": "컨텐츠 확인 대기중", "createdAt": "2026-10-17T14:00:00"}]
+        self.product_transport.history["16417638496"] = [{"statusName": "승인대기중", "comment": "컨텐츠 확인 대기중", "createdAt": "2026-10-17T14:00:00"}]
         self.monitor().refresh(1)
         why = [p for e, p in self.events() if e == "PRODWHY:16417638496"][0]
         self.assertEqual((why["s"], why["c"]), ("NO_REASON", ""))
@@ -258,7 +258,7 @@ class DeniedReasonTests(Base_):
         service.due = lambda ref: True
         service.refresh(1)
         self.product_transport.status["16417638496"] = "승인반려"
-        self.product_transport.history["16417638496"] = [{"status": "승인반려", "comment": "두 번째 반려 사유", "createdAt": "2026-10-18T09:00:00"}]
+        self.product_transport.history["16417638496"] = [{"statusName": "승인반려", "comment": "두 번째 반려 사유", "createdAt": "2026-10-18T09:00:00"}]
         self.clock[0] = NOW + timedelta(hours=3)
         service = self.monitor()
         service.due = lambda ref: True
@@ -273,7 +273,7 @@ class AggregationTests(Base_):
         self.submission("16417638496")
         self.allow()
         self.product_transport.status["16417638496"] = "승인반려"
-        self.product_transport.history["16417638496"] = [{"status": "승인반려", "comment": REASON, "createdAt": "2026-10-17T14:30:00"}]
+        self.product_transport.history["16417638496"] = [{"statusName": "승인반려", "comment": REASON, "createdAt": "2026-10-17T14:30:00"}]
         self.monitor().refresh(1)
         latest = ProductStatusMonitorService.latest_by_product(self.db)
         self.assertEqual(latest["16417638496"]["status"], "DENIED")
@@ -286,7 +286,7 @@ class AggregationTests(Base_):
         self.submission("16417638496")
         self.allow()
         self.product_transport.status["16417638496"] = "승인반려"
-        self.product_transport.history["16417638496"] = [{"status": "승인반려", "comment": REASON, "createdAt": "2026-10-17T14:30:00"}]
+        self.product_transport.history["16417638496"] = [{"statusName": "승인반려", "comment": REASON, "createdAt": "2026-10-17T14:30:00"}]
         self.monitor().refresh(1)
         self.product_transport.status["16417638496"] = "승인완료"
         service = self.monitor()

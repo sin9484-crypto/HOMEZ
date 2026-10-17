@@ -8,8 +8,8 @@ File : app/domains/purchase_task/coupang_product_history_provider.py
 
 공식 문서 확인(2026-10-17, developers.coupangcorp.com — 읽기 전용 확인):
   - 상품 상태변경이력 조회  GET /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{sellerProductId}/histories
-      응답 data[]: status, comment, createdBy, createdAt(yyyy-MM-dd'T'HH:mm:ss). `status`에 승인반려(Approval denied)가 있다.
-      `comment`가 반려 사유를 담는지는 **문서에 명시돼 있지 않다**(예시는 "컨텐츠 확인 대기중" 같은 진행 문구) — 실제 응답으로 확인해야 한다.
+      응답 data[]: 문서는 status·comment·createdBy·createdAt이라 하나 **실제 응답의 키는 statusName·comment·createdBy·createdAt**이다(2026-10-18 읽기 확인,
+      statusName 값: 임시저장·승인대기중·승인완료·승인반려). `comment`에 반려 사유가 실제로 담긴다(상세설명 이미지 다운로드 실패 문구 확인).
   - 상품 조회(상태)  GET /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{sellerProductId} — `data.statusName`.
 
 규칙:
@@ -88,8 +88,10 @@ class _ProductStatusMixin:
         for item in data:
             if not isinstance(item, dict):
                 continue
+            # 실제 응답(2026-10-18 읽기 확인)의 상태 키는 `statusName`이고(값: 임시저장·승인대기중·승인완료·승인반려), 문서의 `status`는 비어 있었다.
+            # 둘 다 받는다(실제 키 우선). 응답 최상위에는 `nextToken`이 있어 다음 쪽이 있을 수 있으나 최신 이력이 앞이라 첫 쪽만 읽는다.
             rows.append({
-                "status": _text(item.get("status")) or "",
+                "status": _text(item.get("statusName")) or _text(item.get("status")) or "",
                 "comment": (_text(item.get("comment")) or "")[:MAX_REASON_CHARS],
                 "at": _text(item.get("createdAt")) or "",
             })

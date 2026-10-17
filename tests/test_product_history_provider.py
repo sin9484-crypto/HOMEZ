@@ -117,6 +117,34 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(p.read_product_history("1").rows), 1)
 
 
+class RealResponseShapeTests(unittest.TestCase):
+    """2026-10-18 실제 응답(레이펄스 16417638496)의 모양 — 항목 키는 `statusName`이고 `status`는 없다."""
+
+    REAL = [
+        {"statusName": "승인완료", "comment": "'1개 200ml' 옵션의 재고가 '10' 로 변경되었습니다.", "createdBy": "A01767141", "createdAt": "2026-10-17T15:57:22"},
+        {"statusName": "승인완료", "comment": "승인완료", "createdBy": "쿠팡", "createdAt": "2026-10-17T15:06:31"},
+        {"statusName": "승인대기중", "comment": "판매자 승인 요청 시 재등록", "createdBy": "A01767141", "createdAt": "2026-10-17T15:06:30"},
+        {"statusName": "임시저장", "comment": "판매자 임시저장", "createdBy": "A01767141", "createdAt": "2026-10-17T15:06:29"},
+        {"statusName": "승인반려", "comment": "[기본형]: 상세설명에 포함된 모든 이미지를 다운받지 못했습니다.", "createdBy": "쿠팡", "createdAt": "2026-10-17T14:10:17"},
+    ]
+
+    def test_the_status_comes_from_statusname(self):
+        body = {"code": "SUCCESS", "message": "", "data": self.REAL, "nextToken": ""}
+        p, _ = provider(response(200, body))
+        rows = p.read_product_history("16417638496").rows
+        self.assertEqual([r["status"] for r in rows], ["승인완료", "승인완료", "승인대기중", "임시저장", "승인반려"])
+        self.assertIn("다운받지 못했습니다", rows[-1]["comment"])
+        self.assertNotIn("A01767141", repr([set(r) for r in rows]))
+
+    def test_the_documented_status_key_still_works_as_a_fallback(self):
+        p, _ = provider(response(200, history_body([{"status": "Approval denied", "comment": "x", "createdAt": "2026-10-17T14:10:17"}])))
+        self.assertEqual(p.read_product_history("1").rows[0]["status"], "Approval denied")
+
+    def test_the_real_key_wins_when_both_exist(self):
+        p, _ = provider(response(200, history_body([{"statusName": "승인반려", "status": "", "comment": "x", "createdAt": "2026-10-17T14:10:17"}])))
+        self.assertEqual(p.read_product_history("1").rows[0]["status"], "승인반려")
+
+
 class RequestShapeTests(unittest.TestCase):
 
     def test_only_get_goes_out_with_the_documented_paths(self):
