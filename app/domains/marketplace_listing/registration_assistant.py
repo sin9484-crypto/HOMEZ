@@ -334,8 +334,22 @@ def build_items(
             else:
                 unresolved.append(f"구매옵션 정의에 없는 옵션:{name}")
         option_names.append(name)
+    # 같은 묶음(group_number가 NONE이 아닌 같은 값)의 필수 구매옵션은 "그중 하나"만 채우면 된다(쿠팡 카테고리 56213의
+    # 개당 중량/개당 용량 — 개당 용량만 넣은 등록이 승인됐다). 묶음 전체가 비었을 때만 미해결이다.
+    groups: dict[str, list[str]] = {}
+    for d in exposed_required:
+        group = str(d.get("group_number") or "NONE").strip().upper()
+        if group not in ("NONE", ""):
+            groups.setdefault(group, []).append(d["attribute_type_name"])
+    reported_groups: set[str] = set()
     for d in exposed_required:
         name = d["attribute_type_name"]
+        group = str(d.get("group_number") or "NONE").strip().upper()
+        if group not in ("NONE", ""):
+            if not any(member in option_names for member in groups[group]) and group not in reported_groups:
+                reported_groups.add(group)
+                unresolved.append("구매옵션(택1):" + "/".join(groups[group]))
+            continue
         if name not in option_names and name != "수량":
             unresolved.append(f"구매옵션:{name}")
     if unresolved:

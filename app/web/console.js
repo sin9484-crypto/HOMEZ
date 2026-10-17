@@ -13134,6 +13134,7 @@
       }).join("")}
       <p class="field-error" id="lw-fulfillment-error"></p>`;
 
+    lwAttachRegistrationAssistant(content, w);
     content.querySelectorAll(".lw-channel-block").forEach((block) => {
       lwLoadChannelPolicyStatus(block, w.product_candidate_id);
     });
@@ -13755,6 +13756,112 @@
         });
       });
     });
+  }
+
+  // 등록 도우미(2026-10-17, Phase A) — 5단계의 값을 "제안"으로 다시 도출해 보여 주고, 사용자가 확인한 뒤에만 저장한다.
+  // 새 값을 만들어 내지 않는다: 온채널 고시·이미 저장한 값·고정값에서만 가져오고 못 채운 필수 칸은 막는다(서버 규칙).
+  // 제안 보기·저장은 각각 쿠팡 카테고리 조회 GET 1회가 들어가므로 누르기 전에 확인을 받는다. 쿠팡 등록(POST)은 하지 않는다.
+  function lwAttachRegistrationAssistant(content, w) {
+    content.querySelector("[data-lw-assistant]")?.remove();
+    const selection = (w.channel_selections || [])[0] || {};
+    const fields = selection.required_fields || {};
+    const eco = (w.economics_input || [])[0] || {};
+    const noticeConfirmed = (selection.channel_policy_confirmed_evidence_rule_codes || []).includes("CATEGORY_NOTICE_INFO_REQUIRED");
+    const panel = document.createElement("section");
+    panel.setAttribute("data-lw-assistant", "");
+    panel.style.cssText = "border:1px solid var(--border,#d0d7de);border-radius:8px;padding:12px 14px;margin:0 0 14px;";
+    panel.innerHTML = `
+      <h3 style="margin:0 0 4px;">${HomezI18n.t("lw.assistant_title")}</h3>
+      <p class="stat-sub" style="margin:0 0 10px;">${HomezI18n.t("lw.assistant_hint")}</p>
+      <div class="lw-field-grid">
+        <label class="field"><span class="field-label">${HomezI18n.t("lw.assistant_category")}</span>
+          <input type="text" data-lw-assist-category value="${escapeHtml(String(fields.displayCategoryCode || ""))}"></label>
+        <label class="field"><span class="field-label">${HomezI18n.t("lw.assistant_price")}</span>
+          <input type="number" min="1" data-lw-assist-price value="${escapeHtml(String(fields.salePrice || eco.sale_price || ""))}"></label>
+        <label class="field"><span class="field-label">${HomezI18n.t("lw.assistant_stock")}</span>
+          <input type="number" min="1" max="9999" data-lw-assist-stock value="${escapeHtml(String(fields.maximumBuyCount || 10))}"></label>
+      </div>
+      <label class="lw-checklist-item"><input type="checkbox" data-lw-assist-notice ${noticeConfirmed ? "checked" : ""}>
+        <span>${HomezI18n.t("lw.assistant_notice_confirm")}</span></label>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" data-lw-assist-propose>${HomezI18n.t("lw.assistant_propose_btn")}</button>
+        <button type="button" class="btn btn-primary btn-sm" data-lw-assist-apply disabled>${HomezI18n.t("lw.assistant_apply_btn")}</button>
+      </div>
+      <div data-lw-assist-result style="margin-top:10px;"></div>`;
+    content.prepend(panel);
+    const result = panel.querySelector("[data-lw-assist-result]");
+    const applyBtn = panel.querySelector("[data-lw-assist-apply]");
+
+    const requestBody = (withVersion) => {
+      const num = (value) => (value === undefined || value === null || value === "" ? undefined : Number(value));
+      const body = {
+        marketplace_account_id: selection.marketplace_account_id,
+        display_category_code: panel.querySelector("[data-lw-assist-category]").value.trim(),
+        sale_price: Number(panel.querySelector("[data-lw-assist-price]").value),
+        stock: Number(panel.querySelector("[data-lw-assist-stock]").value),
+        confirm_notice: panel.querySelector("[data-lw-assist-notice]").checked,
+        unit_cost: num(eco.cost_of_goods), shipping_cost: num(eco.shipping_cost),
+      };
+      if (eco.channel_fee_rate) body.channel_fee_rate = String(eco.channel_fee_rate);
+      if (eco.return_reserve_rate) body.return_reserve_rate = String(eco.return_reserve_rate);
+      if (withVersion) body.expected_version = lwState.wizard.version;
+      Object.keys(body).forEach((key) => body[key] === undefined && delete body[key]);
+      return body;
+    };
+    const valid = () => {
+      if (!panel.querySelector("[data-lw-assist-category]").value.trim()) { result.innerHTML = `<p class="field-error">${HomezI18n.t("lw.assistant_category_required")}</p>`; return false; }
+      if (!(Number(panel.querySelector("[data-lw-assist-price]").value) > 0)) { result.innerHTML = `<p class="field-error">${HomezI18n.t("lw.assistant_price_required")}</p>`; return false; }
+      return true;
+    };
+    const levelStyle = { BLOCKER: "color:var(--danger,#b42318);font-weight:600;", CAUTION: "color:#9a6700;", INFO: "color:var(--text-secondary,#57606a);" };
+    const render = (data) => {
+      const notes = (data.notes || []).map((n) =>
+        `<li style="${levelStyle[n.level] || ""}">${escapeHtml(HomezI18n.t(`lw.assistant_level_${String(n.level).toLowerCase()}`))} · ${escapeHtml(n.message)}</li>`).join("");
+      const unresolved = (data.unresolved || []).map((u) => `<li>${escapeHtml(u)}</li>`).join("");
+      result.innerHTML = `
+        <p><strong>${HomezI18n.t(data.ready ? "lw.assistant_ready" : "lw.assistant_not_ready")}</strong>
+          · ${HomezI18n.t("lw.assistant_items", { count: data.item_count || 0 })}</p>
+        ${unresolved ? `<p class="stat-sub">${HomezI18n.t("lw.assistant_unresolved")}</p><ul>${unresolved}</ul>` : ""}
+        ${notes ? `<p class="stat-sub">${HomezI18n.t("lw.assistant_notes")}</p><ul>${notes}</ul>` : ""}`;
+      applyBtn.disabled = !data.ready;
+    };
+
+    panel.querySelector("[data-lw-assist-propose]").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      if (!valid()) return;
+      const ok = await askConfirm(HomezI18n.t("lw.assistant_propose_confirm_body"), {
+        title: HomezI18n.t("lw.assistant_propose_confirm_title"), okLabel: HomezI18n.t("lw.assistant_propose_btn"),
+      });
+      if (!ok) return;
+      result.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      applyBtn.disabled = true;
+      try {
+        const data = await apiFetch(`/listing-wizards/${w.id}/registration-assistant/propose`, { method: "POST", body: JSON.stringify(requestBody(false)) });
+        render(data);
+      } catch (err) {
+        result.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("lw.assistant_failed"))}</p>`;
+      }
+    }));
+
+    applyBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      if (!valid()) return;
+      const ok = await askConfirm(HomezI18n.t("lw.assistant_apply_confirm_body"), {
+        title: HomezI18n.t("lw.assistant_apply_confirm_title"), okLabel: HomezI18n.t("lw.assistant_apply_btn"),
+      });
+      if (!ok) return;
+      try {
+        const data = await apiFetch(`/listing-wizards/${w.id}/registration-assistant/apply`, { method: "POST", body: JSON.stringify(requestBody(true)) });
+        if (data.applied) {
+          toast(HomezI18n.t("lw.assistant_applied"), "success");
+          lwState.wizard = await apiFetch(`/listing-wizards/${w.id}`);
+          await lwRenderStep();
+        } else {
+          render(data);
+          result.insertAdjacentHTML("beforeend", `<p class="field-error">${escapeHtml(data.error || HomezI18n.t("lw.assistant_not_saved"))}</p>`);
+        }
+      } catch (err) {
+        result.insertAdjacentHTML("beforeend", `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("lw.assistant_failed"))}</p>`);
+      }
+    }));
   }
 
   // A9(2026-10-14) — URL로 가져온 공급처의 상품정보제공고시를 이 칸들의 "제안"으로 채운다. 빈 칸에만 채우고(덮어쓰지 않음),

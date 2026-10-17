@@ -27,7 +27,10 @@ from app.domains.marketplace_listing.listing_wizard_schema import WizardDraftUpd
 from app.domains.marketplace_listing.listing_wizard_schema import WizardFulfillmentUpdateRequest
 from app.domains.marketplace_listing.listing_wizard_service import ListingWizardService
 from app.domains.marketplace_listing.model import ListingWizard
+from app.domains.marketplace_listing.registration_assistant import NO_BRAND_KEYS
 from app.domains.marketplace_listing.registration_assistant import NOTICE_EVIDENCE_PREFIX
+from app.domains.marketplace_listing.registration_assistant import SELLER_DEFAULT_KEYS
+from app.domains.marketplace_listing.registration_assistant import AssistantNote
 from app.domains.marketplace_listing.registration_assistant import AssistantRequest
 from app.domains.marketplace_listing.registration_assistant import Proposal
 from app.domains.marketplace_listing.registration_assistant import build_proposal
@@ -38,6 +41,81 @@ from app.domains.product_candidate.model import ProductCandidate
 from app.domains.product_candidate.model import ProductCandidateEvidence
 from app.domains.product_import.notice_suggestions import decode_notice_rows
 from app.domains.user_settings.repository import UserSettingRepository
+
+
+# ---------------------------------------------------------------------------
+# 이미 저장한 5단계 값 재사용(2026-10-17, 등록 도우미 Phase A)
+#
+# URL로 가져오기로 만든 위저드가 아니어도(수동 생성·복제), 사용자가 이미 5단계에 저장해 둔 값이 있으면 그것을 근거로 쓴다.
+# 새 값을 만들어 내지 않는다 — 저장돼 있던 값을 같은 규칙(`build_proposal`)으로 다시 검증해 돌려주고, 도우미가 만든 제안을 저장할 때
+# 이미 올려 둔 이미지·상세설명·사용권 선언이 지워지지 않도록 지켜 준다.
+# ---------------------------------------------------------------------------
+
+
+def saved_entry_for_account(channel_selections_json: str | None, account_id: int | None) -> dict:
+    """위저드에 저장된 5단계 항목 중 이 판매계정의 것(없으면 빈 dict)."""
+
+    try:
+        entries = json.loads(channel_selections_json or "[]")
+    except (TypeError, ValueError):
+        return {}
+    for entry in entries:
+        if isinstance(entry, dict) and (account_id is None or entry.get("marketplace_account_id") == account_id):
+            return entry
+    return {}
+
+
+def rows_from_saved_selection(entry: dict) -> list[tuple[str, str]]:
+    """저장된 고시 값을 (라벨, 값) 행으로 바꾼다. 빈 값·내부 키(`__…`)는 뺀다."""
+
+    info = ((entry or {}).get("channel_policy_attributes") or {}).get("notice_information") or {}
+    rows: list[tuple[str, str]] = []
+    group = str(info.get("__notice_category_name") or "").strip()
+    if group:
+        rows.append(("상품정보제공고시 구분", group))
+    for key, value in info.items():
+        if str(key).startswith("__") or not str(value).strip():
+            continue
+        rows.append((str(key).split("::", 1)[-1], str(value).strip()))
+    return rows
+
+
+def merge_saved_defaults(defaults: dict, entry: dict) -> tuple[dict, list[str]]:
+    """판매자 공통 값이 비어 있으면 같은 위저드에 이미 저장된 값으로 채운다(고정값·이전 성공 등록이 우선). 무브랜드 확인 기록은
+    저장된 상태가 NO_BRAND일 때만 가져온다. 반환: (병합 결과, 채운 키 목록)."""
+
+    merged = dict(defaults)
+    saved = (entry or {}).get("required_fields") or {}
+    used: list[str] = []
+    for key in SELLER_DEFAULT_KEYS:
+        if key not in merged and saved.get(key) not in (None, ""):
+            merged[key] = saved[key]
+            used.append(key)
+    if merged.get("brandState") != "NO_BRAND" and saved.get("brandState") == "NO_BRAND":
+        for key in NO_BRAND_KEYS:
+            if key in saved:
+                merged[key] = saved[key]
+        used.append("brandState")
+    return merged, used
+
+
+def carry_saved_content(request: AssistantRequest, entry: dict) -> tuple[AssistantRequest, list[str]]:
+    """요청이 이미지·상세설명·사용권 선언을 비워 두었으면 저장돼 있던 값을 그대로 이어 받는다(사용자가 새로 넘긴 값이 우선)."""
+
+    saved = (entry or {}).get("required_fields") or {}
+    updates: dict = {}
+    carried: list[str] = []
+    if not request.images and saved.get("images"):
+        updates["images"] = list(saved["images"])
+        carried.append("대표 이미지")
+    if not request.contents and saved.get("contents"):
+        updates["contents"] = list(saved["contents"])
+        updates["contents_source_asset_ids"] = list(saved.get("contentsSourceAssetIds") or request.contents_source_asset_ids)
+        carried.append("상세설명")
+    if not request.image_rights_confirmed and saved.get("liveImageRightsConfirmed") is True:
+        updates["image_rights_confirmed"] = True
+        carried.append("이미지 사용권 선언")
+    return (request.model_copy(update=updates) if updates else request), carried
 
 
 def proposal_to_dict(proposal: Proposal) -> dict:
@@ -120,17 +198,42 @@ class RegistrationAssistantService:
         candidate = self.db.query(ProductCandidate).filter(ProductCandidate.id == wizard.product_candidate_id).first()
         if candidate is None:
             raise BadRequestException("위저드에 상품 후보가 연결되어 있지 않습니다.")
+        saved = saved_entry_for_account(wizard.channel_selections_json, account_id)
         rows = self._onch_rows(candidate.id)
+        rows_from_saved = False
         if not rows:
-            raise BadRequestException("온채널 정보고시 근거가 없습니다 — URL로 상품 가져오기로 만든 위저드에서만 쓸 수 있습니다.")
+            rows = rows_from_saved_selection(saved)
+            rows_from_saved = bool(rows)
+        if not rows:
+            raise BadRequestException(
+                "고시 근거가 없습니다 — URL로 상품 가져오기로 만든 위저드이거나, 5단계에 고시를 한 번 저장해 둔 위저드에서 쓸 수 있습니다.",
+            )
         prior_fields, prior_notice, prior_outbound, prior_return = self._prior_success(wizard_id, company_id, account_id)
-        return build_proposal(
+        defaults = pick_seller_defaults(prior_fields, prior_notice, self._fixed_defaults(user_id, company_id))
+        defaults, defaults_from_saved = merge_saved_defaults(defaults, saved)
+        request, carried = carry_saved_content(request, saved)
+        proposal = build_proposal(
             wizard_draft=json.loads(wizard.draft_json or "{}"), candidate_id=candidate.id,
             source_reference=candidate.source_reference or f"CANDIDATE:{candidate.id}", account_id=account_id,
-            onch_rows=rows, metadata=metadata,
-            seller_defaults=pick_seller_defaults(prior_fields, prior_notice, self._fixed_defaults(user_id, company_id)),
-            outbound_code=prior_outbound, return_center_code=prior_return, request=request,
+            onch_rows=rows, metadata=metadata, seller_defaults=defaults,
+            outbound_code=prior_outbound or saved.get("outbound_shipping_place_code"),
+            return_center_code=prior_return or saved.get("return_center_code"), request=request,
         )
+        if rows_from_saved:
+            proposal.notes.append(AssistantNote(
+                "INFO", "NOTICE_FROM_SAVED_VALUES",
+                "온채널 고시 근거가 없어, 이 위저드 5단계에 이미 저장된 고시 값을 근거로 다시 검증했다 — 새 값을 만들지 않았다.",
+            ))
+        if defaults_from_saved:
+            proposal.notes.append(AssistantNote(
+                "INFO", "SELLER_VALUES_FROM_SAVED",
+                "고정값·이전 등록에 없는 판매자 공통 값은 이 위저드에 이미 저장된 값을 썼다: " + ", ".join(defaults_from_saved),
+            ))
+        if carried:
+            proposal.notes.append(AssistantNote(
+                "INFO", "SAVED_CONTENT_KEPT", "이미 올려 둔 값을 그대로 유지한다: " + ", ".join(carried),
+            ))
+        return proposal
 
     def apply(
         self, wizard_id: int, company_id: int, actor_user_id: int, request: AssistantRequest, metadata: dict,
