@@ -49,11 +49,11 @@ class PlacementTests(unittest.TestCase):
 
 class RequestTests(unittest.TestCase):
 
-    def test_only_two_post_endpoints_are_used(self):
+    def test_only_three_post_endpoints_are_used(self):
         src = block()
-        self.assertEqual(sorted(set(re.findall(r'apiFetch\("(/[^"]+)"', src))), ["/product-import/competitors/compare", "/product-import/competitors/read"])
-        self.assertEqual(src.count("apiFetch("), 2)
-        self.assertEqual(src.count('method: "POST"'), 2)
+        self.assertEqual(sorted(set(re.findall(r'apiFetch\("(/[^"]+)"', src))), ["/product-import/competitors/compare", "/product-import/competitors/read", "/product-import/strategy"])
+        self.assertEqual(src.count("apiFetch("), 3)
+        self.assertEqual(src.count('method: "POST"'), 3)
 
     def test_reading_asks_first_after_validating_and_deduplicating_the_addresses(self):
         src = block()
@@ -114,6 +114,7 @@ class TextTests(unittest.TestCase):
 
     def used(self):
         found = set(re.findall(r'cmpT\("([a-z_]+)"', block()))
+        found |= set(re.findall(r'"(strat_[a-z_]+)"', block()))  # 서버 코드 → 문구 열쇠 표(글자 그대로)
         # 조건식 안의 글자 그대로의 열쇠(cmpT(조건 ? "a" : "b"))도 쓰는 문구로 센다
         for first, second in re.findall(r'cmpT\([^()]*?\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"\)', block()):
             found |= {first, second}
@@ -152,6 +153,76 @@ class TextTests(unittest.TestCase):
         self.assertIn('"lw.cmp_won": " KRW"', EN)
         self.assertIn("검색 결과 페이지는 넣지 마세요", KO)
         self.assertIn("Do not enter search result pages", EN)
+
+
+SERVER = (ROOT / "app/domains/pricing/price_strategy.py").read_text(encoding="utf-8")
+ROUTER = (ROOT / "app/domains/product_import/router.py").read_text(encoding="utf-8")
+
+
+class StrategyScreenTests(unittest.TestCase):
+    """M3 가격 전략: 경쟁 가격 비교 결과 아래의 버튼과 결과 표시."""
+
+    def test_the_button_appears_only_after_a_comparison_that_counted_something(self):
+        src = block()
+        self.assertIn('lastReport.n ? `<div class="field-inline"><button type="button" class="btn btn-secondary" data-cmp-strategy>', src)
+        self.assertIn("let lastReport = null;", src)
+
+    def test_the_request_reuses_the_cost_inputs_and_the_last_comparison_and_nothing_else(self):
+        src = block()
+        run = src[src.index("const runStrategy"):src.index("compareBtn.addEventListener")]
+        self.assertIn('document.querySelector("#lw-aia-host [data-aia-calc-host]")', run)
+        self.assertIn('calcHost.lwAiaBody()', run)
+        self.assertIn('apiFetch("/product-import/strategy", { method: "POST", body: JSON.stringify(body) })', run)
+        self.assertIn("body.market = { n: market.n, basis: lastReport.basis, min: market.min };", run)
+        self.assertIn("if (market.n >= 2) { body.market.median = market.median; body.market.max = market.max; }", run)
+        self.assertIn('typeof calcHost.lwAiaBody !== "function"', run)
+        self.assertLess(run.index("lwAiaBody()"), run.index("apiFetch("))
+        # AI 분석·단가 블록이 같은 요청 구성 함수를 노출한다
+        self.assertIn("host.lwAiaBody = body;", CONSOLE)
+        self.assertLess(CONSOLE.index("const body = () => {"), CONSOLE.index("host.lwAiaBody = body;"))
+        # 노출하는 곳은 계산 칸을 그리는 함수 안(= host가 data-aia-calc-host)이고, 그 칸은 lwAiaAttach가 만든다
+        mount = CONSOLE[CONSOLE.index("function lwAiaMountCalc"):]
+        self.assertLess(mount.index("host.lwAiaBody = body;"), mount.index("function lwAiaSnapshot"))
+        attach = CONSOLE[CONSOLE.index("function lwAiaAttach"):CONSOLE.index("function lwAiaMountCalc")] if CONSOLE.index("function lwAiaAttach") < CONSOLE.index("function lwAiaMountCalc") else ""
+        self.assertIn("data-aia-calc-host", attach or CONSOLE[CONSOLE.index("function lwAiaAttach"):CONSOLE.index("function lwAiaAttach") + 600])
+
+    def test_every_server_text_in_the_result_is_escaped(self):
+        src = block()
+        html = src[src.index("const strategyHtml"):src.index("const runStrategy")]
+        for expr in ("escapeHtml(text)", "escapeHtml(cmpWon(row.price))", "escapeHtml((row.labels || [row.label]).join(\" · \"))", "escapeHtml(lwUiPercent(row.margin_rate))",
+                     "escapeHtml(row.label)", "const list = (items) => (items || []).map((text) => `<li>${escapeHtml(text)}</li>`).join(\"\");"):
+            self.assertIn(expr, html, expr)
+        self.assertIn("const missing = (report.missing || []).map((m) => m.message);", html)  # 메시지는 list()를 거쳐 이스케이프된다
+
+    def test_a_non_ok_result_shows_no_prices(self):
+        html = block()[block().index("const strategyHtml"):block().index("const runStrategy")]
+        early = html[:html.index("const rec = report.recommended")]
+        self.assertIn('if (report.status !== "OK")', early)
+        self.assertNotIn("report.points", early)
+        self.assertNotIn("report.floor_price", early)
+
+    def test_every_position_vs_market_and_status_code_from_the_server_has_a_text_key(self):
+        src = block()
+        positions = set(re.findall(r'position = "([A-Z_]+)"|position, low, suggested = "([A-Z_]+)"', SERVER))
+        positions = {name for pair in positions for name in pair if name}
+        vs = set(re.findall(r'row\["vs_market"\] = "([A-Z_]+)"', SERVER))
+        statuses = set(re.findall(r'"status": "([A-Z_]+)"', SERVER)) | {"OK"}
+        pos_map = set(re.findall(r'(\w+): "strat_pos_[a-z_]+"', src))
+        vs_map = set(re.findall(r'(\w+): "strat_vs_[a-z_]+"', src))
+        self.assertEqual(positions, set(pos_map))
+        self.assertEqual(vs, set(vs_map))
+        status_map = set(re.findall(r'(\w+): \["(?:ok|warn)", "strat_status_[a-z]+"\]', src))
+        self.assertEqual(statuses, status_map)
+
+    def test_the_route_is_post_and_has_no_ai_or_credential_dependency(self):
+        block_src = ROUTER[ROUTER.index('@router.post("/strategy")'):ROUTER.index('@router.get("/channel-fees")')]
+        self.assertIn("Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE))", block_src)
+        for forbidden in ("credential_store", "AiDraftService", "transport"):
+            self.assertNotIn(forbidden, block_src, forbidden)
+        import app.domains.product_import.router as module
+
+        route = next(r for r in module.router.routes if r.path == "/product-import/strategy")
+        self.assertEqual(route.methods, {"POST"})
 
 
 if __name__ == "__main__":

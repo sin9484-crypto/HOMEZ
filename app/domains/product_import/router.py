@@ -14,6 +14,7 @@ URL 상품 가져오기(2026-10-14) API.
   GET/PUT /product-import/channel-fees  플랫폼 수수료율(사용자가 확인한 값) 조회·저장
   POST /product-import/competitors/read     경쟁 상품 주소(최대 5개)를 읽고 AI가 표시 가격·구성을 해석한다(주소마다 AI 1회 — 월 한도·승인 센터 허용 필요)
   POST /product-import/competitors/compare  확인된 경쟁 가격으로 결정적 통계(AI 없음, 저장 없음)
+  POST /product-import/strategy             마진 하한가·시장 구간·권장 구간 가격 전략 제안(AI 없음, 저장 없음, 가격은 바꾸지 않음)
 
 쿠팡 호출은 없다. 외부 접근은 /search의 페이지 읽기(+ 온채널이면 공식 API 상품 조회)와 /create-draft의 선택한 이미지
 다운로드뿐이다. 권한은 위저드 생성 권한(listing_wizard.create)을 쓴다.
@@ -136,6 +137,19 @@ def analyze_product_url(
         raise BadRequestException(str(exc)) from exc
 
 
+def _calc_input(data: schema.CalculateRequest) -> CalcInput:
+    """계산 요청 → 계산 입력(계산·가격 전략이 같이 쓴다)."""
+
+    return CalcInput(
+        channel=data.channel.strip().upper(), category_code=data.category_code, supply_price=data.supply_price,
+        vat_state=data.vat_state, shipping_cost=data.shipping_cost, sell_quantity=data.sell_quantity,
+        packaging_cost=data.packaging_cost, return_reserve_rate=data.return_reserve_rate, payment_fee_rate=data.payment_fee_rate,
+        sale_price=data.sale_price, pack_count=data.pack_count, unit_volume=data.unit_volume, unit=data.unit,
+        risk_codes=list(data.risk_codes), acknowledged_risks=list(data.acknowledged_risks),
+        ai_sourced=list(data.ai_sourced), ai_values_confirmed=data.ai_values_confirmed,
+    )
+
+
 @router.post("/calculate")
 def calculate_product_economics(
     data: schema.CalculateRequest,
@@ -145,14 +159,7 @@ def calculate_product_economics(
 ):
     """결정적 계산과 판정(AI·바깥 호출 없음, 저장 없음). 모르는 값이 있으면 계산하지 않고 보류로 돌려준다."""
 
-    inp = CalcInput(
-        channel=data.channel.strip().upper(), category_code=data.category_code, supply_price=data.supply_price,
-        vat_state=data.vat_state, shipping_cost=data.shipping_cost, sell_quantity=data.sell_quantity,
-        packaging_cost=data.packaging_cost, return_reserve_rate=data.return_reserve_rate, payment_fee_rate=data.payment_fee_rate,
-        sale_price=data.sale_price, pack_count=data.pack_count, unit_volume=data.unit_volume, unit=data.unit,
-        risk_codes=list(data.risk_codes), acknowledged_risks=list(data.acknowledged_risks),
-        ai_sourced=list(data.ai_sourced), ai_values_confirmed=data.ai_values_confirmed,
-    )
+    inp = _calc_input(data)
     service = UrlAnalysisService(db, ProductImportService(db, RequestsTransport()), AiDraftService(db, credential_store))
     return service.calculate(current_user.company_id, current_user.id, inp)
 
@@ -185,6 +192,28 @@ def compare_competitor_prices(
     from app.domains.product_import.competitor_price_service import to_entry
 
     return CompetitorPriceService.compare([to_entry(row) for row in data.entries])
+
+
+@router.post("/strategy")
+def propose_price_strategy(
+    data: schema.StrategyRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+):
+    """2026-10-18 마케팅 AI M3 — 마진 하한가·시장 구간(M2)·권장 구간을 함께 보여 주는 가격 전략 제안(AI·바깥 호출·저장 없음).
+    어떤 제안도 마진 하한가 아래로 내려가지 않고, 모르는 값이 있으면 가격을 만들지 않는다. 가격은 바꾸지 않는다."""
+
+    from decimal import Decimal
+
+    from app.domains.pricing.price_strategy import Market
+    from app.domains.pricing.price_strategy import strategy_report
+
+    market = None
+    if data.market is not None:
+        market = Market(n=data.market.n, basis=data.market.basis, min=Decimal(data.market.min),
+                        median=None if data.market.median is None else Decimal(data.market.median),
+                        max=None if data.market.max is None else Decimal(data.market.max))
+    return strategy_report(db, current_user.company_id, current_user.id, _calc_input(data), market)
 
 
 @router.get("/channel-fees")

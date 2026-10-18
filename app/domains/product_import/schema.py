@@ -20,6 +20,7 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import model_validator
 
 SourceKind = Literal["ONCHANNEL", "GENERIC"]
 
@@ -263,3 +264,36 @@ class CompetitorCompareRequest(BaseModel):
     entries: list[CompetitorEntryRequest] = Field(min_length=1, max_length=10)
 
     model_config = ConfigDict(extra="forbid")
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-18 마케팅 AI M3 — 가격 전략 제안
+# ---------------------------------------------------------------------------
+
+class MarketInput(BaseModel):
+    """M2 경쟁 가격 비교 결과에서 가져온 시장 구간. 항목이 2개 이상이면 중앙값·최고가가 있어야 한다."""
+
+    n: int = Field(ge=1, le=10)
+    basis: Literal["total", "display"]
+    min: Decimal = Field(ge=0, le=Decimal("100000000"))
+    median: Decimal | None = Field(default=None, ge=0, le=Decimal("100000000"))
+    max: Decimal | None = Field(default=None, ge=0, le=Decimal("100000000"))
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.n >= 2:
+            if self.median is None or self.max is None:
+                raise ValueError("경쟁 가격이 2곳 이상이면 중앙값과 최고가가 있어야 합니다.")
+            if not self.min <= self.median <= self.max:
+                raise ValueError("시장 구간은 최저 ≤ 중앙값 ≤ 최고 순서여야 합니다.")
+        elif self.median is not None or self.max is not None:
+            raise ValueError("경쟁 가격이 1곳이면 중앙값과 최고가를 쓸 수 없습니다.")
+        return self
+
+
+class StrategyRequest(CalculateRequest):
+    """가격 전략 입력 = 계산 입력(원가·부가세·배송비·수수료 등) + 선택적 시장 구간. `sale_price`는 사용자가 생각하는 판매가(평가용)다."""
+
+    market: MarketInput | None = None

@@ -11170,6 +11170,8 @@
       return body;
     };
 
+    host.lwAiaBody = body;  // 가격 전략(M3)이 같은 원가·수수료 입력을 쓰도록 노출한다
+
     const renderFeeBox = (report) => {
       const fee = report.fee || {};
       if (fee.source === "USER_CONFIRMED" && fee.rate) {
@@ -11336,9 +11338,15 @@
   const CMP_MAX_ROWS = 10;
   const cmpWon = (value) => (value === null || value === undefined || value === "" ? "—" : `${Number(value).toLocaleString()}${cmpT("won")}`);
 
+  // 가격 전략(M3): 서버가 준 위치·상태 코드를 글자 그대로의 문구 열쇠로 옮긴다.
+  const CMP_STRAT_POS = { NO_MARKET: "strat_pos_none", ONE_REFERENCE: "strat_pos_one", COMPETITIVE: "strat_pos_competitive", ABOVE_MEDIAN: "strat_pos_above_median", ABOVE_MARKET: "strat_pos_above_market" };
+  const CMP_STRAT_VS = { NO_MARKET: "strat_vs_none", BELOW_MARKET_MIN: "strat_vs_below", WITHIN: "strat_vs_within", ABOVE_MEDIAN: "strat_vs_above_median", ABOVE_MARKET_MAX: "strat_vs_above_max" };
+  const CMP_STRAT_STATUS = { OK: ["ok", "strat_status_ok"], HOLD: ["warn", "strat_status_hold"], NOT_RECOMMENDED: ["warn", "strat_status_no"] };
+
   function lwCmpAttach(host) {
     if (!host) return;
     let rows = [];
+    let lastReport = null;
     host.innerHTML = `
       <h3>${cmpT("title")}</h3>
       <p class="stat-sub">${cmpT("hint")}</p>
@@ -11470,6 +11478,51 @@
         ${(report.notes || []).map((text) => `<p class="stat-sub">${escapeHtml(text)}</p>`).join("")}`;
     };
 
+    const strategyHtml = (report) => {
+      const [tone, statusKey] = CMP_STRAT_STATUS[report.status] || ["warn", "strat_status_hold"];
+      const list = (items) => (items || []).map((text) => `<li>${escapeHtml(text)}</li>`).join("");
+      const missing = (report.missing || []).map((m) => m.message);
+      const head = `<p><span class="pill ${tone}">${escapeHtml(cmpT(statusKey))}</span> ${escapeHtml(cmpT("strat_min_rate", { rate: (Number(report.min_margin_rate) * 100).toFixed(0) }))}</p>`;
+      if (report.status !== "OK") {
+        return `<h4>${cmpT("strat_title")}</h4>${head}
+          ${(report.reasons || []).length ? `<ul>${list(report.reasons)}</ul>` : ""}
+          ${missing.length ? `<p class="field-error">${cmpT("strat_missing")}</p><ul>${list(missing)}</ul>` : ""}
+          ${report.status === "HOLD" ? `<p class="stat-sub">${cmpT("strat_hold_hint")}</p>` : ""}`;
+      }
+      const rec = report.recommended || {};
+      const points = (report.points || []).map((row) => `<tr>
+        <td>${escapeHtml(cmpWon(row.price))}</td><td>${escapeHtml((row.labels || [row.label]).join(" · "))}</td>
+        <td>${escapeHtml(cmpWon(row.margin_amount))}</td><td>${escapeHtml(lwUiPercent(row.margin_rate))}</td>
+        <td>${escapeHtml(cmpT(row.meets_min ? "strat_ok" : "strat_not_ok"))}</td></tr>`).join("");
+      const sens = (report.sensitivity || []).map((row) => `<li>${escapeHtml(row.label)} → ${escapeHtml(lwUiPercent(row.margin_rate))} (${escapeHtml(cmpT(row.meets_min ? "strat_ok" : "strat_not_ok"))})</li>`).join("");
+      const entered = report.entered;
+      return `<h4>${cmpT("strat_title")}</h4>${head}
+        <p><strong>${escapeHtml(cmpT("strat_floor", { price: cmpWon(report.floor_price) }))}</strong></p>
+        <p class="stat-sub">${escapeHtml(cmpT(CMP_STRAT_POS[report.position] || "strat_pos_none"))}</p>
+        <p><strong>${escapeHtml(rec.high ? cmpT("strat_range", { low: cmpWon(rec.low), high: cmpWon(rec.high), suggested: cmpWon(rec.suggested) }) : cmpT("strat_range_open", { low: cmpWon(rec.low), suggested: cmpWon(rec.suggested) }))}</strong></p>
+        ${entered ? `<p class="stat-sub">${escapeHtml(cmpT("strat_entered", { price: cmpWon(entered.price), rate: lwUiPercent(entered.margin_rate), where: cmpT(CMP_STRAT_VS[entered.vs_market] || "strat_vs_none") }))}${entered.vs_floor === "BELOW_FLOOR" ? ` ${escapeHtml(cmpT("strat_entered_below"))}` : ""}</p>` : ""}
+        <table class="data-table"><thead><tr><th>${cmpT("strat_col_price")}</th><th>${cmpT("strat_col_name")}</th><th>${cmpT("strat_col_margin")}</th><th>${cmpT("strat_col_rate")}</th><th>${cmpT("strat_col_ok")}</th></tr></thead><tbody>${points}</tbody></table>
+        ${sens ? `<details><summary>${cmpT("strat_sens_title")}</summary><ul>${sens}</ul></details>` : ""}
+        ${list(report.warnings) ? `<ul>${list(report.warnings)}</ul>` : ""}
+        ${(report.notes || []).map((text) => `<p class="stat-sub">${escapeHtml(text)}</p>`).join("")}`;
+    };
+
+    const runStrategy = async () => {
+      errorEl.textContent = "";
+      if (!lastReport || !lastReport.n) return;
+      const calcHost = document.querySelector("#lw-aia-host [data-aia-calc-host]");  // AI 분석·단가 블록의 계산 칸(분석을 다시 하면 새로 그려진다)
+      if (!calcHost || typeof calcHost.lwAiaBody !== "function") { errorEl.textContent = cmpT("strat_need_cost"); return; }
+      const body = calcHost.lwAiaBody();  // 거기에 입력한 원가·부가세·배송비·수수료 등을 그대로 쓴다
+      const market = lastReport.market || {};
+      body.market = { n: market.n, basis: lastReport.basis, min: market.min };
+      if (market.n >= 2) { body.market.median = market.median; body.market.max = market.max; }
+      try {
+        q("strategy-out").innerHTML = strategyHtml(await apiFetch("/product-import/strategy", { method: "POST", body: JSON.stringify(body) }));
+      } catch (err) {
+        errorEl.textContent = err.message || cmpT("strat_failed");
+      }
+    };
+
     compareBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
       errorEl.textContent = "";
       syncRows();
@@ -11486,7 +11539,10 @@
         });
       }
       try {
-        q("report").innerHTML = reportHtml(await apiFetch("/product-import/competitors/compare", { method: "POST", body: JSON.stringify({ entries }) }));
+        lastReport = await apiFetch("/product-import/competitors/compare", { method: "POST", body: JSON.stringify({ entries }) });
+        q("report").innerHTML = reportHtml(lastReport) + (lastReport.n ? `<div class="field-inline"><button type="button" class="btn btn-secondary" data-cmp-strategy>${cmpT("strat_btn")}</button></div><div data-cmp-strategy-out aria-live="polite"></div>` : "");
+        const strategyBtn = q("strategy");
+        if (strategyBtn) strategyBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, runStrategy));
       } catch (err) {
         errorEl.textContent = err.message || cmpT("compare_failed");
       }

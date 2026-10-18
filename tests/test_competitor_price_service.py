@@ -231,14 +231,14 @@ class WiringTests(unittest.TestCase):
         routes = self.routes()
         for path in ("/product-import/competitors/read", "/product-import/competitors/compare"):
             self.assertEqual(routes[path].methods, {"POST"}, path)
-        block = ROUTER[ROUTER.index('@router.post("/competitors/read")'):ROUTER.index('@router.get("/channel-fees")')]
+        block = ROUTER[ROUTER.index('@router.post("/competitors/read")'):ROUTER.index('@router.post("/strategy")')]
         self.assertEqual(block.count("Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE))"), 2)
 
     def test_the_read_route_takes_only_addresses_and_the_compare_route_stays_free_of_ai(self):
         routes = self.routes()
         body = routes["/product-import/competitors/read"].dependant.body_params
         self.assertEqual([p.name for p in body], ["data"])
-        compare = ROUTER[ROUTER.index('@router.post("/competitors/compare")'):ROUTER.index('@router.get("/channel-fees")')]
+        compare = ROUTER[ROUTER.index('@router.post("/competitors/compare")'):ROUTER.index('@router.post("/strategy")')]
         for forbidden in ("credential_store", "AiDraftService", "transport", "db: Session"):
             self.assertNotIn(forbidden, compare, forbidden)
 
