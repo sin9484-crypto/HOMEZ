@@ -211,6 +211,42 @@ class BriefingFunctionTests(unittest.TestCase):
         for bad in ('""', "null", '"가짜"'):
             self.assertIsNone(self.run_js(f"parseUtcMs({bad})"))
 
+    # ---- 앱 상태 점검(T1) ----
+
+    def health(self, *codes):
+        return {"overall": "FAIL", "checks": [{"code": c, "level": lv, "params": p} for c, lv, p in codes], "passed": [], "unknown": []}
+
+    def test_system_checks_from_the_server_are_listed_and_unknown_or_info_codes_are_skipped(self):
+        health = self.health(("SCHEDULER_NOT_RUNNING", "FAIL", {}), ("BACKUP_STALE", "WARN", {"days": 9}), ("REHEARSAL_NONE", "INFO", {}),
+                             ("SOMETHING_NEW", "FAIL", {}), ("DISK_LOW", "OK", {"free_mb": 10}))
+        system = self.brief(health=health)["system"]
+        self.assertEqual([(c["code"], c["level"]) for c in system], [("SCHEDULER_NOT_RUNNING", "FAIL"), ("BACKUP_STALE", "WARN")])
+
+    def test_missing_or_malformed_health_gives_no_system_lines_and_does_not_break_the_briefing(self):
+        for health in (None, {}, {"checks": None}, {"checks": "x"}, {"checks": [None, 3, {}]}):
+            self.assertEqual(self.brief(health=health)["system"], [])
+        self.assertEqual(self.brief()["system"], [])
+
+    def test_system_lines_show_in_the_stalled_card_with_numbers_and_colour(self):
+        data = {"mine": 0, "urgent": [], "upcoming": [], "stalled": [], "system": [
+            {"code": "BACKUP_OLD", "level": "FAIL", "params": {"days": 41}},
+            {"code": "DISK_LOW", "level": "WARN", "params": {"free_mb": 512}},
+            {"code": "JOBS_OVERDUE", "level": "WARN", "params": {"jobs": ["a", "b"]}}]}
+        html = self.run_js(f"briefingHtml({json.dumps(data)})")
+        for text in ("마지막 백업이 41일 전이에요", "512MB", "자동 작업 2개가 제때 돌지 않고"):
+            self.assertIn(text, html)
+        self.assertNotIn("자동 확인이 모두 최근에 돌았어요", html)
+        self.assertRegex(html, r"ez-c-red[^>]*>[^<]*41일")
+        self.assertRegex(html, r"ez-c-orange[^>]*>[^<]*512MB")
+
+    def test_stalled_items_and_system_lines_appear_together_and_nothing_hides_the_all_clear_when_empty(self):
+        data = {"mine": 0, "urgent": [], "upcoming": [], "stalled": [{"kind": "detect", "minutes": 45}], "system": [{"code": "ESTOP_ACTIVE", "level": "WARN", "params": {}}]}
+        html = self.run_js(f"briefingHtml({json.dumps(data)})")
+        self.assertIn("45분째", html)
+        self.assertIn("긴급 중지가 켜져 있어", html)
+        empty = self.run_js('briefingHtml({"mine": 0, "urgent": [], "upcoming": [], "stalled": [], "system": []})')
+        self.assertIn("자동 확인이 모두 최근에 돌았어요", empty)
+
     # ---- 화면 글 ----
 
     def test_the_html_shows_each_section_and_escapes_text(self):
@@ -236,7 +272,7 @@ class WiringTests(unittest.TestCase):
 
     def test_the_briefing_is_built_from_data_already_loaded_and_rendered_above_the_flow(self):
         body = JS.split("async function loadToday()")[1]
-        self.assertIn("const brief = briefingFrom({ rows, ext, collect, today, nowMs: Date.now() });", body)
+        self.assertIn("const brief = briefingFrom({ rows, ext, collect, today, health: sysHealth, nowMs: Date.now() });", body)
         self.assertLess(body.index("${briefingHtml(brief)}"), body.index('class="ez-flow"'))
 
     def test_the_briefing_code_makes_no_request(self):
@@ -247,6 +283,7 @@ class WiringTests(unittest.TestCase):
     def test_every_text_exists_in_both_languages_with_matching_placeholders(self):
         used = set(re.findall(r'T\(\s*"(easy\.brief\.[a-z_]+)"', JS)) | {f"easy.brief.st_{k}" for k in ("detect", "pstatus", "settle")}
         used |= {"easy.brief.exp_soon", "easy.brief.exp_done", "easy.brief.headline", "easy.brief.headline_none"}
+        used |= set(re.findall(r'"(easy\.brief\.sys_[a-z_]+)"', re.search(r"const BRIEF_SYS_KEYS = [^\n]+", JS).group(0)))
         ko = re.search(r'"ko-KR": \{(.*?)\n  \}', TEXTS, re.S).group(1)
         en = re.search(r'"en-US": \{(.*?)\n  \}', TEXTS, re.S).group(1)
         for key in used:
@@ -254,6 +291,22 @@ class WiringTests(unittest.TestCase):
             ev = re.search(rf'"{re.escape(key)}": "([^"]*)"', en)
             self.assertTrue(kv and ev, key)
             self.assertEqual(set(re.findall(r"\{(\w+)\}", kv.group(1))), set(re.findall(r"\{(\w+)\}", ev.group(1))), key)
+
+    def test_every_server_check_code_has_a_screen_text_except_the_info_only_ones(self):
+        rules = (ROOT / "app/domains/diagnostics/health_summary.py").read_text(encoding="utf-8")
+        codes = set(re.findall(r'_check\("([A-Z_]+)", (FAIL|WARN)', rules))
+        mapped = set(re.findall(r"([A-Z_]+): \"easy\.brief\.sys_", re.search(r"const BRIEF_SYS_KEYS = [^\n]+", JS).group(0)))
+        self.assertEqual({c for c, _ in codes}, mapped)
+        # 같은 문구 열쇠를 두 코드가 나눠 쓰지 않는다
+        keys = re.findall(r'easy\.brief\.sys_[a-z_]+', re.search(r"const BRIEF_SYS_KEYS = [^\n]+", JS).group(0))
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_texts_do_not_repeat_a_placeholder(self):
+        for lang in ("ko-KR", "en-US"):
+            block = re.search(rf'"{lang}": \{{(.*?)\n  \}}', TEXTS, re.S).group(1)
+            for key, value in re.findall(r'"(easy\.brief\.sys_[a-z_]+)": "([^"]*)"', block):
+                names = re.findall(r"\{(\w+)\}", value)
+                self.assertEqual(len(names), len(set(names)), key)
 
 
 if __name__ == "__main__":

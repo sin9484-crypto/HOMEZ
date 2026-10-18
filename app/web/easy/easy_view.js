@@ -295,6 +295,7 @@
   // 자동 확인이 멈춘 건 아닌지"를 한 장에 모은다. 서버 시각 값은 UTC라 시간대 표기가 없으면 UTC로 읽는다.
   const BRIEF_DETECT_MIN_MINUTES = 30;       // 주문 자동 감지(5분 주기) — 이보다 오래 성공 기록이 없으면 점검 대상(주기의 3배와 비교해 큰 쪽)
   const BRIEF_PSTATUS_STALE_MINUTES = 90;    // 쿠팡 상품 상태 확인(30분 주기) — 아직 승인되지 않은 상품이 있을 때만
+  const BRIEF_SYS_KEYS = { SCHEDULER_NOT_RUNNING: "easy.brief.sys_scheduler", JOBS_MISSING: "easy.brief.sys_jobs_missing", JOBS_PAUSED: "easy.brief.sys_jobs_paused", JOBS_OVERDUE: "easy.brief.sys_jobs_overdue", BACKUP_NONE: "easy.brief.sys_backup_none", BACKUP_STALE: "easy.brief.sys_backup_stale", BACKUP_OLD: "easy.brief.sys_backup_old", REHEARSAL_FAILED: "easy.brief.sys_rehearsal_failed", REHEARSAL_STALE: "easy.brief.sys_rehearsal_stale", DISK_LOW: "easy.brief.sys_disk_low", DISK_CRITICAL: "easy.brief.sys_disk_critical", ESTOP_ACTIVE: "easy.brief.sys_estop" };
   const BRIEF_STALL_KEYS = { detect: "easy.brief.st_detect", pstatus: "easy.brief.st_pstatus", settle: "easy.brief.st_settle" };  // 문구 키를 글자 그대로 둔다(쓰지 않는 문구 점검이 찾을 수 있게)
   const BRIEF_SETTLEMENT_STALE_HOURS = 36;   // 쿠팡 정산 읽기(하루 몇 번)
 
@@ -313,7 +314,7 @@
     return (row.group === "CHECK" ? 0 : 10) + kind;
   }
 
-  function briefingFrom({ rows, ext, collect, today, nowMs }) {
+  function briefingFrom({ rows, ext, collect, today, health, nowMs }) {
     const mine = (rows || []).filter((r) => r.group !== "PROGRESS")
       .map((r, index) => ({ r, index, w: briefWeight(r) })).sort((a, b) => a.w - b.w || a.index - b.index).map((x) => x.r);
     const urgent = mine.slice(0, 3).map((r) => ({ key: r.key, title: r.title, name: (r.product && r.product.name) || "" }));
@@ -336,7 +337,11 @@
     }
     const settled = parseUtcMs(today && today.settlement_checked_at);
     if (settled !== null && (nowMs - settled) / 3600000 > BRIEF_SETTLEMENT_STALE_HOURS) stalled.push({ kind: "settle", hours: Math.round((nowMs - settled) / 3600000) });
-    return { mine: mine.length, urgent, upcoming, stalled };
+    // 앱 상태 점검(자동 작업·백업·디스크·긴급 중지): 서버가 규칙으로 낸 이상 후보 중 문구가 있는 것만(알 수 없는 코드는 건너뛴다).
+    const system = ((health && Array.isArray(health.checks)) ? health.checks : [])
+      .filter((c) => c && BRIEF_SYS_KEYS[c.code] && (c.level === "FAIL" || c.level === "WARN"))
+      .map((c) => ({ code: c.code, level: c.level, params: c.params || {} }));
+    return { mine: mine.length, urgent, upcoming, stalled, system };
   }
 
   function briefingHtml(b) {
@@ -347,9 +352,10 @@
     const upcoming = b.upcoming.length
       ? b.upcoming.map((u) => li(u.kind === "expired" ? "ez-c-red" : "ez-c-orange", T(u.kind === "expired" ? "easy.brief.exp_done" : "easy.brief.exp_soon", { what: u.what, h: u.hours }))).join("")
       : li("ez-muted", T("easy.brief.upcoming_none"));
-    const stalled = b.stalled.length
-      ? b.stalled.map((s) => li("ez-c-red", T(BRIEF_STALL_KEYS[s.kind], { m: s.minutes, h: s.hours }))).join("")
-      : li("ez-muted", T("easy.brief.stalled_none"));
+    const lines = b.stalled.map((s) => li("ez-c-red", T(BRIEF_STALL_KEYS[s.kind], { m: s.minutes, h: s.hours })))
+      .concat((b.system || []).map((c) => li(c.level === "FAIL" ? "ez-c-red" : "ez-c-orange", T(BRIEF_SYS_KEYS[c.code], {
+        jobs: Array.isArray(c.params.jobs) ? c.params.jobs.length : "", days: c.params.days, mb: c.params.free_mb }))));
+    const stalled = lines.length ? lines.join("") : li("ez-muted", T("easy.brief.stalled_none"));
     return `<section class="ez-brief" aria-label="${esc(T("easy.brief.title"))}">
       <div class="ez-sec">${esc(T("easy.brief.title"))}<small>${esc(T(b.mine ? "easy.brief.headline" : "easy.brief.headline_none", { n: b.mine }))}</small></div>
       <div class="ez-cards" style="grid-template-columns:repeat(3,1fr)">
@@ -362,14 +368,15 @@
   async function loadToday() {
     const root = $("ez-root-easy-today");
     root.innerHTML = loadingHtml();
-    let wq, today, safety, ext, collect;
+    let wq, today, safety, ext, collect, sysHealth;
     try {
-      [wq, today, safety, ext, collect] = await Promise.all([
+      [wq, today, safety, ext, collect, sysHealth] = await Promise.all([
         B.wq.fetchItems(),
         api("/easy-view/today").catch(() => null),
         api("/console/api/safety-status").catch(() => null),
         api("/external-calls/summary").catch(() => null),
         api("/orders/collection-ops/status").catch(() => null),
+        api("/diagnostics/health-summary").catch(() => null),
       ]);
     } catch (err) { errorBox(root, err); return; }
     if (wq.allFailed && !today) { errorBox(root, wq.error); return; }
@@ -512,7 +519,7 @@
 
     const counts = { CHECK: 0, APPROVAL: 0, PROGRESS: 0 };
     rows.forEach((r) => { counts[r.group] += 1; });
-    const brief = briefingFrom({ rows, ext, collect, today, nowMs: Date.now() });
+    const brief = briefingFrom({ rows, ext, collect, today, health: sysHealth, nowMs: Date.now() });
     const mine = counts.CHECK + counts.APPROVAL;
     const filter = S.selected.todoFilter || "ALL";
     const visible = rows.filter((r) => filter === "ALL" || (filter === "MINE" ? r.group !== "PROGRESS" : r.group === "PROGRESS"));

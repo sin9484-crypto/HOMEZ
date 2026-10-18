@@ -23,8 +23,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from fastapi import Depends
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.dependency import get_db
 from app.core.db_path_contract import assert_bootstrap_path_matches_engine
 from app.core.guard import admin_guard
 from app.desktop.paths import get_homez_db_path
@@ -95,3 +97,15 @@ def db_identity(
 
 
 __all__ = ["router"]
+
+
+@router.get("/health-summary")
+def get_health_summary(
+    _: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-18 서버 관리 AI T1 — 운영 상태 진단 요약(자동 작업·백업·복구 시험·디스크·긴급 중지). 읽기 전용, 재시작·복구·설정 변경을 하지 않는다."""
+
+    from app.domains.diagnostics.health_service import HealthService
+
+    return HealthService(db).summary()
