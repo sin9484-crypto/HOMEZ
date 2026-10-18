@@ -12,6 +12,8 @@ URL 상품 가져오기(2026-10-14) API.
   POST /product-import/analyze          URL 1건을 읽고 AI가 상품을 해석한다(AI 호출 1회 — 월 한도·승인 센터 허용 필요)
   POST /product-import/calculate        단가·이익 계산과 판정(AI 없음, 결정적 계산, 저장 없음)
   GET/PUT /product-import/channel-fees  플랫폼 수수료율(사용자가 확인한 값) 조회·저장
+  POST /product-import/competitors/read     경쟁 상품 주소(최대 5개)를 읽고 AI가 표시 가격·구성을 해석한다(주소마다 AI 1회 — 월 한도·승인 센터 허용 필요)
+  POST /product-import/competitors/compare  확인된 경쟁 가격으로 결정적 통계(AI 없음, 저장 없음)
 
 쿠팡 호출은 없다. 외부 접근은 /search의 페이지 읽기(+ 온채널이면 공식 API 상품 조회)와 /create-draft의 선택한 이미지
 다운로드뿐이다. 권한은 위저드 생성 권한(listing_wizard.create)을 쓴다.
@@ -153,6 +155,36 @@ def calculate_product_economics(
     )
     service = UrlAnalysisService(db, ProductImportService(db, RequestsTransport()), AiDraftService(db, credential_store))
     return service.calculate(current_user.company_id, current_user.id, inp)
+
+
+@router.post("/competitors/read")
+def read_competitor_prices(
+    data: schema.CompetitorReadRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+    transport: Transport = Depends(get_transport),
+    credential_store: CredentialStore = Depends(get_llm_credential_store),
+):
+    """2026-10-18 마케팅 AI M2 — 사용자가 넣은 경쟁 상품 주소(최대 5개)를 한 건씩 읽고 주소마다 AI 해석 1회. 저장 없음, 쓰기 없음.
+    월 한도·승인 센터 허용이 있어야 나간다. 우리 가격·원가는 AI에 보내지 않는다. 통계는 /competitors/compare가 한다."""
+
+    from app.domains.product_import.competitor_price_service import CompetitorPriceService
+
+    service = CompetitorPriceService(db, ProductImportService(db, transport), AiDraftService(db, credential_store))
+    return service.read(data.urls, current_user.company_id, current_user.id)
+
+
+@router.post("/competitors/compare")
+def compare_competitor_prices(
+    data: schema.CompetitorCompareRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+):
+    """결정적 통계(AI·바깥 호출·DB 없음). AI가 읽은 값은 사용자가 확인했다고 표시한 것만 센다."""
+
+    from app.domains.product_import.competitor_price_service import CompetitorPriceService
+    from app.domains.product_import.competitor_price_service import to_entry
+
+    return CompetitorPriceService.compare([to_entry(row) for row in data.entries])
 
 
 @router.get("/channel-fees")

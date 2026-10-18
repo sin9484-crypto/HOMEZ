@@ -10889,6 +10889,7 @@
         </div>`).join("")}</div>` : `<p class="empty-text">${lwUiT("images_none")}</p>`}
 
       <div id="lw-aia-host"></div>
+      <div id="lw-cmp-host"></div>
 
       <h3>${lwUiT("step_margin")}</h3>
       <div class="lw-ui-grid">
@@ -10919,6 +10920,7 @@
     el("lw-ui-result").hidden = false;
     lwUrlImportState.report = null;
     lwAiaAttach(el("lw-aia-host"), data);
+    lwCmpAttach(el("lw-cmp-host"));
 
     el("lw-ui-calc-btn").addEventListener("click", lwUrlImportCalc);
     el("lw-ui-apply-btn").addEventListener("click", () => {
@@ -11324,6 +11326,174 @@
     lwAiaMountCalc(details.querySelector("[data-aia-manual-host]"), { prefill: {}, analysis: null });
   }
   // ---- /AI 분석 · 단가 · 이익 계산 ----
+
+  // ---- 경쟁 가격 비교 (2026-10-18, 마케팅 AI M2) ----
+  // 사용자가 경쟁 상품 주소를 건건이 넣으면(최대 5개) AI가 표시 가격·배송비·구성을 읽고, 통계는 서버의 결정적 계산이 낸다.
+  // AI가 읽은 값은 사용자가 페이지에서 직접 확인했다고 표시해야 계산에 들어간다. 표시가일 뿐 실제 판매 실적이 아니다.
+
+  const cmpT = (key, vars) => HomezI18n.t(`lw.cmp_${key}`, vars);
+  const CMP_MAX_URLS = 5;
+  const CMP_MAX_ROWS = 10;
+  const cmpWon = (value) => (value === null || value === undefined || value === "" ? "—" : `${Number(value).toLocaleString()}${cmpT("won")}`);
+
+  function lwCmpAttach(host) {
+    if (!host) return;
+    let rows = [];
+    host.innerHTML = `
+      <h3>${cmpT("title")}</h3>
+      <p class="stat-sub">${cmpT("hint")}</p>
+      <label class="field"><span class="field-label">${cmpT("urls_label")}</span>
+        <textarea rows="3" data-cmp-urls placeholder="${escapeHtml(cmpT("urls_hint"))}"></textarea></label>
+      <div class="field-inline">
+        <button type="button" class="btn btn-secondary" data-cmp-read>${cmpT("read_btn")}</button>
+        <button type="button" class="btn btn-ghost" data-cmp-add>${cmpT("add_btn")}</button>
+      </div>
+      <p class="field-error" data-cmp-error role="alert"></p>
+      <div data-cmp-notes></div>
+      <div data-cmp-rows></div>
+      <div class="field-inline"><button type="button" class="btn btn-secondary" data-cmp-compare style="display:none">${cmpT("compare_btn")}</button></div>
+      <div data-cmp-report aria-live="polite"></div>`;
+    const q = (name) => host.querySelector(`[data-cmp-${name}]`);
+    const errorEl = q("error");
+    const rowsEl = q("rows");
+    const compareBtn = q("compare");
+
+    const syncRows = () => {
+      rowsEl.querySelectorAll("[data-cmp-row]").forEach((box) => {
+        const row = rows[Number(box.dataset.cmpRow)];
+        if (!row) return;
+        box.querySelectorAll("[data-cmp-f]").forEach((input) => { row[input.dataset.cmpF] = input.value; });
+        const confirm = box.querySelector("[data-cmp-confirm]");
+        if (confirm) row.confirmed = confirm.checked;
+      });
+    };
+
+    const fieldHtml = (key, label, value, attrs = "") => `
+      <label class="field"><span class="field-label">${label}</span>
+        <input type="${attrs.includes("number") ? "number" : "text"}" ${attrs.replace("number", "")} data-cmp-f="${key}" value="${escapeHtml(value === undefined || value === null ? "" : String(value))}"></label>`;
+
+    const renderRows = () => {
+      rowsEl.innerHTML = rows.map((row, index) => `
+        <div class="lw-checklist" data-cmp-row="${index}">
+          <div class="field-inline"><strong>${escapeHtml(row.label || cmpT("manual_label"))}</strong>
+            <span class="stat-sub">${cmpT(row.source === "AI_PAGE" ? "src_ai" : "src_manual")}</span>
+            <button type="button" class="btn btn-ghost btn-sm" data-cmp-remove="${index}">${cmpT("remove_btn")}</button></div>
+          ${row.url ? `<div class="stat-sub">${escapeHtml(row.url)}</div>` : ""}
+          <div class="lw-ui-grid">
+            ${fieldHtml("label", cmpT("f_label"), row.label, 'maxlength="60"')}
+            ${fieldHtml("price", cmpT("f_price"), row.price, 'number min="1" step="1"')}
+            ${fieldHtml("shipping_fee", cmpT("f_shipping"), row.shipping_fee, 'number min="0" step="1"')}
+            ${fieldHtml("pack_count", cmpT("f_pack"), row.pack_count, 'number min="1" step="1"')}
+            ${fieldHtml("unit_volume", cmpT("f_volume"), row.unit_volume, 'number min="0" step="any"')}
+            ${fieldHtml("unit", cmpT("f_unit"), row.unit, 'maxlength="10"')}
+          </div>
+          ${Object.entries(row.evidence || {}).map(([key, text]) => `<small class="stat-sub">${escapeHtml(cmpT(`ev_${key}`))}: ${escapeHtml(text)}</small>`).join("<br>")}
+          ${(row.notes || []).map((text) => `<p class="stat-sub">${escapeHtml(text)}</p>`).join("")}
+          ${row.source === "AI_PAGE" ? `<label class="lw-checklist-item"><input type="checkbox" data-cmp-confirm ${row.confirmed ? "checked" : ""}><span>${cmpT("confirm_label")}</span></label>` : ""}
+        </div>`).join("");
+      compareBtn.style.display = rows.length ? "" : "none";  // .btn이 display를 정해 hidden 속성으로는 숨겨지지 않는다
+      rowsEl.querySelectorAll("[data-cmp-remove]").forEach((button) => button.addEventListener("click", () => {
+        syncRows();
+        rows.splice(Number(button.dataset.cmpRemove), 1);
+        renderRows();
+      }));
+    };
+
+    q("add").addEventListener("click", () => {
+      syncRows();
+      if (rows.length >= CMP_MAX_ROWS) { errorEl.textContent = cmpT("rows_full", { max: CMP_MAX_ROWS }); return; }
+      errorEl.textContent = "";
+      rows.push({ label: "", url: "", price: "", shipping_fee: "", pack_count: "", unit_volume: "", unit: "", source: "MANUAL", confirmed: false, evidence: {}, notes: [] });
+      renderRows();
+    });
+
+    q("read").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      errorEl.textContent = "";
+      const seenUrls = new Set();
+      const urls = q("urls").value.split(/\s+/).map((u) => u.trim()).filter(Boolean).filter((u) => {
+        const key = u.split("#")[0].replace(/\/+$/, "").toLowerCase();  // 서버와 같은 기준으로 같은 주소를 한 번만 센다
+        if (seenUrls.has(key)) return false;
+        seenUrls.add(key);
+        return true;
+      });
+      if (!urls.length) { errorEl.textContent = cmpT("urls_none"); return; }
+      if (urls.length > CMP_MAX_URLS) { errorEl.textContent = cmpT("urls_too_many", { max: CMP_MAX_URLS }); return; }
+      const ok = await askConfirm(cmpT("confirm_body", { n: urls.length }), { title: cmpT("confirm_title"), okLabel: cmpT("read_btn") });
+      if (!ok) return;
+      let data;
+      try {
+        data = await apiFetch("/product-import/competitors/read", { method: "POST", body: JSON.stringify({ urls }) });
+      } catch (err) {
+        errorEl.textContent = err.message || cmpT("read_failed");
+        return;
+      }
+      syncRows();
+      const notes = [];
+      (data.results || []).forEach((result) => {
+        if (!result.ok) { notes.push(`${result.url} — ${result.error || cmpT("read_failed")}`); return; }
+        const prefill = result.prefill || {};
+        const value = (key) => (prefill[key] ? prefill[key].value : "");
+        const evidence = {};
+        ["price", "shipping_fee", "pack_count", "unit_volume"].forEach((key) => { if (prefill[key] && prefill[key].evidence) evidence[key] = prefill[key].evidence; });
+        const lines = Array.from(new Set([...(result.warnings || []), ...Object.values(result.rejected || {})]));  // 같은 안내는 한 번만
+        if (result.option_note) lines.push(result.option_note);
+        rows.push({
+          label: String(result.title || result.url).slice(0, 60), url: result.url, price: value("price"), shipping_fee: value("shipping_fee"),
+          pack_count: value("pack_count"), unit_volume: value("unit_volume"), unit: prefill.unit_volume ? prefill.unit_volume.unit : "",
+          source: "AI_PAGE", confirmed: false, checked_at: result.checked_at || null, evidence, notes: lines,
+        });
+      });
+      if (data.stopped_reason) notes.push(cmpT("stopped", { why: data.stopped_reason }));
+      notes.push(cmpT("usage", { cost: data.total_cost_krw }));
+      q("notes").innerHTML = notes.map((text) => `<p class="stat-sub">${escapeHtml(text)}</p>`).join("");
+      renderRows();
+    }));
+
+    const reportHtml = (report) => {
+      const market = report.market || {};
+      const perVolume = (report.per_volume || []).map((group) => `<li>${escapeHtml(cmpT("per_volume", { unit: group.unit_class, per: group.per, min: cmpWon(group.min), median: cmpWon(group.median), max: cmpWon(group.max) }))}</li>`).join("");
+      const head = !report.n
+        ? `<p class="field-error">${cmpT("market_none")}</p>`
+        : market.n >= 2
+          ? `<p><strong>${escapeHtml(cmpT("market_line", { n: market.n, min: cmpWon(market.min), median: cmpWon(market.median), max: cmpWon(market.max) }))}</strong></p>`
+          : `<p><strong>${escapeHtml(cmpT("market_one", { min: cmpWon(market.min) }))}</strong></p>`;
+      const piece = report.per_piece && report.per_piece.n ? `<p class="stat-sub">${escapeHtml(cmpT("per_piece", { min: cmpWon(report.per_piece.min), median: cmpWon(report.per_piece.median), max: cmpWon(report.per_piece.max) }))}</p>` : "";
+      const entries = (report.entries || []).map((row) => `<tr>
+        <td>${row.included ? escapeHtml(String(row.rank)) : "—"}</td><td>${escapeHtml(row.label)}</td>
+        <td>${row.included ? escapeHtml(cmpWon(row.compared_price)) : "—"}</td>
+        <td>${row.included ? escapeHtml(row.unusual ? cmpT("state_unusual") : cmpT("state_in")) : escapeHtml(row.reason || "")}</td></tr>`).join("");
+      return `<h4>${cmpT("report_title")}</h4>
+        ${report.basis ? `<p class="stat-sub">${escapeHtml(cmpT(report.basis === "total" ? "basis_total" : "basis_display"))}</p>` : ""}
+        ${head}${piece}${perVolume ? `<ul>${perVolume}</ul>` : ""}
+        <table class="data-table"><thead><tr><th>${cmpT("col_rank")}</th><th>${cmpT("col_label")}</th><th>${cmpT("col_price")}</th><th>${cmpT("col_state")}</th></tr></thead><tbody>${entries}</tbody></table>
+        ${(report.warnings || []).map((text) => `<p class="stat-sub">${escapeHtml(text)}</p>`).join("")}
+        ${(report.notes || []).map((text) => `<p class="stat-sub">${escapeHtml(text)}</p>`).join("")}`;
+    };
+
+    compareBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      errorEl.textContent = "";
+      syncRows();
+      const entries = [];
+      for (const row of rows) {
+        const price = Number(row.price);
+        const label = String(row.label || "").trim() || cmpT("manual_label");
+        if (!Number.isInteger(price) || price < 1) { errorEl.textContent = cmpT("price_missing", { label }); return; }
+        const optionalInt = (value) => (String(value ?? "").trim() === "" ? null : Number(value));
+        entries.push({
+          label: label.slice(0, 60), url: row.url || null, price, shipping_fee: optionalInt(row.shipping_fee), pack_count: optionalInt(row.pack_count),
+          unit_volume: optionalInt(row.unit_volume), unit: String(row.unit || "").trim() || null, source: row.source,
+          confirmed: row.source === "AI_PAGE" ? !!row.confirmed : false, checked_at: row.checked_at || null,
+        });
+      }
+      try {
+        q("report").innerHTML = reportHtml(await apiFetch("/product-import/competitors/compare", { method: "POST", body: JSON.stringify({ entries }) }));
+      } catch (err) {
+        errorEl.textContent = err.message || cmpT("compare_failed");
+      }
+    }));
+  }
+
+  // ---- /경쟁 가격 비교 ----
 
   async function lwOpenWizard(id) {
     try {

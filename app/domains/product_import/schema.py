@@ -227,3 +227,39 @@ class ChannelFeeSaveRequest(BaseModel):
     note: str | None = Field(default=None, max_length=40)
 
     model_config = ConfigDict(extra="forbid")
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-18 마케팅 AI M2 — 경쟁 가격 비교
+# ---------------------------------------------------------------------------
+
+class CompetitorReadRequest(BaseModel):
+    """경쟁 상품 주소 1~5개(사용자가 건건이 넣은 것). 검색 결과 수집·페이지 넘김은 없다."""
+
+    urls: list[str] = Field(min_length=1, max_length=5)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompetitorEntryRequest(BaseModel):
+    """계산에 넣을 한 줄. AI가 읽은 값(AI_PAGE)은 사용자가 페이지에서 직접 확인했다는 표시(confirmed)가 있어야 센다."""
+
+    label: str = Field(min_length=1, max_length=60)
+    url: str | None = Field(default=None, max_length=2000)
+    price: int = Field(ge=1, le=100_000_000)
+    shipping_fee: int | None = Field(default=None, ge=0, le=1_000_000)
+    pack_count: int | None = Field(default=None, ge=1, le=1000)
+    unit_volume: Decimal | None = Field(default=None, gt=0, le=100000)
+    unit: str | None = Field(default=None, max_length=10)
+    source: Literal["AI_PAGE", "MANUAL"] = "MANUAL"
+    confirmed: bool = False
+    checked_at: str | None = Field(default=None, max_length=40)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompetitorCompareRequest(BaseModel):
+
+    entries: list[CompetitorEntryRequest] = Field(min_length=1, max_length=10)
+
+    model_config = ConfigDict(extra="forbid")
