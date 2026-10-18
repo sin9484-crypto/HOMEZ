@@ -291,6 +291,74 @@
     return chip("blue", T("easy.state.progress"));
   }
 
+  // 2026-10-18 — 상품 관리 AI P4: 오늘 브리핑(규칙 기반, AI 없음·새 호출 없음). 이미 불러온 값으로 "가장 먼저 볼 것 / 24시간 안에 있을 일 /
+  // 자동 확인이 멈춘 건 아닌지"를 한 장에 모은다. 서버 시각 값은 UTC라 시간대 표기가 없으면 UTC로 읽는다.
+  const BRIEF_DETECT_MIN_MINUTES = 30;       // 주문 자동 감지(5분 주기) — 이보다 오래 성공 기록이 없으면 점검 대상(주기의 3배와 비교해 큰 쪽)
+  const BRIEF_PSTATUS_STALE_MINUTES = 90;    // 쿠팡 상품 상태 확인(30분 주기) — 아직 승인되지 않은 상품이 있을 때만
+  const BRIEF_STALL_KEYS = { detect: "easy.brief.st_detect", pstatus: "easy.brief.st_pstatus", settle: "easy.brief.st_settle" };  // 문구 키를 글자 그대로 둔다(쓰지 않는 문구 점검이 찾을 수 있게)
+  const BRIEF_SETTLEMENT_STALE_HOURS = 36;   // 쿠팡 정산 읽기(하루 몇 번)
+
+  function parseUtcMs(iso) {
+    if (!iso) return null;
+    const text = String(iso);
+    const ms = Date.parse(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(text) ? text : `${text}Z`);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  // 같은 "내가 할 일"이어도 급한 정도가 다르다: 승인반려·송장·반품/문의처럼 판매와 고객에 바로 닿는 일을 먼저, 출고일 확인 같은 정리성 일을 뒤로.
+  function briefWeight(row) {
+    const key = String(row.key || "");
+    const kind = key.startsWith("pstatus:") ? 0 : key.startsWith("invoice:") ? 1 : (key.startsWith("return:") || key.startsWith("inq:") || key.startsWith("supret:")) ? 2
+      : key.startsWith("unres:") ? 3 : key === "detect" ? 4 : key.startsWith("days:") ? 9 : 5;
+    return (row.group === "CHECK" ? 0 : 10) + kind;
+  }
+
+  function briefingFrom({ rows, ext, collect, today, nowMs }) {
+    const mine = (rows || []).filter((r) => r.group !== "PROGRESS")
+      .map((r, index) => ({ r, index, w: briefWeight(r) })).sort((a, b) => a.w - b.w || a.index - b.index).map((x) => x.r);
+    const urgent = mine.slice(0, 3).map((r) => ({ key: r.key, title: r.title, name: (r.product && r.product.name) || "" }));
+    const upcoming = [];
+    ((ext && Array.isArray(ext.renewable)) ? ext.renewable : []).forEach((r) => {
+      if (r.state === "EXPIRED") upcoming.push({ kind: "expired", what: r.purpose_label || "" });
+      else if (r.hours_left !== null && r.hours_left !== undefined && r.hours_left !== "" && Number.isFinite(Number(r.hours_left)) && Number(r.hours_left) <= 24) upcoming.push({ kind: "soon", what: r.purpose_label || "", hours: Number(r.hours_left) });
+    });
+    const stalled = [];
+    if (collect && ["OK", "WAITING", "FAILING"].includes(collect.health)) {
+      const last = parseUtcMs(collect.last_succeeded_at);
+      const limit = Math.max(BRIEF_DETECT_MIN_MINUTES, 3 * (Number(collect.interval_minutes) || 5));
+      if (last !== null && (nowMs - last) / 60000 > limit) stalled.push({ kind: "detect", minutes: Math.round((nowMs - last) / 60000) });
+    }
+    const pending = ((today && today.product_status) || []).filter((p) => p.status && p.status !== "APPROVED" && p.status !== "DELETED");
+    const checked = pending.map((p) => parseUtcMs(p.checked_at)).filter((ms) => ms !== null);
+    if (pending.length && checked.length) {
+      const minutes = (nowMs - Math.max(...checked)) / 60000;
+      if (minutes > BRIEF_PSTATUS_STALE_MINUTES) stalled.push({ kind: "pstatus", minutes: Math.round(minutes) });
+    }
+    const settled = parseUtcMs(today && today.settlement_checked_at);
+    if (settled !== null && (nowMs - settled) / 3600000 > BRIEF_SETTLEMENT_STALE_HOURS) stalled.push({ kind: "settle", hours: Math.round((nowMs - settled) / 3600000) });
+    return { mine: mine.length, urgent, upcoming, stalled };
+  }
+
+  function briefingHtml(b) {
+    const li = (cls, text) => `<li class="${cls}">${esc(text)}</li>`;
+    const urgent = b.urgent.length
+      ? b.urgent.map((u) => li("", u.name ? `${u.title} · ${u.name}` : u.title)).join("")
+      : li("ez-muted", T("easy.brief.urgent_none"));
+    const upcoming = b.upcoming.length
+      ? b.upcoming.map((u) => li(u.kind === "expired" ? "ez-c-red" : "ez-c-orange", T(u.kind === "expired" ? "easy.brief.exp_done" : "easy.brief.exp_soon", { what: u.what, h: u.hours }))).join("")
+      : li("ez-muted", T("easy.brief.upcoming_none"));
+    const stalled = b.stalled.length
+      ? b.stalled.map((s) => li("ez-c-red", T(BRIEF_STALL_KEYS[s.kind], { m: s.minutes, h: s.hours }))).join("")
+      : li("ez-muted", T("easy.brief.stalled_none"));
+    return `<section class="ez-brief" aria-label="${esc(T("easy.brief.title"))}">
+      <div class="ez-sec">${esc(T("easy.brief.title"))}<small>${esc(T(b.mine ? "easy.brief.headline" : "easy.brief.headline_none", { n: b.mine }))}</small></div>
+      <div class="ez-cards" style="grid-template-columns:repeat(3,1fr)">
+        <div class="ez-card"><div class="k">${esc(T("easy.brief.urgent"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${urgent}</ul></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.brief.upcoming"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${upcoming}</ul></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.brief.stalled"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${stalled}</ul></div>
+      </div></section>`;
+  }
+
   async function loadToday() {
     const root = $("ez-root-easy-today");
     root.innerHTML = loadingHtml();
@@ -444,6 +512,7 @@
 
     const counts = { CHECK: 0, APPROVAL: 0, PROGRESS: 0 };
     rows.forEach((r) => { counts[r.group] += 1; });
+    const brief = briefingFrom({ rows, ext, collect, today, nowMs: Date.now() });
     const mine = counts.CHECK + counts.APPROVAL;
     const filter = S.selected.todoFilter || "ALL";
     const visible = rows.filter((r) => filter === "ALL" || (filter === "MINE" ? r.group !== "PROGRESS" : r.group === "PROGRESS"));
@@ -471,6 +540,7 @@
     root.innerHTML = `
       <div class="ez-head"><div><h1>${esc(T("easy.nav.today"))}</h1><div class="ez-lead">${esc(T("easy.today.lead", { mine, watch: counts.PROGRESS }))}</div></div></div>
       ${wq.failed.length ? `<div class="ez-note info"><div>${esc(T("wq.partial_notice", { sources: wq.failed.map((k) => T(`wq.src.${k}`)).join(", ") }))}</div></div>` : ""}
+      ${briefingHtml(brief)}
       <div class="ez-flow" role="group" aria-label="${esc(T("easy.flow.aria"))}">${flow}</div>
       <div class="ez-tabs" role="tablist">
         ${[["ALL", "easy.tab.all", rows.length], ["MINE", "easy.tab.mine", mine], ["PROGRESS", "easy.tab.progress", counts.PROGRESS]].map(([id, key, n]) =>
