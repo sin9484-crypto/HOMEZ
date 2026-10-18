@@ -49,7 +49,7 @@ from app.domains.ai_governance.constants import AutomationLevel
 from app.domains.ai_governance.constants import CapabilityCode
 from app.domains.ai_governance.constants import CapabilityType
 
-CAPABILITY_CATALOG_VERSION = "2.2.0"
+CAPABILITY_CATALOG_VERSION = "2.3.0"
 # 2.1.0(2026-09-07): PRODUCT_DISCOVERY의 forbidden_operations에서
 # "실제 외부 트렌드 API 호출"을 해제(NaverDataLabTrendAdapter 정식
 # 승인, CapabilityType.EXTERNAL_DATA_PROVIDER 신규 추가).
@@ -61,6 +61,10 @@ CAPABILITY_CATALOG_VERSION = "2.2.0"
 # 존재/API HUB 대응 완료/실제 호출 검증 완료" 3단계로 명시적으로
 # 분리한다 — 지금 시점엔 앞의 둘만 TRUE이고, 세 번째는 사용자가
 # 실제 키를 등록해 최소 1회 실 호출에 성공해야만 TRUE로 바뀐다.
+# 2.3.0(2026-10-19, 마케팅 AI M5): 2026-10-18에 만든 마케팅·진단·후보 평가 기능을 기존 역량에 **기록만** 했다 — 새 역량 코드·새 호출
+# 문턱·유형 변경 없음(13개 그대로). CONTENT_GENERATION(상품명·검색어 제안), PRICING_INVENTORY(경쟁 가격 비교·가격 전략),
+# ORDER_SHIPMENT_RETURN(판매 성과 읽기·반려 사유 분류), OPERATIONS_COORDINATION(운영 상태 진단·AI 설명·오늘 브리핑),
+# PRODUCT_SELECTION(후보 같은 상품 판별·사전 평가). 실제 AI 호출은 한 번도 하지 않았다는 사실과 판정·가격 변경을 하지 않는다는 한계를 상태에 적었다.
 
 
 @dataclass(frozen=True)
@@ -326,13 +330,18 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         model_prompt_policy_version="deterministic-v1",
         provider_status=(
             "NO_REAL_PROVIDER — evaluator_kind=deterministic만 구현, "
-            "DecisionEvaluatorProtocol(실 LLM용)은 정의만 되어 있고 미연결"
+            "DecisionEvaluatorProtocol(실 LLM용)은 정의만 되어 있고 미연결. "
+            "2026-10-19 등록: 후보 화면의 같은 상품 판별·중복 알림(S1)과 사전 평가(S2: 후보 가능/보류/제외 권고)는 AI 없는 규칙(RULE_ENGINE)이며 "
+            "읽기 전용 권고일 뿐 후보의 상태·점수를 바꾸지 않는다. 마진 분석 스냅샷이 없으면 '후보 가능'이 될 수 없다."
         ),
         actual_entry_points=(
             "app/domains/decision/service.py::"
             "DecisionService.evaluate_candidate()",
             "app/domains/product_selection/service.py::"
             "ProductSelectionService.get_overview()",
+            "app/domains/product_candidate/candidate_evaluation.py::evaluate() (후보 사전 평가 규칙 — 상품 서칭 AI S2)",
+            "app/domains/product_candidate/candidate_evaluation_service.py::CandidateEvaluationService.evaluate_all() (GET /product-candidates/evaluations)",
+            "app/domains/product_candidate/candidate_similarity_service.py::CandidateSimilarityService.similar_to() / families() (같은 상품 판별 — S1)",
         ),
         unimplemented_dependencies=(
             "DecisionEvaluatorProtocol 실 LLM 연동 미구현",
@@ -431,13 +440,20 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "Claude Messages API)가 구현돼 있다 — 등록 위저드 3단계 'AI 초안'에서 "
             "사용자가 누를 때만 호출되며 월 한도·승인 센터 허용(LLM/AI_DRAFT)·"
             "호출별 사용 기록·응답 필드별 검증을 거친다. 이 구현 시점에는 단위 테스트(가짜 "
-            "전송)만 통과했고 실제 API 호출·화면 실사용 검증은 아직 하지 않았다."
+            "전송)만 통과했고 실제 API 호출·화면 실사용 검증은 아직 하지 않았다. "
+            "2026-10-19 등록: 마케팅 AI M1 '상품명·검색어 제안'(marketing_name_service)도 같은 LLM 경로다 — 사용자가 누를 때만 호출되고"
+            "(월 한도·승인 센터 허용 AI_DRAFT·사용 기록), 상품명 후보 3개·새 검색어 10개를 항목별로 검증(입력에 없던 숫자·효능·홍보·원산지 표현, "
+            "옵션 값 반복, 단어 도배, 금지 품목)해 통과한 것만 보여 주고 사용자가 고른 것만 3단계 초안에 저장한다(서버가 적용 때 다시 검증). "
+            "시장 신호는 후보에 이미 저장된 네이버 검색 관심도 점수(상대값, 쿠팡 검색량 아님)뿐이다. "
+            "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만)."
         ),
         actual_entry_points=(
             "app/domains/marketplace_listing/candidate_pipeline_service.py::"
             "CandidatePipelineService.start_pipeline()",
             "app/domains/marketplace_listing/ai_draft_service.py::"
             "AiDraftService.propose()/apply() (위저드 /ai-draft/* 엔드포인트)",
+            "app/domains/marketplace_listing/marketing_name_service.py::"
+            "MarketingNameService.propose()/apply() (위저드 /ai-draft/names, /ai-draft/names/apply — 마케팅 AI M1)",
         ),
         unimplemented_dependencies=(
             "후보 파이프라인 경로에는 실 LLM Provider가 연결돼 있지 않다(위저드 AI 초안 경로에만 있음)",
@@ -448,7 +464,8 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/marketplace_listing/draft_content_provider.py::"
             "FakeDraftContentProvider / DisabledDraftContentProvider(fail-closed); "
             "app/domains/marketplace_listing/llm_draft_provider.py::LlmDraftProvider + validate_response "
-            "(실 LLM 경로, 사용자 클릭 시에만)"
+            "(실 LLM 경로, 사용자 클릭 시에만); "
+            "app/domains/marketplace_listing/marketing_name_service.py::validate_suggestions (상품명·검색어 제안 검증)"
         ),
     ),
     CapabilityContract(
@@ -677,11 +694,20 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "restock)과 가격 변경 요청(pricing.request_price_change)은 "
             "여전히 사람이 직접 수행하는 별도 CRUD로, 이 capability와 "
             "연결되어 있지 않다(AG-0에서 되돌린 상태 유지 — 제안만 "
-            "이 capability, 실행은 항상 별도)."
+            "이 capability, 실행은 항상 별도). "
+            "2026-10-19 등록(마케팅 AI M2·M3): 경쟁 가격 비교는 사용자가 넣은 상품 주소(최대 5개)를 사용자가 누를 때만 AI가 읽어 표시 가격·배송비·구성을 "
+            "뽑는다(월 한도·승인 센터 허용 AI_ANALYSIS·사용 기록, 값마다 페이지 원문 인용 검증, 페이지가 AI를 조종하려 하면 금액 폐기) — "
+            "금액·통계·제안은 코드가 낸다. AI가 읽은 값은 사용자가 확인했다고 표시해야 계산에 들어가고, 통계(최저·중앙값·최고·개당·단위당)는 "
+            "AI 없는 Decimal 계산이다. 가격 전략 제안(마진 하한가·시장 구간·권장 구간)도 AI 없는 계산이며 마진 하한가 아래의 가격은 제안하지 않고 "
+            "모르는 값이 있으면 가격을 만들지 않는다. 가격은 바꾸지 않는다 — 변경은 기존 가격 변경 요청→승인 경로로만. "
+            "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만)."
         ),
         actual_entry_points=(
             "app/domains/pricing/price_advisory_service.py::"
             "PriceAdvisoryService.suggest() / propose_price_change()",
+            "app/domains/pricing/price_strategy.py::strategy_report() / plan() (POST /product-import/strategy — 마케팅 AI M3, AI 없음)",
+            "app/domains/product_import/competitor_price_stats.py::compare() (POST /product-import/competitors/compare — 결정적 통계, AI 없음)",
+            "app/domains/product_import/competitor_price_service.py::CompetitorPriceService.read() (POST /product-import/competitors/read — AI가 페이지를 읽음, 사용자가 누를 때만)",
             "app/domains/inventory/replenishment_advisory_service.py::"
             "ReplenishmentAdvisoryService.suggest() / "
             "propose_replenishment()",
@@ -689,6 +715,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         unimplemented_dependencies=(
             "실 HTTP 진입점 없음(Service 레벨까지만 구현, Router 미연결)",
             "AI 업무 제안 UI 미연결(AG-5, 2026-08-21 라운드부터 이월)",
+            "가격 전략 화면은 가격 변경 요청을 만들지 않는다(제안만 — 변경 요청은 기존 경로에서 사람이)",
         ),
         implementation_reference=(
             "app/domains/pricing/price_advisory_service.py::"
@@ -769,12 +796,19 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "return_order 및 각 도메인의 상태 전이 메서드)는 여전히 "
             "사람/시스템이 직접 수행하는 별도 CRUD로, 이 capability와 "
             "연결되어 있지 않다(AG-0에서 되돌린 상태 유지 — 분석만 "
-            "이 capability, 실행은 항상 별도)."
+            "이 capability, 실행은 항상 별도). "
+            "2026-10-19 등록: 쿠팡 승인반려 사유 분류(P1a)는 AI 없는 규칙이고, 판매 성과 보기(마케팅 AI M4)는 사용자가 누를 때만 쿠팡 매출내역을 읽기(GET)만 해 "
+            "옵션별 판매·반품·실현 수수료율로 집계한다(기존 AFTER_SALES_CHECK 허용·시간당 상한, 고객 정보 미수집, 저장 없음). "
+            "표본이 작으면 '표본 부족'이라고 하고 제안이 맞았는지는 판정하지 않는다. 실제 쿠팡 응답은 아직 읽지 않았다(문서 기준 모양으로 만든 읽기이며 "
+            "첫 실제 읽기에서 모양이 다르면 '읽지 못함'으로 보인다)."
         ),
         actual_entry_points=(
             "app/domains/order/exception_analysis_service.py::"
             "OrderExceptionAnalysisService.analyze() / "
             "create_review_action()",
+            "app/domains/order/product_rejection_advice.py::classify_rejection() (승인반려 사유 규칙 분류 — 상품 관리 AI P1a)",
+            "app/domains/order/sales_performance_service.py::SalesPerformanceService.read() (POST /orders/sales-performance — 쿠팡 매출내역 읽기, 마케팅 AI M4)",
+            "app/domains/ai_learning/marketing_outcomes.py::summarize() (옵션별 판매·반품 집계와 표본 크기 판정)",
             "GET /orders/exception-analysis, POST /orders/"
             "exception-analysis/review-actions (app/domains/order/"
             "router.py)",
@@ -783,6 +817,8 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "\"취소 요청\" 탐지 미구현(Order.status에 별도 CANCEL_"
             "REQUESTED 상태가 없어 CANCELLED와 구분할 신호 없음)",
             "AI 업무 제안 UI 미연결",
+            "제안(상품명·가격)을 기록하고 쿠팡 옵션 ID와 연결해 제안과 성과를 연결하는 일은 아직 없다(마케팅 AI M4-full)",
+            "쿠팡 매출내역의 환불 금액 부호·환불 건 수수료 처리는 문서에 없어 실제 응답 확인 후 다듬어야 한다",
         ),
         implementation_reference=(
             "app/domains/order/exception_analysis_service.py::"
@@ -942,7 +978,11 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "NO_AI — 순수 COUNT + 하위 분석 결과 재사용·정렬"
             "(RULE_ENGINE). 2026-10-18부터 쉬운 보기 '반려 사유 보기'에는 별도 경로로 사용자가 버튼을 눌렀을 때만 AI(Claude)가 "
             "쿠팡 승인반려 사유를 쉬운 말로 풀어 주는 기능이 있으나(order/product_rejection_ai_service.py, 월 한도·승인 센터 허용·"
-            "응답 검증·같은 사유 1회 저장), 우선순위·집계 판단에는 AI가 관여하지 않는다. 단순 Dashboard 조회(orchestration."
+            "응답 검증·같은 사유 1회 저장), 우선순위·집계 판단에는 AI가 관여하지 않는다. "
+            "2026-10-19 등록: 운영 상태 진단 요약(T1: 자동 작업·백업·복구 시험·디스크·긴급 중지)은 AI 없는 읽기 전용 규칙이고, 그 이상 후보의 원인 설명(T2)은 "
+            "사용자가 누를 때만 AI(Claude)에 허용 목록 데이터(점검 코드·수치·고정 뜻 문장)만 보낸다(월 한도·승인 센터 허용 AI_ADVICE·사용 기록·숫자/약속/위험 조치 검증·같은 이상 조합 1회 저장). "
+            "재시작·복구·백업·설정 변경을 하지 않고 하라고 약속하지도 않는다. 쉬운 보기 '오늘 브리핑'(P4)도 규칙이다. "
+            "실제 Claude 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). 단순 Dashboard 조회(orchestration."
             "dashboard_service.get_summary)는 여전히 사람이 언제든 볼 "
             "수 있는 화면으로, 이 capability와 연결되어 있지 않다"
             "(AG-0에서 되돌린 상태 유지 — 완전히 별개의 화면·경로)."
@@ -952,6 +992,11 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "OperationsPriorityService.analyze()",
             "GET /orchestration/priorities (app/domains/orchestration/"
             "router.py)",
+            "app/domains/diagnostics/health_summary.py::evaluate() (운영 상태 진단 규칙 — 서버 관리 AI T1)",
+            "app/domains/diagnostics/health_service.py::HealthService.summary() (GET /diagnostics/health-summary, 읽기 전용)",
+            "app/domains/diagnostics/health_ai_service.py::HealthAiService.explain() (POST /diagnostics/health-advice — T2, 사용자가 누를 때만)",
+            "app/domains/order/product_rejection_ai_service.py::ProductRejectionAiService.explain() (POST /orders/product-rejection-advice — P1b, 사용자가 누를 때만)",
+            "app/web/easy/easy_view.js::briefingFrom() (쉬운 보기 오늘 브리핑 — P4, 규칙)",
         ),
         unimplemented_dependencies=(
             "AI 업무 제안 UI 미연결",
