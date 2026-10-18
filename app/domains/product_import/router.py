@@ -60,9 +60,20 @@ def search_product_url(
 ):
     service = ProductImportService(db, transport, connection_service)
     try:
-        return service.search(data.url, current_user.company_id, current_user.id)
+        response = service.search(data.url, current_user.company_id, current_user.id)
     except ProductImportError as exc:
         raise BadRequestException(str(exc)) from exc
+    # 2026-10-18 S1 — 이미 있는 후보 중 같거나 비슷한 것을 알린다(읽기 전용, 실패해도 가져오기는 막지 않는다).
+    try:
+        from app.domains.product_candidate.candidate_similarity_service import CandidateSimilarityService
+
+        response.similar_candidates = [schema.SimilarCandidate(**row) for row in CandidateSimilarityService(db).similar_to(
+            current_user.company_id, response.suggested_product_name or response.title,
+            CandidateSimilarityService.spec_text([(row.label, row.value) for row in response.notice_rows[:60]]), exclude_reference=response.source_reference,
+        )]
+    except Exception:  # noqa: BLE001 — 알림은 편의 기능이다
+        db.rollback()
+    return response
 
 
 @router.post("/margin-proposal", response_model=schema.MarginProposalResponse)

@@ -138,6 +138,19 @@ def list_candidates(
     ]
 
 
+@router.get("/duplicates")
+def list_candidate_duplicates(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-18 상품 서칭 AI S1 — 이 회사가 볼 수 있는 후보를 상품군(같은 상품·구성만 다른 상품)으로 묶어 보여 준다. 읽기 전용, 후보는 바뀌지 않는다.
+    `/{candidate_id}` 경로보다 앞에 둔다(그렇지 않으면 "duplicates"가 후보 번호로 읽힌다)."""
+
+    from app.domains.product_candidate.candidate_similarity_service import CandidateSimilarityService
+
+    return CandidateSimilarityService(db).families(current_user.company_id)
+
+
 @router.post(
     "/private",
     response_model=ProductCandidateResponse,

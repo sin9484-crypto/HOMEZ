@@ -10780,6 +10780,23 @@
     });
   }
 
+  // 이미 있는 후보 중 같거나 비슷한 것 알림(2026-10-18 S1). 합치거나 막지 않고 알려 줄 뿐이다 — 새로 만들지는 사용자가 정한다.
+  function lwUrlImportSimilarHtml(list) {
+    const items = Array.isArray(list) ? list : [];
+    if (!items.length) return "";
+    const rel = { DUPLICATE: "sim_rel_duplicate", VARIANT: "sim_rel_variant", SIMILAR: "sim_rel_similar" };
+    const status = { APPROVED: "sim_st_accepted", HELD: "sim_st_held", REJECTED: "sim_st_rejected" };
+    // 문구가 없는 이유 코드(앞으로 늘어날 수 있다)는 키 이름을 그대로 보이지 않고 건너뛴다.
+    const known = (text) => (String(text).startsWith("lw.urlimp.") ? "" : text);
+    const why = (code) => known(String(code).startsWith("SPEC_DIFFERS:")
+      ? lwUiT("sim_why_differs", { what: known(lwUiT(`sim_spec_${String(code).slice(13).replace(":", "_")}`)) || String(code).slice(13) })
+      : lwUiT(`sim_why_${String(code).toLowerCase()}`));
+    return `<div class="lw-ui-warnings"><strong>${lwUiT("sim_title")}</strong><p class="stat-sub">${lwUiT("sim_hint")}</p><ul>${items.map((c) =>
+      `<li><b>${escapeHtml(lwUiT(rel[c.relation] || "sim_rel_similar"))}</b> · #${escapeHtml(String(c.candidate_id))} ${escapeHtml(c.product_name)}`
+      + ` <small class="stat-sub">(${escapeHtml(lwUiT(status[c.status] || "sim_st_other"))} · ${escapeHtml(String(Math.round((c.core_score || 0) * 100)))}%)</small>`
+      + `<div class="stat-sub">${(c.reasons || []).map((code) => why(code)).filter(Boolean).map((t) => escapeHtml(t)).join(" · ")}</div></li>`).join("")}</ul></div>`;
+  }
+
   function lwUrlImportRender(data) {
     const offer = data.offer || null;
     const infoRows = [
@@ -10807,6 +10824,7 @@
         <input type="text" id="lw-ui-keywords"></label>
       <label class="field"><span class="field-label">${lwUiT("desc_label")}</span>
         <textarea id="lw-ui-desc" rows="4">${escapeHtml(data.suggested_description || "")}</textarea></label>
+      ${lwUrlImportSimilarHtml(data.similar_candidates)}
       <dl class="lw-ui-info"><dt>${lwUiT("source_info")}</dt>${infoRows.map(([k, v]) => `<dd><span>${escapeHtml(k)}</span> ${escapeHtml(v)}</dd>`).join("")}</dl>
       ${notices.length ? `<details><summary>${lwUiT("notice_summary", { count: notices.length })}</summary>
         <table class="data-table"><tbody>${notices.map((r) => `<tr><td>${escapeHtml(r.label)}</td><td>${escapeHtml(r.value)}</td></tr>`).join("")}</tbody></table></details>` : ""}

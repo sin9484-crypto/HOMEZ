@@ -59,6 +59,17 @@ class NoticeRow(BaseModel):
     value: str
 
 
+class SimilarCandidate(BaseModel):
+    """이미 있는 후보 중 이 상품과 같거나 비슷한 것(읽기 전용 알림 — 합치거나 막지 않는다)."""
+
+    candidate_id: int
+    product_name: str
+    status: str = ""
+    relation: Literal["DUPLICATE", "VARIANT", "SIMILAR"]
+    core_score: float
+    reasons: list[str] = Field(default_factory=list)
+
+
 class UrlSearchResponse(BaseModel):
 
     source_kind: SourceKind
@@ -77,6 +88,8 @@ class UrlSearchResponse(BaseModel):
     images: list[ImageSuggestion] = Field(default_factory=list)
     offer: SupplierOffer | None = None
     warnings: list[str] = Field(default_factory=list)
+    # 2026-10-18 S1 — 이미 있는 후보 중 같거나 비슷한 것(가까운 순 최대 5개). 후보를 막거나 합치지 않는다.
+    similar_candidates: list[SimilarCandidate] = Field(default_factory=list)
 
 
 class MarginProposalRequest(BaseModel):
