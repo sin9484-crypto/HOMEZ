@@ -1463,6 +1463,90 @@
     return `<div class="ez-score"><div class="ez-num">${v.toFixed(2)}</div><div class="ez-bar ${tone}"><i style="width:${Math.round(v * 100)}%"></i></div></div>`;
   }
 
+  // ---- 판매 성과 (2026-10-18, 마케팅 AI M4 lite) ----
+  // 쿠팡 매출내역을 사용자가 "쿠팡에서 읽기"를 눌렀을 때만 읽는다(읽기 전용, 승인 센터 '반품·민원·정산 확인' 허용 필요). 화면을 열거나 새로고침할 때는 읽지 않는다.
+  // 옵션별 판매·반품·수수료와 표본 크기만 보여 주고, 어떤 제안이 맞았는지는 판정하지 않는다. 서버가 준 모든 글은 이스케이프한다.
+
+  const PERF_SAMPLE = { INSUFFICIENT: ["gray", "easy.perf.sample_insufficient"], REFERENCE: ["blue", "easy.perf.sample_reference"], ENOUGH: ["ok", "easy.perf.sample_enough"] };
+  const PERF_DAYS = [7, 14, 30];
+  const perfState = { days: 30, data: null, error: "", busy: false };
+
+  function perfPercent(rate) {
+    return rate === null || rate === undefined || rate === "" ? "—" : `${(Number(rate) * 100).toFixed(1)}%`;
+  }
+
+  function perfWon(value) {
+    return value === null || value === undefined || value === "" ? "—" : `${Number(value).toLocaleString()}${T("easy.perf.won")}`;
+  }
+
+  function perfHtml(state) {
+    const note = (tone, text) => `<div class="ez-note ${tone}" style="margin-top:12px"><span class="ez-dot ${tone}" aria-hidden="true">${tone === "info" ? "i" : "!"}</span><div>${esc(text)}</div></div>`;
+    const num = (value) => (value === null || value === undefined || value === "" ? "—" : value);  // 없는 값은 "undefined" 대신 "—"
+    const data = state && state.data;
+    if (state && state.error) return note("warn", state.error);
+    if (!data) return note("info", T("easy.perf.empty"));
+    if (!data.ok) {
+      if (data.no_connection) return note("warn", T("easy.perf.no_connection"));
+      if (data.blocked) return note("warn", T("easy.perf.blocked"));
+      return note("warn", T("easy.perf.failed", { why: data.detail || "" }));
+    }
+    const s = data.summary || { totals: {}, items: [], notes: [], period: {} };
+    const t = s.totals || {};
+    const sampleChip = (level) => { const pair = PERF_SAMPLE[level] || PERF_SAMPLE.INSUFFICIENT; return `<span class="ez-chip ${pair[0]}">${esc(T(pair[1]))}</span>`; };
+    const cards = `<div class="ez-cards" style="margin-top:12px">
+      <div class="ez-card accent"><div class="k">${esc(T("easy.perf.k_orders"))}</div><div class="v">${esc(t.orders || 0)}</div><div class="s">${sampleChip(t.sample)}</div></div>
+      <div class="ez-card"><div class="k">${esc(T("easy.perf.k_units"))}</div><div class="v">${esc(t.sale_units || 0)}</div><div class="s">${esc(T("easy.perf.k_items", { n: t.items || 0 }))}</div></div>
+      <div class="ez-card"><div class="k">${esc(T("easy.perf.k_amount"))}</div><div class="v">${esc(perfWon(t.sale_amount))}</div><div class="s">${esc(T("easy.perf.k_fee", { rate: perfPercent(t.fee_ratio) }))}</div></div>
+      <div class="ez-card"><div class="k">${esc(T("easy.perf.k_return"))}</div><div class="v">${esc(perfPercent(t.return_rate))}</div><div class="s">${esc(T("easy.perf.k_return_units", { n: t.refund_units || 0 }))}</div></div></div>`;
+    const period = s.period && s.period.from ? `<p class="ez-muted" style="margin:10px 0 0">${esc(T("easy.perf.period", { from: s.period.from, to: s.period.to }))}</p>` : "";
+    const rows = (s.items || []).map((item) => `<tr>
+      <td><b>${esc(item.name || T("easy.perf.no_name"))}</b><small class="ez-muted" style="display:block;font-size:13px">${esc(num(item.vendor_item_id))}${item.refund_without_sale ? ` · ${esc(T("easy.perf.refund_only"))}` : ""}</small></td>
+      <td class="ez-num">${esc(num(item.sale_units))}</td><td class="ez-num">${esc(perfWon(item.sale_amount))}</td>
+      <td class="ez-num">${esc(num(item.refund_units))} · ${esc(perfPercent(item.return_rate))}${item.high_return ? ` <span class="ez-chip red">${esc(T("easy.perf.high_return"))}</span>` : ""}</td>
+      <td class="ez-num">${esc(perfPercent(item.fee_ratio))}</td><td>${sampleChip(item.sample)}</td></tr>`).join("");
+    const table = rows
+      ? `<table class="ez-table" style="margin-top:12px"><thead><tr>${["easy.perf.col_option", "easy.perf.col_units", "easy.perf.col_amount", "easy.perf.col_return", "easy.perf.col_fee", "easy.perf.col_sample"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`
+      : note("info", T("easy.perf.no_sales"));
+    const extras = [];
+    if (data.truncated) extras.push(note("warn", T("easy.perf.truncated")));
+    if (s.omitted) extras.push(`<p class="ez-muted">${esc(T("easy.perf.omitted", { n: s.omitted }))}</p>`);
+    if (s.duplicates || s.skipped) extras.push(`<p class="ez-muted">${esc(T("easy.perf.skipped", { d: s.duplicates || 0, s: s.skipped || 0 }))}</p>`);
+    const notes = (s.notes || []).map((text) => `<p class="ez-muted" style="font-size:13px;margin:4px 0">${esc(text)}</p>`).join("");
+    return `${cards}${period}${table}${extras.join("")}<div style="margin-top:12px">${notes}</div>
+      <p class="ez-faint" style="font-size:12px">${esc(T("easy.perf.checked", { at: data.checked_at ? new Date(`${data.checked_at}Z`).toLocaleString() : "" }))}</p>`;
+  }
+
+  function renderPerf(host) {
+    host.innerHTML = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.perf.lead"))}</div></div>
+      <div style="display:flex;gap:12px;align-items:center;margin:14px 0;flex-wrap:wrap">
+        <label>${esc(T("easy.perf.days_label"))} <select id="ez-perf-days">${PERF_DAYS.map((d) => `<option value="${d}" ${d === perfState.days ? "selected" : ""}>${esc(T("easy.perf.days_opt", { d }))}</option>`).join("")}</select></label>
+        <button type="button" class="ez-btn" id="ez-perf-read">${esc(T("easy.perf.read_btn"))}</button></div>
+      <div id="ez-perf-out" aria-live="polite">${perfHtml(perfState)}</div>`;
+    $("ez-perf-days").addEventListener("change", (event) => { perfState.days = Number(event.target.value) || 30; });
+    $("ez-perf-read").addEventListener("click", async () => {
+      if (perfState.busy) return;   // 확인 창이 떠 있거나 읽는 중이면 다시 누르지 못한다(창이 겹쳐 열리거나 두 번 읽는 것을 막는다)
+      perfState.busy = true;
+      try {
+        const ok = await ezDialog({ title: T("easy.perf.ask_title"), bodyHtml: `<p>${esc(T("easy.perf.ask_body", { d: perfState.days }))}</p>`, okLabel: T("easy.perf.read_btn") });
+        if (!ok) return;
+        const out = $("ez-perf-out");
+        out.innerHTML = loadingHtml();
+        try {
+          perfState.data = await api(`/orders/sales-performance?days=${encodeURIComponent(perfState.days)}`, { method: "POST" });
+          perfState.error = "";
+        } catch (err) {
+          perfState.error = (err && err.message) || T("easy.perf.failed", { why: "" });
+        }
+        const target = $("ez-perf-out");
+        if (target) target.innerHTML = perfHtml(perfState);
+      } finally {
+        perfState.busy = false;
+      }
+    });
+  }
+
+  // ---- /판매 성과 ----
+
   async function loadAnalysis() {
     const root = $("ez-root-easy-analysis");
     root.innerHTML = loadingHtml();
@@ -1494,8 +1578,9 @@
     const segs = Object.keys(dist).sort();
     const total = (cands || []).length;
 
+    const perfBadge = perfState.data && perfState.data.ok && perfState.data.summary ? perfState.data.summary.totals.items : "—";
     const tabs = [["CAND", "easy.an.tab_cand", total], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
-      ["DEC", "easy.an.tab_dec", (decisions || []).length], ["AI", "easy.an.tab_ai", (models || []).length]];
+      ["DEC", "easy.an.tab_dec", (decisions || []).length], ["AI", "easy.an.tab_ai", (models || []).length], ["PERF", "easy.an.tab_perf", perfBadge]];
 
     root.innerHTML = `
       <div class="ez-head"><div><h1>${esc(T("easy.nav.analysis"))}</h1><div class="ez-lead">${esc(T("easy.an.lead"))}</div></div></div>
@@ -1547,6 +1632,8 @@
         <td><span class="ez-chip ${REC_CHIP[d.recommendation] || "gray"}">${esc(REC_KEY[d.recommendation] ? T(REC_KEY[d.recommendation]) : String(d.recommendation))}</span></td>
         <td>${d.blocked_by_safety ? `<span class="ez-chip red">${esc(T("easy.an.blocked"))}</span>` : '<span class="ez-faint">—</span>'}</td></tr>`).join("")}</tbody></table>`;
       bindRows(host, "tbody tr", (key) => B.navigateTo("decision-detail", { id: Number(key) }));
+    } else if (tab === "PERF") {
+      renderPerf(host);
     } else {
       const rows = models || [];
       if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_ai", "easy.an.empty_ai_s"); return; }

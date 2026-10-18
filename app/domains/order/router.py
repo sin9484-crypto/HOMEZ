@@ -242,6 +242,20 @@ def refresh_after_sales_now(
     }
 
 
+@router.post("/sales-performance")
+def read_sales_performance(
+    days: int = 30,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-18 마케팅 AI M4(lite) — 쿠팡 매출내역을 최근 `days`일(1~31, 어제까지) 읽어 옵션별 판매·반품·수수료로 집계한다(GET만, `AFTER_SALES_CHECK` 허용 필요).
+    사용자가 누를 때만 읽고, 저장하지 않으며, 쿠팡에 쓰지 않는다. 허용이 없으면 호출하지 않는다. 어떤 제안이 맞았는지는 판정하지 않는다."""
+
+    from app.domains.order.sales_performance_service import SalesPerformanceService
+
+    return SalesPerformanceService(db).read(current_user.company_id, days)
+
+
 @router.get(
     "/collection-ops/test-budget-plan",
     response_model=OrderCollectionTestBudgetPlanResponse,

@@ -583,7 +583,7 @@ class CoupangChannelActions:
 
     _AFTER_SALES_READS = {
         "returns": "read_return_requests", "online": "read_online_inquiries", "call": "read_call_center_inquiries",
-        "settlement": "read_settlement_histories",
+        "settlement": "read_settlement_histories", "revenue": "read_revenue_history",
     }
 
     def read_after_sales(self, *, company_id: int, store_connection_id: int, what: str, **params):

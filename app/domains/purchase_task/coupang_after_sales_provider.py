@@ -16,6 +16,10 @@ File : app/domains/purchase_task/coupang_after_sales_provider.py
       partnerCounselingStatus(NONE|ANSWER|NO_ANSWER|TRANSFER), inquiryStartAt/EndAt(최대 7일), pageNum, pageSize(최대 30).
   - 정산 내역  GET /v2/providers/marketplace_openapi/apis/api/v1/settlement-histories
       revenueRecognitionYearMonth(YYYY-MM, 필수). 문서의 응답 예시는 2019년 것이라 실제 응답 모양은 첫 호출 때 확인한다.
+  - 매출내역  GET /v2/providers/openapi/apis/api/v1/revenue-history   (2026-10-18 M0 조사: developers.coupang.com 정산 > 매출내역 조회)
+      vendorId, recognitionDateFrom/To(yyyy-MM-dd, 최대 31일, 종료일은 전일까지), token(첫 호출은 빈 값, 이후 nextToken), maxPerPage(기본 50·최대 50).
+      주문(orderId) 단위 레코드이고 items[]에 옵션(vendorItemId) 단위 명세가 있다. saleType은 SALE|REFUND. 매출인식일은 배송완료+7일 또는 구매확정이라 실적이 지연된다.
+      초당 5회(판매자 ID 단위) 한도가 있어 쪽 사이에 쉰다. 응답 모양은 첫 실호출 때 확인한다(모르는 모양이면 추측하지 않고 실패로 돌려준다).
 
 규칙:
   - GET만 한다. 쿠팡에 쓰지 않는다(답변·수령확인·환불 등은 이 조각에 없다).
@@ -32,6 +36,7 @@ from dataclasses import field
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+import time
 from typing import Any
 from urllib.parse import quote
 from urllib.parse import urlencode
@@ -43,11 +48,18 @@ RETURN_REQUESTS_PATH = "/v2/providers/openapi/apis/api/v6/vendors/{vendor_id}/re
 ONLINE_INQUIRIES_PATH = "/v2/providers/openapi/apis/api/v5/vendors/{vendor_id}/onlineInquiries"
 CALL_CENTER_INQUIRIES_PATH = "/v2/providers/openapi/apis/api/v5/vendors/{vendor_id}/callCenterInquiries"
 SETTLEMENT_HISTORIES_PATH = "/v2/providers/marketplace_openapi/apis/api/v1/settlement-histories"
+REVENUE_HISTORY_PATH = "/v2/providers/openapi/apis/api/v1/revenue-history"
 
 KST = timezone(timedelta(hours=9))
 MAX_RETURN_RANGE_DAYS = 31
 MAX_INQUIRY_RANGE_DAYS = 7
 MAX_PAGES = 3  # 문의 목록의 한 번 읽기 상한(쪽수만큼 호출이 늘기 때문)
+MAX_REVENUE_RANGE_DAYS = 31
+MAX_REVENUE_PAGES = 10          # 한 번 읽기의 상한(쪽당 최대 50건 → 500주문). 넘으면 truncated로 알린다.
+REVENUE_PAGE_SIZE = 50
+REVENUE_PAGE_PAUSE_SECONDS = 0.25   # 쿠팡 한도(초당 5회, 판매자 ID 단위·전체 API 합산)보다 한참 아래로
+REVENUE_SALE_TYPES = ("SALE", "REFUND")
+_sleep = time.sleep   # 시험이 바꿔 끼운다
 
 
 @dataclass(frozen=True)
@@ -247,6 +259,74 @@ class _AfterSalesMixin:
                 "deduction": _number(item.get("deductionAmount")),
             })  # 계좌 정보(예금주·은행·계좌번호)는 읽지 않는다.
         return AfterSalesRead(True, tuple(rows), "", 200)
+
+    # ---- 매출내역(판매 성과) ----
+
+    def read_revenue_history(self, *, days: int = 30) -> AfterSalesRead:
+        """최근 `days`일(1~31, 어제까지)의 매출내역을 주문·옵션 단위로 읽는다. 쪽마다 1회 호출(최대 10쪽), 쪽 사이에 쉰다. 읽기만 한다."""
+
+        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_REVENUE_RANGE_DAYS:
+            return AfterSalesRead(False, detail=f"조회 기간 오류(1~{MAX_REVENUE_RANGE_DAYS}일)")
+        end = self._now().astimezone(KST).date() - timedelta(days=1)   # 종료일은 전일까지만 조회할 수 있다
+        start = end - timedelta(days=days - 1)
+        rows: list[dict] = []
+        calls, token, seen_tokens, has_more = 0, "", set(), False
+        while True:
+            if calls >= MAX_REVENUE_PAGES:
+                break
+            if calls:
+                _sleep(REVENUE_PAGE_PAUSE_SECONDS)
+            query = urlencode({
+                "vendorId": self.vendor_id, "recognitionDateFrom": start.isoformat(), "recognitionDateTo": end.isoformat(),
+                "token": token, "maxPerPage": REVENUE_PAGE_SIZE,
+            }, quote_via=quote)
+            response, failure = self._after_sales_get(REVENUE_HISTORY_PATH, query)
+            calls += 1
+            if failure is not None:
+                return AfterSalesRead(False, tuple(rows), failure.detail, failure.http_status, calls)
+            body = _body(response)
+            data = body.get("data") if body else None
+            if not isinstance(data, list):
+                return AfterSalesRead(False, tuple(rows), "매출내역 응답 해석 불가", 200, calls)
+            for order in data:
+                if isinstance(order, dict):
+                    rows.extend(self._parse_revenue_order(order))
+            next_token = _text(body.get("nextToken"))
+            has_more = body.get("hasNext") is True
+            if not has_more:
+                break
+            if not next_token:   # 다음 쪽이 있다는데 토큰이 없다 — 이어 읽을 수 없으니 잘렸다고 알린다
+                break
+            if next_token == token or next_token in seen_tokens:   # 같은 쪽을 되풀이해 읽지 않는다
+                return AfterSalesRead(False, tuple(rows), "매출내역 페이지 토큰이 되풀이됨", 200, calls)
+            seen_tokens.add(next_token)
+            token = next_token
+        return AfterSalesRead(True, tuple(rows), "", 200, calls, truncated=has_more)
+
+    @staticmethod
+    def _parse_revenue_order(order: dict) -> list[dict]:
+        """주문 한 건 → 옵션별 줄. 고객·주소·연락처는 응답에 있어도 읽지 않는다(주문번호·옵션 ID·수량·금액·수수료만)."""
+
+        sale_type = (_text(order.get("saleType")) or "").upper()
+        order_id = _text(order.get("orderId"))
+        if sale_type not in REVENUE_SALE_TYPES or order_id is None:
+            return []
+        out = []
+        for item in (order.get("items") if isinstance(order.get("items"), list) else []):
+            if not isinstance(item, dict):
+                continue
+            vendor_item_id, quantity = _text(item.get("vendorItemId")), _int(item.get("quantity"))
+            if vendor_item_id is None or quantity is None:
+                continue
+            name = _text(item.get("vendorItemName")) or _text(item.get("productName"))
+            out.append({
+                "order_id": order_id, "sale_type": sale_type, "sale_date": _text(order.get("saleDate")), "recognition_date": _text(order.get("recognitionDate")),
+                "vendor_item_id": vendor_item_id, "name": name[:60] if name else None, "quantity": quantity,
+                "sale_price": _number(item.get("salePrice")), "sale_amount": _number(item.get("saleAmount")),
+                "service_fee": _number(item.get("serviceFee")), "service_fee_vat": _number(item.get("serviceFeeVat")),
+                "settlement_amount": _number(item.get("settlementAmount")),
+            })
+        return out
 
     # ---- 공통 ----
 
