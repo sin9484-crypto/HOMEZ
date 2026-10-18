@@ -8037,9 +8037,47 @@
   // --------------------------------------------------
 
   let candidatesCache = [];
+  let candidateEvalCache = new Map();  // 후보 번호 → 사전 평가(2026-10-18 S2, 읽기 전용 권고)
 
   async function fetchCandidates() {
     return apiFetch("/product-candidates?limit=200");
+  }
+
+  // 후보 사전 평가 칸(2026-10-18 S2): 결정 칩 + 가장 중요한 이유 2개. 권고일 뿐 후보의 상태는 바뀌지 않는다. 글은 모두 이스케이프한다.
+  const CAND_EVAL_CHIP = { READY: ["ok", "eval_ready"], HOLD: ["warn", "eval_hold"], EXCLUDE: ["danger", "eval_exclude"] };
+  const CAND_EVAL_MISSING = { SUPPLY_PRICE: "eval_miss_supply", VAT_STATE: "eval_miss_vat", SHIPPING_COST: "eval_miss_shipping", CHANNEL_FEE: "eval_miss_fee", AI_CONFIRM: "eval_miss_ai" };
+  const CAND_EVAL_KIND = { COSMETIC: "eval_kind_cosmetic", FOOD: "eval_kind_food", HEALTH_FOOD: "eval_kind_health_food", MEDICAL: "eval_kind_medical", ELECTRIC: "eval_kind_electric", CHILD: "eval_kind_child" };
+
+  function candidateEvalReasonText(reason) {
+    const t = (key, vars) => HomezI18n.t(`candidates.${key}`, vars);
+    const p = (reason && reason.params) || {};
+    const list = (items) => (Array.isArray(items) ? items.join(", ") : "");
+    switch (reason && reason.code) {
+      case "PROHIBITED_ITEM": return t("eval_r_prohibited", { words: list(p.words) });
+      case "BRAND_IP_WORD": return t("eval_r_brand_ip", { words: list(p.words) });
+      case "CLAIM_WORDS": return t("eval_r_claim", { words: list(p.words) });
+      case "CHILD_TERMS": return t("eval_r_child", { words: list(p.words) });
+      case "REGULATED_CATEGORY": return t("eval_r_regulated", { kind: CAND_EVAL_KIND[p.kind] ? t(CAND_EVAL_KIND[p.kind]) : String(p.kind || "") });
+      case "KC_CERT": return t("eval_r_kc", { value: String(p.value || "") });
+      case "MARGIN_NOT_ANALYZED": return t("eval_r_margin_none");
+      case "MARGIN_ANALYSIS_HOLD": return t("eval_r_margin_hold", { missing: (p.missing || []).map((code) => (CAND_EVAL_MISSING[code] ? t(CAND_EVAL_MISSING[code]) : code)).join(", ") });
+      case "MARGIN_ANALYSIS_UNFIT": return t("eval_r_margin_unfit");
+      case "MARGIN_OK": return t("eval_r_margin_ok", { price: Number(p.price).toLocaleString("ko-KR"), rate: Math.round(Number(p.rate || 0) * 100) });
+      case "DUPLICATE_OF": return t("eval_r_duplicate", { id: p.candidate_id });
+      case "VARIANT_EXISTS": return t("eval_r_variant");
+      case "NO_NOTICE": return t("eval_r_no_notice");
+      default: return "";
+    }
+  }
+
+  function candidateEvalCellHtml(item) {
+    if (!item) return "—";
+    const [tone, key] = CAND_EVAL_CHIP[item.decision] || ["info", "eval_hold"];
+    const reasons = (item.reasons || []).filter((r) => r.level !== "OK" || item.decision === "READY");
+    const shown = reasons.slice(0, 2).map((r) => candidateEvalReasonText(r)).filter(Boolean);
+    const more = reasons.length - 2;
+    return `<span class="pill ${tone}">${escapeHtml(HomezI18n.t(`candidates.${key}`))}</span>`
+      + (shown.length ? `<div class="stat-sub">${shown.map((text) => escapeHtml(text)).join(" · ")}${more > 0 ? ` ${escapeHtml(HomezI18n.t("candidates.eval_more", { n: more }))}` : ""}</div>` : "");
   }
 
   async function loadCandidates() {
@@ -8051,6 +8089,13 @@
     } catch (err) {
       renderErrorState(wrap, err);
       return;
+    }
+    // 사전 평가는 참고 열이다 — 못 불러와도 후보 목록은 그대로 보여 준다.
+    try {
+      const evaluation = await apiFetch("/product-candidates/evaluations");
+      candidateEvalCache = new Map(((evaluation && evaluation.items) || []).map((item) => [item.candidate_id, item]));
+    } catch (_err) {
+      candidateEvalCache = new Map();
     }
 
     populateSourceFilter(candidatesCache);
@@ -8113,6 +8158,7 @@
     const colDemand = HomezI18n.t("candidates.col_demand");
     const colRisk = HomezI18n.t("candidates.col_risk");
     const colStatus = HomezI18n.t("candidates.col_status");
+    const colEval = HomezI18n.t("candidates.col_eval");
 
     const trs = rows.map((r) => `
       <tr class="row-clickable" tabindex="0" data-id="${r.id}">
@@ -8124,6 +8170,7 @@
         <td data-label="${colDemand}">${scoreBarHtml(r.demand_score)}</td>
         <td data-label="${colRisk}">${scoreBarHtml(r.risk_score, { invert: true })}</td>
         <td data-label="${colStatus}"><span class="status-tag status-${r.status}">${escapeHtml(candidateStatusLabel(r.status))}</span></td>
+        <td data-label="${colEval}">${candidateEvalCellHtml(candidateEvalCache.get(r.id))}</td>
       </tr>
     `).join("");
 
@@ -8131,7 +8178,7 @@
       <table class="responsive-cards">
         <thead><tr>
           <th>${colName}</th><th>${colSource}</th><th>${colTrend}</th><th>${colNewProduct}</th>
-          <th>${colMargin}</th><th>${colDemand}</th><th>${colRisk}</th><th>${colStatus}</th>
+          <th>${colMargin}</th><th>${colDemand}</th><th>${colRisk}</th><th>${colStatus}</th><th>${colEval}</th>
         </tr></thead>
         <tbody>${trs}</tbody>
       </table>

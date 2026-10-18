@@ -151,6 +151,19 @@ def list_candidate_duplicates(
     return CandidateSimilarityService(db).families(current_user.company_id)
 
 
+@router.get("/evaluations")
+def list_candidate_evaluations(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-18 상품 서칭 AI S2 — 후보 사전 평가(후보 가능/보류/제외 권고와 이유). 읽기 전용 권고이며 후보의 상태·점수는 바뀌지 않는다.
+    `/{candidate_id}` 경로보다 앞에 둔다(그렇지 않으면 "evaluations"가 후보 번호로 읽힌다)."""
+
+    from app.domains.product_candidate.candidate_evaluation_service import CandidateEvaluationService
+
+    return CandidateEvaluationService(db).evaluate_all(current_user.company_id)
+
+
 @router.post(
     "/private",
     response_model=ProductCandidateResponse,
