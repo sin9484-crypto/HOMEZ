@@ -717,6 +717,49 @@ def ai_draft_apply(
     )
 
 
+class MarketingNamesApplyRequest(BaseModel):
+    expected_version: int
+    product_name: str | None = None
+    add_keywords: list[str] | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def _marketing_name_service(db: Session, credential_store: CredentialStore):
+    from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+    from app.domains.marketplace_listing.marketing_name_service import MarketingNameService
+
+    return MarketingNameService(db, AiDraftService(db, credential_store))
+
+
+@router.post("/{wizard_id}/ai-draft/names")
+def marketing_names_propose(
+    wizard_id: int,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """2026-10-18 마케팅 AI M1 — 상품명 후보·새 검색어 제안(위저드는 바꾸지 않는다). 요청에 글이 없고 서버가 위저드에서 직접 읽는다. 월 한도·승인 센터 허용이 있어야 나간다."""
+
+    return _marketing_name_service(db, credential_store).propose(wizard_id, current_user.company_id, current_user.id)
+
+
+@router.post("/{wizard_id}/ai-draft/names/apply")
+def marketing_names_apply(
+    wizard_id: int,
+    data: MarketingNamesApplyRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """사용자가 고른 상품명 1개와 더할 검색어만 3단계 초안에 저장한다(서버가 같은 검증을 다시 한다). 바깥 호출 없음."""
+
+    return _marketing_name_service(db, credential_store).apply(
+        wizard_id, current_user.company_id, current_user.id,
+        product_name=data.product_name, add_keywords=data.add_keywords, expected_version=data.expected_version,
+    )
+
+
 @router.post("/{wizard_id}/coupang/contents-from-media")
 def build_coupang_contents_from_media(
     wizard_id: int,

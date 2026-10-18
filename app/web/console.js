@@ -12043,6 +12043,7 @@
 
     lwWireAutosaveInputs(content);
     lwAttachAiDraft(content);
+    lwAttachMarketingNames(content);
   }
 
   // 2026-10-18 — 등록 도우미 AI 초안(Phase B). AI는 제안만 하고, 사용자가 필드마다 고른 것만 3단계 초안에 저장된다.
@@ -12213,6 +12214,89 @@
   }
 
   // 같은 원본에서 만들어진 조각(source_asset_id)을 원본 바로 뒤에 모으고, 원본끼리·조각끼리는 id 순으로 둔다.
+  // 2026-10-18 — 마케팅 AI M1: 상품명 후보·새 검색어 제안. AI는 제안만 하고, 사용자가 고른 상품명 1개와 검색어만 3단계 초안에 저장된다.
+  // 보내는 것은 상품 정보와 저장된 검색 관심도 점수 요약뿐이다(쿠팡 검색량이 아니다). 월 한도·승인 센터 허용·호출별 사용 기록으로 비용을 막는다.
+  function lwAttachMarketingNames(content) {
+    content.querySelector("[data-lw-mkt]")?.remove();
+    const wizardId = lwState.wizard.id;
+    const base = `/listing-wizards/${wizardId}/ai-draft/names`;
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const panel = document.createElement("section");
+    panel.setAttribute("data-lw-mkt", "");
+    panel.style.cssText = "border:1px solid var(--border,#d0d7de);border-radius:8px;padding:12px 14px;margin:14px 0;";
+    panel.innerHTML = `
+      <h3 style="margin:0 0 4px;">${t("mkt_title")}</h3>
+      <p class="stat-sub" style="margin:0 0 8px;">${t("mkt_hint")}</p>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" data-lw-mkt-propose>${t("mkt_propose_btn")}</button>
+        <button type="button" class="btn btn-primary btn-sm" data-lw-mkt-apply disabled>${t("mkt_apply_btn")}</button>
+      </div>
+      <div data-lw-mkt-result style="margin-top:10px;"></div>`;
+    const anchor = content.querySelector("[data-lw-ai]");
+    if (anchor) anchor.after(panel); else content.append(panel);
+    const result = panel.querySelector("[data-lw-mkt-result]");
+    const applyBtn = panel.querySelector("[data-lw-mkt-apply]");
+    let proposal = null;
+
+    const render = (data) => {
+      proposal = data;
+      const names = Array.isArray(data.names) ? data.names : [];
+      const keywords = Array.isArray(data.keywords) ? data.keywords : [];
+      const signal = data.signal ? t("mkt_signal", { score: data.signal.score_0_to_1 }) : t("mkt_signal_none");
+      const cached = data.cached && data.at ? `<p class="stat-sub">${escapeHtml(t("mkt_cached", { at: new Date(`${data.at}Z`).toLocaleString() }))}</p>` : "";
+      const nameRows = names.map((item, index) => `
+        <label class="lw-checklist-item" style="display:block;margin:0 0 6px;"><input type="radio" name="lw-mkt-name" data-lw-mkt-name="${index}">
+          <span><strong>${escapeHtml(item.name)}</strong></span></label>
+        <div class="stat-sub" style="margin:0 0 8px 22px;">${escapeHtml(item.why || "")}</div>`).join("");
+      const keywordRows = keywords.map((word, index) => `
+        <label class="lw-checklist-item" style="display:inline-block;margin:0 12px 6px 0;"><input type="checkbox" data-lw-mkt-kw="${index}" checked>
+          <span>${escapeHtml(word)}</span></label>`).join("");
+      const rejected = Object.values(data.rejected || {}).map((why) => `<li>${escapeHtml(why)}</li>`).join("");
+      const usage = data.usage ? `<p class="stat-sub">${escapeHtml(t("mkt_usage", { cost: data.usage.cost_krw, used: Math.round(data.usage.month_used_krw || 0), limit: data.usage.monthly_limit_krw }))}</p>` : "";
+      result.innerHTML = `
+        <p class="stat-sub">${escapeHtml(signal)}</p>${cached}
+        ${names.length ? `<div><strong>${t("mkt_names")}</strong>
+          <div class="stat-sub">${escapeHtml(t("mkt_current"))}: ${escapeHtml((data.current && data.current.product_name) || "—")}</div>
+          <label class="lw-checklist-item" style="display:block;margin:6px 0;"><input type="radio" name="lw-mkt-name" data-lw-mkt-name="-1" checked>
+            <span>${t("mkt_keep_name")}</span></label>${nameRows}</div>` : ""}
+        ${keywords.length ? `<div style="margin-top:8px;"><strong>${t("mkt_keywords")}</strong><div>${keywordRows}</div></div>` : ""}
+        ${names.length || keywords.length ? "" : `<p class="field-error">${t("mkt_none_passed")}</p>`}
+        ${rejected ? `<p class="stat-sub">${t("mkt_rejected")}</p><ul>${rejected}</ul>` : ""}
+        ${usage}`;
+      applyBtn.disabled = !(names.length || keywords.length);
+    };
+
+    panel.querySelector("[data-lw-mkt-propose]").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      const ok = await askConfirm(t("mkt_confirm_body"), { title: t("mkt_confirm_title"), okLabel: t("mkt_propose_btn") });
+      if (!ok) return;
+      result.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
+      try {
+        render(await apiFetch(base, { method: "POST" }));
+      } catch (err) {
+        result.innerHTML = `<p class="field-error">${escapeHtml(err.message || t("mkt_propose_failed"))}</p>`;
+      }
+    }));
+
+    applyBtn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+      if (!proposal) return;
+      const body = { expected_version: lwState.wizard.version };
+      const picked = panel.querySelector("[data-lw-mkt-name]:checked");
+      const index = picked ? Number(picked.dataset.lwMktName) : -1;
+      if (index >= 0 && proposal.names[index]) body.product_name = proposal.names[index].name;
+      const words = [...panel.querySelectorAll("[data-lw-mkt-kw]:checked")].map((box) => proposal.keywords[Number(box.dataset.lwMktKw)]).filter(Boolean);
+      if (words.length) body.add_keywords = words;
+      if (Object.keys(body).length === 1) { toast(t("mkt_pick_none"), "error"); return; }
+      try {
+        const done = await apiFetch(`${base}/apply`, { method: "POST", body: JSON.stringify(body) });
+        lwState.wizard = await apiFetch(`/listing-wizards/${wizardId}`);
+        toast(t("mkt_applied", { fields: done.applied.length, refused: Object.keys(done.refused || {}).length }), "success");
+        lwRenderDraftStep(content);
+      } catch (err) {
+        toast(err.message || t("mkt_apply_failed"), "error");
+      }
+    }));
+  }
+
   // 2026-10-14 — 제품 색에 맞춘 배경 고르기. 배경을 고정하지 않고, 서버가 제품(누끼)의 색을 분석해 대비가 큰 순서로
   // 제안한 배경 중에서 고른다(대표 이미지는 흰 배경만). 제품은 다시 그리지 않고 배경·그림자만 바뀐다.
   let lwBgNotice = null;
