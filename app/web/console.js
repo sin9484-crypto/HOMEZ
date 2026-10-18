@@ -10908,7 +10908,7 @@
       </div>
       <div class="field-inline">
         <button class="btn btn-secondary" id="lw-ui-calc-btn">${lwUiT("calc_btn")}</button>
-        <button class="btn btn-ghost" id="lw-ui-apply-btn" hidden>${lwUiT("apply_proposal_btn")}</button>
+        <button class="btn btn-ghost" id="lw-ui-apply-btn" style="display:none">${lwUiT("apply_proposal_btn")}</button>
       </div>
       <div id="lw-ui-margin-result" aria-live="polite"></div>
 
@@ -10968,7 +10968,7 @@
             <span class="pill ${meets ? "ok" : "warn"}">${meets ? lwUiT("result_ok") : lwUiT("result_low")}</span></td></tr>
         </tbody></table>
         ${(result.warnings || []).length ? `<ul class="lw-ui-warnings">${result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>` : ""}`;
-      el("lw-ui-apply-btn").hidden = result.proposed_sale_price == null;
+      el("lw-ui-apply-btn").style.display = result.proposed_sale_price == null ? "none" : "";  // .btn이 display를 정해 hidden 속성으로는 숨겨지지 않는다
       return result;
     } catch (err) {
       out.innerHTML = `<p class="field-error">${escapeHtml(err.message || lwUiT("calc_failed"))}</p>`;
@@ -11134,7 +11134,7 @@
         <label class="lw-checklist-item"><input type="checkbox" data-aia-ack="${escapeHtml(r.code)}"><span>${escapeHtml(r.label)}${r.reason ? ` — ${escapeHtml(r.reason)}` : ""}</span></label>`).join("")}</fieldset>` : ""}
       <div class="field-inline">
         <button type="button" class="btn btn-secondary" data-aia-calc>${aiaT("calc_btn")}</button>
-        <button type="button" class="btn btn-ghost" data-aia-apply hidden>${aiaT("apply_btn")}</button>
+        <button type="button" class="btn btn-ghost" data-aia-apply style="display:none">${aiaT("apply_btn")}</button>
       </div>
       <div data-aia-fee></div>
       <div data-aia-report aria-live="polite"></div>`;
@@ -11222,7 +11222,7 @@
         ${sens ? `<details><summary>${aiaT("sens_title")}</summary><ul>${sens}</ul></details>` : ""}
         ${assumptions ? `<details open><summary>${aiaT("assume_title")}</summary><ul>${assumptions}</ul></details>` : ""}
         <p class="stat-sub">${aiaT("no_competitor")}</p>`;
-      applyBtn.hidden = !(report.scenarios || []).some((s) => s.sale_price);
+      applyBtn.style.display = (report.scenarios || []).some((s) => s.sale_price) ? "" : "none";  // .btn이 display를 정해 hidden 속성으로는 숨겨지지 않는다
       renderFeeBox(report);
     };
 
