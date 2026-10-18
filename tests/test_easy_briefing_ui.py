@@ -109,7 +109,7 @@ console.log(JSON.stringify(__EXPR__));
 class BriefingFunctionTests(unittest.TestCase):
 
     def run_js(self, expression):
-        sources = "\n".join([constants_source()] + [function_source(n) for n in ("parseUtcMs", "briefWeight", "briefingFrom", "briefingHtml")])
+        sources = "\n".join([constants_source()] + [function_source(n) for n in ("parseUtcMs", "briefWeight", "briefSysText", "briefingFrom", "briefingHtml")])
         script = HARNESS.replace("__SOURCES__", sources).replace("__NOW__", str(NOW)).replace("__EXPR__", expression)
         proc = subprocess.run([NODE, "-e", script], env={**os.environ, "TABLE_JSON": json.dumps(ko_table())}, capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -276,7 +276,7 @@ class WiringTests(unittest.TestCase):
         self.assertLess(body.index("${briefingHtml(brief)}"), body.index('class="ez-flow"'))
 
     def test_the_briefing_code_makes_no_request(self):
-        code = "\n".join(function_source(n) for n in ("parseUtcMs", "briefWeight", "briefingFrom", "briefingHtml"))
+        code = "\n".join(function_source(n) for n in ("parseUtcMs", "briefWeight", "briefSysText", "briefingFrom", "briefingHtml"))
         for forbidden in ("api(", "apiFetch", "fetch(", "XMLHttpRequest", "localStorage", "method:"):
             self.assertNotIn(forbidden, code, forbidden)
 

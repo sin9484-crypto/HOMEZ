@@ -109,3 +109,26 @@ def get_health_summary(
     from app.domains.diagnostics.health_service import HealthService
 
     return HealthService(db).summary()
+
+
+def get_health_advice_credential_store():
+    """AI 키 저장소 — 항상 실제 Windows 자격증명 저장소. 테스트는 이 의존성을 덮어쓴다."""
+
+    from app.core.windows_credential_store import WindowsCredentialStore
+
+    return WindowsCredentialStore()
+
+
+@router.post("/health-advice")
+def explain_health_summary(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_health_advice_credential_store),
+):
+    """2026-10-18 서버 관리 AI T2 — 운영 상태 이상을 AI가 쉬운 말로 설명(사용자가 눌렀을 때만, 월 한도·승인 센터 허용 필요).
+    요청에는 아무 글도 받지 않는다 — 점검 결과는 서버가 직접 모으고, 허용 목록(점검 코드·수치)만 AI로 보낸다."""
+
+    from app.domains.diagnostics.health_ai_service import HealthAiService
+    from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+
+    return HealthAiService(db, AiDraftService(db, credential_store)).explain(current_user.company_id, current_user.id)

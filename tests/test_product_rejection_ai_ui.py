@@ -66,7 +66,8 @@ class DialogTests(unittest.TestCase):
         return JS.split("async function productReasonDialog(")[1].split("// 공급처(온채널) 반품 요청 내용:")[0]
 
     def _ask(self):
-        return JS.split("async function productAdviceAsk(")[1].split("// 0~1 점수를 막대와 숫자로")[0]
+        # 이 함수 바로 뒤에 오는 첫 주석 블록(서버 관리 AI T2 "운영 상태 이상 AI 설명")이 시작하기 전까지만 본다
+        return JS.split("async function productAdviceAsk(")[1].split("// 운영 상태 이상 AI 설명")[0]
 
     def _html(self):
         return JS.split("function productAdviceHtml(")[1].split("async function productAdviceAsk(")[0]

@@ -344,6 +344,12 @@
     return { mine: mine.length, urgent, upcoming, stalled, system };
   }
 
+  function briefSysText(c) {
+    const p = (c && c.params) || {};
+    const val = (v) => (v === undefined || v === null ? "…" : v);  // 값이 없으면 "undefined" 대신 "…"
+    return T(BRIEF_SYS_KEYS[c.code], { jobs: Array.isArray(p.jobs) ? p.jobs.length : "…", days: val(p.days), mb: val(p.free_mb) });
+  }
+
   function briefingHtml(b) {
     const li = (cls, text) => `<li class="${cls}">${esc(text)}</li>`;
     const urgent = b.urgent.length
@@ -353,15 +359,14 @@
       ? b.upcoming.map((u) => li(u.kind === "expired" ? "ez-c-red" : "ez-c-orange", T(u.kind === "expired" ? "easy.brief.exp_done" : "easy.brief.exp_soon", { what: u.what, h: u.hours }))).join("")
       : li("ez-muted", T("easy.brief.upcoming_none"));
     const lines = b.stalled.map((s) => li("ez-c-red", T(BRIEF_STALL_KEYS[s.kind], { m: s.minutes, h: s.hours })))
-      .concat((b.system || []).map((c) => li(c.level === "FAIL" ? "ez-c-red" : "ez-c-orange", T(BRIEF_SYS_KEYS[c.code], {
-        jobs: Array.isArray(c.params.jobs) ? c.params.jobs.length : "", days: c.params.days, mb: c.params.free_mb }))));
+      .concat((b.system || []).map((c) => li(c.level === "FAIL" ? "ez-c-red" : "ez-c-orange", briefSysText(c))));
     const stalled = lines.length ? lines.join("") : li("ez-muted", T("easy.brief.stalled_none"));
     return `<section class="ez-brief" aria-label="${esc(T("easy.brief.title"))}">
       <div class="ez-sec">${esc(T("easy.brief.title"))}<small>${esc(T(b.mine ? "easy.brief.headline" : "easy.brief.headline_none", { n: b.mine }))}</small></div>
       <div class="ez-cards" style="grid-template-columns:repeat(3,1fr)">
         <div class="ez-card"><div class="k">${esc(T("easy.brief.urgent"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${urgent}</ul></div>
         <div class="ez-card"><div class="k">${esc(T("easy.brief.upcoming"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${upcoming}</ul></div>
-        <div class="ez-card"><div class="k">${esc(T("easy.brief.stalled"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${stalled}</ul></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.brief.stalled"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${stalled}</ul>${(b.system || []).length ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-sysadv>${esc(T("easy.sysadv.btn"))}</button></div>` : ""}</div>
       </div></section>`;
   }
 
@@ -560,6 +565,8 @@
       </div>
       ${watch}`;
 
+    const sysAdv = root.querySelector("[data-ez-sysadv]");
+    if (sysAdv) sysAdv.addEventListener("click", () => systemAdviceAsk(brief.system));
     root.querySelectorAll("[data-ez-filter]").forEach((btn) => btn.addEventListener("click", () => { S.selected.todoFilter = btn.dataset.ezFilter; loadToday(); }));
 
     const main = $("ez-today-main");
@@ -1416,6 +1423,35 @@
       if (res.explanation) loadToday();
     } catch (err) {
       B.toast((err && err.message) || T("easy.advice.ai_failed"), "error");
+    }
+  }
+
+  // 운영 상태 이상 AI 설명(참고용): 버튼을 눌렀을 때만 서버에 요청한다(월 한도·승인 센터 허용 필요). 서버가 점검 결과를 직접 모으고 요청에는 글을 싣지 않는다. 글은 전부 이스케이프한다.
+  function systemAdviceHtml(advice, system) {
+    const by = new Map((system || []).map((c) => [c.code, c]));
+    const list = (items) => (Array.isArray(items) && items.length ? `<ul style="margin:4px 0 0 18px;padding:0">${items.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "");
+    const items = (advice.items || []).filter((it) => it && BRIEF_SYS_KEYS[it.code]).map((it) =>
+      `<div style="margin-top:10px"><b>${esc(briefSysText(by.get(it.code) || { code: it.code, params: {} }))}</b>`
+      + `<div style="margin-top:2px">${esc(it.cause || "")}</div>`
+      + `<div class="ez-muted" style="font-size:12px;margin-top:4px">${esc(T("easy.sysadv.steps"))}</div>${list(it.steps)}</div>`).join("");
+    return `<div class="ez-note info" style="margin-top:10px"><span class="ez-dot info">AI</span><div>`
+      + `${advice.summary ? `<div>${esc(advice.summary)}</div>` : ""}${items}`
+      + `<div class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.sysadv.note"))}</div></div></div>`;
+  }
+
+  async function systemAdviceAsk(system) {
+    const ok = await ezDialog({ title: T("easy.sysadv.ask_title"), bodyHtml: `<p>${esc(T("easy.sysadv.ask_body"))}</p>`, okLabel: T("easy.sysadv.btn") });
+    if (!ok) return;
+    try {
+      const res = await api("/diagnostics/health-advice", { method: "POST" });
+      const body = res.advice ? systemAdviceHtml(res.advice, system)
+        : `<div class="ez-note warn" style="margin-top:10px"><span class="ez-dot warn">!</span><div>${esc(T("easy.sysadv.none"))}${Object.values(res.rejected || {}).map((w) => `<div>${esc(w)}</div>`).join("")}</div></div>`;
+      const at = res.cached && res.at ? parseUtcMs(res.at) : null;
+      const cached = at === null ? "" : `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.sysadv.cached", { at: new Date(at).toLocaleString() }))}</p>`;
+      const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.sysadv.usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>` : "";
+      await ezDialog({ title: T("easy.sysadv.title"), bodyHtml: body + cached + usage, okLabel: T("easy.sysadv.close") });
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.sysadv.failed"), "error");
     }
   }
 
