@@ -940,7 +940,9 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         model_prompt_policy_version="deterministic-v1",
         provider_status=(
             "NO_AI — 순수 COUNT + 하위 분석 결과 재사용·정렬"
-            "(RULE_ENGINE). 단순 Dashboard 조회(orchestration."
+            "(RULE_ENGINE). 2026-10-18부터 쉬운 보기 '반려 사유 보기'에는 별도 경로로 사용자가 버튼을 눌렀을 때만 AI(Claude)가 "
+            "쿠팡 승인반려 사유를 쉬운 말로 풀어 주는 기능이 있으나(order/product_rejection_ai_service.py, 월 한도·승인 센터 허용·"
+            "응답 검증·같은 사유 1회 저장), 우선순위·집계 판단에는 AI가 관여하지 않는다. 단순 Dashboard 조회(orchestration."
             "dashboard_service.get_summary)는 여전히 사람이 언제든 볼 "
             "수 있는 화면으로, 이 capability와 연결되어 있지 않다"
             "(AG-0에서 되돌린 상태 유지 — 완전히 별개의 화면·경로)."

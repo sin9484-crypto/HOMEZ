@@ -904,3 +904,37 @@ def sync_channel_status(
 __all__ = [
     "router",
 ]
+
+
+# 2026-10-18 — 상품 관리 AI P1b: 승인반려 사유 AI 설명(사용자가 "AI 설명 받기"를 눌렀을 때만, 월 한도·승인 센터 허용 필요).
+# 쉬운 보기 API는 읽기 전용이라 이 쓰기·바깥 호출 경로는 여기에 둔다. 요청에는 상품 번호만 받고 반려 사유는 서버가 찾는다.
+from pydantic import BaseModel  # noqa: E402
+from pydantic import ConfigDict  # noqa: E402
+from pydantic import Field  # noqa: E402
+
+
+class ProductRejectionAdviceRequest(BaseModel):
+    seller_product_id: str = Field(min_length=1, max_length=20)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def get_advice_credential_store():
+    """AI 키 저장소 — 항상 실제 Windows 자격증명 저장소. 테스트는 이 의존성을 덮어쓴다."""
+
+    return WindowsCredentialStore()
+
+
+@router.post("/product-rejection-advice")
+def explain_product_rejection(
+    data: ProductRejectionAdviceRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_advice_credential_store),
+):
+    from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+    from app.domains.order.product_rejection_ai_service import ProductRejectionAiService
+
+    return ProductRejectionAiService(db, AiDraftService(db, credential_store)).explain(
+        current_user.company_id, current_user.id, data.seller_product_id,
+    )

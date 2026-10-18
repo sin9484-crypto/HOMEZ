@@ -30,11 +30,11 @@ def block(lang):
     return re.search(r'"%s": \{(.*?)\n  \}' % lang, TEXTS, re.S).group(1)
 
 
-def product_status(latest, submitted=None):
+def product_status(latest, submitted=None, cached=None):
     service = object.__new__(EasyViewService)
     service.db = None
     submitted = submitted or [{"seller_product_id": "111", "product_name": "상품", "wizard_id": 1}]
-    with mock.patch("app.domains.easy_view.service.ProductStatusMonitorService.latest_by_product", return_value=latest):
+    with mock.patch("app.domains.easy_view.service.ProductStatusMonitorService.latest_by_product", return_value=latest),             mock.patch("app.domains.easy_view.service.ProductRejectionAiService.latest_cached", return_value=cached or {}):
         return service._product_status(submitted)
 
 

@@ -893,11 +893,14 @@
       return `<div class="ez-note info" style="margin-top:10px"><span class="ez-dot info">i</span><div>${head}<b>${esc(tryT(`easy.advice.${a.code}.t`, ""))}</b>`
         + `<ol style="margin:6px 0 0 18px;padding:0">${steps.map((t) => `<li>${esc(t)}</li>`).join("")}</ol></div></div>`;
     }).join("");
-    await ezDialog({
-      title: T("easy.pstatus.dialog_title"), okLabel: T("dialog.confirm.cancel"),
-      bodyHtml: `<div>${kv(T("easy.pstatus.f_product"), p.product_name)}${kv(T("easy.today.coupang_no", { id: p.seller_product_id }), "")}${kv(T("easy.pstatus.f_checked"), p.checked_at || "—")}</div>${reason}${advice}
+    const aiBlock = p.ai_advice ? productAdviceHtml(p.ai_advice) : "";
+    const canAsk = !!p.reason && !p.ai_advice;
+    const asked = await ezDialog({
+      title: T("easy.pstatus.dialog_title"), okLabel: canAsk ? T("easy.advice.ask_btn") : T("easy.advice.close"), cancelLabel: canAsk ? T("easy.advice.close") : T("dialog.confirm.cancel"),
+      bodyHtml: `<div>${kv(T("easy.pstatus.f_product"), p.product_name)}${kv(T("easy.today.coupang_no", { id: p.seller_product_id }), "")}${kv(T("easy.pstatus.f_checked"), p.checked_at || "—")}</div>${reason}${advice}${aiBlock}
         <p class="ez-muted" style="font-size:13px;margin-top:10px">${esc(T("easy.pstatus.howto"))}</p>`,
     });
+    if (canAsk && asked) await productAdviceAsk(p);
   }
 
   // 공급처(온채널) 반품 요청 내용: 온채널 화면에서 이 주문의 "반품/교환 요청"을 접수한 뒤 "요청했어요"로 기록한다. 온채널로 보내는 것은 없다.
@@ -1313,6 +1316,30 @@
   function tryT(key, fallback) {
     const text = T(key);
     return text === key ? fallback : text;
+  }
+
+  // 반려 사유 AI 설명(참고용): 이미 받은 설명을 그리거나, 버튼을 눌렀을 때만 서버에 요청한다(월 한도·승인 센터 허용 필요). 글은 전부 이스케이프한다.
+  function productAdviceHtml(ai) {
+    const list = (items) => (Array.isArray(items) && items.length ? `<ul style="margin:4px 0 0 18px;padding:0">${items.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "");
+    return `<div class="ez-note info" style="margin-top:10px"><span class="ez-dot info">AI</span><div><b>${esc(T("easy.advice.ai_title"))}</b>`
+      + `<div style="margin-top:4px">${esc(ai.summary || "")}</div>${list(ai.causes)}`
+      + `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.advice.ai_steps"))}</div>${list(ai.steps)}`
+      + `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.advice.ai_note"))}</div></div></div>`;
+  }
+
+  async function productAdviceAsk(p) {
+    const ok = await ezDialog({ title: T("easy.advice.ask_title"), bodyHtml: `<p>${esc(T("easy.advice.ask_body"))}</p>`, okLabel: T("easy.advice.ask_btn") });
+    if (!ok) return;
+    try {
+      const res = await api("/orders/product-rejection-advice", { method: "POST", body: JSON.stringify({ seller_product_id: p.seller_product_id }) });
+      const body = res.explanation ? productAdviceHtml(res.explanation)
+        : `<div class="ez-note warn" style="margin-top:10px"><span class="ez-dot warn">!</span><div>${esc(T("easy.advice.ai_none"))}${Object.values(res.rejected || {}).map((w) => `<div>${esc(w)}</div>`).join("")}</div></div>`;
+      const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.advice.ai_usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>` : "";
+      await ezDialog({ title: T("easy.advice.ai_title"), bodyHtml: body + usage, okLabel: T("easy.advice.close") });
+      if (res.explanation) loadToday();
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.advice.ai_failed"), "error");
+    }
   }
 
   // 0~1 점수를 막대와 숫자로(높을수록 초록, 낮을수록 주황·빨강). 점수가 없으면 "점수 없음".

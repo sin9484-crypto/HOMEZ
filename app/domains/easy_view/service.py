@@ -30,6 +30,7 @@ from app.domains.order.model import Order
 from app.domains.order.model import OrderItem
 from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
 from app.domains.order.product_rejection_advice import classify_rejection
+from app.domains.order.product_rejection_ai_service import ProductRejectionAiService
 from app.domains.order.product_status_monitor_service import ProductStatusMonitorService
 from app.domains.order.supplier_return_service import SupplierReturnService
 from app.domains.purchase_task.constants import ChannelActionStatus
@@ -224,6 +225,7 @@ class EasyViewService:
             latest = ProductStatusMonitorService.latest_by_product(self.db)
         except Exception:  # noqa: BLE001 — audit_logs가 없는 환경 등에서는 비어 있는 것으로 본다
             latest = {}
+        cached = ProductRejectionAiService.latest_cached(self.db)  # 같은 사유로 이미 받은 AI 설명(읽기 전용)
         items = []
         for product in submitted:
             info = latest.get(product["seller_product_id"]) or {}
@@ -237,6 +239,8 @@ class EasyViewService:
                 "reason_state": info.get("reason_state") if reason_current else None,
                 # 사유 문구를 규칙으로 분류한 고치는 방법 안내 종류(AI 없음). 사유가 현재 것이 아니면 붙이지 않는다.
                 "advice": classify_rejection(info.get("reason")) if reason_current else [],
+                # 이 사유로 이미 받아 둔 AI 설명(있을 때만). 사유가 바뀌면(읽은 시각이 다르면) 보이지 않는다.
+                "ai_advice": (cached.get(product["seller_product_id"]) or {}).get("ai") if reason_current and (cached.get(product["seller_product_id"]) or {}).get("for") == info.get("reason_for") else None,
             })
         return items
 
