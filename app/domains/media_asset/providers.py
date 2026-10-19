@@ -43,6 +43,9 @@ class ImageGenerationRequest:
     prompt_fingerprint: str
     style_params: dict
     items: tuple[ImageGenerationRequestItem, ...]
+    # 2026-10-19 참고 사진 생성 R1 — 선택 항목(기본값 None). 기존 호출은 그대로 동작한다.
+    reference_image_bytes: bytes | None = None
+    reference_mime_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,9 +134,14 @@ class FakeImageGenerationProvider(ImageGenerationProvider):
         self, request: ImageGenerationRequest,
     ) -> ImageGenerationProviderResult:
 
+        reference_tag = ""
+        if request.reference_image_bytes:
+            # 참고 사진이 다르면 결과도 달라야 한다(없으면 기존 시드 그대로 — 기존 시험·멱등성 보존).
+            reference_tag = ":ref=" + hashlib.sha256(request.reference_image_bytes).hexdigest()
+
         results = []
         for item in request.items:
-            seed = f"{request.prompt_fingerprint}:{item.sequence_index}:{item.purpose}"
+            seed = f"{request.prompt_fingerprint}:{item.sequence_index}:{item.purpose}{reference_tag}"
             image_bytes = _deterministic_png(seed)
 
             results.append(ImageGenerationResultItem(
