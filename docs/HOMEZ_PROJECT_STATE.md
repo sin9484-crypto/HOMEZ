@@ -13150,3 +13150,25 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - **워터마크 금지(사용자 지시, 같은 날 "이미지 생성에 워터 마크 생성하지 마라")**: 모든 용도(대표·추가·상세)의 제공자 요청에 `no_watermark=True`와 금지 목록(`forbidden_in_image`: watermark·logo·text overlay·caption·signature·stamp·label)을 싣고, 검수 항목에 `NO_WATERMARK`를 요구한다(참고 사진에 있던 워터마크가 따라 나오는 경우 포함). 장면·포즈 설명 문구가 글자·표식을 요구하지 않는지 시험한다. **"AI 생성 이미지" 표기는 이미지 안에 굽지 않고** 이미지 밖(상품 설명·기록)에만 둔다(`label_placement=OUTSIDE_IMAGE`). 이 저장소에는 이미지에 워터마크를 넣는 코드가 없다(`ENABLE_WATERMARK` 설정은 어디서도 쓰지 않음, 기본 꺼짐). 이번 단계 총계: 시험 39건·변이 28건 전부 감지. 한계: 생성된 결과물에 워터마크가 실제로 없는지 **자동으로 검사하는 수단은 없다**(사람 검수 항목).
 - **한계**: (0) **쿠팡 대표 이미지 규격·AI 생성 이미지 정책 미확인 — 대표로 쓴 AI 사진이 반려될 수 있다.** (1) 화면·API·작업 큐 연결이 없다 — 이 모듈은 아직 아무 데서도 호출되지 않는다(R3). (2) 실제 이미지 생성 제공자는 연결하지 않았다(가드 허용·비용 승인·정책 조사 I0 필요). (3) 검수 4항목은 "요구 선언"이며 자동 검사 수단이 없다. (4) 쿠팡의 AI 생성 이미지 표기·제한 정책은 미확인. (5) 영상의 일괄 밝기·색온도 보정(R2)과 상세 페이지 자동 배치·"AI 강조"(R3)는 하지 않았다.
 - **다음**: R2(일괄 후처리), R3(위저드 "참고 사진으로 만들기" 화면 + 라우트 + 작업 큐), I0(AI 생성 이미지 정책·권리 조사) — 각각 Whitelist 승인 필요.
+
+## 2026-10-19 — I0 조사(쿠팡 대표 이미지 규격·AI 생성 이미지 정책) + R1 커밋 f80c89a
+
+사용자 승인("1번 2번 승인 그리고 이미지생성에 워터 마크 생성하지마라")에 따라 R1을 커밋했고(`f80c89a`, 워터마크 금지 포함), 다음 단계로 I0 조사를 했다(공개 웹 검색 3회, 읽기 전용, WING 로그인·쿠팡 API 없음).
+- **결론: 쿠팡 공식 문서를 찾지 못했다.** 대표 이미지 공식 규격과 AI 생성 이미지 허용·표기 정책은 🔴 미확인이다. 판매자 블로그(🟡)는 흰 배경·점유율 85%·이미지 위 글자 금지·실물과 동일·사은품 노출 금지를 말하지만 쿠팡 규정으로 취급하지 않는다. 카테고리별 모델 착용 대표 허용, "이미지 자동 수정 동의"의 실제 동작, 국내 법령상 AI 생성물 표시 의무도 확인하지 못했다. 기록: `docs/research/20261019_I0_IMAGE_POLICY_RESEARCH.md`(신규, 미커밋).
+- 영향: R1이 대표 요청에 붙인 반려 위험 경고·사용자 최종 확인 표시는 이 미확인 상태에 맞는 장치다. R3 화면에서는 대표 요청의 기본 선택을 흰 배경(단색 스튜디오)으로 두는 것을 권고한다(사용자가 바꿀 수 있음).
+- 사용자 몫(제가 하지 않음): WING 이미지 가이드 직접 읽기, 쿠팡 판매자 지원에 AI 생성·AI 편집 대표 이미지 허용·표기 여부 서면 문의.
+- **다음**: R3(화면·라우트·작업 큐 연결) — Whitelist 승인 필요. 실제 생성 제공자 연결은 정책 확인·가드 허용·비용 승인 뒤.
+
+## 2026-10-23 — AI 자율 제작 라운드(사용자 지시 "최종까지 별도 승인·질문 없이"): 반영 A·S3·R3·R2·I2·I3·P2·P3·T3·T4·M4-full·등록부 v2.4.0, **로컬 커밋만·push 없음·실제 외부 호출 0·실제 DB Migration 적용 0·앱 재시작 없음**
+
+상세(제작 기준·시험·한계)는 `docs/HOMEZ_AI_AUTONOMOUS_BUILD_REPORT_20261022.md`. 22일 예약이 세션 종료로 발동하지 못해 23일에 직접 시작했다.
+- **반영 A(T1·T2 확장, `9d01b1d`)**: 주문 자동 감지 정지·읽기 허용 만료를 앱이 스스로 알린다(허용 상태는 읽기만, 한 번도 허용한 적 없으면 INFO, 모르면 정상 아님). 앱 재시작 후에야 화면에 보인다.
+- **S3(`3247dbe`)**: 공급처 비의존 공급 조건 평가(`supplier/offer_rules.py`·`offer_provider.py`, `POST /product-import/supplier-offers/rank`). 실제 공급처 제공자 없음, S4 보류.
+- **이미지 R3a·R3b·R2·I2·I3**: 참고 사진 생성(FAKE 제공자만, `reference_generation_service.py`·화면), 일괄 밝기·색온도 보정(`batch_adjust*.py`), 컨셉별 독립 작업(`concept_run_service.py`, `POST /media-assets/concept-runs`), 장면 배경 5종(L1)·컨셉 검사(`concept_inspection.py`)·카테고리 추천(`concept_recommendation.py`), 컨셉 화면. 파생 자산 승계 규칙 `derived_assets.adopt_derived`(권리 격상 방지). **실제 이미지 생성 API 호출 0, 쿠팡 이미지·AI 생성 정책 미확인(I0 🔴), 정책 적합 검사는 NOT_CHECKED.**
+- **P2·P3**: 주문 마진 점검(`purchase_task/margin_watch*.py`, `GET /purchase-tasks/margin-watch`), 고객 응대 답변 초안(`order/cs_reply_draft*.py`, 마스킹·약속 표현 폐기·저장 없음)·반품 손익 계산(`order/return_economics.py`). **API만 있고 화면 없음, 실제 Claude 호출 0**. P5(쓰기)·S4 보류.
+- **T0·T3·T4**: 범위 확정안 문서, 수동 스냅샷 정책 변경 비교(`channel_policy/policy_change_watch.py`, 서버는 페이지를 가져오지 않음), 약관 점검표·낱말 점검·본문 없는 뼈대(`channel_policy/terms_checklist.py`, 법률 자문 아님 표시). 공지 자동 수집의 약관상 허용 여부 🔴 미확인.
+- **M4-full**: 채택한 제안과 옵션 성과를 제안일 전·후로 나란히 보이는 순수 함수(`ai_learning/suggestion_outcomes.py`, 판정 안 함·표본 부족 시 판단 불가). 제안 기록 테이블 **Migration 초안만** `docs/migration_drafts/…sql.draft`(적용 안 함, `migrations/` 밖).
+- **등록부 v2.4.0**: 새 역량 없이 IMAGE_PROCESSING·SUPPLIER_RECOMMENDATION·PRICING_INVENTORY·ORDER_SHIPMENT_RETURN에 위 기능을 **기록만**(실제 AI·이미지 API 미호출 명시).
+- **미커밋 기존 WIP는 건드리지 않았다**(`.claude/skills/homez-action-briefing/`, `docs/HOMEZ_UI_REDESIGN_RESEARCH_20261014.md`, `docs/research/2026100x~1018*`).
+- **남은 것·사용자 몫**: ① 앱 재시작 후 쉬운 보기 새 점검 확인 ② 쿠팡 이미지·AI 이미지 정책 직접 확인(WING·판매자 지원) ③ 쿠팡 의류 수수료율 확인 ④ P2·P3·S3 화면 연결 승인 ⑤ 제안 기록 Migration(초안) 적용 여부 결정 ⑥ 실제 공급처 제공자·실제 AI 호출 승인 ⑦ 로컬 커밋 push 여부.
+- **알려진 기존 결함**: `tests.test_marketing_name_service.ServiceTests.test_two_clicks_at_once_make_only_one_call`가 모듈 전체 실행 때 간헐 실패(단독 실행은 통과, 깨끗한 HEAD에서도 재현) — 이번 라운드에서 고치지 않았다.
