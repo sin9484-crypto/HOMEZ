@@ -834,7 +834,9 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "첫 실제 읽기에서 모양이 다르면 '읽지 못함'으로 보인다). "
             "2026-10-23 등록(상품 관리 AI P3): 고객 응대 답변 초안은 사용자가 누를 때만 AI가 문안만 쓰고(월 한도·승인 센터 허용 AI_DRAFT·사용 기록, 연락처·주소·이름은 보내기 전에 가린다, "
             "약속·책임 인정·외부 연락 유도·효능 표현이 들어간 초안은 버린다) 아무것도 저장·전송하지 않는다 — 실제 AI 호출은 아직 하지 않았다. "
-            "반품 손익 계산은 AI 없는 Decimal 계산(회수·환불 단계별 확인 항목 포함)이다."
+            "반품 손익 계산은 AI 없는 Decimal 계산(회수·환불 단계별 확인 항목 포함)이다. "
+            "같은 날 후속(M4-full 저장소): 채택한 제안을 기록·옵션 연결하고, 사용자가 누를 때만 기존 판매 성과 읽기로 제안일 전·후를 나란히 보인다 — "
+            "제안이 맞았는지는 판정하지 않는다. 읽기가 잘리거나 실패하면 비교하지 않는다. 화면은 'AI 점검 도구'."
         ),
         actual_entry_points=(
             "app/domains/order/cs_reply_draft_service.py::CsReplyDraftService.draft() (POST /orders/cs-reply-draft — 사용자가 누를 때만, 문안 초안만)",
@@ -845,6 +847,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/order/product_rejection_advice.py::classify_rejection() (승인반려 사유 규칙 분류 — 상품 관리 AI P1a)",
             "app/domains/order/sales_performance_service.py::SalesPerformanceService.read() (POST /orders/sales-performance — 쿠팡 매출내역 읽기, 마케팅 AI M4)",
             "app/domains/ai_learning/marketing_outcomes.py::summarize() (옵션별 판매·반품 집계와 표본 크기 판정)",
+            "app/domains/ai_learning/suggestion_record_service.py::SuggestionRecordService.create()/evaluate() (POST /ai-learning/suggestions, /suggestions/evaluate — 채택한 제안 기록·전후 비교, 판정 없음)",
             "GET /orders/exception-analysis, POST /orders/"
             "exception-analysis/review-actions (app/domains/order/"
             "router.py)",
@@ -853,7 +856,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "\"취소 요청\" 탐지 미구현(Order.status에 별도 CANCEL_"
             "REQUESTED 상태가 없어 CANCELLED와 구분할 신호 없음)",
             "AI 업무 제안 UI 미연결",
-            "제안(상품명·가격)을 기록하고 쿠팡 옵션 ID와 연결해 제안과 성과를 연결하는 일은 아직 없다(마케팅 AI M4-full)",
+            "제안과 성과를 연결하는 기록 표(marketing_suggestion_records)는 Migration 20261023_00을 앱에서 승인해야 생긴다 — 승인 전에는 기록·비교가 '준비되지 않음'으로 멈춘다(2026-10-23)",
             "쿠팡 매출내역의 환불 금액 부호·환불 건 수수료 처리는 문서에 없어 실제 응답 확인 후 다듬어야 한다",
         ),
         implementation_reference=(

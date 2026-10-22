@@ -13173,3 +13173,10 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - **남은 것·사용자 몫**: ① 앱 재시작 후 쉬운 보기 새 점검 확인 ② 쿠팡 이미지·AI 이미지 정책 직접 확인(WING·판매자 지원) ③ 쿠팡 의류 수수료율 확인 ④ P2·P3·S3 화면 연결 승인 ⑤ 제안 기록 Migration(초안) 적용 여부 결정 ⑥ 실제 공급처 제공자·실제 AI 호출 승인 ⑦ 로컬 커밋 push 여부.
 - **알려진 기존 결함**: `tests.test_marketing_name_service.ServiceTests.test_two_clicks_at_once_make_only_one_call`가 모듈 전체 실행 때 간헐 실패(단독 실행은 통과, 깨끗한 HEAD에서도 재현) — 이번 라운드에서 고치지 않았다.
 - **전체 회귀(2026-10-23)**: 452개 모듈 7,236건 실행, 실패 1건 — `test_migration_directory_contains_only_expected_files`(10-16 Migration 파일이 기대 목록에 없음, 이번 라운드 이전부터 있던 결함, 고치지 않음). 그 외 전부 통과.
+
+## 2026-10-23 (후속) — Migration 목록 시험 수정·push, "AI 점검 도구" 화면, 제안 기록 표(Migration 20261023_00, **실제 DB 미적용**)
+
+- Migration 목록 계약 시험에 10-16 Migration을 추가하고(`9fa76a7`) push했다.
+- 오늘 할 일 › **AI 점검 도구**(`f4289cf`)에 카드 7개를 모았다: 마진 점검·답변 초안·반품 손익·공급 조건 비교·정책 변경 비교·약관 점검·제안 기록과 전후 비교. 저장·전송·가격 변경은 없다. 답변 초안만 누를 때 AI를 부르고, 전후 비교만 누를 때 쿠팡 매출을 읽는다(허용 필요·읽기 전용).
+- **제안 기록 표 `marketing_suggestion_records`(Migration `20261023_00`)는 저장소에만 추가했다. 앱을 다시 시작하면 승인 대기 Migration으로 보이며, 사용자가 승인 화면에서 승인해야 백업 후 적용된다.** 승인 전에는 제안 기록 카드가 "준비되지 않음"을 알린다. 새 경로는 SuperAdmin 전용이다(기존 계약).
+- 상세: `docs/HOMEZ_AI_AUTONOMOUS_BUILD_REPORT_20261022.md` 7장.

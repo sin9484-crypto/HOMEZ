@@ -47,18 +47,24 @@ class SalesPerformanceService:
         return row[0] if row else None
 
     def read(self, company_id: int, days: int = 30) -> dict:
+        status, rows = self.read_rows(company_id, days)
+        return {**status, "summary": summarize(rows) if status["ok"] else None}
+
+    def read_rows(self, company_id: int, days: int = 30) -> tuple[dict, list]:
+        """읽기 상태와 읽은 줄(실패면 빈 목록). 2026-10-23 M4-full의 전·후 비교가 같은 읽기를 쓰도록 `read`에서 떼어 냈다 — 동작은 같다."""
+
         if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_REVENUE_RANGE_DAYS:
             raise BadRequestException(f"조회 기간은 1~{MAX_REVENUE_RANGE_DAYS}일이어야 합니다.")
-        base = {"ok": False, "blocked": False, "no_connection": False, "detail": "", "days": days, "calls": 0, "truncated": False, "summary": None,
+        base = {"ok": False, "blocked": False, "no_connection": False, "detail": "", "days": days, "calls": 0, "truncated": False,
                 "checked_at": self._now().isoformat(timespec="seconds")}
         store_id = self._connection_id(company_id)
         if store_id is None:
-            return {**base, "no_connection": True, "detail": "연결된 쿠팡 상점이 없어요"}
+            return {**base, "no_connection": True, "detail": "연결된 쿠팡 상점이 없어요"}, []
         result, failure = self._actions_factory(self.db).read_after_sales(company_id=company_id, store_connection_id=store_id, what="revenue", days=days)
         if result is None:
             detail = failure.detail if failure is not None else ""
             blocked = str(detail).startswith("EXTERNAL_") or "허용" in str(detail)
-            return {**base, "blocked": blocked, "detail": str(detail)[:300]}
+            return {**base, "blocked": blocked, "detail": str(detail)[:300]}, []
         if not result.ok:
-            return {**base, "calls": result.calls, "detail": str(result.detail)[:300]}
-        return {**base, "ok": True, "calls": result.calls, "truncated": bool(result.truncated), "summary": summarize(list(result.rows))}
+            return {**base, "calls": result.calls, "detail": str(result.detail)[:300]}, []
+        return {**base, "ok": True, "calls": result.calls, "truncated": bool(result.truncated)}, list(result.rows)

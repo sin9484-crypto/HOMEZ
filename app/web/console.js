@@ -7292,6 +7292,68 @@
     return `<div class="detail-panel" id="at-tm-result"><p class="field-error">${escapeHtml(t("tm_disclaimer"))}</p>${body}</div>`;
   }
 
+  // 제안 기록·성과 비교(M4-full) — 채택해 쿠팡에 반영한 제안을 기록하고, 누를 때만 쿠팡 매출내역을 읽어 제안일 전·후를 나란히 본다(판정하지 않는다).
+  const AT_SG_KINDS = ["PRODUCT_NAME", "SEARCH_KEYWORD", "PRICE"];
+  const AT_SG_STATUSES = ["OBSERVED", "INSUFFICIENT", "NOT_EVALUATED"];
+  const AT_SG_REASONS = ["UNKNOWN_KIND", "NOT_ADOPTED", "NOT_LINKED", "SUGGESTED_AT_UNREADABLE", "NO_REVENUE_ROWS", "NO_BEFORE_OR_AFTER_PERIOD", "SAMPLE_TOO_SMALL"];
+  const AT_SG_READ_REASONS = ["NO_RECORDS", "READ_FAILED", "READ_TRUNCATED"];
+
+  function atSuggestionBody(form) {
+    // 화면 입력 → 서버 입력. 고쳐 쓰지 않고 문제가 있으면 문구 키를 돌려준다(서버도 같은 규칙으로 다시 막는다).
+    if (!AT_SG_KINDS.includes(form.kind)) return { body: null, error: "sg_err_kind" };
+    const value = String(form.value || "").trim();
+    if (!value) return { body: null, error: "sg_err_value" };
+    if (value.length > 300) return { body: null, error: "sg_err_value_long" };
+    const vendor = String(form.vendor || "").trim();
+    if (vendor && !/^\d{1,40}$/.test(vendor)) return { body: null, error: "sg_err_vendor" };
+    const day = String(form.day || "").trim();
+    if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return { body: null, error: "sg_err_day" };
+    const ref = String(form.ref || "").trim();
+    return {
+      body: { kind: form.kind, suggested_value: value, suggested_on: day || null, product_ref: ref ? ref.slice(0, 80) : null, vendor_item_id: vendor || null, adopted: form.adopted === true },
+      error: null,
+    };
+  }
+
+  function atSuggestionListHtml(rows) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!rows || !rows.length) return `<p class="empty-text">${escapeHtml(t("sg_empty"))}</p>`;
+    const body = rows.map((r) => `
+      <tr data-sg-id="${escapeHtml(r.id)}">
+        <td>${escapeHtml(AT_SG_KINDS.includes(r.kind) ? t(`sg_kind_${r.kind.toLowerCase()}`) : t("sg_kind_other"))}</td>
+        <td>${escapeHtml(r.suggested_value)}${r.product_ref ? ` <span class="stat-sub">${escapeHtml(r.product_ref)}</span>` : ""}</td>
+        <td>${escapeHtml(r.suggested_at || "—")}</td>
+        <td>${escapeHtml(t(r.adopted ? "sg_adopted_yes" : "sg_adopted_no"))} <button type="button" class="btn btn-ghost btn-sm" data-sg-toggle="${escapeHtml(r.id)}" data-sg-adopted="${r.adopted ? "1" : ""}">${escapeHtml(t(r.adopted ? "sg_unadopt_btn" : "sg_adopt_btn"))}</button></td>
+        <td><input class="input" data-sg-vendor-input="${escapeHtml(r.id)}" value="${escapeHtml(r.vendor_item_id || "")}" inputmode="numeric" style="width:120px" placeholder="${escapeHtml(t("sg_vendor_placeholder"))}">
+            <button type="button" class="btn btn-ghost btn-sm" data-sg-link="${escapeHtml(r.id)}">${escapeHtml(t("sg_link_btn"))}</button></td>
+      </tr>`).join("");
+    return `<div class="table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(t("sg_col_kind"))}</th><th>${escapeHtml(t("sg_col_value"))}</th><th>${escapeHtml(t("sg_col_day"))}</th><th>${escapeHtml(t("sg_col_adopted"))}</th><th>${escapeHtml(t("sg_col_vendor"))}</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  function atSuggestionEvalHtml(result) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!result) return "";
+    if (result.reason) {
+      const key = AT_SG_READ_REASONS.includes(result.reason) ? `sg_read_${result.reason.toLowerCase()}` : "sg_read_other";
+      const detail = result.read && result.read.detail ? ` <span class="stat-sub">${escapeHtml(result.read.detail)}</span>` : "";
+      return `<div class="banner banner-warning" role="status" id="at-sg-eval-result"><p>${escapeHtml(t(key))}${detail}</p></div>`;
+    }
+    const ev = result.evaluation || {};
+    const side = (s) => (s ? escapeHtml(t("sg_side", { days: s.days, orders: s.orders, units_per_day: s.units_per_day === null || s.units_per_day === undefined ? "—" : s.units_per_day, return_rate: s.return_rate === null || s.return_rate === undefined ? "—" : s.return_rate })) : "—");
+    const rows = (ev.results || []).map((r) => {
+      const status = AT_SG_STATUSES.includes(r.status) ? t(`sg_status_${r.status.toLowerCase()}`) : t("sg_status_other");
+      const reason = r.reason ? (AT_SG_REASONS.includes(r.reason) ? t(`sg_reason_${r.reason.toLowerCase()}`) : t("sg_reason_other")) : "";
+      const overlap = (r.warnings || []).includes("OVERLAPPING_SUGGESTIONS") ? ` ${escapeHtml(t("sg_overlap"))}` : "";
+      return `<tr><td>${escapeHtml(r.suggested_value || "—")}</td><td>${escapeHtml(status)}${reason ? ` — ${escapeHtml(reason)}` : ""}${overlap}</td><td>${side(r.before)}</td><td>${side(r.after)}</td></tr>`;
+    }).join("");
+    const period = ev.period && ev.period.from ? escapeHtml(t("sg_period", { from: ev.period.from, to: ev.period.to })) : "";
+    return `<div class="detail-panel" id="at-sg-eval-result">
+      <p>${period}</p>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(t("sg_col_value"))}</th><th>${escapeHtml(t("col_decision"))}</th><th>${escapeHtml(t("sg_col_before"))}</th><th>${escapeHtml(t("sg_col_after"))}</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="stat-sub">${escapeHtml(t("sg_no_judgment"))}</p>
+    </div>`;
+  }
+
   async function loadAiTools() {
     const wrap = el("at-content");
     if (!wrap) return;
@@ -7347,7 +7409,23 @@
         <button type="button" class="btn btn-ghost btn-sm" id="at-tm-checklist-btn">${escapeHtml(t("tm_checklist_btn"))}</button>
         <button type="button" class="btn btn-primary btn-sm" id="at-tm-coverage-btn">${escapeHtml(t("tm_coverage_btn"))}</button>
         <button type="button" class="btn btn-ghost btn-sm" id="at-tm-skeleton-btn">${escapeHtml(t("tm_skeleton_btn"))}</button>
-        <p class="field-error" id="at-tm-error"></p><div id="at-tm-out"></div></div>`;
+        <p class="field-error" id="at-tm-error"></p><div id="at-tm-out"></div></div>
+
+      <div class="dash-card" id="at-sg-card"><div class="dash-card-head"><h2>${escapeHtml(t("sg_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("sg_hint"))}</p>
+        <div class="lw-bg-controls">
+          <label>${escapeHtml(t("sg_kind"))} <select class="input" id="at-sg-kind">${AT_SG_KINDS.map((k) => `<option value="${k}">${escapeHtml(t(`sg_kind_${k.toLowerCase()}`))}</option>`).join("")}</select></label>
+          <input class="input" id="at-sg-value" maxlength="300" placeholder="${escapeHtml(t("sg_value_placeholder"))}" style="min-width:220px">
+          <input class="input" id="at-sg-ref" maxlength="80" placeholder="${escapeHtml(t("sg_ref_placeholder"))}" style="width:140px">
+          <input class="input" id="at-sg-vendor" inputmode="numeric" placeholder="${escapeHtml(t("sg_vendor_placeholder"))}" style="width:140px">
+          <label>${escapeHtml(t("sg_day"))} <input class="input" type="date" id="at-sg-day"></label>
+          <label><input type="checkbox" id="at-sg-adopted"> ${escapeHtml(t("sg_adopted_label"))}</label>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="at-sg-save-btn">${escapeHtml(t("sg_save_btn"))}</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="at-sg-list-btn">${escapeHtml(t("sg_list_btn"))}</button>
+        <label>${escapeHtml(t("sg_days"))} <select class="input" id="at-sg-days"><option value="30">30</option><option value="14">14</option><option value="7">7</option></select></label>
+        <button type="button" class="btn btn-ghost btn-sm" id="at-sg-eval-btn">${escapeHtml(t("sg_eval_btn"))}</button>
+        <p class="field-error" id="at-sg-error"></p><div id="at-sg-list"></div><div id="at-sg-eval"></div></div>`;
 
     const showError = (id, text) => { el(id).textContent = text || ""; };
 
@@ -7465,6 +7543,53 @@
     el("at-tm-coverage-btn").addEventListener("click", runTerms("coverage", () => apiFetch("/channel-policy/terms/coverage", {
       method: "POST", body: JSON.stringify({ text: el("at-tm-text").value, models: atTermsModels(el("at-tm-model").value) }),
     })));
+
+    const sgError = (text) => { el("at-sg-error").textContent = text || ""; };
+    async function sgLoadList() {
+      try {
+        el("at-sg-list").innerHTML = atSuggestionListHtml(await apiFetch("/ai-learning/suggestions"));
+      } catch (err) {
+        el("at-sg-list").innerHTML = "";
+        sgError(err.message || HomezI18n.t("common.load_error"));
+        return;
+      }
+      el("at-sg-list").querySelectorAll("[data-sg-toggle]").forEach((btn) => btn.addEventListener("click", () => withButtonGuard(btn, async () => {
+        sgError("");
+        try {
+          await apiFetch(`/ai-learning/suggestions/${encodeURIComponent(btn.dataset.sgToggle)}`, { method: "PATCH", body: JSON.stringify({ adopted: !btn.dataset.sgAdopted }) });
+          await sgLoadList();
+        } catch (err) { sgError(err.message || HomezI18n.t("common.load_error")); }
+      })));
+      el("at-sg-list").querySelectorAll("[data-sg-link]").forEach((btn) => btn.addEventListener("click", () => withButtonGuard(btn, async () => {
+        sgError("");
+        const input = el("at-sg-list").querySelector(`[data-sg-vendor-input="${btn.dataset.sgLink}"]`);
+        const vendor = String(input ? input.value : "").trim();
+        if (vendor && !/^\d{1,40}$/.test(vendor)) { sgError(t("sg_err_vendor")); return; }
+        try {
+          await apiFetch(`/ai-learning/suggestions/${encodeURIComponent(btn.dataset.sgLink)}`, { method: "PATCH", body: JSON.stringify({ vendor_item_id: vendor }) });
+          await sgLoadList();
+        } catch (err) { sgError(err.message || HomezI18n.t("common.load_error")); }
+      })));
+    }
+    el("at-sg-list-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => { sgError(""); await sgLoadList(); }));
+    el("at-sg-save-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      sgError("");
+      const prepared = atSuggestionBody({ kind: el("at-sg-kind").value, value: el("at-sg-value").value, ref: el("at-sg-ref").value, vendor: el("at-sg-vendor").value,
+        day: el("at-sg-day").value, adopted: el("at-sg-adopted").checked });
+      if (prepared.error) { sgError(t(prepared.error)); return; }
+      try {
+        await apiFetch("/ai-learning/suggestions", { method: "POST", body: JSON.stringify(prepared.body) });
+        el("at-sg-value").value = "";
+        await sgLoadList();
+      } catch (err) { sgError(err.message || HomezI18n.t("common.load_error")); }
+    }));
+    el("at-sg-eval-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      sgError("");
+      const days = Number(el("at-sg-days").value) || 30;
+      try {
+        el("at-sg-eval").innerHTML = atSuggestionEvalHtml(await apiFetch(`/ai-learning/suggestions/evaluate?days=${days}`, { method: "POST" }));
+      } catch (err) { sgError(err.message || HomezI18n.t("common.load_error")); }
+    }));
   }
 
   const VIEW_LOADERS = {

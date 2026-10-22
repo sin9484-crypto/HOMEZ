@@ -9,10 +9,36 @@ File : app/domains/ai_learning/schema.py
 
 from __future__ import annotations
 
+from datetime import date
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import StrictBool
+
+
+class SuggestionRecordCreateRequest(BaseModel):
+    """2026-10-23 M4-full — 채택해 쿠팡에 반영한 제안 1건 기록. 반영한 날을 모르면 오늘."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["PRODUCT_NAME", "SEARCH_KEYWORD", "PRICE"]
+    suggested_value: str = Field(min_length=1, max_length=300)
+    suggested_on: date | None = None
+    product_ref: str | None = Field(default=None, max_length=80)
+    vendor_item_id: str | None = Field(default=None, max_length=40)
+    adopted: StrictBool = False
+
+
+class SuggestionRecordUpdateRequest(BaseModel):
+    """채택 표시·옵션 ID 연결만 바꾼다. 넘기지 않은 값은 그대로(vendor_item_id에 빈 글을 넘기면 연결 해제)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    adopted: StrictBool | None = None
+    vendor_item_id: str | None = Field(default=None, max_length=40)
 
 
 class RecordOutcomeRequest(BaseModel):

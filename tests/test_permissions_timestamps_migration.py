@@ -402,6 +402,9 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 이 테스트가 실패 상태였다(2026-10-23 전체 회귀에서 발견) — 같은 갱신 규칙으로 추가한다.
             # 실제 운영 DB에는 2026-10-16 사용자 승인으로 앱의 Migration 승인 경로를 통해 적용됐다.
             "20261016_00_create_external_call_allowance_schema.sql",
+            # 2026-10-23 마케팅 AI M4-full — 채택한 제안 기록 테이블 1개(marketing_suggestion_records, 추가형).
+            # 실제 운영 DB에는 미적용이다(앱의 Migration 승인 화면에서 사용자가 승인할 때만 적용).
+            "20261023_00_create_marketing_suggestion_record_schema.sql",
         ]
 
         all_files = sorted(

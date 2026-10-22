@@ -33,6 +33,8 @@ from app.domains.ai_learning.schema import ModelCandidateCreateRequest
 from app.domains.ai_learning.schema import ModelCandidateResponse
 from app.domains.ai_learning.schema import RecordOutcomeRequest
 from app.domains.ai_learning.schema import RejectModelCandidateRequest
+from app.domains.ai_learning.schema import SuggestionRecordCreateRequest
+from app.domains.ai_learning.schema import SuggestionRecordUpdateRequest
 from app.domains.ai_learning.service import AiLearningService
 from app.domains.user.model import User
 
@@ -202,6 +204,65 @@ def reject_model_candidate(
     return service.reject_model_candidate(
         candidate_id=candidate_id, company_id=current_user.company_id,
         user_id=current_user.id, is_admin=True, reason=data.reason,
+    )
+
+
+# ---- 2026-10-23 마케팅 AI M4-full: 채택한 제안 기록과 전·후 성과 비교 ----
+# 이 라우터의 모든 경로는 SuperAdminGuard라는 기존 계약(tests/test_ai_learning_router_guard.py)을 그대로 따른다.
+# 테이블은 Migration 20261023_00이 만든다 — 앱의 Migration 승인 전에는 이 경로가 동작하지 않는다.
+
+
+@router.get("/suggestions")
+def list_suggestion_records(
+    limit: int = Query(default=100, ge=1, le=200),
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    from app.domains.ai_learning.suggestion_record_service import SuggestionRecordService
+
+    return SuggestionRecordService(db).list(current_user.company_id, limit)
+
+
+@router.post("/suggestions")
+def create_suggestion_record(
+    data: SuggestionRecordCreateRequest,
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    """채택해 쿠팡에 반영한 제안 1건을 기록한다(HOMEZ DB에만, 쿠팡 쓰기 없음)."""
+
+    from app.domains.ai_learning.suggestion_record_service import SuggestionRecordService
+
+    return SuggestionRecordService(db).create(
+        current_user.company_id, current_user.id, data.kind, data.suggested_value, data.suggested_on, data.product_ref, data.vendor_item_id, data.adopted,
+    )
+
+
+@router.post("/suggestions/evaluate")
+def evaluate_suggestion_records(
+    days: int = Query(default=30, ge=1, le=31),
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    """사용자가 누를 때만 쿠팡 매출내역을 읽어(허용이 있을 때만, 읽기 전용) 기록마다 제안일 전·후를 나란히 보여 준다. 판정하지 않는다."""
+
+    from app.domains.ai_learning.suggestion_record_service import SuggestionRecordService
+
+    return SuggestionRecordService(db).evaluate(current_user.company_id, days)
+
+
+@router.patch("/suggestions/{record_id}")
+def update_suggestion_record(
+    record_id: int,
+    data: SuggestionRecordUpdateRequest,
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    from app.domains.ai_learning.suggestion_record_service import SuggestionRecordService
+
+    fields = data.model_dump(exclude_unset=True)
+    return SuggestionRecordService(db).update(
+        current_user.company_id, record_id, adopted=fields.get("adopted"), vendor_item_id=fields["vendor_item_id"] if "vendor_item_id" in fields else ...,
     )
 
 

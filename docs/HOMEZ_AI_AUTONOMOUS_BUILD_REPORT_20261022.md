@@ -275,3 +275,39 @@
 - 실패 1건: `tests.test_permissions_timestamps_migration.MigrationStaticContractTestCase.test_migration_directory_contains_only_expected_files` — `migrations/` 폴더에 2026-10-16 커밋(`9f2e1b9`)으로 들어간 `20261016_00_create_external_call_allowance_schema.sql`이 이 시험의 기대 목록에 없다. **이번 라운드 이전부터 있던 결함**이다(이번 라운드는 `migrations/`를 건드리지 않았고 단독 실행으로도 같은 결과). Migration 계약 시험이라 기대 목록을 고치는 것은 사용자 확인 후에 한다(고치지 않았다).
 - 13번째 묶음의 `[Errno 10048] … bind` 로그는 시험 안의 임시 서버 포트 충돌 기록이며 해당 묶음은 통과했다.
 - 간헐 실패로 알려진 `test_two_clicks_at_once_make_only_one_call`는 이번 실행에서는 통과했다.
+
+---
+
+## 7. 후속 진행 (2026-10-23, 사용자 지시 "1. Migration 목록 시험 고쳐라 2. 로컬 커밋 push 해라 3. 진행")
+
+### 7-1. Migration 목록 시험 수정·push
+- `tests/test_permissions_timestamps_migration.py`의 기대 목록에 10-16 Migration(`20261016_00`)을 추가했다(커밋 `9fa76a7`). 13건 통과. 그 뒤 로컬 커밋을 `origin/main`에 push했다.
+
+### 7-2. "AI 점검 도구" 화면 (커밋 `f4289cf`)
+- API로만 있던 기능을 새 메뉴 하나(오늘 할 일 › AI 점검 도구)에 카드로 모았다: 주문 마진 점검(P2)·고객 응대 답변 초안(P3)·반품 손익 계산·공급 조건 비교(S3)·정책 변경 비교(T3)·약관 점검(T4).
+- 기준: 기존 화면을 건드리지 않으려고 화면 한 곳에 모았다. 화면은 새 판정을 만들지 않고 판정·이유 코드를 정해진 문구로 옮긴다(모르는 코드는 일반 문구). 서버 글은 이스케이프한다. 모르는 금액은 빈 값으로 보내고 0으로 바꾸지 않는다.
+- 시험 중 발견해 고친 결함: 모르는 금액이 화면에 '0원'으로 보이던 문제. 정책 비교의 판매 금지 낱말에 '판매할 수 없'을 추가했고, 약관 GET에서 '공통 조항만'(`models=`)을 빈 목록으로 처리하게 했다.
+- 검증: `test_ai_tools_ui` 23건, 변이 23건 전부 감지. 격리 서버와 실제 브라우저에서 카드 6개를 조작해 확인했다. 전화번호는 AI로 보내기 전에 `[전화번호]`로 가려졌고, 약속 표현 초안은 버려졌다. 공급 조건 비교는 백산수 기록(18.24%)과 같은 18.2%가 나왔다.
+
+### 7-3. M4-full 저장소 — 제안 기록 표 (이번 커밋)
+- Model `ai_learning/model.py::MarketingSuggestionRecord`, Migration `migrations/20261023_00_create_marketing_suggestion_record_schema.sql`(Model의 SQLite DDL 그대로).
+  - 시험이 대조하는 것: DDL 일치, 임시 DB 적용, 기존 데이터 보존, 재적용 거절, rollback 주석.
+  - 초안(`docs/migration_drafts/…draft`)은 지웠다.
+- `ai_learning/suggestion_record_service.py`: 기록·채택 표시·옵션 연결·목록, 전·후 비교.
+  - 전·후 비교는 기존 판매 성과 읽기를 그대로 쓴다. `SalesPerformanceService.read_rows`로 떼어 냈고 동작은 같다.
+  - 읽기가 실패하거나 잘리면 비교하지 않고, 판정도 하지 않는다.
+- API: `GET/POST /ai-learning/suggestions`, `PATCH /ai-learning/suggestions/{id}`, `POST /ai-learning/suggestions/evaluate`.
+  - 이 라우터는 모든 경로가 SuperAdmin 전용이라는 기존 계약 시험이 있어 그대로 따랐다(처음 AdminGuard로 만들었다가 계약 시험에 걸려 고쳤다).
+- 화면: AI 점검 도구의 7번째 카드 "제안 기록·성과 비교".
+- 기준:
+  - '오늘'은 한국 날짜로 잡는다. 시험이 UTC 날짜 오류를 잡아 고쳤다.
+  - **표가 없으면(Migration 승인 전) 서버 오류 대신 "앱을 다시 시작해 Migration 승인 화면에서 승인해 주세요"라고 알리고, 표를 몰래 만들지 않는다.**
+- **실제 운영 DB에는 적용하지 않았다.** 앱을 다시 시작하면 승인 대기 Migration으로 보인다. 승인하면 앱이 백업한 뒤 적용한다. 승인 전에는 앱이 제한 모드일 수 있다.
+- 검증: `test_suggestion_record_service` 22건, 화면 시험 3건 추가. 변이 29건 중 24건을 첫 실행에 감지했고, 4건은 시험 보강 후 감지했다. 1건은 동등 변이다(옵션 ID에 `True`를 넣어도 숫자 검사에 걸림).
+  - 격리 DB에 Migration 79개 전부 적용(무결성 ok). 브라우저에서 기록·잘못된 옵션 ID 거절·채택 표시·옵션 연결·전후 비교를 확인했다(쿠팡 읽기는 격리 서버의 가짜 응답).
+  - 관련 회귀 931건 통과.
+- 등록부: ORDER_SHIPMENT_RETURN에 진입점과 "Migration 승인 전에는 동작하지 않음"을 기록했다.
+
+### 7-4. 이번에도 하지 않은 것(사용자 승인·행동이 필요)
+- 실제 이미지 생성 제공자, 실제 공급처 연동, 실제 Claude 호출(답변 초안 등은 화면에서 사용자가 누를 때 기존 허용·월 한도 경로로만 나간다), P5 쿠팡 쓰기 — 외부 호출·비용·쓰기라 각각 별도 승인이 필요하다.
+- 제안 기록 Migration의 실제 DB 적용 — 앱의 Migration 승인 화면에서 사용자가 한다.

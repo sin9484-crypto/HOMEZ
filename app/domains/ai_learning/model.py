@@ -348,9 +348,82 @@ class ModelCandidateStatusEvent(Base):
     )
 
 
+class MarketingSuggestionRecord(Base):
+    """2026-10-23 마케팅 AI M4-full — 사용자가 **채택해 쿠팡에 반영한** 제안(상품명·검색어·가격) 1건.
+    쿠팡 옵션 ID(`vendor_item_id`)와 연결해 두면 제안일 전·후의 판매·반품을 나란히 볼 수 있다
+    (`suggestion_outcomes.evaluate` — 판정하지 않는다). 쿠팡에 쓰는 일은 없고 기록만 한다.
+    `kind`는 PRODUCT_NAME/SEARCH_KEYWORD/PRICE — 서비스가 검사한다(DB 제약 없음, 기존 모델과 같은 방식)."""
+
+    __tablename__ = "marketing_suggestion_records"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    company_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    kind: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    # 쿠팡 옵션 ID — 아직 연결하지 않았으면 None(평가하지 않는다).
+    vendor_item_id: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        index=True,
+    )
+
+    product_ref: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+    )
+
+    suggested_value: Mapped[str] = mapped_column(
+        String(300),
+        nullable=False,
+    )
+
+    # 제안을 쿠팡에 반영한 날(사용자가 넣는다). 전·후 기간을 가르는 기준.
+    suggested_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+    )
+
+    adopted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    adopted_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    # 논리 참조 (users.id)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
 __all__ = [
     "DecisionOutcome",
     "LearningDatasetRecord",
     "ModelCandidate",
     "ModelCandidateStatusEvent",
+    "MarketingSuggestionRecord",
 ]

@@ -51,7 +51,7 @@ console.log(JSON.stringify(__EXPR__));
 """
 
 FUNCTIONS = ("atWon", "atDecisionPill", "atReasonText", "atMarginHtml", "atParseFacts", "atCsProblem", "atCsResultHtml", "atReturnBody", "atReturnHtml",
-             "atOfferRowToInput", "atOfferHtml", "atWatchHtml", "atTermsModels", "atTermsHtml")
+             "atOfferRowToInput", "atOfferHtml", "atWatchHtml", "atTermsModels", "atTermsHtml", "atSuggestionBody", "atSuggestionListHtml", "atSuggestionEvalHtml")
 
 
 @unittest.skipUnless(NODE, "node가 없어 화면 함수를 실행해 볼 수 없다")
@@ -245,6 +245,57 @@ class BehaviourTests(unittest.TestCase):
         self.assertIn("배송", checklist)
 
 
+@unittest.skipUnless(NODE, "node가 없어 화면 함수를 실행해 볼 수 없다")
+class SuggestionCardTests(unittest.TestCase):
+
+    run_js = BehaviourTests.run_js
+
+    def test_suggestion_body(self):
+        ok = self.run_js('atSuggestionBody({kind: "PRICE", value: " 9,900원 ", ref: "", vendor: " 123 ", day: "2026-10-20", adopted: true})')
+        self.assertEqual(ok, {"body": {"kind": "PRICE", "suggested_value": "9,900원", "suggested_on": "2026-10-20", "product_ref": None, "vendor_item_id": "123", "adopted": True}, "error": None})
+        self.assertEqual(self.run_js('atSuggestionBody({kind: "PRICE", value: "x", adopted: "yes"})')["body"]["adopted"], False)       # 참(true)만 채택
+        self.assertIsNone(self.run_js('atSuggestionBody({kind: "PRICE", value: "x"})')["body"]["suggested_on"])                   # 모르면 서버가 오늘(한국 날짜)
+        for form, error in (('{kind: "DISCOUNT", value: "x"}', "sg_err_kind"), ('{kind: "PRICE", value: "  "}', "sg_err_value"),
+                            ('{kind: "PRICE", value: "x".repeat(301)}', "sg_err_value_long"), ('{kind: "PRICE", value: "x", vendor: "12a"}', "sg_err_vendor"),
+                            ('{kind: "PRICE", value: "x", day: "10/20"}', "sg_err_day")):
+            self.assertEqual(self.run_js(f"atSuggestionBody({form})"), {"body": None, "error": error}, form)
+
+    def test_suggestion_list(self):
+        self.assertIn("아직 기록한 제안이 없습니다", self.run_js("atSuggestionListHtml([])"))
+        rows = [{"id": 3, "kind": "PRODUCT_NAME", "suggested_value": "<b>새 이름</b>", "product_ref": "백산수", "suggested_at": "2026-10-20", "adopted": True, "vendor_item_id": "111"},
+                {"id": 4, "kind": "WEIRD", "suggested_value": "x", "product_ref": None, "suggested_at": None, "adopted": False, "vendor_item_id": None}]
+        html = self.run_js(f"atSuggestionListHtml({json.dumps(rows)})")
+        self.assertIn("&lt;b&gt;새 이름", html)
+        self.assertNotIn("<b>새 이름", html)
+        self.assertIn('data-sg-toggle="3" data-sg-adopted="1"', html)
+        self.assertIn('data-sg-toggle="4" data-sg-adopted=""', html)
+        self.assertIn("채택 해제", html)
+        self.assertIn("채택 표시", html)
+        self.assertIn('value="111"', html)
+        self.assertIn(">기타<", html)
+
+    def test_suggestion_evaluation(self):
+        for reason, text in (("NO_RECORDS", "쿠팡을 읽지 않았습니다"), ("READ_FAILED", "읽지 못해 비교하지 않았습니다"), ("READ_TRUNCATED", "일부만 보고"), ("HACK", "비교하지 않았습니다")):
+            html = self.run_js(f'atSuggestionEvalHtml({{reason: "{reason}", read: {{detail: "<i>허용 없음</i>"}}}})')
+            self.assertIn(text, html, reason)
+            self.assertNotIn("<i>", html)
+        result = {"reason": None, "evaluation": {"period": {"from": "2026-09-01", "to": "2026-09-30"}, "results": [
+            {"suggested_value": "새 이름", "status": "OBSERVED", "reason": None, "warnings": ["OVERLAPPING_SUGGESTIONS"],
+             "before": {"days": 14, "orders": 12, "units_per_day": "0.86", "return_rate": "0.0000"}, "after": {"days": 16, "orders": 24, "units_per_day": "1.50", "return_rate": None}},
+            {"suggested_value": "9900", "status": "NOT_EVALUATED", "reason": "NOT_LINKED"},
+            {"suggested_value": "검색어", "status": "INSUFFICIENT", "reason": "SAMPLE_TOO_SMALL", "before": {"days": 3, "orders": 2, "units_per_day": "0.67", "return_rate": None}, "after": None}]}}
+        html = self.run_js(f"atSuggestionEvalHtml({json.dumps(result)})")
+        self.assertIn("읽은 기간 2026-09-01 ~ 2026-09-30", html)
+        self.assertIn("14일 · 주문 12건 · 하루 0.86개 · 반품률 0.0000", html)
+        self.assertIn("반품률 —", html)                                    # 모르는 반품률은 0으로 쓰지 않는다
+        self.assertIn("같은 옵션에 다른 제안도 있어", html)
+        self.assertIn("비교 안 함 — 옵션 ID 미연결", html)
+        self.assertIn("표본 부족(판단 불가) — 주문이 10건 미만", html)
+        self.assertIn("판정하지 않습니다", html)
+        for word in ("적중", "성공", "효과가 있"):
+            self.assertNotIn(word, html)
+
+
 class SourceTests(unittest.TestCase):
 
     def test_the_menu_section_loader_and_tab_exist(self):
@@ -255,7 +306,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn('["ai-tools", "nav.ai_tools"]', JS)
 
     def test_each_card_calls_the_right_route(self):
-        for route in ("/purchase-tasks/margin-watch?min_margin_percent=", '"/orders/cs-reply-draft"', '"/orders/return-economics"', '"/product-import/supplier-offers/rank"',
+        for route in ('"/ai-learning/suggestions"', "/ai-learning/suggestions/evaluate?days=", "/ai-learning/suggestions/${encodeURIComponent(",
+                      "/purchase-tasks/margin-watch?min_margin_percent=", '"/orders/cs-reply-draft"', '"/orders/return-economics"', '"/product-import/supplier-offers/rank"',
                       '"/channel-policy/watch/compare"', "/channel-policy/terms/checklist", "/channel-policy/terms/skeleton", '"/channel-policy/terms/coverage"'):
             self.assertIn(route, PANEL, route)
 
@@ -270,6 +322,10 @@ class SourceTests(unittest.TestCase):
         for part in (cs, ret, of):
             self.assertIn("withButtonGuard", part)
 
+    def test_the_adopt_button_flips_the_current_state(self):
+        self.assertIn("body: JSON.stringify({ adopted: !btn.dataset.sgAdopted })", PANEL)
+        self.assertIn('body: JSON.stringify({ vendor_item_id: vendor })', PANEL)
+
     def test_nothing_is_sent_or_saved_from_this_screen(self):
         for word in ("/send", "localStorage", "/apply", "price-change"):
             self.assertNotIn(word, PANEL, word)
@@ -282,9 +338,11 @@ class SourceTests(unittest.TestCase):
         used |= {"cs_err_kind", "cs_err_empty", "cs_err_long", "cs_err_fact_line", "cs_err_fact_many", "ret_err_amount", "of_err_supplier", "of_err_number"}
         used |= {f"cs_kind_{k.lower()}" for k in ("DELIVERY", "RETURN_EXCHANGE", "PRODUCT", "OTHER")}
         for const, prefix in (("AT_MW_REASONS", "mw_reason_"), ("AT_RET_REASONS", "ret_reason_"), ("AT_OF_REASONS", "of_reason_"), ("AT_RET_STEPS", "ret_step_"),
-                              ("AT_DECISIONS", "decision_"), ("AT_RET_FIELDS", "ret_field_")):
+                              ("AT_DECISIONS", "decision_"), ("AT_RET_FIELDS", "ret_field_"), ("AT_SG_KINDS", "sg_kind_"), ("AT_SG_STATUSES", "sg_status_"),
+                              ("AT_SG_REASONS", "sg_reason_"), ("AT_SG_READ_REASONS", "sg_read_")):
             codes = re.search(const + r" = \[([^\]]+)\]", JS).group(1).replace('"', "").replace(" ", "").split(",")
             used |= {prefix + c.lower() for c in codes}
+        used |= {"sg_kind_other", "sg_status_other", "sg_reason_other", "sg_read_other"}
         used |= {"mw_reason_other", "ret_reason_other", "of_reason_other", "ret_step_other", "decision_other", "pw_status_unchanged", "pw_status_changed", "pw_status_unknown", "view_hint"}
         for key in sorted(used):
             self.assertIn(f"at.{key}", ko, f"한국어 문구 없음: {key}")

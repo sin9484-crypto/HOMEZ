@@ -8,20 +8,15 @@ File : tests/test_suggestion_outcomes.py
 
   - 판정하지 않는다: 항상 `causal: False`, "적중/실패" 표현 없음. 표본이 작으면 INSUFFICIENT(판단 불가). 채택하지 않았거나 연결·날짜·기간이 없으면 평가하지 않고 이유를 단다.
   - 전·후 기간은 읽은 매출내역 기간을 제안일에서 가른 것이며 제안일 당일은 '후'다. 같은 옵션 제안이 여럿이면 겹침 경고.
-  - Migration 초안은 migrations/ 밖에 있어 앱이 집어 가지 않으며, 임시 SQLite에서 실행돼 열·제약·색인이 기대대로 만들어지고 rollback 되는지 확인한다(실제 DB 무관).
+  - (2026-10-23 같은 날 후속) Migration 초안은 실제 Migration(`migrations/20261023_00_…`)과 Model로 옮겼고 그 검증은 `test_suggestion_record_service.py`에 있다.
 =========================================================
 """
 
 import json
-import re
-import sqlite3
 import unittest
-from pathlib import Path
 
 from app.domains.ai_learning import suggestion_outcomes as so
 
-ROOT = Path(__file__).resolve().parents[1]
-DRAFT = ROOT / "docs" / "migration_drafts" / "20261023_00_create_marketing_suggestion_record_schema.sql.draft"
 
 
 def sale(order, day, vendor="V1", qty=1, kind="SALE"):
@@ -159,51 +154,6 @@ class OverlapAndLimitTests(unittest.TestCase):
         result = so.evaluate([record()], month_rows())
         json.dumps(result, ensure_ascii=False)
         self.assertTrue(any("판정하지 않아요" in note for note in result["notes"]))
-
-
-class DraftMigrationTests(unittest.TestCase):
-
-    def test_the_draft_is_not_in_the_real_migrations_folder(self):
-        self.assertTrue(DRAFT.exists())
-        self.assertFalse(any("marketing_suggestion_record" in p.name for p in (ROOT / "migrations").iterdir()))
-        self.assertTrue(DRAFT.name.endswith(".sql.draft"))
-        text = DRAFT.read_text(encoding="utf-8")
-        self.assertIn("적용하지 않음", text)
-        self.assertIn("DROP TABLE IF EXISTS marketing_suggestion_records", text)       # rollback은 주석으로만
-
-    def test_the_draft_builds_the_table_on_a_temporary_database_and_cannot_run_twice(self):
-        sql = "\n".join(line for line in DRAFT.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("--"))
-        conn = sqlite3.connect(":memory:")
-        try:
-            conn.executescript(sql)
-            columns = {row[1]: (row[2], row[3], row[5]) for row in conn.execute("PRAGMA table_info(marketing_suggestion_records)")}
-            self.assertEqual(list(columns), ["id", "company_id", "kind", "vendor_item_id", "product_ref", "suggested_value", "suggested_at", "adopted", "adopted_at", "created_by", "created_at"])
-            self.assertEqual(columns["id"][2], 1)                                  # 기본 키
-            for name in ("company_id", "kind", "suggested_value", "suggested_at", "adopted", "created_at"):
-                self.assertEqual(columns[name][1], 1, name)                         # NOT NULL
-            for name in ("vendor_item_id", "product_ref", "adopted_at", "created_by"):
-                self.assertEqual(columns[name][1], 0, name)                         # 연결 전·정보 없음은 비어 있을 수 있다
-            indexes = {row[1] for row in conn.execute("PRAGMA index_list(marketing_suggestion_records)")}
-            self.assertEqual(indexes, {"ix_marketing_suggestion_records_company_id", "ix_marketing_suggestion_records_vendor_item_id"})
-            conn.execute("INSERT INTO marketing_suggestion_records (company_id, kind, suggested_value, suggested_at, adopted, created_at) VALUES (1,'PRICE','9900','2026-09-15',0,'2026-09-15')")
-            with self.assertRaises(sqlite3.IntegrityError):
-                conn.execute("INSERT INTO marketing_suggestion_records (company_id, kind, suggested_value, suggested_at, adopted, created_at) VALUES (1,'DISCOUNT','x','2026-09-15',0,'2026-09-15')")
-            with self.assertRaises(sqlite3.OperationalError):
-                conn.executescript(sql)                                              # 두 번째 적용은 실패한다(부분 적용 방지)
-        finally:
-            conn.close()
-
-    def test_the_rollback_in_the_comments_removes_what_the_draft_created(self):
-        text = DRAFT.read_text(encoding="utf-8")
-        sql = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
-        rollback = "\n".join(re.sub(r"^--\s?", "", line) for line in text.splitlines() if re.match(r"^--\s+(DROP )", line))
-        conn = sqlite3.connect(":memory:")
-        try:
-            conn.executescript(sql)
-            conn.executescript(rollback)
-            self.assertEqual(conn.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE '%marketing_suggestion_records%'").fetchone()[0], 0)
-        finally:
-            conn.close()
 
 
 if __name__ == "__main__":
