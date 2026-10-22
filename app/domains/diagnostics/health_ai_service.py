@@ -60,7 +60,18 @@ CODE_MEANING = {
     "DISK_LOW": "데이터가 저장되는 디스크의 남은 공간이 1GB보다 적다.",
     "DISK_CRITICAL": "데이터가 저장되는 디스크의 남은 공간이 300MB보다 적다.",
     "ESTOP_ACTIVE": "긴급 중지가 켜져 있어 앱이 바깥으로 보내는 모든 일이 멈춰 있다.",
+    # 2026-10-21 반영 A — 감시가 조용히 멈추는 경우(허용 만료·앱 꺼짐). 조치는 판매자가 하는 일(승인 센터 허용 다시 주기·앱 켜기)이다.
+    "DETECTION_NEEDS_ALLOWANCE": "새 주문을 5분마다 가져오는 자동 감지가 승인 센터의 허용이 없어 멈춰 있다. 멈춰 있던 동안 들어온 주문은 앱이 아직 모른다.",
+    "DETECTION_ERROR": "자동 감지가 연속으로 실패해 오류 상태로 멈췄다. 원인을 확인한 뒤 다시 켜야 한다.",
+    "DETECTION_PAUSED": "자동 감지가 일시 중지 상태라 새 주문을 자동으로 가져오지 않는다.",
+    "DETECTION_FAILING": "자동 감지의 최근 확인이 실패했다.",
+    "DETECTION_BLOCKED": "쿠팡 연결 정보를 확인할 수 없어 자동 감지가 건너뛰고 있다.",
+    "DETECTION_ENV_BLOCKED": "실행 환경의 호출 제한이 쿠팡 조회를 막고 있다(앱이나 쿠팡의 문제가 아니다).",
+    "DETECTION_STALE": "자동 감지는 켜져 있는데 한동안 확인을 시도한 기록이 없다. 앱이 꺼져 있었거나 자동 작업 엔진이 멈췄을 수 있다.",
+    "READS_ALLOWANCE_LAPSED": "주문·배송 상태, 반품·문의·정산, 상품 상태를 쿠팡에서 읽어 오는 자동 확인 중 허용이 끝난(만료·취소·소진) 것이 있어 그 확인이 멈춰 있다. 그 사이 생긴 일은 앱이 모를 수 있다.",
 }
+# 읽기 허용 목적 코드 → 쉬운 말(AI에 보내는 허용 목록 — 이 밖의 목적 코드는 보내지 않는다)
+READS_PURPOSE_LABEL = {"ORDER_TRACKING": "주문·배송 상태", "AFTER_SALES_CHECK": "반품·문의·정산", "PRODUCT_STATUS_CHECK": "상품 상태"}
 
 SYSTEM_PROMPT = (
     "당신은 HOMEZ 앱을 쓰는 한국 판매자(개발자가 아님)에게 앱의 운영 상태 점검 결과를 쉬운 말로 설명하는 도우미입니다. <health_data> 안의 점검 결과를 설명합니다.\n"
@@ -111,6 +122,10 @@ def build_user_prompt(checks: list[dict]) -> str:
             facts["free_mb"] = params["free_mb"]
         if isinstance(params.get("jobs"), list):
             facts["jobs"] = [j for j in params["jobs"] if j in known_jobs]
+        if isinstance(params.get("minutes"), int):
+            facts["minutes_since_last_attempt"] = params["minutes"]
+        if isinstance(params.get("purposes"), list):
+            facts["purposes"] = [READS_PURPOSE_LABEL[x] for x in params["purposes"] if x in READS_PURPOSE_LABEL]
         items.append({"code": c["code"], "level": c["level"], "meaning": CODE_MEANING[c["code"]], "facts": facts})
     return "<health_data>\n" + json.dumps({"checks": items}, ensure_ascii=False, indent=1) + "\n</health_data>\n위 점검 결과를 JSON으로 설명하세요."
 

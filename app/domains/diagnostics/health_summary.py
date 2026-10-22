@@ -14,6 +14,11 @@ File : app/domains/diagnostics/health_summary.py
   - REHEARSAL      복구 시험 기록이 없다 → INFO / 가장 최근 시험이 실패했다 → FAIL / 14일 넘게 시험하지 않았다 → WARN
   - DISK           데이터 디스크 여유가 1GB 미만 → WARN / 300MB 미만 → FAIL
   - ESTOP          긴급 중지가 켜져 있다 → WARN(바깥으로 나가는 일이 모두 멈춰 있다)
+  - DETECTION      신규 주문 자동 감지(2026-10-21 반영 A) — 운영 화면이 이미 쓰는 `describe_health` 코드를 그대로 옮긴다: 승인 센터 허용이 없다 → WARN /
+                   연속 실패로 오류 모드 → FAIL / 일시 중지·실패 중·연결 정보 확인 불가·환경 제한 → WARN / 꺼 둠(수동) → INFO / 정상으로 보이지만 마지막 시도가
+                   30분 넘게 지났다(앱이 꺼져 있었거나 엔진이 멈춤) → WARN
+  - READS          주문·배송 상태, 반품·문의·정산, 상품 상태를 읽는 자동 확인의 허용(2026-10-21 반영 A) — 전에 허용이 있었는데 만료·취소·소진됐다 → WARN /
+                   한 번도 허용한 적이 없다 → INFO. 허용이 없으면 그 확인이 **조용히 멈추므로** 화면이 "일이 없다"와 "감시를 못 한다"를 구분할 수 있어야 한다
 값을 읽지 못한 항목(None)은 점검하지 않고 `unknown`에 코드만 남긴다 — 모르는 것을 정상이라고 하지 않는다.
 시각은 모두 UTC naive다. 이 모듈은 원인을 추측하지 않는다(코드와 숫자만) — 원인 설명은 사람이나 이후 AI 단계가 한다.
 =========================================================
@@ -33,6 +38,18 @@ BACKUP_FAIL_DAYS = 30
 REHEARSAL_STALE_DAYS = 14
 DISK_WARN_BYTES = 1024 ** 3
 DISK_FAIL_BYTES = 300 * 1024 ** 2
+DETECTION_STALE_MINUTES = 30  # 감지 주기(5분)의 6배 — 이보다 오래 시도 기록이 없으면 "정상"이라 믿지 않는다
+
+# 운영 화면(`describe_health`)의 상태 코드 → (점검 코드, 수준). 여기 없는 코드는 모르는 상태라 점검하지 않고 unknown에 남긴다.
+DETECTION_HEALTH_CODES = {
+    "NEEDS_ALLOWANCE": ("DETECTION_NEEDS_ALLOWANCE", WARN),
+    "ERROR": ("DETECTION_ERROR", FAIL),
+    "PAUSED": ("DETECTION_PAUSED", WARN),
+    "FAILING": ("DETECTION_FAILING", WARN),
+    "BLOCKED": ("DETECTION_BLOCKED", WARN),
+    "ENV_BLOCKED": ("DETECTION_ENV_BLOCKED", WARN),
+    "OFF": ("DETECTION_OFF", INFO),
+}
 
 
 def _check(code: str, level: str, **params: Any) -> dict[str, Any]:
@@ -47,7 +64,8 @@ def evaluate(snapshot: dict[str, Any]) -> dict[str, Any]:
     """스냅샷 → {"overall": FAIL|WARN|INFO|OK, "checks": [이상 후보], "passed": [정상 코드], "unknown": [못 읽은 코드]}.
 
     스냅샷 키(모두 선택): now(datetime), scheduler_enabled(bool), scheduler(None 또는 {"running": bool, "jobs": [{"id", "next_run"(datetime|None)}]}),
-    expected_jobs(list[str]), latest_backup_at, latest_rehearsal({"at", "ok"}|None), rehearsal_known(bool), disk_free_bytes(int|None), estop_active(bool|None)."""
+    expected_jobs(list[str]), latest_backup_at, latest_rehearsal({"at", "ok"}|None), rehearsal_known(bool), disk_free_bytes(int|None), estop_active(bool|None),
+    detection(None 또는 {"health_code": str, "minutes_since_attempt": int|None}), reads(None 또는 {"lapsed": [목적], "never": [목적]})."""
 
     now: datetime = snapshot["now"]
     checks: list[dict[str, Any]] = []
@@ -128,6 +146,36 @@ def evaluate(snapshot: dict[str, Any]) -> dict[str, Any]:
         checks.append(_check("ESTOP_ACTIVE", WARN))
     else:
         passed.append("ESTOP")
+
+    # ---- 신규 주문 자동 감지 · 읽기 허용(2026-10-21 반영 A) ----
+    detection = snapshot.get("detection")
+    if not isinstance(detection, dict):
+        unknown.append("DETECTION")
+    else:
+        health_code = detection.get("health_code")
+        minutes = detection.get("minutes_since_attempt")
+        if health_code in DETECTION_HEALTH_CODES:
+            code, level = DETECTION_HEALTH_CODES[health_code]
+            params = {"minutes": minutes} if isinstance(minutes, int) and not isinstance(minutes, bool) else {}
+            checks.append(_check(code, level, **params))
+        elif health_code in ("OK", "WAITING"):
+            if health_code == "OK" and isinstance(minutes, int) and not isinstance(minutes, bool) and minutes > DETECTION_STALE_MINUTES:
+                checks.append(_check("DETECTION_STALE", WARN, minutes=minutes))
+            else:
+                passed.append("DETECTION")
+        else:
+            unknown.append("DETECTION")
+    reads = snapshot.get("reads")
+    if not isinstance(reads, dict):
+        unknown.append("READS")
+    else:
+        lapsed, never = list(reads.get("lapsed") or []), list(reads.get("never") or [])
+        if lapsed:
+            checks.append(_check("READS_ALLOWANCE_LAPSED", WARN, purposes=lapsed))
+        if never:
+            checks.append(_check("READS_NOT_ALLOWED", INFO, purposes=never))
+        if not (lapsed or never):
+            passed.append("READS")
 
     checks.sort(key=lambda c: LEVEL_RANK[c["level"]])
     levels = {c["level"] for c in checks}

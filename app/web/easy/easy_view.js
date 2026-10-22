@@ -295,7 +295,7 @@
   // 자동 확인이 멈춘 건 아닌지"를 한 장에 모은다. 서버 시각 값은 UTC라 시간대 표기가 없으면 UTC로 읽는다.
   const BRIEF_DETECT_MIN_MINUTES = 30;       // 주문 자동 감지(5분 주기) — 이보다 오래 성공 기록이 없으면 점검 대상(주기의 3배와 비교해 큰 쪽)
   const BRIEF_PSTATUS_STALE_MINUTES = 90;    // 쿠팡 상품 상태 확인(30분 주기) — 아직 승인되지 않은 상품이 있을 때만
-  const BRIEF_SYS_KEYS = { SCHEDULER_NOT_RUNNING: "easy.brief.sys_scheduler", JOBS_MISSING: "easy.brief.sys_jobs_missing", JOBS_PAUSED: "easy.brief.sys_jobs_paused", JOBS_OVERDUE: "easy.brief.sys_jobs_overdue", BACKUP_NONE: "easy.brief.sys_backup_none", BACKUP_STALE: "easy.brief.sys_backup_stale", BACKUP_OLD: "easy.brief.sys_backup_old", REHEARSAL_FAILED: "easy.brief.sys_rehearsal_failed", REHEARSAL_STALE: "easy.brief.sys_rehearsal_stale", DISK_LOW: "easy.brief.sys_disk_low", DISK_CRITICAL: "easy.brief.sys_disk_critical", ESTOP_ACTIVE: "easy.brief.sys_estop" };
+  const BRIEF_SYS_KEYS = { SCHEDULER_NOT_RUNNING: "easy.brief.sys_scheduler", JOBS_MISSING: "easy.brief.sys_jobs_missing", JOBS_PAUSED: "easy.brief.sys_jobs_paused", JOBS_OVERDUE: "easy.brief.sys_jobs_overdue", BACKUP_NONE: "easy.brief.sys_backup_none", BACKUP_STALE: "easy.brief.sys_backup_stale", BACKUP_OLD: "easy.brief.sys_backup_old", REHEARSAL_FAILED: "easy.brief.sys_rehearsal_failed", REHEARSAL_STALE: "easy.brief.sys_rehearsal_stale", DISK_LOW: "easy.brief.sys_disk_low", DISK_CRITICAL: "easy.brief.sys_disk_critical", ESTOP_ACTIVE: "easy.brief.sys_estop", DETECTION_NEEDS_ALLOWANCE: "easy.brief.sys_det_allowance", DETECTION_ERROR: "easy.brief.sys_det_error", DETECTION_PAUSED: "easy.brief.sys_det_paused", DETECTION_FAILING: "easy.brief.sys_det_failing", DETECTION_BLOCKED: "easy.brief.sys_det_blocked", DETECTION_ENV_BLOCKED: "easy.brief.sys_det_env", DETECTION_STALE: "easy.brief.sys_det_stale", READS_ALLOWANCE_LAPSED: "easy.brief.sys_reads_lapsed" };
   const BRIEF_STALL_KEYS = { detect: "easy.brief.st_detect", pstatus: "easy.brief.st_pstatus", settle: "easy.brief.st_settle" };  // 문구 키를 글자 그대로 둔다(쓰지 않는 문구 점검이 찾을 수 있게)
   const BRIEF_SETTLEMENT_STALE_HOURS = 36;   // 쿠팡 정산 읽기(하루 몇 번)
 
@@ -347,7 +347,7 @@
   function briefSysText(c) {
     const p = (c && c.params) || {};
     const val = (v) => (v === undefined || v === null ? "…" : v);  // 값이 없으면 "undefined" 대신 "…"
-    return T(BRIEF_SYS_KEYS[c.code], { jobs: Array.isArray(p.jobs) ? p.jobs.length : "…", days: val(p.days), mb: val(p.free_mb) });
+    return T(BRIEF_SYS_KEYS[c.code], { jobs: Array.isArray(p.jobs) ? p.jobs.length : "…", days: val(p.days), mb: val(p.free_mb), m: val(p.minutes), what: Array.isArray(p.purposes) ? p.purposes.map((x) => T(`easy.brief.reads_${String(x).toLowerCase()}`)).join(", ") : "…" });
   }
 
   function briefingHtml(b) {

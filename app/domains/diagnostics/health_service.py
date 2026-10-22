@@ -11,6 +11,9 @@ File : app/domains/diagnostics/health_service.py
   - 백업: `backup_records` 가장 최근 시각 / 복구 시험: `restore_attempts` 가장 최근 시도(성공·실패).
   - 디스크: 데이터베이스 파일이 있는 디스크의 여유 용량(`shutil.disk_usage`).
   - 긴급 중지: `SafetyService.is_emergency_stop_active()`.
+  - 신규 주문 자동 감지(2026-10-21 반영 A): `order_auto_collection_states` 가장 최근 행 + 기능 모드 → 운영 화면과 같은 `describe_health` 코드(규칙을 따로 만들지 않는다).
+  - 읽기 허용(반영 A): `external_call_allowances`에서 주문·배송 상태·반품/민원/정산·상품 상태 읽기 허용이 **지금 쓸 수 있는지**를 읽기만으로 판정한다 —
+    `ExternalCallPolicyService.authorize`는 만료 표시·요청 생성처럼 **쓰기**를 하므로 쓰지 않는다.
 무거운 점검(DB 무결성 검사·마이그레이션 진단)은 요청마다 돌리지 않는다 — 진단 내보내기(`/diagnostics/export`)와 주간 복구 시험이 맡는다.
 =========================================================
 """
@@ -130,6 +133,70 @@ class HealthService:
             self.db.rollback()
             return None
 
+    def _detection(self) -> tuple[dict | None, int | None]:
+        """(감지 상태, 회사 번호). 읽지 못하거나 한 번도 기록이 없으면 (None, 회사 번호 또는 None) — 모르는 것을 정상이라 하지 않는다."""
+        try:
+            from app.domains.automation_safety.constants import FunctionCode
+            from app.domains.automation_safety.service import SafetyService
+            from app.domains.order.auto_collection_scheduler import describe_health
+            from app.domains.order.collection_model import OrderAutoCollectionState
+
+            state = self.db.query(OrderAutoCollectionState).order_by(OrderAutoCollectionState.id.desc()).first()
+            if state is None:
+                return None, None
+            mode = SafetyService(self.db).get_function_mode(state.company_id, FunctionCode.ORDER_COLLECTION)
+            code, _text = describe_health(mode, state)
+            attempted = _to_utc_naive(state.last_attempted_at)
+            minutes = None if attempted is None else max(0, int((self._now() - attempted).total_seconds() // 60))
+            return {"health_code": code, "minutes_since_attempt": minutes}, state.company_id
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+            logger.warning("운영 상태 점검: 자동 감지 상태를 읽지 못했다", exc_info=True)
+            return None, None
+
+    def _reads(self, company_id: int | None) -> dict | None:
+        """읽기 허용 3종(주문·배송 상태 / 반품·민원·정산 / 상품 상태)이 지금 쓸 수 있는지. 쓸 수 있으면 목록에서 빠지고,
+        전에 있었는데 못 쓰면 lapsed, 한 번도 없으면 never. 읽기만 한다(만료 표시·요청 생성 없음)."""
+        try:
+            from app.domains.external_call.constants import AllowanceMode
+            from app.domains.external_call.constants import AllowanceStatus
+            from app.domains.external_call.constants import CallKind
+            from app.domains.external_call.constants import CallPurpose
+            from app.domains.external_call.constants import ExternalSystem
+            from app.domains.external_call.model import ExternalCallAllowance
+
+            now = self._now()
+            watched = (CallPurpose.ORDER_TRACKING, CallPurpose.AFTER_SALES_CHECK, CallPurpose.PRODUCT_STATUS_CHECK)
+            query = self.db.query(ExternalCallAllowance).filter(
+                ExternalCallAllowance.system == ExternalSystem.COUPANG, ExternalCallAllowance.kind == CallKind.READ,
+                ExternalCallAllowance.purpose.in_((*watched, CallPurpose.ANY)),
+            )
+            if company_id is not None:
+                query = query.filter(ExternalCallAllowance.company_id == company_id)
+            rows = query.all()
+
+            def usable(a) -> bool:
+                if a.status != AllowanceStatus.ACTIVE:
+                    return False
+                if a.expires_at is not None and _to_utc_naive(a.expires_at) <= now:
+                    return False
+                return a.mode != AllowanceMode.COUNTED or (a.remaining_count or 0) > 0
+
+            lapsed: list[str] = []
+            never: list[str] = []
+            for purpose in watched:
+                relevant = [a for a in rows if a.purpose in (purpose, CallPurpose.ANY)]
+                if any(usable(a) for a in relevant):
+                    continue
+                # 요청만 하고 결정 전(PENDING)이거나 거절된 것은 "허용한 적 없음"이다.
+                had_grant = any(a.status not in (AllowanceStatus.PENDING, AllowanceStatus.REJECTED) for a in relevant)
+                (lapsed if had_grant else never).append(purpose)
+            return {"lapsed": lapsed, "never": never}
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+            logger.warning("운영 상태 점검: 읽기 허용 상태를 읽지 못했다", exc_info=True)
+            return None
+
     def snapshot(self) -> dict[str, Any]:
         enabled, scheduler = self._scheduler()
         backup_ok, latest_backup = self._latest_backup()
@@ -140,6 +207,9 @@ class HealthService:
             "rehearsal_known": rehearsal_ok, "latest_rehearsal": latest_rehearsal,
             "disk_free_bytes": self._disk_free(), "estop_active": self._estop(),
         }
+        detection, company_id = self._detection()
+        snap["detection"] = detection
+        snap["reads"] = self._reads(company_id)
         if backup_ok:
             snap["latest_backup_at"] = latest_backup
         return snap

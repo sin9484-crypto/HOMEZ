@@ -295,6 +295,8 @@ class WiringTests(unittest.TestCase):
     def test_every_server_check_code_has_a_screen_text_except_the_info_only_ones(self):
         rules = (ROOT / "app/domains/diagnostics/health_summary.py").read_text(encoding="utf-8")
         codes = set(re.findall(r'_check\("([A-Z_]+)", (FAIL|WARN)', rules))
+        # 2026-10-21 반영 A: 감지 상태 코드는 표(DETECTION_HEALTH_CODES)에서 만든다 — 표 항목도 같은 기준(FAIL·WARN만)으로 센다.
+        codes |= set(re.findall(r'\("(DETECTION_[A-Z_]+)", (FAIL|WARN)\)', rules))
         mapped = set(re.findall(r"([A-Z_]+): \"easy\.brief\.sys_", re.search(r"const BRIEF_SYS_KEYS = [^\n]+", JS).group(0)))
         self.assertEqual({c for c, _ in codes}, mapped)
         # 같은 문구 열쇠를 두 코드가 나눠 쓰지 않는다

@@ -330,6 +330,8 @@ class RuleCoverageTests(unittest.TestCase):
         import re
 
         actionable = {code for code, level in re.findall(r'_check\("([A-Z_]+)", (FAIL|WARN)', rules)}
+        # 2026-10-21 반영 A: 감지 상태는 표(DETECTION_HEALTH_CODES)에서 코드를 만든다 — 표 항목도 같은 기준으로 센다(INFO는 제외).
+        actionable |= {code for code, level in re.findall(r'\("(DETECTION_[A-Z_]+)", (FAIL|WARN)\)', rules)}
         self.assertEqual(set(svc.CODE_MEANING), actionable)
         self.assertTrue(all(isinstance(v, str) and v for v in svc.CODE_MEANING.values()))
         self.assertTrue({"FAIL", "WARN"} <= {hs.FAIL, hs.WARN})

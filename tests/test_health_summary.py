@@ -46,6 +46,8 @@ def good(**overrides):
         "scheduler": {"running": True, "jobs": [{"id": j, "next_run": NOW + timedelta(minutes=3)} for j in JOBS]},
         "expected_jobs": JOBS, "latest_backup_at": NOW - timedelta(days=1), "rehearsal_known": True,
         "latest_rehearsal": {"at": NOW - timedelta(days=2), "ok": True}, "disk_free_bytes": 20 * GB, "estop_active": False,
+        # 2026-10-21 반영 A: 자동 감지·읽기 허용도 정상 스냅샷의 일부(없으면 "모름"으로 남는다 — 아래 시험은 tests/test_health_detection_checks.py)
+        "detection": {"health_code": "OK", "minutes_since_attempt": 3}, "reads": {"lapsed": [], "never": []},
     }
     snap.update(overrides)
     return snap
@@ -60,7 +62,7 @@ class RuleTests(unittest.TestCase):
     def test_a_healthy_snapshot_is_ok_with_every_item_passed(self):
         r = hs.evaluate(good())
         self.assertEqual((r["overall"], r["checks"], r["unknown"]), ("OK", [], []))
-        self.assertEqual(set(r["passed"]), {"SCHEDULER", "JOBS", "BACKUP", "REHEARSAL", "DISK", "ESTOP"})
+        self.assertEqual(set(r["passed"]), {"SCHEDULER", "JOBS", "BACKUP", "REHEARSAL", "DISK", "ESTOP", "DETECTION", "READS"})
 
     def test_scheduler_states(self):
         self.assertEqual(codes(hs.evaluate(good(scheduler=None)), "FAIL"), ["SCHEDULER_NOT_RUNNING"])
