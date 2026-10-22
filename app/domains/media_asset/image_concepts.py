@@ -110,9 +110,11 @@ class ImageConcept:
     checks: tuple[str, ...] = ()
     needs_generated_label: bool = False
     l2_approved: bool = False
+    # --- I3 추가(기본값 있음): 로컬 장면(L1) 컨셉이 쓰는 장면 코드(scene_backgrounds.SCENE_CODES) ---
+    scene_code: str = ""
 
     def background_spec(self) -> BackgroundSpec:
-        return BackgroundSpec(kind=self.background_kind, color_hex=self.color_hex, color_hex_end=self.color_hex_end)
+        return BackgroundSpec(kind=self.background_kind, color_hex=self.color_hex, color_hex_end=self.color_hex_end, scene_code=self.scene_code or None)
 
     def to_summary(self) -> dict:
         """화면에서 컨셉 목록을 보여 줄 때 쓰는 값(색 미리보기 포함)."""
@@ -121,7 +123,7 @@ class ImageConcept:
             "usable_for": list(self.usable_for),
             # I1 추가 필드(기존 필드는 그대로, 새 필드만 더한다)
             "version": self.version, "processing_level": self.processing_level, "scene_kind": self.scene_kind, "mood": self.mood,
-            "good_for": list(self.good_for), "avoid_for": list(self.avoid_for), "needs_generated_label": self.needs_generated_label,
+            "good_for": list(self.good_for), "avoid_for": list(self.avoid_for), "needs_generated_label": self.needs_generated_label, "scene_code": self.scene_code,
             "preview": {
                 "background": [self.color_hex, self.color_hex_end] if self.color_hex_end else [self.color_hex or "#FFFFFF"],
                 "text": _hex(self.theme.text), "accent": _hex(self.theme.accent),
@@ -145,6 +147,23 @@ def _concept(
         background_kind=kind, color_hex=start, color_hex_end=end,
         theme=ConceptTheme(bg=_rgb(bg), text=_rgb(text), muted=_rgb(muted), shade=_rgb(shade), accent=_rgb(accent)),
         processing_level=LEVEL_L0, scene_kind=SCENE_BY_BACKGROUND.get(kind, ""), mood=mood, good_for=good_for, avoid_for=avoid_for, checks=checks,
+    )
+
+
+def _scene_concept(
+    code: str, label: str, description: str, scene_code: str, base_hex: str | None, *, bg: str, text: str, muted: str, shade: str, accent: str,
+    mood: str = "", good_for: tuple[str, ...] = (), avoid_for: tuple[str, ...] = (),
+) -> ImageConcept:
+    """로컬 장면(L1) 컨셉 — 질감·조명을 코드가 그린다(생성 아님). 추가·상세 전용이고, 요구하는 검사는 L0와 같다(제품 보존·배경 대비)."""
+    from app.domains.media_asset import scene_backgrounds
+
+    scene_kind = SCENE_MATERIAL_TEXTURE if scene_code in scene_backgrounds.TEXTURES else SCENE_STUDIO_LIGHT
+    return ImageConcept(
+        code=code, label_ko=label, description=description, usable_for=(PURPOSE_ADDITIONAL, PURPOSE_DETAIL),
+        background_kind=BackgroundKind.SCENE, color_hex=base_hex, color_hex_end=None,
+        theme=ConceptTheme(bg=_rgb(bg), text=_rgb(text), muted=_rgb(muted), shade=_rgb(shade), accent=_rgb(accent)),
+        processing_level=LEVEL_L1, scene_kind=scene_kind, mood=mood, good_for=good_for, avoid_for=avoid_for,
+        checks=(CHECK_PRODUCT_PRESERVATION, CHECK_BACKGROUND_CONTRAST, CHECK_NO_TEXT_OVERLAY), scene_code=scene_code,
     )
 
 
@@ -197,6 +216,32 @@ CONCEPTS: dict[str, ImageConcept] = _build_registry((
         bg="#14171C", text="#F3F4F6", muted="#B8BEC8", shade="#1E232B", accent="#D4B26A",
         mood="고급·무게감", good_for=("선물", "전자기기", "시계"), avoid_for=("식품", "위생용품", "아동"),
     ),
+    # ---- 2026-10-23 I3: 로컬 장면(L1) 5종 — 질감·조명을 코드가 그린다(제품은 다시 그리지 않는다). 대표(MAIN)에는 쓰지 않는다. 어울림 목록은 설명에서 이끌어 낸 보수적 기본값이다. ----
+    _scene_concept(
+        "LINEN_NATURAL", "내추럴 린넨", "린넨 천 질감의 따뜻한 배경. 데일리·패션·생활용품에 어울립니다.", "LINEN", "#E8DFD0",
+        bg="#E7DDCF", text="#2B2418", muted="#5E5340", shade="#DDD1BF", accent="#7A5C3A",
+        mood="내추럴·포근", good_for=("생활용품", "패션", "주방", "인테리어"), avoid_for=("전자기기",),
+    ),
+    _scene_concept(
+        "WOOD_WARM", "따뜻한 나무결", "나무 책상 같은 결이 있는 배경. 식품·주방·문구에 어울립니다.", "WOOD", "#C9A67C",
+        bg="#D6B98F", text="#1E140A", muted="#4A3820", shade="#C6A878", accent="#5A3A18",
+        mood="따뜻·수제", good_for=("식품", "주방", "문구", "인테리어"), avoid_for=("위생용품",),
+    ),
+    _scene_concept(
+        "PAPER_SOFT", "부드러운 종이", "고운 종이 질감의 은은한 배경. 뷰티·문구·아동 상품에 어울립니다.", "PAPER", "#F3EDE2",
+        bg="#F1EBDF", text="#2B2418", muted="#665A45", shade="#E8DFD0", accent="#8A6D4B",
+        mood="은은·섬세", good_for=("뷰티", "문구", "아동", "도서"),
+    ),
+    _scene_concept(
+        "SPOTLIGHT_WARM", "따뜻한 스포트라이트", "가운데가 밝은 따뜻한 조명 배경. 선물·시계·주얼리에 어울립니다.", "SPOTLIGHT_WARM", None,
+        bg="#E4D4BE", text="#2B2418", muted="#5E5340", shade="#D6C3A8", accent="#8A5A20",
+        mood="따뜻·집중", good_for=("선물", "시계", "주얼리", "식품"),
+    ),
+    _scene_concept(
+        "SPOTLIGHT_COOL", "차가운 스포트라이트", "가운데가 밝은 푸른 조명 배경. 전자기기·기능성·스포츠에 어울립니다.", "SPOTLIGHT_COOL", None,
+        bg="#CAD5E4", text="#12202E", muted="#3A4B5E", shade="#BCCADC", accent="#1F4E89",
+        mood="선명·기능", good_for=("전자기기", "기능성", "스포츠", "남성용품"),
+    ),
 ))
 
 
@@ -223,10 +268,23 @@ def validate_spec(concept: ImageConcept) -> list[str]:
         problems.append("장면 종류가 올바르지 않다")
     if c.processing_level == LEVEL_L0 and c.scene_kind not in L0_SCENES:
         problems.append("L0(로컬 합성)은 흰 배경·단색·그라데이션 장면만 만들 수 있다 — 소재·생활 장면·조명·계절은 L1 이상이 필요하다")
-    if c.background_kind not in (BackgroundKind.WHITE, BackgroundKind.SOLID_COLOR, BackgroundKind.GRADIENT):
-        problems.append("컨셉의 배경 종류는 흰 배경·단색·그라데이션이어야 한다(기존 이미지 배경은 컨셉이 아니다)")
+    if c.background_kind not in (BackgroundKind.WHITE, BackgroundKind.SOLID_COLOR, BackgroundKind.GRADIENT, BackgroundKind.SCENE):
+        problems.append("컨셉의 배경 종류는 흰 배경·단색·그라데이션·장면(SCENE)이어야 한다(기존 이미지 배경은 컨셉이 아니다)")
     elif c.processing_level == LEVEL_L0 and SCENE_BY_BACKGROUND.get(c.background_kind) != c.scene_kind:
         problems.append("장면 종류가 배경 종류와 맞지 않는다")
+    if c.background_kind == BackgroundKind.SCENE:
+        from app.domains.media_asset import scene_backgrounds
+
+        if c.processing_level == LEVEL_L0:
+            problems.append("장면(SCENE) 배경은 L1 이상이어야 한다")
+        if c.scene_code not in scene_backgrounds.SCENE_CODES:
+            problems.append("장면 배경은 알려진 장면 코드를 가져야 한다")
+        elif c.scene_code in scene_backgrounds.TEXTURES and c.scene_kind != SCENE_MATERIAL_TEXTURE:
+            problems.append("질감 장면의 장면 종류는 MATERIAL_TEXTURE여야 한다")
+        elif c.scene_code in scene_backgrounds.LIGHTS and c.scene_kind != SCENE_STUDIO_LIGHT:
+            problems.append("조명 장면의 장면 종류는 STUDIO_LIGHT여야 한다")
+    elif c.scene_code:
+        problems.append("장면 코드는 장면(SCENE) 배경에서만 쓴다")
 
     # 색: 배경 종류별로 필요한 색만 있어야 한다
     start_ok = bool(c.color_hex) and bool(_HEX.match(c.color_hex or ""))
@@ -237,6 +295,15 @@ def validate_spec(concept: ImageConcept) -> list[str]:
         problems.append("단색 배경은 시작 색 하나(#RRGGBB)만 필요하다")
     if c.background_kind == BackgroundKind.GRADIENT and not (start_ok and end_ok):
         problems.append("그라데이션 배경은 시작·끝 색(#RRGGBB)이 둘 다 필요하다")
+    if c.background_kind == BackgroundKind.SCENE:
+        from app.domains.media_asset import scene_backgrounds
+
+        if c.color_hex_end:
+            problems.append("장면 배경에는 끝 색을 지정하지 않는다")
+        if c.scene_code in scene_backgrounds.TEXTURES and not start_ok:
+            problems.append("질감 장면은 바탕색(#RRGGBB)이 필요하다")
+        if c.scene_code in scene_backgrounds.LIGHTS and c.color_hex:
+            problems.append("조명 장면은 색을 지정하지 않는다(조명 색은 정해져 있다)")
 
     # 대표 이미지: 흰 배경만, 생성(L2) 불가
     if PURPOSE_MAIN in c.usable_for:

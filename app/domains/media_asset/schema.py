@@ -13,6 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from typing import Literal
 
@@ -136,6 +137,99 @@ class AdaptiveCompositionRequestSchema(BaseModel):
     fill_ratio: float = Field(default=0.86, ge=0.3, le=1.0)
     # 크롭이 작아 제품이 작게 나올 때만 확대를 허용한다(1.0 = 확대 없음, 최대 2.5배).
     max_upscale: float = Field(default=1.0, ge=1.0, le=2.5)
+
+
+class ReferenceGenerationRequestSchema(BaseModel):
+    """참고 사진으로 만들기(2026-10-22 R3a) — 배경·포즈는 서버의 프리셋 코드만 받는다(글을 그대로 받지 않는다)."""
+
+    reference_asset_id: int
+    purpose: Literal["MAIN", "ADDITIONAL", "DETAIL"] = "ADDITIONAL"
+    backgrounds: list[str] = Field(..., min_length=1, max_length=3)
+    poses: list[str] = Field(..., min_length=1, max_length=3)
+    count: int = Field(default=1, ge=1, le=6)
+    # 대표(MAIN)에 AI 생성 사진을 쓰는 데 대한 사용자 최종 확인. 서버가 MAIN이면 이 값이 True여야만 실행한다.
+    confirmed_main: bool = False
+
+
+class ReferenceGenerationResponseSchema(BaseModel):
+    plan: dict
+    assets: list["MediaAssetResponse"]
+    job_id: int | None
+    demo: bool
+    generated_label: str
+    label_placement: str
+    provider_cost: float | None = None
+
+
+class BatchAdjustRequestSchema(BaseModel):
+    """선택한 사진에 같은 밝기·색온도 보정을 한 번에 적용한다(2026-10-23 R2). 둘 다 정수 −50~+50, 둘 다 0이면 보정할 것이 없다(서버가 거절)."""
+
+    asset_ids: list[int] = Field(..., min_length=1, max_length=20)
+    brightness: int = Field(default=0, ge=-50, le=50, strict=True)
+    warmth: int = Field(default=0, ge=-50, le=50, strict=True)
+
+    @field_validator("asset_ids")
+    @classmethod
+    def _positive_ids(cls, value):
+        if any(isinstance(v, bool) or v <= 0 for v in value):
+            raise ValueError("사진 번호는 양의 정수여야 합니다.")
+        return value
+
+
+class BatchAdjustItemSchema(BaseModel):
+    asset_id: int
+    status: str
+    reason: str | None = None
+    asset: "MediaAssetResponse | None" = None
+
+
+class BatchAdjustResponseSchema(BaseModel):
+    results: list[BatchAdjustItemSchema]
+    created: int
+    reused: int
+    skipped: int
+    failed: int
+
+
+class ConceptRunRequestSchema(BaseModel):
+    """누끼 한 장으로 고른 컨셉 여러 개를 각각 따로 만든다(2026-10-23 I2). 컨셉 코드는 서버의 컨셉 목록에 있는 것만 처리하고 나머지는 건너뛴다."""
+
+    cutout_asset_id: int
+    concept_codes: list[str] = Field(..., min_length=1, max_length=6)
+    purpose: Literal["MAIN", "ADDITIONAL", "DETAIL"] = "ADDITIONAL"
+
+    @field_validator("concept_codes")
+    @classmethod
+    def _codes(cls, value):
+        import re
+
+        if any(not isinstance(v, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{2,39}", v) for v in value):
+            raise ValueError("컨셉 코드는 영문 대문자·숫자·밑줄 3~40자여야 합니다.")
+        return value
+
+
+class ConceptCheckSchema(BaseModel):
+    code: str
+    status: str
+    detail: dict
+
+
+class ConceptRunItemSchema(BaseModel):
+    concept_code: str
+    status: str
+    reason: str | None = None
+    usable: bool | None = None
+    checks: list[ConceptCheckSchema] = []
+    asset: "MediaAssetResponse | None" = None
+
+
+class ConceptRunResponseSchema(BaseModel):
+    results: list[ConceptRunItemSchema]
+    created: int
+    reused: int
+    check_failed: int
+    skipped: int
+    failed: int
 
 
 class FeatureHighlightInput(BaseModel):

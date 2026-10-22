@@ -397,6 +397,120 @@ def compose_adaptive_background(
     )
 
 
+@router.get("/reference-generation/presets")
+def reference_generation_presets(current_user: User = Depends(admin_guard)):
+    """참고 사진으로 만들기에서 고를 수 있는 배경·포즈 목록과 규칙(읽기 전용, 정적 값)."""
+
+    from app.domains.media_asset import reference_generation as rg
+
+    return {
+        **rg.list_presets(), "purposes": list(rg.ALLOWED_PURPOSES), "generated_label": rg.GENERATED_LABEL_KO,
+        "label_placement": rg.LABEL_PLACEMENT, "no_watermark": True, "provider_codes": list(rg.ALLOWED_PROVIDER_CODES),
+        "main_policy_warning": rg.MAIN_POLICY_WARNING_KO,
+    }
+
+
+@router.post("/reference-generation/preview")
+def reference_generation_preview(
+    data: schema.ReferenceGenerationRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """계획만 만든다 — 사진·DB에 아무것도 쓰지 않고 외부 호출도 비용도 없다(경고·검수 항목·예상 비용 포함)."""
+
+    from app.domains.media_asset.reference_generation_service import ReferenceGenerationService
+
+    return ReferenceGenerationService(db).preview(
+        company_id=current_user.company_id, reference_asset_id=data.reference_asset_id, purpose=data.purpose,
+        backgrounds=data.backgrounds, poses=data.poses, count=data.count,
+    )
+
+
+@router.post("/reference-generation", response_model=schema.ReferenceGenerationResponseSchema)
+def reference_generation_run(
+    data: schema.ReferenceGenerationRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """참고 사진으로 사진을 만든다(FAKE 제공자만 — 시연용 결과). 대표(MAIN)는 confirmed_main=true가 있어야 실행한다.
+    이미지에는 워터마크·글자를 넣지 않고 'AI 생성' 표기는 응답·작업 기록에만 둔다."""
+
+    from app.domains.media_asset import reference_generation as rg
+    from app.domains.media_asset.reference_generation_service import ReferenceGenerationService
+
+    outcome = ReferenceGenerationService(db).generate(
+        company_id=current_user.company_id, requested_by=current_user.id, reference_asset_id=data.reference_asset_id,
+        purpose=data.purpose, backgrounds=data.backgrounds, poses=data.poses, count=data.count, confirmed_main=data.confirmed_main,
+    )
+    return {
+        "plan": outcome.plan.to_summary(), "assets": [MediaAssetResponse.model_validate(a) for a in outcome.assets],
+        "job_id": outcome.job_id, "demo": outcome.demo, "generated_label": rg.GENERATED_LABEL_KO,
+        "label_placement": rg.LABEL_PLACEMENT, "provider_cost": outcome.provider_cost,
+    }
+
+
+@router.post("/concept-runs", response_model=schema.ConceptRunResponseSchema)
+def concept_run(
+    data: schema.ConceptRunRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """누끼 한 장으로 고른 컨셉 여러 개를 컨셉별로 따로 만들고 컨셉마다 검사 결과(제품 보존·배경 대비·대표 규격 등)를 돌려준다(로컬 Pillow — 외부 접촉·비용 없음).
+    검사에서 FAIL이 나온 컨셉은 저장하지 않고 CHECK_FAILED로 알린다. 한 컨셉의 실패가 나머지를 막지 않는다. 이미지에 글자·워터마크를 더하지 않는다."""
+
+    from app.domains.media_asset.concept_run_service import ConceptRunService
+
+    outcomes = ConceptRunService(db).run(
+        company_id=current_user.company_id, requested_by=current_user.id, cutout_asset_id=data.cutout_asset_id,
+        concept_codes=data.concept_codes, purpose=data.purpose,
+    )
+    results = [
+        {"concept_code": o.concept_code, "status": o.status, "reason": o.reason, "usable": o.usable, "checks": list(o.checks),
+         "asset": None if o.asset is None else MediaAssetResponse.model_validate(o.asset)}
+        for o in outcomes
+    ]
+    count = lambda status: sum(1 for o in outcomes if o.status == status)  # noqa: E731
+    return {"results": results, "created": count("CREATED"), "reused": count("REUSED"), "check_failed": count("CHECK_FAILED"), "skipped": count("SKIPPED"), "failed": count("FAILED")}
+
+
+@router.get("/concept-recommendations")
+def concept_recommendations(
+    category: str | None = None,
+    purpose: str = "ADDITIONAL",
+    current_user: User = Depends(admin_guard),
+):
+    """상품 카테고리(사용자가 넣은 글)에 맞는 컨셉을 규칙으로 추천한다(읽기 전용·AI 없음). 피해야 할 컨셉은 숨기지 않고 이유와 함께 따로 알린다. 권고일 뿐 모든 컨셉을 직접 고를 수 있다."""
+
+    from app.domains.media_asset.concept_recommendation import recommend
+
+    try:
+        return recommend(category, purpose, list_concepts())
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+
+
+@router.post("/batch-adjust", response_model=schema.BatchAdjustResponseSchema)
+def batch_adjust_run(
+    data: schema.BatchAdjustRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """선택한 사진 여러 장에 같은 밝기·색온도 보정을 적용해 새 파생 자산으로 저장한다(로컬 Pillow — 외부 접촉·비용 없음, 원본은 그대로).
+    사진마다 결과(CREATED/REUSED/SKIPPED/FAILED)를 따로 돌려주고 한 장의 실패가 나머지를 막지 않는다. 이미지에 글자·워터마크를 더하지 않는다."""
+
+    from app.domains.media_asset.batch_adjust_service import BatchAdjustService
+
+    outcomes = BatchAdjustService(db).adjust(
+        company_id=current_user.company_id, requested_by=current_user.id, asset_ids=data.asset_ids, brightness=data.brightness, warmth=data.warmth,
+    )
+    results = [
+        {"asset_id": o.asset_id, "status": o.status, "reason": o.reason, "asset": None if o.asset is None else MediaAssetResponse.model_validate(o.asset)}
+        for o in outcomes
+    ]
+    count = lambda status: sum(1 for o in outcomes if o.status == status)  # noqa: E731
+    return {"results": results, "created": count("CREATED"), "reused": count("REUSED"), "skipped": count("SKIPPED"), "failed": count("FAILED")}
+
+
 @router.post("/generate-detail-page", response_model=MediaAssetResponse)
 def generate_detail_page(
     data: DetailPageGenerationRequestSchema,

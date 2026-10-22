@@ -12658,6 +12658,460 @@
     await load();
   }
 
+  // 2026-10-22 — 참고 사진으로 만들기(R3b). 원본 사진 한 장을 참고로 배경·포즈를 골라 같은 상품 사진을 여러 장 만든다.
+  // 지금은 시연용(FAKE) 제공자만 연결돼 있어 실제 AI 이미지가 아니라 샘플 이미지가 만들어진다. 이미지에는 워터마크·글자를 넣지 않고
+  // 'AI 생성' 표기는 이미지 밖(작업 기록·응답)에만 둔다. 대표 이미지는 사용자 최종 확인 없이는 실행하지 않는다(서버도 같은 규칙으로 다시 막는다).
+  const LW_REF_MAX_PICK = 3;
+  const LW_REF_MAX_COUNT = 6;
+  const LW_REF_KNOWN_CHECKS = ["PRODUCT_MATCHES_REFERENCE", "NO_TEXT_OVERLAY", "NO_WATERMARK", "NO_THIRD_PARTY_MARKS", "GENERATED_LABEL_ATTACHED", "MAIN_IMAGE_SPEC"];
+  let lwRefNotice = null;
+
+  function lwRefDefaults(purpose) {
+    // 대표는 흰 배경 단색 스튜디오 + 원본 포즈를 기본으로 둔다(쿠팡 대표 이미지 규격을 확인하지 못해 가장 덜 위험한 선택). 사용자가 바꿀 수 있다.
+    return purpose === "MAIN"
+      ? { backgrounds: ["STUDIO_PLAIN"], poses: ["KEEP_ORIGINAL"], count: 1 }
+      : { backgrounds: ["CAFE"], poses: ["ARMS_DOWN"], count: 1 };
+  }
+
+  function lwRefToggle(list, code, limit) {
+    // 이미 골랐으면 빼고, 아니면 한도 안에서만 더한다(한도를 넘으면 그대로 둔다).
+    if (list.includes(code)) return list.filter((item) => item !== code);
+    return list.length >= limit ? list : list.concat([code]);
+  }
+
+  function lwRefMaxCount(state) {
+    return Math.max(0, Math.min(LW_REF_MAX_COUNT, state.backgrounds.length * state.poses.length));
+  }
+
+  function lwRefProblem(state, rightsStatus) {
+    // 실행 전에 화면이 먼저 알려 줄 일(서버가 같은 규칙으로 다시 막는다). 문제가 없으면 null, 있으면 문구 키.
+    if (rightsStatus === "RIGHTS_DENIED") return "ref_err_denied";
+    if (!state.backgrounds.length) return "ref_err_background";
+    if (!state.poses.length) return "ref_err_pose";
+    if (!(state.count >= 1) || state.count > lwRefMaxCount(state)) return "ref_err_count";
+    if (rightsStatus === "RIGHTS_UNVERIFIED" && state.rightsAck !== true) return "ref_err_rights";
+    if (state.purpose === "MAIN" && state.confirmMain !== true) return "ref_err_main_confirm";
+    return null;
+  }
+
+  function lwRefBody(state, assetId) {
+    return {
+      reference_asset_id: Number(assetId), purpose: state.purpose, backgrounds: state.backgrounds.slice(), poses: state.poses.slice(),
+      count: Number(state.count), confirmed_main: state.purpose === "MAIN" && state.confirmMain === true,
+    };
+  }
+
+  function lwRefNoticeHtml() {
+    if (!lwRefNotice) return "";
+    const notice = lwRefNotice;
+    lwRefNotice = null;
+    return `<div class="banner banner-success" role="status" id="lw-ref-created-banner">${escapeHtml(HomezI18n.t("lw.ref_created", { count: notice.count }))}</div>`;
+  }
+
+  function lwRefPreviewHtml(plan) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    if (!plan) return "";
+    const checks = (plan.required_checks || []).filter((code) => LW_REF_KNOWN_CHECKS.includes(code))
+      .map((code) => `<li>${escapeHtml(t(`ref_check_${code.toLowerCase()}`))}</li>`).join("");
+    const warnings = (plan.warnings || []).map((w) => `<p class="field-error">${escapeHtml(w)}</p>`).join("");
+    const cost = typeof plan.estimated_cost === "number" ? plan.estimated_cost.toFixed(2) : "…";
+    return `<div class="detail-panel" id="lw-ref-preview-box">
+      <p><strong>${escapeHtml(t("ref_preview_summary", { count: plan.count === undefined ? "…" : plan.count, cost }))}</strong></p>
+      ${warnings}
+      <p class="stat-sub">${escapeHtml(t("ref_checks_title"))}</p>
+      <ul>${checks}</ul>
+    </div>`;
+  }
+
+  async function lwOpenReferencePanel(assetId, rightsStatus, content) {
+    const panel = el(`lw-ref-panel-${assetId}`);
+    if (!panel) return;
+    const card = panel.closest(".lw-media-card");
+    if (panel.dataset.open === "1") {
+      panel.innerHTML = "";
+      panel.dataset.open = "";
+      if (card) card.style.gridColumn = "";
+      return;
+    }
+    panel.dataset.open = "1";
+    if (card) card.style.gridColumn = "1 / -1";
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    panel.innerHTML = `<p class="loading-text">${escapeHtml(t("ref_loading"))}</p>`;
+    let presets;
+    try {
+      presets = await apiFetch("/media-assets/reference-generation/presets");
+    } catch (err) {
+      panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
+      return;
+    }
+    const state = { purpose: "ADDITIONAL", ...lwRefDefaults("ADDITIONAL"), rightsAck: false, confirmMain: false, plan: null };
+
+    function pickList(name, items, selected) {
+      return items.map((item) => `<label class="lw-ref-pick"><input type="checkbox" data-ref-${name}="${escapeHtml(item.code)}" ${selected.includes(item.code) ? "checked" : ""}> ${escapeHtml(item.label_ko)}</label>`).join(" ");
+    }
+
+    function render(errorKey, errorText) {
+      const maxCount = lwRefMaxCount(state);
+      const countOptions = Array.from({ length: maxCount }, (_, i) => `<option value="${i + 1}" ${state.count === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("");
+      const purposes = [["ADDITIONAL", "ref_purpose_additional"], ["DETAIL", "ref_purpose_detail"], ["MAIN", "ref_purpose_main"]]
+        .map(([value, key]) => `<label><input type="radio" name="lw-ref-purpose-${assetId}" value="${value}" ${state.purpose === value ? "checked" : ""}> ${escapeHtml(t(key))}</label>`).join(" ");
+      const rights = rightsStatus === "RIGHTS_DENIED"
+        ? `<p class="field-error">${escapeHtml(t("ref_rights_denied"))}</p>`
+        : (rightsStatus === "RIGHTS_UNVERIFIED"
+          ? `<p class="field-error">${escapeHtml(t("ref_rights_unverified"))}</p>
+             <label><input type="checkbox" id="lw-ref-rights-ack-${assetId}" ${state.rightsAck ? "checked disabled" : ""}> ${escapeHtml(t("ref_rights_ack_label"))}</label>`
+          : "");
+      const main = state.purpose === "MAIN"
+        ? `<div class="banner banner-warning"><p>${escapeHtml(presets.main_policy_warning || "")}</p>
+             <label><input type="checkbox" id="lw-ref-main-confirm-${assetId}" ${state.confirmMain ? "checked" : ""}> ${escapeHtml(t("ref_main_confirm_label"))}</label></div>`
+        : "";
+      const problem = errorKey ? t(errorKey) : (errorText || "");
+      panel.innerHTML = `
+        <div class="detail-panel lw-ref-panel-box">
+          <h3>${escapeHtml(t("ref_panel_title"))}</h3>
+          <p class="stat-sub">${escapeHtml(t("ref_panel_hint"))}</p>
+          <p class="stat-sub">${escapeHtml(t("ref_demo_note"))}</p>
+          <p class="stat-sub">${escapeHtml(t("ref_no_watermark_note"))}</p>
+          <p class="stat-sub">${escapeHtml(t("ref_wing_note"))}</p>
+          ${rights}
+          <div class="lw-bg-controls">${purposes}</div>
+          <p><strong>${escapeHtml(t("ref_backgrounds"))}</strong> ${pickList("bg", presets.backgrounds || [], state.backgrounds)}</p>
+          <p><strong>${escapeHtml(t("ref_poses"))}</strong> ${pickList("pose", presets.poses || [], state.poses)}</p>
+          <p><label>${escapeHtml(t("ref_count"))} <select id="lw-ref-count-${assetId}" ${maxCount ? "" : "disabled"}>${countOptions}</select></label></p>
+          ${main}
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="lw-ref-preview-btn-${assetId}">${escapeHtml(t("ref_preview_btn"))}</button>
+            <button type="button" class="btn btn-primary btn-sm" id="lw-ref-run-btn-${assetId}">${escapeHtml(t("ref_run_btn"))}</button>
+          </div>
+          <p class="field-error" id="lw-ref-error-${assetId}">${escapeHtml(problem)}</p>
+          ${lwRefPreviewHtml(state.plan)}
+        </div>`;
+      wire();
+    }
+
+    function wire() {
+      panel.querySelectorAll(`input[name="lw-ref-purpose-${assetId}"]`).forEach((radio) => {
+        radio.addEventListener("change", () => {
+          state.purpose = radio.value;
+          Object.assign(state, lwRefDefaults(state.purpose));
+          state.confirmMain = false;
+          state.plan = null;
+          render();
+        });
+      });
+      panel.querySelectorAll("[data-ref-bg]").forEach((box) => box.addEventListener("change", () => {
+        state.backgrounds = lwRefToggle(state.backgrounds, box.dataset.refBg, LW_REF_MAX_PICK);
+        state.count = Math.min(state.count, Math.max(1, lwRefMaxCount(state)));
+        state.plan = null;
+        render();
+      }));
+      panel.querySelectorAll("[data-ref-pose]").forEach((box) => box.addEventListener("change", () => {
+        state.poses = lwRefToggle(state.poses, box.dataset.refPose, LW_REF_MAX_PICK);
+        state.count = Math.min(state.count, Math.max(1, lwRefMaxCount(state)));
+        state.plan = null;
+        render();
+      }));
+      const countEl = el(`lw-ref-count-${assetId}`);
+      if (countEl) countEl.addEventListener("change", () => { state.count = Number(countEl.value); state.plan = null; });
+      const mainEl = el(`lw-ref-main-confirm-${assetId}`);
+      if (mainEl) mainEl.addEventListener("change", () => { state.confirmMain = mainEl.checked; });
+      const ackEl = el(`lw-ref-rights-ack-${assetId}`);
+      if (ackEl && !state.rightsAck) {
+        ackEl.addEventListener("change", async () => {
+          if (!ackEl.checked) return;
+          ackEl.disabled = true;
+          try {
+            await apiFetch("/media-assets/rights-acknowledgements", {
+              method: "POST",
+              body: JSON.stringify({ asset_id: Number(assetId), workflow_stage: "GENERATE_OR_EDIT_OR_EXPORT", warning_code: "RIGHTS_UNVERIFIED", user_action: "CONTINUE" }),
+            });
+            state.rightsAck = true;
+            render();
+          } catch (err) {
+            ackEl.checked = false;
+            ackEl.disabled = false;
+            render(null, err.message || t("ref_rights_ack_failed"));
+          }
+        });
+      }
+      el(`lw-ref-preview-btn-${assetId}`).addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwRefProblem({ ...state, confirmMain: true }, rightsStatus);  // 미리보기는 대표 최종 확인 없이도 볼 수 있다
+        if (key) { render(key); return; }
+        try {
+          state.plan = await apiFetch("/media-assets/reference-generation/preview", { method: "POST", body: JSON.stringify(lwRefBody({ ...state, confirmMain: false }, assetId)) });
+          render();
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+        }
+      }));
+      el(`lw-ref-run-btn-${assetId}`).addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwRefProblem(state, rightsStatus);
+        if (key) { render(key); return; }
+        try {
+          const result = await apiFetch("/media-assets/reference-generation", { method: "POST", body: JSON.stringify(lwRefBody(state, assetId)) });
+          // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 만든 장수를 알린다.
+          lwRefNotice = { count: (result.assets || []).length };
+          await lwRenderMediaStep(content);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+        }
+      }));
+    }
+
+    render();
+  }
+
+  // 2026-10-23 — 컨셉으로 만들기(I2·I3). 누끼 사진 한 장으로 배경 컨셉(단색·그라데이션·질감·조명)을 여러 개 골라 각각 따로 만든다(내 컴퓨터에서만 처리, 비용·외부 전송 없음).
+  // 컨셉마다 검사(제품 보존·배경 대비·대표 규격)를 숫자로 돌려 통과하지 못하면 저장하지 않는다. 쿠팡 정책 적합 여부는 자동으로 확인하지 못해 사람이 확인해야 한다고 항상 알린다.
+  // 이미지에는 글자·워터마크를 넣지 않는다. 한도(6개)와 대표(흰 배경만)는 서버도 같은 규칙으로 다시 막는다.
+  const LW_CONCEPT_MAX_PICK = 6;
+  const LW_CONCEPT_KNOWN_CHECKS = ["PRODUCT_PRESERVATION", "BACKGROUND_CONTRAST", "MAIN_IMAGE_SPEC", "NO_TEXT_OVERLAY", "POLICY_FLAGS"];
+  const LW_CONCEPT_KNOWN_CHECK_STATUSES = ["PASS", "WARN", "FAIL", "BY_CONSTRUCTION", "NOT_CHECKED", "SKIPPED"];
+  const LW_CONCEPT_KNOWN_STATUSES = ["CREATED", "REUSED", "CHECK_FAILED", "SKIPPED", "FAILED"];
+  const LW_CONCEPT_KNOWN_REASONS = ["UNKNOWN_CONCEPT", "NOT_USABLE_FOR_PURPOSE", "INSPECTION_FAILED", "COMPOSE_FAILED", "SAVE_FAILED", "EXISTING_ASSET_WITH_SAME_CONTENT"];
+  let lwConceptNotice = null;
+
+  function lwConceptProblem(state) {
+    // 실행 전에 화면이 먼저 알려 줄 일(서버가 같은 규칙으로 다시 막는다). 문제가 없으면 null, 있으면 문구 키.
+    if (!Array.isArray(state.codes) || !state.codes.length) return "concept_err_none";
+    if (state.codes.length > LW_CONCEPT_MAX_PICK) return "concept_err_max";
+    return null;
+  }
+
+  function lwConceptBody(state, assetId) {
+    return { cutout_asset_id: Number(assetId), concept_codes: state.codes.slice(), purpose: state.purpose };
+  }
+
+  function lwConceptCheckText(check) {
+    // 서버 검사 코드·상태 → 사람 말(모르는 코드는 글을 그대로 보여 주지 않고 일반 문구).
+    const t = (key) => HomezI18n.t(`lw.${key}`);
+    const name = LW_CONCEPT_KNOWN_CHECKS.includes(check.code) ? t(`concept_check_${String(check.code).toLowerCase()}`) : t("concept_check_other");
+    const status = LW_CONCEPT_KNOWN_CHECK_STATUSES.includes(check.status) ? t(`concept_cstatus_${String(check.status).toLowerCase()}`) : t("concept_cstatus_other");
+    return `${name}: ${status}`;
+  }
+
+  function lwConceptSummaryHtml(result, labels) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    if (!result) return "";
+    const num = (v) => (Number.isInteger(v) ? v : "…");
+    const rows = (result.results || []).map((r) => {
+      const label = (labels && labels[r.concept_code]) || r.concept_code;
+      const status = LW_CONCEPT_KNOWN_STATUSES.includes(r.status) ? t(`concept_status_${String(r.status).toLowerCase()}`) : t("concept_status_other");
+      const reason = r.reason ? ` — ${escapeHtml(LW_CONCEPT_KNOWN_REASONS.includes(r.reason) ? t(`concept_reason_${String(r.reason).toLowerCase()}`) : t("concept_reason_other"))}` : "";
+      const asset = r.asset && Number.isInteger(r.asset.id) ? ` (#${r.asset.id})` : "";
+      const checks = (r.checks || []).map((c) => `<li class="stat-sub">${escapeHtml(lwConceptCheckText(c))}</li>`).join("");
+      return `<li><strong>${escapeHtml(label)}</strong> · ${escapeHtml(status)}${asset}${reason}${checks ? `<ul>${checks}</ul>` : ""}</li>`;
+    }).join("");
+    return `<div class="banner banner-success" role="status" id="lw-concept-created-banner">
+      <p>${escapeHtml(t("concept_result", { created: num(result.created), reused: num(result.reused), skipped: num(result.skipped), check_failed: num(result.check_failed), failed: num(result.failed) }))}</p>
+      <p class="stat-sub">${escapeHtml(t("concept_policy_note"))}</p>
+      <ul>${rows}</ul></div>`;
+  }
+
+  function lwConceptNoticeHtml() {
+    if (!lwConceptNotice) return "";
+    const notice = lwConceptNotice;
+    lwConceptNotice = null;
+    return lwConceptSummaryHtml(notice.result, notice.labels);
+  }
+
+  async function lwOpenConceptPanel(assetId, content) {
+    const panel = el(`lw-concept-panel-${assetId}`);
+    if (!panel) return;
+    const card = panel.closest(".lw-media-card");
+    if (panel.dataset.open === "1") {
+      panel.innerHTML = "";
+      panel.dataset.open = "";
+      if (card) card.style.gridColumn = "";
+      return;
+    }
+    panel.dataset.open = "1";
+    if (card) card.style.gridColumn = "1 / -1";
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const state = { purpose: "ADDITIONAL", category: "", codes: [], recs: null };
+
+    async function load(errorText) {
+      panel.innerHTML = `<p class="loading-text">${escapeHtml(t("concept_loading"))}</p>`;
+      try {
+        state.recs = await apiFetch(`/media-assets/concept-recommendations?purpose=${encodeURIComponent(state.purpose)}&category=${encodeURIComponent(state.category)}`);
+      } catch (err) {
+        panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
+        return;
+      }
+      const known = new Set((state.recs.recommended || []).concat(state.recs.excluded || []).map((r) => r.code));
+      state.codes = state.codes.filter((code) => known.has(code));
+      render(null, errorText);
+    }
+
+    function levelText(level) {
+      return t(level === "L0" ? "concept_level_l0" : (level === "L1" ? "concept_level_l1" : "concept_level_other"));
+    }
+
+    function rowHtml(row, excluded) {
+      const reasons = (row.reasons || []).map((r) => `<span class="stat-sub">${escapeHtml(r)}</span>`).join(" ");
+      return `<label class="lw-ref-pick lw-concept-pick"><input type="checkbox" data-concept-code="${escapeHtml(row.code)}" ${state.codes.includes(row.code) ? "checked" : ""}>
+        <strong>${escapeHtml(row.label_ko)}</strong> <span class="stat-sub">${escapeHtml(levelText(row.processing_level))}</span> ${reasons}${excluded ? ` <span class="field-error">${escapeHtml(t("concept_avoid_tag"))}</span>` : ""}</label>`;
+    }
+
+    function render(errorKey, errorText) {
+      const recs = state.recs || { recommended: [], excluded: [] };
+      const purposes = [["ADDITIONAL", "concept_purpose_additional"], ["DETAIL", "concept_purpose_detail"], ["MAIN", "concept_purpose_main"]]
+        .map(([value, key]) => `<label><input type="radio" name="lw-concept-purpose-${assetId}" value="${value}" ${state.purpose === value ? "checked" : ""}> ${escapeHtml(t(key))}</label>`).join(" ");
+      const excluded = (recs.excluded || []).length
+        ? `<p class="stat-sub">${escapeHtml(t("concept_excluded_title"))}</p><div>${recs.excluded.map((r) => rowHtml(r, true)).join("")}</div>` : "";
+      const problem = errorKey ? t(errorKey) : (errorText || "");
+      panel.innerHTML = `
+        <div class="detail-panel lw-concept-panel-box">
+          <h3>${escapeHtml(t("concept_panel_title"))}</h3>
+          <p class="stat-sub">${escapeHtml(t("concept_panel_hint"))}</p>
+          <p class="stat-sub">${escapeHtml(t("concept_local_note"))}</p>
+          <p class="stat-sub">${escapeHtml(t("concept_policy_note"))}</p>
+          <div class="lw-bg-controls">${purposes}</div>
+          ${state.purpose === "MAIN" ? `<p class="stat-sub">${escapeHtml(t("concept_main_note"))}</p>` : ""}
+          <p><label>${escapeHtml(t("concept_category_label"))} <input type="text" id="lw-concept-category-${assetId}" maxlength="60" placeholder="${escapeHtml(t("concept_category_placeholder"))}" value="${escapeHtml(state.category)}"></label>
+            <button type="button" class="btn btn-ghost btn-sm" id="lw-concept-recommend-btn-${assetId}">${escapeHtml(t("concept_recommend_btn"))}</button></p>
+          ${recs.category_known === false && state.category ? `<p class="stat-sub">${escapeHtml(t("concept_category_unknown"))}</p>` : ""}
+          <div id="lw-concept-list-${assetId}">${(recs.recommended || []).map((r) => rowHtml(r, false)).join("") || `<p class="empty-text">${escapeHtml(t("concept_none"))}</p>`}</div>
+          ${excluded}
+          <p class="stat-sub">${escapeHtml(t("concept_pick_count", { count: state.codes.length, max: LW_CONCEPT_MAX_PICK }))}</p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="lw-concept-run-btn-${assetId}">${escapeHtml(t("concept_run_btn"))}</button>
+          </div>
+          <p class="field-error" id="lw-concept-error-${assetId}">${escapeHtml(problem)}</p>
+        </div>`;
+      wire();
+    }
+
+    function wire() {
+      panel.querySelectorAll(`input[name="lw-concept-purpose-${assetId}"]`).forEach((radio) => {
+        radio.addEventListener("change", () => { state.purpose = radio.value; state.codes = []; load(); });
+      });
+      panel.querySelectorAll("[data-concept-code]").forEach((box) => box.addEventListener("change", () => {
+        const next = lwRefToggle(state.codes, box.dataset.conceptCode, LW_CONCEPT_MAX_PICK);
+        const overLimit = box.checked && next.length === state.codes.length && !state.codes.includes(box.dataset.conceptCode);
+        state.codes = next;
+        render(overLimit ? "concept_err_max" : null);
+      }));
+      const categoryEl = el(`lw-concept-category-${assetId}`);
+      if (categoryEl) categoryEl.addEventListener("input", () => { state.category = categoryEl.value; });
+      el(`lw-concept-recommend-btn-${assetId}`).addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => { await load(); }));
+      el(`lw-concept-run-btn-${assetId}`).addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwConceptProblem(state);
+        if (key) { render(key); return; }
+        try {
+          const result = await apiFetch("/media-assets/concept-runs", { method: "POST", body: JSON.stringify(lwConceptBody(state, assetId)) });
+          const labels = {};
+          ((state.recs && state.recs.recommended) || []).concat((state.recs && state.recs.excluded) || []).forEach((r) => { labels[r.code] = r.label_ko; });
+          // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 컨셉별 결과와 검사 내용을 보여 준다.
+          lwConceptNotice = { result, labels };
+          await lwRenderMediaStep(content);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+        }
+      }));
+    }
+
+    await load();
+  }
+
+  // 2026-10-23 — 일괄 보정(R2). 고른 사진 여러 장에 같은 밝기·색온도를 한 번에 적용해 새 사진으로 저장한다(로컬 처리, 원본 유지).
+  // 이미지에는 글자·워터마크를 넣지 않는다. 범위(−50~+50)와 한도(20장)는 서버도 같은 규칙으로 다시 막는다.
+  const LW_ADJ_MAX_PHOTOS = 20;
+  const LW_ADJ_LIMIT = 50;
+  let lwAdjNotice = null;
+
+  function lwAdjProblem(state, ids) {
+    // 문제가 없으면 null, 있으면 문구 키.
+    if (!Array.isArray(ids) || !ids.length) return "adj_err_none";
+    if (ids.length > LW_ADJ_MAX_PHOTOS) return "adj_err_many";
+    const ok = (v) => Number.isInteger(v) && v >= -LW_ADJ_LIMIT && v <= LW_ADJ_LIMIT;
+    if (!ok(state.brightness) || !ok(state.warmth)) return "adj_err_range";
+    if (state.brightness === 0 && state.warmth === 0) return "adj_err_zero";
+    return null;
+  }
+
+  function lwAdjBody(state, ids) {
+    return { asset_ids: ids.map(Number), brightness: Number(state.brightness), warmth: Number(state.warmth) };
+  }
+
+  function lwAdjReasonText(reason) {
+    // 서버 이유 코드 → 사람 말(모르는 코드는 글을 그대로 보여 주지 않고 일반 문구).
+    const known = { NOT_FOUND: "adj_reason_not_found", RIGHTS_DENIED: "adj_reason_denied", EXISTING_ASSET_WITH_SAME_CONTENT: "adj_reason_existing" };
+    return HomezI18n.t(`lw.${known[reason] || "adj_reason_other"}`);
+  }
+
+  function lwAdjSummaryHtml(result) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    if (!result) return "";
+    const lines = (result.results || []).filter((r) => r.status !== "CREATED")
+      .map((r) => `<li>#${escapeHtml(r.asset_id)} · ${escapeHtml(t(`adj_status_${String(r.status).toLowerCase()}`))}${r.reason ? ` — ${escapeHtml(lwAdjReasonText(r.reason))}` : ""}</li>`).join("");
+    const num = (v) => (Number.isInteger(v) ? v : "…");
+    return `<div class="banner banner-success" role="status" id="lw-adj-created-banner">
+      <p>${escapeHtml(t("adj_result", { created: num(result.created), reused: num(result.reused), skipped: num(result.skipped), failed: num(result.failed) }))}</p>
+      ${lines ? `<ul>${lines}</ul>` : ""}</div>`;
+  }
+
+  function lwAdjNoticeHtml() {
+    if (!lwAdjNotice) return "";
+    const notice = lwAdjNotice;
+    lwAdjNotice = null;
+    return lwAdjSummaryHtml(notice);
+  }
+
+  function lwBindBatchAdjust(content) {
+    const toggle = content.querySelector("#lw-adj-toggle-btn");
+    const panel = content.querySelector("#lw-adj-panel");
+    if (!toggle || !panel) return;
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const state = { brightness: 0, warmth: 0 };
+    const picked = () => Array.from(content.querySelectorAll(".lw-adj-check")).filter((box) => box.checked).map((box) => Number(box.value));
+
+    function renderPanel(errorKey, errorText) {
+      const ids = picked();
+      panel.innerHTML = `
+        <div class="detail-panel lw-adj-panel-box">
+          <h3>${escapeHtml(t("adj_title"))}</h3>
+          <p class="stat-sub">${escapeHtml(t("adj_hint"))}</p>
+          <p class="stat-sub">${escapeHtml(t("adj_no_marks_note"))}</p>
+          <p><label>${escapeHtml(t("adj_brightness"))} <input type="range" id="lw-adj-brightness" min="-50" max="50" step="5" value="${state.brightness}"> <span id="lw-adj-brightness-val">${state.brightness}</span></label></p>
+          <p><label>${escapeHtml(t("adj_warmth"))} <input type="range" id="lw-adj-warmth" min="-50" max="50" step="5" value="${state.warmth}"> <span id="lw-adj-warmth-val">${state.warmth}</span></label></p>
+          <p class="stat-sub" id="lw-adj-count">${escapeHtml(t("adj_selected", { count: ids.length }))}</p>
+          <div class="dialog-actions"><button type="button" class="btn btn-primary btn-sm" id="lw-adj-run-btn">${escapeHtml(t("adj_run_btn"))}</button></div>
+          <p class="field-error" id="lw-adj-error">${escapeHtml(errorKey ? t(errorKey) : (errorText || ""))}</p>
+        </div>`;
+      const sync = (id, key) => {
+        const input = panel.querySelector(id);
+        input.addEventListener("input", () => { state[key] = Number(input.value); panel.querySelector(`${id}-val`).textContent = String(state[key]); });
+      };
+      sync("#lw-adj-brightness", "brightness");
+      sync("#lw-adj-warmth", "warmth");
+      panel.querySelector("#lw-adj-run-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const chosen = picked();
+        const key = lwAdjProblem(state, chosen);
+        if (key) { renderPanel(key); return; }
+        try {
+          lwAdjNotice = await apiFetch("/media-assets/batch-adjust", { method: "POST", body: JSON.stringify(lwAdjBody(state, chosen)) });
+          await lwRenderMediaStep(content);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch (err) {
+          renderPanel(null, err.message || HomezI18n.t("common.load_error"));
+        }
+      }));
+    }
+
+    toggle.addEventListener("click", () => {
+      if (panel.dataset.open === "1") { panel.innerHTML = ""; panel.dataset.open = ""; return; }
+      panel.dataset.open = "1";
+      renderPanel();
+    });
+    content.querySelectorAll(".lw-adj-check").forEach((box) => box.addEventListener("change", () => {
+      const count = panel.querySelector("#lw-adj-count");
+      if (count) count.textContent = t("adj_selected", { count: picked().length });
+    }));
+  }
+
   function lwOrderMediaAssets(list) {
     const rootOf = (a) => a.source_asset_id || a.id;
     return [...list].sort((x, y) => {
@@ -12697,6 +13151,9 @@
     content.innerHTML = `
       <h2>${HomezI18n.t("lw.step.media")}</h2>
       ${lwBgNoticeHtml()}
+      ${lwRefNoticeHtml()}
+      ${lwAdjNoticeHtml()}
+      ${lwConceptNoticeHtml()}
       <p class="stat-sub">${HomezI18n.t("lw.media_add_hint")}</p>
 
       <div class="lw-media-search-panel">
@@ -12712,7 +13169,9 @@
         <label class="btn btn-secondary" for="lw-media-upload-input">${HomezI18n.t("lw.media_upload_btn")}</label>
         <input type="file" id="lw-media-upload-input" accept="image/png,image/jpeg,image/webp" multiple hidden>
         <button type="button" class="btn btn-secondary" id="lw-long-image-toggle-btn">${HomezI18n.t("lw.media_long_image_btn")}</button>
+        <button type="button" class="btn btn-secondary" id="lw-adj-toggle-btn">${HomezI18n.t("lw.adj_btn")}</button>
       </div>
+      <div id="lw-adj-panel"></div>
       <p class="field-error" id="lw-media-upload-error"></p>
 
       <div class="lw-long-image-panel" id="lw-long-image-panel" hidden>
@@ -12742,10 +13201,13 @@
             <span>#${a.id} · ${escapeHtml(a.purpose)} · ${escapeHtml(a.asset_role)}${a.asset_role === "GENERATED" && a.source_asset_id ? ` (from #${a.source_asset_id})` : ""}</span>
           </label>
           ${lwRightsBadge(a.rights_status)}
+          <label class="lw-adj-pick"><input type="checkbox" class="lw-adj-check" value="${a.id}"> ${HomezI18n.t("lw.adj_pick")}</label>
           ${isVerified ? "" : `<p class="lw-media-thumb-note">${HomezI18n.t("lw.rights_unverified_selection_blocked")}</p>`}
           <div class="lw-media-card-actions">
             ${a.asset_role === "ORIGINAL" ? `<button type="button" class="btn btn-ghost btn-sm lw-cutout-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.media_cutout_btn")}</button>` : ""}
             ${a.asset_role === "GENERATED" ? `<button type="button" class="btn btn-ghost btn-sm lw-compose-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.media_compose_btn")}</button>` : ""}
+            ${a.asset_role === "GENERATED" ? `<button type="button" class="btn btn-ghost btn-sm lw-concept-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.concept_btn")}</button>` : ""}
+            ${a.asset_role === "ORIGINAL" ? `<button type="button" class="btn btn-ghost btn-sm lw-ref-btn" data-asset-id="${a.id}" data-rights="${escapeHtml(a.rights_status)}">${HomezI18n.t("lw.ref_btn")}</button>` : ""}
             <button type="button" class="btn btn-ghost btn-sm lw-manual-edit-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.media_manual_edit_btn")}</button>
             <button type="button" class="btn btn-ghost btn-sm lw-detail-page-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.media_detail_page_btn")}</button>
             ${isVerified
@@ -12755,6 +13217,8 @@
           <div class="lw-rights-action-panel" id="lw-rights-panel-${a.id}"></div>
           <div class="lw-rights-action-panel" id="lw-detail-page-panel-${a.id}"></div>
           <div class="lw-bg-panel" id="lw-bg-panel-${a.id}"></div>
+          <div class="lw-bg-panel" id="lw-ref-panel-${a.id}"></div>
+          <div class="lw-bg-panel" id="lw-concept-panel-${a.id}"></div>
         </div>`;
       }).join("")}</div>`}
       <p class="field-error" id="lw-media-error"></p>`;
@@ -12912,6 +13376,16 @@
     content.querySelectorAll(".lw-compose-btn").forEach((btn) => {
       btn.addEventListener("click", () => lwOpenBackgroundPanel(btn.dataset.assetId, content));
     });
+
+    content.querySelectorAll(".lw-concept-btn").forEach((btn) => {
+      btn.addEventListener("click", () => lwOpenConceptPanel(btn.dataset.assetId, content));
+    });
+
+    content.querySelectorAll(".lw-ref-btn").forEach((btn) => {
+      btn.addEventListener("click", () => lwOpenReferencePanel(btn.dataset.assetId, btn.dataset.rights, content));
+    });
+
+    lwBindBatchAdjust(content);
 
     content.querySelectorAll(".lw-manual-edit-btn").forEach((btn) => {
       btn.addEventListener("click", () => {

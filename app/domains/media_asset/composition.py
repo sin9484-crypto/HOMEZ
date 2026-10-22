@@ -31,8 +31,10 @@ class BackgroundKind:
     SOLID_COLOR = "SOLID_COLOR"
     GRADIENT = "GRADIENT"
     EXISTING_ASSET = "EXISTING_ASSET"
+    # 2026-10-23 이미지 AI I3 — 로컬 장면 배경(질감·조명, 생성이 아니다). scene_backgrounds.py가 코드로 그린다.
+    SCENE = "SCENE"
 
-    ALL = (WHITE, SOLID_COLOR, GRADIENT, EXISTING_ASSET)
+    ALL = (WHITE, SOLID_COLOR, GRADIENT, EXISTING_ASSET, SCENE)
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class BackgroundSpec:
     color_hex: str | None = None  # SOLID_COLOR / GRADIENT 시작색
     color_hex_end: str | None = None  # GRADIENT 끝색
     existing_asset_bytes: bytes | None = None  # EXISTING_ASSET
+    scene_code: str | None = None  # SCENE(color_hex는 질감의 바탕색, 조명은 색을 쓰지 않는다)
 
 
 def _parse_hex_color(value: str) -> tuple[int, int, int]:
@@ -95,6 +98,13 @@ def _build_background(spec: BackgroundSpec, size: tuple[int, int]) -> Image.Imag
         bg = Image.open(io.BytesIO(spec.existing_asset_bytes)).convert("RGB")
 
         return bg.resize(size)
+
+    if spec.kind == BackgroundKind.SCENE:
+        if not spec.scene_code:
+            raise BadRequestException("SCENE 배경은 scene_code가 필요합니다.")
+        from app.domains.media_asset import scene_backgrounds
+
+        return scene_backgrounds.render_scene(spec.scene_code, size, spec.color_hex or "#E8DFD0")
 
     raise BadRequestException(f"알 수 없는 배경 종류입니다: {spec.kind}")
 

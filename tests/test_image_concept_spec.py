@@ -54,8 +54,9 @@ class MigrationOfTheSixTests(unittest.TestCase):
     ]
 
     def test_codes_order_backgrounds_colors_purposes_and_themes_are_unchanged(self):
-        concepts = ic.list_concepts()
-        self.assertEqual(len(concepts), 6)
+        concepts = ic.list_concepts()[:6]       # I3(2026-10-23)에서 L1 장면 컨셉 5종이 뒤에 추가됐다 — 처음 6종은 그대로여야 한다
+        self.assertEqual(len(ic.list_concepts()), 11)
+        self.assertEqual([c.code for c in ic.list_concepts()[6:]], ["LINEN_NATURAL", "WOOD_WARM", "PAPER_SOFT", "SPOTLIGHT_WARM", "SPOTLIGHT_COOL"])
         for concept, (code, label, usable, kind, start, end, bg, text, accent) in zip(concepts, self.EXPECTED):
             self.assertEqual((concept.code, concept.label_ko, concept.usable_for, concept.background_kind, concept.color_hex, concept.color_hex_end),
                              (code, label, usable, kind, start, end), code)
@@ -67,7 +68,7 @@ class MigrationOfTheSixTests(unittest.TestCase):
                          {"code": "CLEAN_WHITE", "label_ko": "깔끔한 흰 배경", "description": "쿠팡 대표 이미지에 가장 안전한 흰 배경. 군더더기 없는 기본형.",
                           "usable_for": ["MAIN", "ADDITIONAL", "DETAIL"], "preview": {"background": ["#FFFFFF"], "text": "#222222", "accent": "#2D6CDF"}})
         self.assertEqual(set(summary) - {"code", "label_ko", "description", "usable_for", "preview"},
-                         {"version", "processing_level", "scene_kind", "mood", "good_for", "avoid_for", "needs_generated_label"})
+                         {"version", "processing_level", "scene_kind", "mood", "good_for", "avoid_for", "needs_generated_label", "scene_code"})
         json.dumps([c.to_summary() for c in ic.list_concepts()])   # 화면용 요약은 JSON으로 나간다
 
     def test_a_concept_built_the_old_way_still_works_with_defaults(self):
@@ -79,7 +80,7 @@ class MigrationOfTheSixTests(unittest.TestCase):
         self.assertEqual(old.background_spec().kind, "SOLID_COLOR")
 
     def test_the_six_are_all_local_composition_without_generation_or_props(self):
-        for concept in ic.list_concepts():
+        for concept in ic.list_concepts()[:6]:
             self.assertEqual((concept.processing_level, concept.version, concept.props_allowed, concept.needs_generated_label, concept.l2_approved), ("L0", 1, False, False, False), concept.code)
             self.assertIn(concept.scene_kind, ic.L0_SCENES)
             self.assertIn("PRODUCT_PRESERVATION", concept.checks)
