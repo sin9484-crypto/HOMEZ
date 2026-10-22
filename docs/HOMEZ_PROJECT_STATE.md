@@ -13172,3 +13172,4 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - **미커밋 기존 WIP는 건드리지 않았다**(`.claude/skills/homez-action-briefing/`, `docs/HOMEZ_UI_REDESIGN_RESEARCH_20261014.md`, `docs/research/2026100x~1018*`).
 - **남은 것·사용자 몫**: ① 앱 재시작 후 쉬운 보기 새 점검 확인 ② 쿠팡 이미지·AI 이미지 정책 직접 확인(WING·판매자 지원) ③ 쿠팡 의류 수수료율 확인 ④ P2·P3·S3 화면 연결 승인 ⑤ 제안 기록 Migration(초안) 적용 여부 결정 ⑥ 실제 공급처 제공자·실제 AI 호출 승인 ⑦ 로컬 커밋 push 여부.
 - **알려진 기존 결함**: `tests.test_marketing_name_service.ServiceTests.test_two_clicks_at_once_make_only_one_call`가 모듈 전체 실행 때 간헐 실패(단독 실행은 통과, 깨끗한 HEAD에서도 재현) — 이번 라운드에서 고치지 않았다.
+- **전체 회귀(2026-10-23)**: 452개 모듈 7,236건 실행, 실패 1건 — `test_migration_directory_contains_only_expected_files`(10-16 Migration 파일이 기대 목록에 없음, 이번 라운드 이전부터 있던 결함, 고치지 않음). 그 외 전부 통과.

@@ -269,3 +269,9 @@
 - 기존 WIP 보호: `.claude/skills/homez-action-briefing/`, `docs/HOMEZ_UI_REDESIGN_RESEARCH_20261014.md`, `docs/research/2026100x~1018*`, `20261019_ONCHANNEL_PUBLIC_SCHEMA_SCOPE.md`는 열거나 수정하거나 커밋하지 않았다.
 - 금융 오류 자동 보정 없음(저장 마진 불일치·반품 금액 불일치는 알리기만).
 - 운영 DB 접근·은행 API·외부 네트워크·무단 Migration·push·배포 없음.
+
+### 6-7. 회귀 시험 결과 (2026-10-23, 실제 실행)
+- 전체 452개 모듈을 12개씩 38묶음으로 나눠 실행: **7,236건, 실패 1건, 나머지 통과**(건너뜀은 기존 조건부 시험).
+- 실패 1건: `tests.test_permissions_timestamps_migration.MigrationStaticContractTestCase.test_migration_directory_contains_only_expected_files` — `migrations/` 폴더에 2026-10-16 커밋(`9f2e1b9`)으로 들어간 `20261016_00_create_external_call_allowance_schema.sql`이 이 시험의 기대 목록에 없다. **이번 라운드 이전부터 있던 결함**이다(이번 라운드는 `migrations/`를 건드리지 않았고 단독 실행으로도 같은 결과). Migration 계약 시험이라 기대 목록을 고치는 것은 사용자 확인 후에 한다(고치지 않았다).
+- 13번째 묶음의 `[Errno 10048] … bind` 로그는 시험 안의 임시 서버 포트 충돌 기록이며 해당 묶음은 통과했다.
+- 간헐 실패로 알려진 `test_two_clicks_at_once_make_only_one_call`는 이번 실행에서는 통과했다.
