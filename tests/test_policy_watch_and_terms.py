@@ -127,6 +127,10 @@ class ImpactTests(unittest.TestCase):
         r = pw.compare("COUPANG", "기준\nKC 인증 필수", "기준")
         self.assertEqual([c["area"] for c in r["impact_candidates"]], ["인증·허가·신고"])
 
+    def test_a_plain_sentence_saying_it_cannot_be_sold_points_to_prohibited_items(self):
+        r = pw.compare("COUPANG", "기준", "기준\n전자담배는 판매할 수 없습니다.")
+        self.assertIn("판매 금지·제한 품목", [c["area"] for c in r["impact_candidates"]])
+
     def test_unchanged_lines_never_create_candidates(self):
         r = pw.compare("COUPANG", "기준\n원산지 안내", "기준\n원산지 안내\n새 소식")
         self.assertEqual(r["impact_candidates"], [])

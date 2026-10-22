@@ -179,6 +179,14 @@ def compare_policy_snapshots(
     return policy_change_watch.compare(data.platform, data.previous_text, data.current_text)
 
 
+def _query_models(models: list[str] | None) -> list[str] | None:
+    """주소 뒤 models 값. 없으면 None(모름 — 모델별 조항까지 모두), `models=`처럼 빈 값만 있으면 빈 목록(공통 조항만)."""
+
+    if models is None:
+        return None
+    return [m for m in models if m]
+
+
 @router.get("/terms/checklist")
 def terms_checklist(
     models: list[str] | None = Query(default=None),
@@ -188,7 +196,7 @@ def terms_checklist(
 
     from app.domains.channel_policy import terms_checklist as terms
 
-    return terms.checklist(models)
+    return terms.checklist(_query_models(models))
 
 
 @router.post("/terms/coverage")
@@ -212,7 +220,7 @@ def terms_skeleton(
 
     from app.domains.channel_policy import terms_checklist as terms
 
-    return terms.skeleton(models)
+    return terms.skeleton(_query_models(models))
 
 
 __all__ = ["router"]

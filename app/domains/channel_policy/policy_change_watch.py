@@ -36,7 +36,7 @@ UNCHANGED, CHANGED, UNKNOWN = "UNCHANGED", "CHANGED", "UNKNOWN"
 # 낱말 → 영향 후보. rule_code는 channel_policy/rule_catalog.py 의 규칙 코드와 같아야 한다(시험이 대조한다). rule_code=None은 규칙 카탈로그에 아직 없는 영역이다.
 IMPACT_KEYWORDS: tuple[dict[str, Any], ...] = (
     {"area": "판매 금지·제한 품목", "rule_codes": ("PROHIBITED_CATEGORY_ABSOLUTE", "NAVER_PROHIBITED_CATEGORY_PLACEHOLDER"),
-     "words": ("판매 불가", "판매불가", "판매 금지", "판매금지", "취급 금지", "금지 품목", "제한 품목", "취급주의")},
+     "words": ("판매 불가", "판매불가", "판매 금지", "판매금지", "판매할 수 없", "판매 할 수 없", "취급 금지", "금지 품목", "제한 품목", "취급주의")},
     {"area": "원산지·제조국", "rule_codes": ("PROHIBITED_ORIGIN_COUNTRY", "RESTRICTED_ORIGIN_COUNTRY_EVIDENCE"), "words": ("원산지", "제조국", "수입 제한")},
     {"area": "인증·허가·신고", "rule_codes": ("RESTRICTED_CATEGORY_CERTIFICATION_REQUIRED",), "words": ("인증", "허가", "신고", "kc", "전기용품", "어린이제품")},
     {"area": "성인 상품 표시", "rule_codes": ("ADULT_ONLY_LABEL_REQUIRED",), "words": ("성인", "19세", "청소년 유해")},

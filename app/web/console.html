@@ -339,6 +339,10 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10.3 3.9L2.6 17.4a1.6 1.6 0 001.4 2.4h16a1.6 1.6 0 001.4-2.4L13.7 3.9a1.6 1.6 0 00-2.8 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
         <span data-i18n="nav.recall_blocks">리콜·판매중지 차단</span>
       </button>
+      <button class="nav-item" data-view="ai-tools" data-permission="__admin_only__">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 20l6-6M14 4l6 6-8 8-6-6z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.ai_tools">AI 점검 도구</span>
+      </button>
     </div>
 
     <div class="nav-group">
@@ -786,6 +790,18 @@
         <div id="sdf-estop-banner-slot"></div>
         <p class="field-hint" data-i18n="settlement_differences.hint">주문 총액 대비 정산 금액 차이, 방치된 정산 건을 읽기 전용으로 분석합니다 — 채널 원본 정산 명세서 대사는 아직 연동되지 않았습니다.</p>
         <div id="sdf-table-wrap">
+          <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
+        </div>
+      </section>
+
+      <!-- 2026-10-23 AI 점검 도구 — 주문 마진 점검·답변 초안·반품 손익·공급 조건 비교·정책 변경 비교·약관 점검 -->
+      <section id="view-ai-tools" class="view">
+        <div class="view-header">
+          <h1 data-i18n="nav.ai_tools">AI 점검 도구</h1>
+          <button class="btn btn-ghost btn-sm" data-refresh="ai-tools" data-i18n="common.refresh">새로고침</button>
+        </div>
+        <p class="field-hint" data-i18n="at.view_hint">API로만 있던 점검·계산 기능을 모은 화면입니다. 저장·전송·가격 변경은 하지 않으며, 답변 초안만 누를 때 AI를 부릅니다.</p>
+        <div id="at-content" aria-live="polite">
           <p class="loading-text" data-i18n="common.loading">불러오는 중…</p>
         </div>
       </section>

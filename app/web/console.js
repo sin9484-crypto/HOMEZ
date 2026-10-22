@@ -7077,6 +7077,396 @@
     }
   }
 
+  // ---- AI 점검 도구 (2026-10-23) ----
+  // 자율 제작 라운드에서 API로만 만들어 둔 점검·계산 기능을 한 화면에 카드로 모았다:
+  // 주문 마진 점검(P2) · 고객 응대 답변 초안(P3) · 반품 손익 계산 · 공급 조건 비교(S3) · 정책 변경 비교(T3) · 약관 점검(T4).
+  // 원칙: 화면은 서버 결과를 보여 줄 뿐 새 판정을 만들지 않는다. 서버가 준 글은 모두 이스케이프하고, 판정·이유 코드는 정해진 문구로 옮긴다(모르는 코드는 일반 문구).
+  // 저장·전송·가격 변경은 없다. 답변 초안만 AI를 부르며(사용자가 누를 때만), 보내는 일은 사람이 쿠팡 윙에서 직접 한다.
+  const AT_MW_REASONS = ["LOSS", "MARGIN_BELOW_TARGET", "ECONOMICS_UNKNOWN", "ECONOMICS_INCONSISTENT", "STORED_MARGIN_MISMATCH", "ASSUMPTIONS_INVALID"];
+  const AT_RET_REASONS = ["AMOUNTS_UNKNOWN", "FEE_REFUND_INCLUDED", "NET_LOSS", "REFUND_ABOVE_PAID", "SUPPLIER_AMOUNTS_MISMATCH", "SETTLEMENT_UNCONFIRMED"];
+  const AT_RET_FIELDS = ["customer_paid", "customer_refund", "supplier_paid", "supplier_refund", "supplier_deduction", "fee_refund"];
+  const AT_RET_STEPS = ["SUPPLIER_REPLY_CHECKED", "EXTRA_REQUESTS_HANDLED", "SHIPPING_DEDUCTION_DECIDED", "WING_RECEIPT_CONFIRMED", "SETTLEMENT_CHECKED"];
+  const AT_OF_REASONS = ["ASSUMPTIONS_INVALID", "PRICE_HIDDEN", "COST_UNKNOWN", "DROPSHIP_NO", "DROPSHIP_UNKNOWN", "MIN_ORDER_ABOVE_ONE", "HIGH_SHIPPING_SHARE", "RETURN_BURDEN_HIGH", "RETURN_COST_UNKNOWN", "TARGET_PRICE_BELOW_FLOOR", "NO_API", "API_UNKNOWN", "NO_DOMESTIC_STOCK"];
+  const AT_DECISIONS = ["OK", "WARN", "HOLD", "BLOCK", "READY", "EXCLUDE"];
+  const AT_CS_KINDS = ["DELIVERY", "RETURN_EXCHANGE", "PRODUCT", "OTHER"];
+  const AT_CS_MAX_CHARS = 1500;
+  const AT_CS_MAX_FACTS = 8;
+  const AT_OF_MAX_ROWS = 10;
+
+  function atWon(value) {
+    if (value === null || value === undefined || value === "") return "—";   // 모르는 금액을 0원으로 보이지 않는다
+    const n = Number(value);
+    return Number.isFinite(n) ? HomezI18n.t("at.won", { amount: Math.round(n).toLocaleString("ko-KR") }) : "—";
+  }
+
+  function atDecisionPill(decision) {
+    const known = AT_DECISIONS.includes(decision);
+    const tone = { OK: "success", READY: "success", WARN: "warning", HOLD: "warning", BLOCK: "danger", EXCLUDE: "danger" }[decision] || "neutral";
+    return `<span class="badge badge-${tone}">${escapeHtml(HomezI18n.t(known ? `at.decision_${String(decision).toLowerCase()}` : "at.decision_other"))}</span>`;
+  }
+
+  function atReasonText(prefix, known, reason) {
+    // 이유 코드 → 정해진 문구(자리표시자는 서버가 준 숫자). 모르는 코드는 서버 글을 그대로 보여 주지 않는다.
+    if (!reason || !known.includes(reason.code)) return HomezI18n.t(`at.${prefix}_reason_other`);
+    const params = {};
+    Object.entries(reason.params || {}).forEach(([k, v]) => { params[k] = Array.isArray(v) ? v.map((x) => HomezI18n.t(`at.ret_field_${x}`)).join(", ") : (v === null || v === undefined ? "—" : v); });
+    if (reason.code === "REFUND_ABOVE_PAID" && params.field) params.field = HomezI18n.t(`at.ret_field_${reason.params.field}`);
+    return HomezI18n.t(`at.${prefix}_reason_${String(reason.code).toLowerCase()}`, params);
+  }
+
+  function atMarginHtml(report) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!report) return "";
+    const counts = report.counts || {};
+    const num = (v) => (Number.isInteger(v) ? v : "…");
+    const rows = (report.rows || []).map((r) => `
+      <tr>
+        <td>#${escapeHtml(r.task_id)} ${escapeHtml(r.title || "")}</td>
+        <td>${atDecisionPill(r.decision)}</td>
+        <td>${typeof r.margin_percent === "number" ? escapeHtml(`${r.margin_percent}%`) : "—"}</td>
+        <td>${r.floor_price === null || r.floor_price === undefined ? "—" : escapeHtml(t("mw_floor_approx", { price: atWon(r.floor_price) }))}</td>
+        <td>${(r.reasons || []).map((x) => escapeHtml(atReasonText("mw", AT_MW_REASONS, x))).join("<br>") || "—"}</td>
+      </tr>`).join("");
+    return `
+      <p>${escapeHtml(t("mw_summary", { checked: num(report.checked_tasks), block: num(counts.BLOCK), hold: num(counts.HOLD), warn: num(counts.WARN), ok: num(counts.OK) }))}</p>
+      <p class="stat-sub">${escapeHtml(t("mw_wing_note"))}</p>
+      ${rows ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(t("mw_col_task"))}</th><th>${escapeHtml(t("col_decision"))}</th><th>${escapeHtml(t("mw_col_margin"))}</th><th>${escapeHtml(t("mw_col_floor"))}</th><th>${escapeHtml(t("col_reasons"))}</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<p class="empty-text">${escapeHtml(t("mw_empty"))}</p>`}`;
+  }
+
+  function atParseFacts(text) {
+    // "항목: 내용" 한 줄에 하나. 빈 줄은 건너뛴다. 모양이 틀리면 고쳐 쓰지 않고 어느 줄인지 알려 준다.
+    const facts = {};
+    const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length; i += 1) {
+      const at = lines[i].indexOf(":");
+      if (at <= 0 || !lines[i].slice(at + 1).trim()) return { facts: null, error: "cs_err_fact_line", line: i + 1 };
+      facts[lines[i].slice(0, at).trim()] = lines[i].slice(at + 1).trim();
+    }
+    if (Object.keys(facts).length > AT_CS_MAX_FACTS) return { facts: null, error: "cs_err_fact_many", line: null };
+    return { facts, error: null, line: null };
+  }
+
+  function atCsProblem(state) {
+    if (!AT_CS_KINDS.includes(state.kind)) return "cs_err_kind";
+    const text = String(state.inquiry || "").trim();
+    if (!text) return "cs_err_empty";
+    if (text.length > AT_CS_MAX_CHARS) return "cs_err_long";
+    return null;
+  }
+
+  function atCsResultHtml(result) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!result) return "";
+    const usage = result.usage || {};
+    const cost = typeof usage.cost_krw === "number" ? atWon(usage.cost_krw) : "—";
+    const masked = Number.isInteger(result.masked_count) ? result.masked_count : 0;
+    if (!result.draft) {
+      const why = Object.values(result.rejected || {}).map((v) => `<li>${escapeHtml(v)}</li>`).join("");
+      return `<div class="banner banner-warning" role="status" id="at-cs-result"><p>${escapeHtml(t("cs_rejected"))}</p>${why ? `<ul>${why}</ul>` : ""}<p class="stat-sub">${escapeHtml(t("cs_usage", { cost }))}</p></div>`;
+    }
+    const needs = (result.draft.needs_check || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
+    return `<div class="detail-panel" id="at-cs-result">
+      <p><strong>${escapeHtml(t("cs_draft_title"))}</strong></p>
+      <textarea class="input" rows="7" readonly id="at-cs-draft-text">${escapeHtml(result.draft.draft || "")}</textarea>
+      ${needs ? `<p class="field-error">${escapeHtml(t("cs_needs_check"))}</p><ul>${needs}</ul>` : ""}
+      <p class="stat-sub">${escapeHtml(t("cs_masked", { count: masked }))} · ${escapeHtml(t("cs_usage", { cost }))}</p>
+      <p class="stat-sub">${escapeHtml(t("cs_footer"))}</p>
+    </div>`;
+  }
+
+  function atReturnBody(values, done) {
+    // 빈 칸은 '모름'(null). 숫자가 아니거나 음수면 보내지 않고 어느 칸인지 알려 준다(0으로 바꾸지 않는다).
+    const body = {};
+    for (const field of AT_RET_FIELDS) {
+      const raw = String((values || {})[field] === undefined || (values || {})[field] === null ? "" : values[field]).replace(/[,\s원]/g, "");
+      if (raw === "") { body[field] = null; continue; }
+      if (!/^\d+(\.\d+)?$/.test(raw)) return { body: null, error: "ret_err_amount", field };
+      body[field] = raw;
+    }
+    const doneOut = {};
+    Object.entries(done || {}).forEach(([k, v]) => { if (AT_RET_STEPS.includes(k) && typeof v === "boolean") doneOut[k] = v; });
+    body.done = doneOut;
+    return { body, error: null, field: null };
+  }
+
+  function atReturnHtml(result) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!result || !result.economics) return "";
+    const e = result.economics;
+    const line = (key, value) => `<li>${escapeHtml(t(key))}: ${value === null || value === undefined ? escapeHtml(t("unknown")) : escapeHtml(atWon(value))}</li>`;
+    const reasons = (e.reasons || []).map((r) => `<li>${escapeHtml(atReasonText("ret", AT_RET_REASONS, r))}</li>`).join("");
+    const steps = ((result.checkpoints || {}).steps || []).map((s) => {
+      const label = AT_RET_STEPS.includes(s.code) ? t(`ret_step_${String(s.code).toLowerCase()}`) : t("ret_step_other");
+      const state = s.done === true ? t("ret_done_yes") : (s.done === false ? t("ret_done_no") : t("ret_done_unknown"));
+      return `<li>${escapeHtml(label)} — ${escapeHtml(state)}</li>`;
+    }).join("");
+    const cp = result.checkpoints || {};
+    const next = cp.next_step && AT_RET_STEPS.includes(cp.next_step) ? t("ret_next", { step: t(`ret_step_${cp.next_step.toLowerCase()}`) }) : (cp.all_done ? t("ret_all_done") : "");
+    const warn = (cp.warnings || []).some((w) => w.code === "RECEIPT_BEFORE_NEGOTIATION") ? `<p class="field-error">${escapeHtml(t("ret_warn_receipt_first"))}</p>` : "";
+    return `<div class="detail-panel" id="at-ret-result">
+      <p>${atDecisionPill(e.decision)}</p>
+      <ul>${line("ret_customer_kept", e.customer_kept)}${line("ret_supplier_unrecovered", e.supplier_unrecovered)}${line("ret_net_before_fee", e.net_before_fee)}${line("ret_net_with_fee_refund", e.net_with_fee_refund)}</ul>
+      ${reasons ? `<ul>${reasons}</ul>` : ""}
+      <p><strong>${escapeHtml(t("ret_steps_title"))}</strong></p><ol>${steps}</ol>
+      ${next ? `<p>${escapeHtml(next)}</p>` : ""}${warn}
+    </div>`;
+  }
+
+  function atOfferRowToInput(row, index) {
+    // 화면 한 줄 → 서버 입력. 공급가·배송비를 모르면 비워 둔다(0으로 채우지 않는다). 위탁 가능은 예/아니오/모름.
+    const num = (v) => { const s = String(v === undefined || v === null ? "" : v).replace(/[,\s원]/g, ""); return s === "" ? null : (/^\d+(\.\d+)?$/.test(s) ? s : undefined); };
+    const supplier = String(row.supplier || "").trim();
+    const id = String(row.external_id || "").trim() || String(index + 1);
+    if (!supplier) return { offer: null, error: "of_err_supplier" };
+    const unit = num(row.unit_cost); const ship = num(row.shipping_cost); const ret = num(row.return_shipping_cost); const moq = num(row.min_order_qty);
+    if ([unit, ship, ret, moq].includes(undefined)) return { offer: null, error: "of_err_number" };
+    const dropship = { YES: true, NO: false }[row.dropship];
+    return {
+      offer: {
+        supplier_code: supplier.slice(0, 30), external_id: id.slice(0, 60), title: String(row.title || "").slice(0, 120), unit_cost: unit, shipping_cost: ship,
+        return_shipping_cost: ret, min_order_qty: moq === null ? null : Math.floor(Number(moq)), price_visible: true, dropship_supported: dropship === undefined ? null : dropship,
+      },
+      error: null,
+    };
+  }
+
+  function atOfferHtml(data) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!data) return "";
+    const rows = (data.results || []).map((r) => `
+      <tr>
+        <td>${escapeHtml(r.rank)}</td>
+        <td>${escapeHtml(r.supplier_code)} · ${escapeHtml(r.external_id)}${r.title ? ` <span class="stat-sub">${escapeHtml(r.title)}</span>` : ""}</td>
+        <td>${atDecisionPill(r.decision)}</td>
+        <td>${r.floor_price === null || r.floor_price === undefined ? "—" : escapeHtml(atWon(r.floor_price))}</td>
+        <td>${typeof r.margin_at_target_percent === "number" ? escapeHtml(`${r.margin_at_target_percent}%`) : "—"}</td>
+        <td>${(r.reasons || []).map((x) => escapeHtml(atReasonText("of", AT_OF_REASONS, x))).join("<br>") || "—"}</td>
+      </tr>`).join("");
+    return `<p class="stat-sub">${escapeHtml(t("of_assumption_note"))}</p>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(t("of_col_rank"))}</th><th>${escapeHtml(t("of_col_offer"))}</th><th>${escapeHtml(t("col_decision"))}</th><th>${escapeHtml(t("of_col_floor"))}</th><th>${escapeHtml(t("of_col_margin"))}</th><th>${escapeHtml(t("col_reasons"))}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function atWatchHtml(result) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!result) return "";
+    const status = ["UNCHANGED", "CHANGED", "UNKNOWN"].includes(result.status) ? result.status : "UNKNOWN";
+    const list = (items) => (items || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
+    const impacts = (result.impact_candidates || []).map((c) => `<li><strong>${escapeHtml(c.area)}</strong> — ${escapeHtml(t("pw_matched", { words: (c.matched_words || []).join(", ") }))}${(c.rule_codes || []).length ? ` · ${escapeHtml(t("pw_rules", { codes: c.rule_codes.join(", ") }))}` : ` · ${escapeHtml(t("pw_not_in_catalog"))}`}</li>`).join("");
+    const num = (v) => (Number.isInteger(v) ? v : 0);
+    return `<div class="detail-panel" id="at-pw-result">
+      <p><strong>${escapeHtml(t(`pw_status_${status.toLowerCase()}`))}</strong></p>
+      ${status === "CHANGED" ? `
+        <p>${escapeHtml(t("pw_added", { count: num(result.added_count) }))}</p><ul>${list(result.added)}</ul>
+        <p>${escapeHtml(t("pw_removed", { count: num(result.removed_count) }))}</p><ul>${list(result.removed)}</ul>
+        ${result.truncated ? `<p class="stat-sub">${escapeHtml(t("pw_truncated"))}</p>` : ""}
+        <p><strong>${escapeHtml(t("pw_impacts_title"))}</strong></p>${impacts ? `<ul>${impacts}</ul>` : `<p class="stat-sub">${escapeHtml(t("pw_no_impacts"))}</p>`}` : ""}
+      <p class="stat-sub">${escapeHtml(t("pw_review_note"))}</p>
+    </div>`;
+  }
+
+  function atTermsModels(choice) {
+    // 사업 모델 선택 → 서버 입력. 모름이면 null(모델별 조항도 모두 점검), 공통만이면 빈 목록.
+    if (choice === "UNKNOWN") return null;
+    if (choice === "PROXY_PURCHASE" || choice === "DROPSHIP") return [choice];
+    if (choice === "BOTH") return ["PROXY_PURCHASE", "DROPSHIP"];
+    return [];
+  }
+
+  function atTermsHtml(kind, data) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    if (!data) return "";
+    let body = "";
+    if (kind === "coverage") {
+      if (data.status !== "CHECKED") {
+        body = `<p>${escapeHtml(t("tm_unknown"))}</p>`;
+      } else {
+        const rows = (data.results || []).map((r) => `<li>${r.status === "MENTIONED" ? "✔" : "✘"} <strong>${escapeHtml(r.title)}</strong> — ${escapeHtml(t(r.status === "MENTIONED" ? "tm_mentioned" : "tm_not_found"))}${r.status === "MENTIONED" ? "" : ` <span class="stat-sub">${escapeHtml(r.must_cover)}</span>`}</li>`).join("");
+        body = `<p>${escapeHtml(t("tm_coverage_summary", { mentioned: Number(data.mentioned) || 0, total: Number(data.total) || 0 }))}</p><ul>${rows}</ul><p class="stat-sub">${escapeHtml(t("tm_mentioned_note"))}</p>`;
+      }
+    } else if (kind === "skeleton") {
+      body = `<p class="field-error">${escapeHtml(t("tm_not_for_use"))}</p><ol>${(data.sections || []).map((s) => `<li><strong>${escapeHtml(s.title)}</strong> <span class="stat-sub">${escapeHtml(s.must_cover)}</span></li>`).join("")}</ol>`;
+    } else {
+      body = `<ol>${(data.clauses || []).map((c) => `<li><strong>${escapeHtml(c.title)}</strong> <span class="stat-sub">${escapeHtml(c.must_cover)}</span></li>`).join("")}</ol>`;
+    }
+    return `<div class="detail-panel" id="at-tm-result"><p class="field-error">${escapeHtml(t("tm_disclaimer"))}</p>${body}</div>`;
+  }
+
+  async function loadAiTools() {
+    const wrap = el("at-content");
+    if (!wrap) return;
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    const kinds = AT_CS_KINDS.map((k) => `<option value="${k}">${escapeHtml(t(`cs_kind_${k.toLowerCase()}`))}</option>`).join("");
+    const retInputs = AT_RET_FIELDS.map((f) => `<label>${escapeHtml(t(`ret_field_${f}`))} <input class="input" type="text" inputmode="numeric" data-at-ret="${f}" placeholder="${escapeHtml(t("ret_unknown_placeholder"))}"></label>`).join(" ");
+    const retSteps = AT_RET_STEPS.map((s) => `<label><select class="input" data-at-step="${s}"><option value="">${escapeHtml(t("ret_done_unknown"))}</option><option value="yes">${escapeHtml(t("ret_done_yes"))}</option><option value="no">${escapeHtml(t("ret_done_no"))}</option></select> ${escapeHtml(t(`ret_step_${s.toLowerCase()}`))}</label>`).join("<br>");
+    wrap.innerHTML = `
+      <div class="dash-card" id="at-mw-card"><div class="dash-card-head"><h2>${escapeHtml(t("mw_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("mw_hint"))}</p>
+        <label>${escapeHtml(t("mw_min_margin"))} <input class="input" type="number" id="at-mw-min" min="0" max="90" value="18" style="width:80px"></label>
+        <button type="button" class="btn btn-primary btn-sm" id="at-mw-btn">${escapeHtml(t("mw_btn"))}</button>
+        <div id="at-mw-result"></div></div>
+
+      <div class="dash-card" id="at-cs-card"><div class="dash-card-head"><h2>${escapeHtml(t("cs_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("cs_hint"))}</p>
+        <p><label>${escapeHtml(t("cs_kind"))} <select class="input" id="at-cs-kind">${kinds}</select></label></p>
+        <p><textarea class="input" id="at-cs-inquiry" rows="5" maxlength="${AT_CS_MAX_CHARS}" placeholder="${escapeHtml(t("cs_inquiry_placeholder"))}"></textarea></p>
+        <p><textarea class="input" id="at-cs-facts" rows="3" placeholder="${escapeHtml(t("cs_facts_placeholder"))}"></textarea></p>
+        <button type="button" class="btn btn-primary btn-sm" id="at-cs-btn">${escapeHtml(t("cs_btn"))}</button>
+        <p class="field-error" id="at-cs-error"></p><div id="at-cs-out"></div></div>
+
+      <div class="dash-card" id="at-ret-card"><div class="dash-card-head"><h2>${escapeHtml(t("ret_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("ret_hint"))}</p>
+        <div class="lw-bg-controls">${retInputs}</div>
+        <p>${retSteps}</p>
+        <button type="button" class="btn btn-primary btn-sm" id="at-ret-btn">${escapeHtml(t("ret_btn"))}</button>
+        <p class="field-error" id="at-ret-error"></p><div id="at-ret-out"></div></div>
+
+      <div class="dash-card" id="at-of-card"><div class="dash-card-head"><h2>${escapeHtml(t("of_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("of_hint"))}</p>
+        <p><label>${escapeHtml(t("of_target_price"))} <input class="input" type="text" inputmode="numeric" id="at-of-target" style="width:120px"></label>
+           <label>${escapeHtml(t("of_fee_rate"))} <input class="input" type="number" id="at-of-fee" min="0" max="50" step="0.1" value="9.8" style="width:80px"></label></p>
+        <div id="at-of-rows"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="at-of-add">${escapeHtml(t("of_add_row"))}</button>
+        <button type="button" class="btn btn-primary btn-sm" id="at-of-btn">${escapeHtml(t("of_btn"))}</button>
+        <p class="field-error" id="at-of-error"></p><div id="at-of-out"></div></div>
+
+      <div class="dash-card" id="at-pw-card"><div class="dash-card-head"><h2>${escapeHtml(t("pw_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("pw_hint"))}</p>
+        <p><label>${escapeHtml(t("pw_platform"))} <select class="input" id="at-pw-platform"><option value="COUPANG">${escapeHtml(t("pw_platform_coupang"))}</option><option value="NAVER_SMARTSTORE">${escapeHtml(t("pw_platform_naver"))}</option></select></label></p>
+        <p><textarea class="input" id="at-pw-prev" rows="4" placeholder="${escapeHtml(t("pw_prev_placeholder"))}"></textarea></p>
+        <p><textarea class="input" id="at-pw-cur" rows="4" placeholder="${escapeHtml(t("pw_cur_placeholder"))}"></textarea></p>
+        <button type="button" class="btn btn-primary btn-sm" id="at-pw-btn">${escapeHtml(t("pw_btn"))}</button>
+        <p class="field-error" id="at-pw-error"></p><div id="at-pw-out"></div></div>
+
+      <div class="dash-card" id="at-tm-card"><div class="dash-card-head"><h2>${escapeHtml(t("tm_title"))}</h2></div>
+        <p class="field-error">${escapeHtml(t("tm_disclaimer"))}</p>
+        <p><label>${escapeHtml(t("tm_model"))} <select class="input" id="at-tm-model">
+          <option value="UNKNOWN">${escapeHtml(t("tm_model_unknown"))}</option><option value="DROPSHIP">${escapeHtml(t("tm_model_dropship"))}</option>
+          <option value="PROXY_PURCHASE">${escapeHtml(t("tm_model_proxy"))}</option><option value="BOTH">${escapeHtml(t("tm_model_both"))}</option><option value="COMMON">${escapeHtml(t("tm_model_common"))}</option></select></label></p>
+        <p><textarea class="input" id="at-tm-text" rows="5" placeholder="${escapeHtml(t("tm_text_placeholder"))}"></textarea></p>
+        <button type="button" class="btn btn-ghost btn-sm" id="at-tm-checklist-btn">${escapeHtml(t("tm_checklist_btn"))}</button>
+        <button type="button" class="btn btn-primary btn-sm" id="at-tm-coverage-btn">${escapeHtml(t("tm_coverage_btn"))}</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="at-tm-skeleton-btn">${escapeHtml(t("tm_skeleton_btn"))}</button>
+        <p class="field-error" id="at-tm-error"></p><div id="at-tm-out"></div></div>`;
+
+    const showError = (id, text) => { el(id).textContent = text || ""; };
+
+    el("at-mw-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      const out = el("at-mw-result");
+      const min = Math.max(0, Math.min(90, Math.round(Number(el("at-mw-min").value) || 0)));
+      try {
+        out.innerHTML = atMarginHtml(await apiFetch(`/purchase-tasks/margin-watch?min_margin_percent=${min}`));
+      } catch (err) {
+        out.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
+      }
+    }));
+
+    el("at-cs-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      showError("at-cs-error", "");
+      const state = { kind: el("at-cs-kind").value, inquiry: el("at-cs-inquiry").value };
+      const key = atCsProblem(state);
+      if (key) { showError("at-cs-error", t(key, { max: AT_CS_MAX_CHARS })); return; }
+      const parsed = atParseFacts(el("at-cs-facts").value);
+      if (parsed.error) { showError("at-cs-error", t(parsed.error, { line: parsed.line, max: AT_CS_MAX_FACTS })); return; }
+      try {
+        const result = await apiFetch("/orders/cs-reply-draft", { method: "POST", body: JSON.stringify({ kind: state.kind, inquiry_text: state.inquiry.trim(), facts: parsed.facts }) });
+        el("at-cs-out").innerHTML = atCsResultHtml(result);
+      } catch (err) {
+        showError("at-cs-error", err.message || HomezI18n.t("common.load_error"));
+      }
+    }));
+
+    el("at-ret-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      showError("at-ret-error", "");
+      const values = {};
+      wrap.querySelectorAll("[data-at-ret]").forEach((input) => { values[input.dataset.atRet] = input.value; });
+      const done = {};
+      wrap.querySelectorAll("[data-at-step]").forEach((sel) => { if (sel.value) done[sel.dataset.atStep] = sel.value === "yes"; });
+      const prepared = atReturnBody(values, done);
+      if (prepared.error) { showError("at-ret-error", t(prepared.error, { field: t(`ret_field_${prepared.field}`) })); return; }
+      try {
+        el("at-ret-out").innerHTML = atReturnHtml(await apiFetch("/orders/return-economics", { method: "POST", body: JSON.stringify(prepared.body) }));
+      } catch (err) {
+        showError("at-ret-error", err.message || HomezI18n.t("common.load_error"));
+      }
+    }));
+
+    const offerRows = [{}];
+    function renderOfferRows() {
+      el("at-of-rows").innerHTML = offerRows.map((row, i) => `
+        <div class="lw-bg-controls" data-at-of-row="${i}">
+          <input class="input" data-k="supplier" placeholder="${escapeHtml(t("of_supplier"))}" value="${escapeHtml(row.supplier || "")}" style="width:110px">
+          <input class="input" data-k="external_id" placeholder="${escapeHtml(t("of_external_id"))}" value="${escapeHtml(row.external_id || "")}" style="width:90px">
+          <input class="input" data-k="unit_cost" inputmode="numeric" placeholder="${escapeHtml(t("of_unit_cost"))}" value="${escapeHtml(row.unit_cost || "")}" style="width:90px">
+          <input class="input" data-k="shipping_cost" inputmode="numeric" placeholder="${escapeHtml(t("of_shipping_cost"))}" value="${escapeHtml(row.shipping_cost || "")}" style="width:90px">
+          <input class="input" data-k="return_shipping_cost" inputmode="numeric" placeholder="${escapeHtml(t("of_return_cost"))}" value="${escapeHtml(row.return_shipping_cost || "")}" style="width:100px">
+          <input class="input" data-k="min_order_qty" inputmode="numeric" placeholder="${escapeHtml(t("of_min_order"))}" value="${escapeHtml(row.min_order_qty || "")}" style="width:80px">
+          <select class="input" data-k="dropship"><option value="">${escapeHtml(t("of_dropship_unknown"))}</option><option value="YES" ${row.dropship === "YES" ? "selected" : ""}>${escapeHtml(t("of_dropship_yes"))}</option><option value="NO" ${row.dropship === "NO" ? "selected" : ""}>${escapeHtml(t("of_dropship_no"))}</option></select>
+        </div>`).join("");
+      el("at-of-rows").querySelectorAll("[data-at-of-row]").forEach((rowEl) => {
+        rowEl.querySelectorAll("[data-k]").forEach((input) => input.addEventListener("input", () => { offerRows[Number(rowEl.dataset.atOfRow)][input.dataset.k] = input.value; }));
+        rowEl.querySelectorAll("select[data-k]").forEach((input) => input.addEventListener("change", () => { offerRows[Number(rowEl.dataset.atOfRow)][input.dataset.k] = input.value; }));
+      });
+    }
+    renderOfferRows();
+    el("at-of-add").addEventListener("click", () => {
+      if (offerRows.length >= AT_OF_MAX_ROWS) { showError("at-of-error", t("of_err_rows", { max: AT_OF_MAX_ROWS })); return; }
+      offerRows.push({});
+      renderOfferRows();
+    });
+    el("at-of-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      showError("at-of-error", "");
+      const offers = [];
+      for (let i = 0; i < offerRows.length; i += 1) {
+        const row = offerRows[i];
+        if (!Object.values(row).some((v) => String(v || "").trim())) continue;   // 완전히 빈 줄은 건너뛴다
+        const converted = atOfferRowToInput(row, i);
+        if (converted.error) { showError("at-of-error", t(converted.error, { row: i + 1 })); return; }
+        offers.push(converted.offer);
+      }
+      if (!offers.length) { showError("at-of-error", t("of_err_none")); return; }
+      const targetRaw = String(el("at-of-target").value || "").replace(/[,\s원]/g, "");
+      if (targetRaw && !/^\d+(\.\d+)?$/.test(targetRaw)) { showError("at-of-error", t("of_err_target")); return; }
+      const fee = Number(el("at-of-fee").value);
+      if (!Number.isFinite(fee) || fee < 0 || fee >= 50) { showError("at-of-error", t("of_err_fee")); return; }
+      try {
+        const body = { offers, target_price: targetRaw || null, fee_rate: (fee / 100).toFixed(4) };
+        el("at-of-out").innerHTML = atOfferHtml(await apiFetch("/product-import/supplier-offers/rank", { method: "POST", body: JSON.stringify(body) }));
+      } catch (err) {
+        showError("at-of-error", err.message || HomezI18n.t("common.load_error"));
+      }
+    }));
+
+    el("at-pw-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      showError("at-pw-error", "");
+      try {
+        const body = { platform: el("at-pw-platform").value, previous_text: el("at-pw-prev").value, current_text: el("at-pw-cur").value };
+        el("at-pw-out").innerHTML = atWatchHtml(await apiFetch("/channel-policy/watch/compare", { method: "POST", body: JSON.stringify(body) }));
+      } catch (err) {
+        showError("at-pw-error", err.message || HomezI18n.t("common.load_error"));
+      }
+    }));
+
+    const termsQuery = () => {
+      const models = atTermsModels(el("at-tm-model").value);
+      if (models === null) return "";
+      return models.length ? `?${models.map((m) => `models=${encodeURIComponent(m)}`).join("&")}` : "?models=";
+    };
+    const runTerms = (kind, request) => async (ev) => withButtonGuard(ev.currentTarget, async () => {
+      showError("at-tm-error", "");
+      try {
+        el("at-tm-out").innerHTML = atTermsHtml(kind, await request());
+      } catch (err) {
+        showError("at-tm-error", err.message || HomezI18n.t("common.load_error"));
+      }
+    });
+    el("at-tm-checklist-btn").addEventListener("click", runTerms("checklist", () => apiFetch(`/channel-policy/terms/checklist${termsQuery()}`)));
+    el("at-tm-skeleton-btn").addEventListener("click", runTerms("skeleton", () => apiFetch(`/channel-policy/terms/skeleton${termsQuery()}`)));
+    el("at-tm-coverage-btn").addEventListener("click", runTerms("coverage", () => apiFetch("/channel-policy/terms/coverage", {
+      method: "POST", body: JSON.stringify({ text: el("at-tm-text").value, models: atTermsModels(el("at-tm-model").value) }),
+    })));
+  }
+
   const VIEW_LOADERS = {
     overview: loadOverview,
     "ai-proposals": loadAiProposals,
@@ -7093,6 +7483,7 @@
     "product-attr-comparison-detail": loadProductAttrComparisonDetail,
     "recall-blocks": loadRecallBlocks,
     "recall-blocks-detail": loadRecallBlocksDetail,
+    "ai-tools": loadAiTools,
     "order-collection-ops": loadOrderCollectionOps,
     candidates: loadCandidates,
     trend: loadTrend,
@@ -7375,7 +7766,7 @@
       tabs: [
         ["work-queue", "nav.work_queue"], ["overview", "nav.dashboard"], ["ai-proposals", "nav.ai_proposals"],
         ["operations-priorities", "nav.operations_priorities"], ["order-exceptions", "nav.order_exceptions"],
-        ["settlement-differences", "nav.settlement_differences"],
+        ["settlement-differences", "nav.settlement_differences"], ["ai-tools", "nav.ai_tools"],
       ],
     },
     {
