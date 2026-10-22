@@ -293,6 +293,32 @@ class MarketInput(BaseModel):
         return self
 
 
+class SupplierOfferInput(BaseModel):
+    """공급 조건 한 건(공급처가 어디든 같은 모양). 모르는 값은 비워 둔다 — 0으로 채우지 않는다."""
+
+    supplier_code: str = Field(min_length=1, max_length=30)
+    external_id: str = Field(min_length=1, max_length=60)
+    title: str = Field(default="", max_length=120)
+    unit_cost: Decimal | None = Field(default=None, ge=0)
+    shipping_cost: Decimal | None = Field(default=None, ge=0)
+    return_shipping_cost: Decimal | None = Field(default=None, ge=0)
+    min_order_qty: int | None = Field(default=None, ge=0, le=100000)
+    price_visible: bool = True
+    dropship_supported: bool | None = None
+    api_available: bool | None = None
+    domestic_stock: bool | None = None
+
+
+class SupplierOfferRankRequest(BaseModel):
+    """공급 조건 비교 요청(2026-10-23 서칭 AI S3). 수수료율·반품 예비율·기준 마진율은 가정값이며 실제 값을 넣을 수 있다."""
+
+    offers: list[SupplierOfferInput] = Field(min_length=1, max_length=50)
+    target_price: Decimal | None = Field(default=None, gt=0)
+    fee_rate: Decimal = Field(default=Decimal("0.098"), ge=0, lt=1)
+    return_reserve_rate: Decimal = Field(default=Decimal("0.03"), ge=0, lt=1)
+    min_margin: Decimal = Field(default=Decimal("0.18"), ge=0, lt=1)
+
+
 class StrategyRequest(CalculateRequest):
     """가격 전략 입력 = 계산 입력(원가·부가세·배송비·수수료 등) + 선택적 시장 구간. `sale_price`는 사용자가 생각하는 판매가(평가용)다."""
 

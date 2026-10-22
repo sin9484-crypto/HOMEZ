@@ -15,6 +15,7 @@ URL 상품 가져오기(2026-10-14) API.
   POST /product-import/competitors/read     경쟁 상품 주소(최대 5개)를 읽고 AI가 표시 가격·구성을 해석한다(주소마다 AI 1회 — 월 한도·승인 센터 허용 필요)
   POST /product-import/competitors/compare  확인된 경쟁 가격으로 결정적 통계(AI 없음, 저장 없음)
   POST /product-import/strategy             마진 하한가·시장 구간·권장 구간 가격 전략 제안(AI 없음, 저장 없음, 가격은 바꾸지 않음)
+  POST /product-import/supplier-offers/rank 공급처 무관 공급 조건 비교(최대 50건, 순수 계산·AI 없음·저장 없음, 모르는 비용은 보류)
 
 쿠팡 호출은 없다. 외부 접근은 /search의 페이지 읽기(+ 온채널이면 공식 API 상품 조회)와 /create-draft의 선택한 이미지
 다운로드뿐이다. 권한은 위저드 생성 권한(listing_wizard.create)을 쓴다.
@@ -214,6 +215,33 @@ def propose_price_strategy(
                         median=None if data.market.median is None else Decimal(data.market.median),
                         max=None if data.market.max is None else Decimal(data.market.max))
     return strategy_report(db, current_user.company_id, current_user.id, _calc_input(data), market)
+
+
+@router.post("/supplier-offers/rank")
+def rank_supplier_offers(
+    data: schema.SupplierOfferRankRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_CREATE)),
+    db: Session = Depends(get_db),
+):
+    """2026-10-23 상품 서칭 AI S3 — 공급처가 어디든 같은 규칙으로 공급 조건을 비교한다(AI·바깥 호출·저장 없음, 순수 계산).
+    모르는 비용은 후보 가능으로 올리지 않고, 위탁이 안 되거나 최소 주문이 1보다 크면 제외하며, 순서는 결정적이다. 권고일 뿐 — 공급처 선택은 사용자가 한다."""
+
+    from app.domains.supplier import offer_rules as rules
+
+    offers = [
+        rules.SupplierOffer(
+            supplier_code=o.supplier_code, external_id=o.external_id, title=o.title, unit_cost=o.unit_cost, shipping_cost=o.shipping_cost,
+            return_shipping_cost=o.return_shipping_cost, min_order_qty=o.min_order_qty, price_visible=o.price_visible,
+            dropship_supported=o.dropship_supported, api_available=o.api_available, domestic_stock=o.domestic_stock,
+        )
+        for o in data.offers
+    ]
+    assumptions = rules.MarginAssumptions(fee_rate=data.fee_rate, return_reserve_rate=data.return_reserve_rate, min_margin=data.min_margin)
+    return {
+        "results": rules.rank_offers(offers, data.target_price, assumptions),
+        "assumptions": {"fee_rate": str(data.fee_rate), "return_reserve_rate": str(data.return_reserve_rate), "min_margin": str(data.min_margin)},
+        "assumptions_note": "수수료율·반품 예비율은 가정값입니다(의류의 실제 쿠팡 수수료율은 확인하지 못했습니다). 실제 값을 넣어 다시 계산하세요.",
+    }
 
 
 @router.get("/channel-fees")
