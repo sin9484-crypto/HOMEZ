@@ -9,11 +9,13 @@ Order Schema — V7 Gate 4(2026-08-15) 처음부터 재설계.
 """
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import StrictBool
 from pydantic import field_validator
 
 from app.core.sensitive_data import mask_address
@@ -25,6 +27,30 @@ from app.core.sensitive_data import mask_zipcode
 # --------------------------------------------------
 # 채널 주문 수집(웹훅형 — 요구사항 1/2/7)
 # --------------------------------------------------
+
+class CsReplyDraftRequest(BaseModel):
+    """고객 문의 답변 초안 요청(2026-10-23 P3). 문의 글은 사용자가 WING에서 직접 붙여 넣은 것이며 저장되지 않는다. 사실은 사용자가 확인한 것만."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(..., pattern="^(DELIVERY|RETURN_EXCHANGE|PRODUCT|OTHER)$")
+    inquiry_text: str = Field(..., min_length=1, max_length=1500)
+    facts: dict[str, str] = Field(default_factory=dict, max_length=8)
+
+
+class ReturnEconomicsRequest(BaseModel):
+    """반품 한 건의 손익·체크포인트 계산 요청(2026-10-23 P3). 금액은 사용자가 쿠팡·공급처 화면에서 직접 확인한 값만 — 모르면 비워 둔다. 저장하지 않는다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    customer_paid: Decimal | None = Field(default=None, ge=0)
+    customer_refund: Decimal | None = Field(default=None, ge=0)
+    supplier_paid: Decimal | None = Field(default=None, ge=0)
+    supplier_refund: Decimal | None = Field(default=None, ge=0)
+    supplier_deduction: Decimal | None = Field(default=None, ge=0)
+    fee_refund: Decimal | None = Field(default=None, ge=0)
+    done: dict[str, StrictBool] = Field(default_factory=dict, max_length=5)
+
 
 class OrderChannelItemPayload(BaseModel):
     """채널이 보낸 원본 주문 품목 — HOMEZ가 만들어내지 않는다."""

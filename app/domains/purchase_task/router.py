@@ -423,6 +423,23 @@ async def import_csv(
 # 구매 작업(목록/생성)
 # --------------------------------------------------
 
+@router.get("/margin-watch")
+def margin_watch(
+    min_margin_percent: int = Query(default=18, ge=0, le=90),
+    limit: int = Query(default=100, ge=1, le=500),
+    current_user: User = Depends(StaffGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-23 상품 관리 AI P2 — 구매 작업의 저장된 경제성으로 마진이 비었거나 기준에 못 미치는 건을 찾고, 쿠팡 윙 자동가격조정 최저가로 둘 하한가를 알려 준다.
+    읽기 전용(쓰기·외부 호출·AI 없음). 정적 경로이므로 동적 경로({task_id})보다 앞에 둔다."""
+
+    from decimal import Decimal
+
+    from app.domains.purchase_task.margin_watch_service import MarginWatchService
+
+    return MarginWatchService(db).report(current_user.company_id, Decimal(min_margin_percent) / Decimal(100), limit)
+
+
 @router.get("", response_model=list[PurchaseTaskResponse])
 def list_tasks(
     status_filter: str | None = Query(default=None, alias="status"),

@@ -33,6 +33,8 @@ from app.domains.automation_safety.service import SafetyService
 from app.domains.order.exception_analysis_service import (
     OrderExceptionAnalysisService,
 )
+from app.domains.order.schema import CsReplyDraftRequest
+from app.domains.order.schema import ReturnEconomicsRequest
 from app.domains.order.schema import OrderCancelRequest
 from app.domains.order.schema import CoupangOrderCollectionRequest
 from app.domains.order.schema import CoupangOrderCollectionRunResponse
@@ -240,6 +242,50 @@ def refresh_after_sales_now(
         "ok": summary["ok"], "blocked": summary["blocked"], "no_connection": summary["no_connection"],
         "failures": summary["failures"], "calls": summary["calls"], "new_events": len(summary["new_events"]),
     }
+
+
+@router.post("/return-economics")
+def calculate_return_economics(
+    data: ReturnEconomicsRequest,
+    current_user: User = Depends(admin_guard),
+):
+    """2026-10-23 상품 관리 AI P3 — 반품 한 건의 손익(고객에게 남은 돈 − 공급사에서 못 돌려받은 돈)과 처리 체크포인트를 계산한다(순수 계산, AI·저장·바깥 호출 없음).
+    사용자가 확인한 금액만 받으며 모르는 값은 비워 둔다 — 하나라도 없으면 손익을 만들지 않는다."""
+
+    from app.domains.order import return_economics as economics
+
+    return {
+        "economics": economics.calculate(
+            data.customer_paid, data.customer_refund, data.supplier_paid, data.supplier_refund, data.supplier_deduction, data.fee_refund,
+        ),
+        "checkpoints": economics.checkpoints(data.done),
+    }
+
+
+def get_cs_draft_credential_store():
+    """AI 키 저장소 — 항상 실제 Windows 자격증명 저장소. 테스트는 이 의존성을 덮어쓴다."""
+
+    from app.core.windows_credential_store import WindowsCredentialStore
+
+    return WindowsCredentialStore()
+
+
+@router.post("/cs-reply-draft")
+def draft_cs_reply(
+    data: CsReplyDraftRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_cs_draft_credential_store),
+):
+    """2026-10-23 상품 관리 AI P3 — 고객 문의 답변 **초안**(사용자가 눌렀을 때만 AI 호출, 월 한도·승인 센터 허용 `AI_DRAFT` 필요).
+    개인정보로 보이는 것은 AI에 보내기 전에 가리고, 문의 글·초안은 저장하지 않으며, 자동 전송은 없다 — 사람이 고쳐서 WING에서 직접 보낸다."""
+
+    from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+    from app.domains.order.cs_reply_draft_service import CsReplyDraftService
+
+    return CsReplyDraftService(db, AiDraftService(db, credential_store)).draft(
+        current_user.company_id, current_user.id, data.kind, data.inquiry_text, data.facts,
+    )
 
 
 @router.post("/sales-performance")
