@@ -16,6 +16,7 @@ from decimal import Decimal
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from typing import Literal
 
 from app.domains.ai_governance.schema import AIResultEnvelope
 
@@ -165,7 +166,24 @@ class MarginEstimateResult(BaseModel):
     company_target_margin_rate: Decimal | None
 
 
+class PolicyWatchCompareRequest(BaseModel):
+    """사용자가 공식 공지에서 직접 복사한 이전 글·이번 글을 비교한다(2026-10-23 T3). 서버는 페이지를 가져오지 않는다."""
+
+    platform: Literal["COUPANG", "NAVER_SMARTSTORE"]
+    previous_text: str | None = Field(default=None, max_length=200_000)
+    current_text: str | None = Field(default=None, max_length=200_000)
+
+
+class TermsCoverageRequest(BaseModel):
+    """약관 초안 글이 필수 조항을 언급하는지 점검한다(2026-10-23 T4). 모델을 모르면 비워 둔다(모델별 조항도 모두 점검)."""
+
+    text: str | None = Field(default=None, max_length=100_000)
+    models: list[Literal["PROXY_PURCHASE", "DROPSHIP"]] | None = Field(default=None, max_length=2)
+
+
 __all__ = [
+    "PolicyWatchCompareRequest",
+    "TermsCoverageRequest",
     "RuleEvaluationDetail",
     "ChannelPolicyEvaluationResponse",
     "EvaluateChannelPolicyRequest",

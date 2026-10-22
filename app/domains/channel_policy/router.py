@@ -14,6 +14,7 @@ listing_wizard_permissions.py의 이미 정의된(아직 시딩되지 않은)
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Query
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
@@ -28,6 +29,8 @@ from app.domains.channel_policy.schema import ChannelPolicyRuleSummary
 from app.domains.channel_policy.schema import EvaluateChannelPolicyRequest
 from app.domains.channel_policy.schema import MarginEstimateInput
 from app.domains.channel_policy.schema import MarginEstimateResult
+from app.domains.channel_policy.schema import PolicyWatchCompareRequest
+from app.domains.channel_policy.schema import TermsCoverageRequest
 from app.domains.channel_policy.schema import (
     UpdateCompanyChannelPolicySettingsRequest,
 )
@@ -162,6 +165,54 @@ def estimate_margin(
     (확정 채널·방식 선택 이후)와는 별개다."""
 
     return service.estimate_margin(current_user.company_id, data)
+
+
+@router.post("/watch/compare")
+def compare_policy_snapshots(
+    data: PolicyWatchCompareRequest,
+    current_user: User = Depends(AdminGuard),
+):
+    """플랫폼 정책 변경 감시(2026-10-23 T3) — 사용자가 복사해 넣은 이전·이번 글을 비교한다. 저장·외부 접촉·AI 없음. 비어 있으면 '비교하지 못함'이고 영향 규칙은 후보일 뿐이다."""
+
+    from app.domains.channel_policy import policy_change_watch
+
+    return policy_change_watch.compare(data.platform, data.previous_text, data.current_text)
+
+
+@router.get("/terms/checklist")
+def terms_checklist(
+    models: list[str] | None = Query(default=None),
+    current_user: User = Depends(AdminGuard),
+):
+    """약관 필수 조항 점검표(2026-10-23 T4). 법률 자문이 아니며 법무 검토 전에는 적용하지 않는다."""
+
+    from app.domains.channel_policy import terms_checklist as terms
+
+    return terms.checklist(models)
+
+
+@router.post("/terms/coverage")
+def terms_coverage(
+    data: TermsCoverageRequest,
+    current_user: User = Depends(AdminGuard),
+):
+    """약관 초안 글이 점검표의 각 조항을 언급하는지 낱말로 확인한다(적절성 판단 아님). 저장·AI 없음."""
+
+    from app.domains.channel_policy import terms_checklist as terms
+
+    return terms.coverage(data.text, data.models)
+
+
+@router.get("/terms/skeleton")
+def terms_skeleton(
+    models: list[str] | None = Query(default=None),
+    current_user: User = Depends(AdminGuard),
+):
+    """약관 뼈대(제목·들어가야 할 내용만, 본문 비어 있음·NOT_FOR_USE). 문장을 만들어 내지 않는다."""
+
+    from app.domains.channel_policy import terms_checklist as terms
+
+    return terms.skeleton(models)
 
 
 __all__ = ["router"]
