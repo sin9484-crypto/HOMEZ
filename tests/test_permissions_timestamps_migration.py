@@ -397,6 +397,11 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 테이블 1개(channel_action_requests, 추가형). 동일한 이유로 추가. 실제 운영 DB에는
             # 미적용이다(별도 승인 대상 — 이 테이블이 없으면 외부 요청을 보내지 않는다).
             "20261005_00_create_channel_action_request_schema.sql",
+            # 2026-10-16(커밋 9f2e1b9) 바깥 호출(쿠팡·온채널) 허용과 호출 기록 — 신규 테이블 2개
+            # (external_call_allowances·external_call_logs, 추가형). 이 목록에 반영되지 않은 채로 남아
+            # 이 테스트가 실패 상태였다(2026-10-23 전체 회귀에서 발견) — 같은 갱신 규칙으로 추가한다.
+            # 실제 운영 DB에는 2026-10-16 사용자 승인으로 앱의 Migration 승인 경로를 통해 적용됐다.
+            "20261016_00_create_external_call_allowance_schema.sql",
         ]
 
         all_files = sorted(
