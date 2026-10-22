@@ -49,7 +49,7 @@ from app.domains.ai_governance.constants import AutomationLevel
 from app.domains.ai_governance.constants import CapabilityCode
 from app.domains.ai_governance.constants import CapabilityType
 
-CAPABILITY_CATALOG_VERSION = "2.3.0"
+CAPABILITY_CATALOG_VERSION = "2.4.0"
 # 2.1.0(2026-09-07): PRODUCT_DISCOVERY의 forbidden_operations에서
 # "실제 외부 트렌드 API 호출"을 해제(NaverDataLabTrendAdapter 정식
 # 승인, CapabilityType.EXTERNAL_DATA_PROVIDER 신규 추가).
@@ -65,6 +65,9 @@ CAPABILITY_CATALOG_VERSION = "2.3.0"
 # 문턱·유형 변경 없음(13개 그대로). CONTENT_GENERATION(상품명·검색어 제안), PRICING_INVENTORY(경쟁 가격 비교·가격 전략),
 # ORDER_SHIPMENT_RETURN(판매 성과 읽기·반려 사유 분류), OPERATIONS_COORDINATION(운영 상태 진단·AI 설명·오늘 브리핑),
 # PRODUCT_SELECTION(후보 같은 상품 판별·사전 평가). 실제 AI 호출은 한 번도 하지 않았다는 사실과 판정·가격 변경을 하지 않는다는 한계를 상태에 적었다.
+# 2.4.0(2026-10-23, 자율 제작 라운드): 이번 라운드에 만든 기능을 기존 역량에 **기록만** 했다 — 새 역량 코드·새 호출 문턱·유형 변경 없음(13개 그대로).
+# IMAGE_PROCESSING(참고 사진 생성 R1·R3a, 일괄 보정 R2, 컨셉별 독립 작업·장면 배경·추천 I2·I3), SUPPLIER_RECOMMENDATION(공급 조건 평가 S3),
+# PRICING_INVENTORY(주문 마진 점검 P2), ORDER_SHIPMENT_RETURN(고객 응대 답변 초안 P3·반품 손익 계산). 실제 AI·실제 이미지 생성 API 호출은 한 번도 하지 않았다.
 
 
 @dataclass(frozen=True)
@@ -478,7 +481,11 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "원본 이미지 가공(누끼·배경·크기조정)",
             "파생 이미지 계보 기록", "채널 규격 변환",
         ),
-        allowed_operations=("Fake 이미지 생성", "배경 제거 시연"),
+        allowed_operations=(
+            "Fake 이미지 생성", "배경 제거 시연",
+            "로컬 Pillow 합성(컨셉 배경·장면 질감·조명, 제품 픽셀 그대로)", "일괄 밝기·색온도 보정(새 파생 자산)",
+            "참고 사진 기반 생성 계획·요청 변환(Fake 제공자까지만)",
+        ),
         forbidden_operations=(
             "실제 유료 이미지 생성 API 호출",
             "권리 미확인 이미지의 자동 VERIFIED 전환",
@@ -519,13 +526,27 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "썸네일 URL 수신 확인, permission_status는 예상대로 항상 "
             "UNKNOWN·selectable=false로 응답됨). 다만 이 결과 전부는 "
             "여전히 상업적 재사용 허가가 확인된 이미지가 아니다 — "
-            "운영자가 출처 페이지를 직접 확인해야 한다.)"
+            "운영자가 출처 페이지를 직접 확인해야 한다.) "
+            "2026-10-23 등록(이미지 AI R1·R2·R3a·I1~I3): ①참고 사진 이미지 생성은 검사·배경×포즈 계획·제공자 요청 변환·미리보기·실행 경로가 있으나 "
+            "제공자는 Fake뿐이고 실제 이미지 생성 API는 한 번도 호출하지 않았다(대표 사진도 허용하되 경고와 최종 확인을 요구, 이미지에 글자·워터마크를 넣지 않는다). "
+            "②일괄 밝기·색온도 보정은 AI 없는 Pillow 계산이며 원본은 그대로 두고 새 파생 자산을 만든다. "
+            "③컨셉별 독립 작업은 로컬 합성(배경 단색·그라데이션·질감·조명)으로 제품 픽셀을 다시 그리지 않고, 컨셉마다 검사(제품 보존·배경 대비·대표 규격)를 숫자로 돌려 "
+            "FAIL이면 저장하지 않는다. 정책 적합 검사(POLICY_FLAGS)는 하지 못하므로 NOT_CHECKED로 그대로 보인다. "
+            "쿠팡의 AI 생성 이미지·대표 이미지 정책 확인은 아직 못 했다(🔴 미확인)."
         ),
         actual_entry_points=(
             "app/domains/media_asset/job_queue_service.py::"
             "ImageGenerationJobQueueService.submit_job()",
+            "app/domains/media_asset/reference_generation_service.py::ReferenceGenerationService.generate() (POST /media-assets/reference-generation — Fake 제공자만)",
+            "app/domains/media_asset/batch_adjust_service.py::BatchAdjustService.adjust() (POST /media-assets/batch-adjust — AI 없음)",
+            "app/domains/media_asset/concept_run_service.py::ConceptRunService.run() (POST /media-assets/concept-runs — 로컬 합성·검사, AI 없음)",
+            "app/domains/media_asset/concept_recommendation.py::recommend() (GET /media-assets/concept-recommendations — 규칙, AI 없음)",
         ),
-        unimplemented_dependencies=("실제 이미지 생성 API 없음",),
+        unimplemented_dependencies=(
+            "실제 이미지 생성 API 없음",
+            "생성형(L2) 컨셉은 아직 없다 — 로컬 합성(L0·L1)만 있다",
+            "정책 적합(쿠팡 이미지 규정) 자동 검사 불가 — 사람이 확인해야 한다",
+        ),
         implementation_reference=(
             "app/domains/media_asset/providers.py::FakeImageGenerationProvider / "
             "DisabledImageGenerationProvider(실제 Provider 미연결 시 fail-closed)"
@@ -604,11 +625,18 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         stop_condition="해당 없음",
         external_provider=None,
         model_prompt_policy_version="fake-supplier-v1",
-        provider_status="NO_REAL_PROVIDER — Fake/CSV/Manual 3종만, 실제 B2B 공급처 API 없음",
+        provider_status=(
+            "NO_REAL_PROVIDER — Fake/CSV/Manual 3종만, 실제 B2B 공급처 API 없음. "
+            "2026-10-23 등록(상품 서칭 AI S3): 공급처에 의존하지 않는 공급 조건 평가(마진 하한 최저가·배송비 비중·반품 부담·위탁/최소주문)와 비교 순위가 있다 — "
+            "AI 없는 Decimal 규칙이고 모르는 비용은 '보류'로 보이며 추측하지 않는다. 공급처 제공자는 Fake/Manual 고정 값만 읽고 실제 공급처 호출은 하지 않았다. "
+            "쿠팡 의류 수수료율은 확인하지 못해 가정값을 쓰며 화면에서 가정으로 표시해야 한다."
+        ),
         actual_entry_points=(
             "app/domains/source/router.py::search_suppliers()",
+            "app/domains/supplier/offer_rules.py::rank_offers() (POST /product-import/supplier-offers/rank — 규칙 계산, AI 없음)",
+            "app/domains/supplier/offer_provider.py::get_offer_provider() (읽기 전용 경계, Fake/Manual만)",
         ),
-        unimplemented_dependencies=("실제 공급처 검색 API 없음",),
+        unimplemented_dependencies=("실제 공급처 검색 API 없음", "공급처별 실제 가격·재고 읽기 어댑터 없음(S4 보류)"),
         implementation_reference=(
             "app/domains/source/discovery_providers.py::FakeSupplierDiscoveryProvider / "
             "ManualSupplierDiscoveryProvider / CsvSupplierDiscoveryProvider"
@@ -700,7 +728,9 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "금액·통계·제안은 코드가 낸다. AI가 읽은 값은 사용자가 확인했다고 표시해야 계산에 들어가고, 통계(최저·중앙값·최고·개당·단위당)는 "
             "AI 없는 Decimal 계산이다. 가격 전략 제안(마진 하한가·시장 구간·권장 구간)도 AI 없는 계산이며 마진 하한가 아래의 가격은 제안하지 않고 "
             "모르는 값이 있으면 가격을 만들지 않는다. 가격은 바꾸지 않는다 — 변경은 기존 가격 변경 요청→승인 경로로만. "
-            "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만)."
+            "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). "
+            "2026-10-23 등록(상품 관리 AI P2): 주문 마진 점검은 진행 중 매입 작업의 판매가·매입가로 마진을 다시 계산해 하한 아래 건을 보여 준다 — AI 없는 읽기 전용 계산이며 "
+            "저장된 마진과 다르면 고치지 않고 '불일치'로만 알린다. 가격은 바꾸지 않는다."
         ),
         actual_entry_points=(
             "app/domains/pricing/price_advisory_service.py::"
@@ -708,6 +738,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/pricing/price_strategy.py::strategy_report() / plan() (POST /product-import/strategy — 마케팅 AI M3, AI 없음)",
             "app/domains/product_import/competitor_price_stats.py::compare() (POST /product-import/competitors/compare — 결정적 통계, AI 없음)",
             "app/domains/product_import/competitor_price_service.py::CompetitorPriceService.read() (POST /product-import/competitors/read — AI가 페이지를 읽음, 사용자가 누를 때만)",
+            "app/domains/purchase_task/margin_watch_service.py::MarginWatchService.report() (GET /purchase-tasks/margin-watch — 주문 마진 점검, 읽기 전용·AI 없음)",
             "app/domains/inventory/replenishment_advisory_service.py::"
             "ReplenishmentAdvisoryService.suggest() / "
             "propose_replenishment()",
@@ -800,9 +831,14 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "2026-10-19 등록: 쿠팡 승인반려 사유 분류(P1a)는 AI 없는 규칙이고, 판매 성과 보기(마케팅 AI M4)는 사용자가 누를 때만 쿠팡 매출내역을 읽기(GET)만 해 "
             "옵션별 판매·반품·실현 수수료율로 집계한다(기존 AFTER_SALES_CHECK 허용·시간당 상한, 고객 정보 미수집, 저장 없음). "
             "표본이 작으면 '표본 부족'이라고 하고 제안이 맞았는지는 판정하지 않는다. 실제 쿠팡 응답은 아직 읽지 않았다(문서 기준 모양으로 만든 읽기이며 "
-            "첫 실제 읽기에서 모양이 다르면 '읽지 못함'으로 보인다)."
+            "첫 실제 읽기에서 모양이 다르면 '읽지 못함'으로 보인다). "
+            "2026-10-23 등록(상품 관리 AI P3): 고객 응대 답변 초안은 사용자가 누를 때만 AI가 문안만 쓰고(월 한도·승인 센터 허용 AI_DRAFT·사용 기록, 연락처·주소·이름은 보내기 전에 가린다, "
+            "약속·책임 인정·외부 연락 유도·효능 표현이 들어간 초안은 버린다) 아무것도 저장·전송하지 않는다 — 실제 AI 호출은 아직 하지 않았다. "
+            "반품 손익 계산은 AI 없는 Decimal 계산(회수·환불 단계별 확인 항목 포함)이다."
         ),
         actual_entry_points=(
+            "app/domains/order/cs_reply_draft_service.py::CsReplyDraftService.draft() (POST /orders/cs-reply-draft — 사용자가 누를 때만, 문안 초안만)",
+            "app/domains/order/return_economics.py::calculate() / checkpoints() (POST /orders/return-economics — 계산, AI 없음)",
             "app/domains/order/exception_analysis_service.py::"
             "OrderExceptionAnalysisService.analyze() / "
             "create_review_action()",

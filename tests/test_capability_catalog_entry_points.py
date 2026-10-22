@@ -74,7 +74,7 @@ class EntryPointTests(unittest.TestCase):
         }
         for code, kind in expected.items():
             self.assertEqual(BY_CODE[code].capability_type, kind, code)
-        self.assertEqual(catalog.CAPABILITY_CATALOG_VERSION, "2.3.0")
+        self.assertEqual(catalog.CAPABILITY_CATALOG_VERSION, "2.4.0")
         self.assertTrue(all(c.active for c in AI_CAPABILITY_CATALOG))
 
 
@@ -123,6 +123,29 @@ class HonestRegistrationTests(unittest.TestCase):
         status = self.status("PRICING_INVENTORY")
         self.assertIn("AI_ANALYSIS", status)
         self.assertIn("금액·통계·제안은 코드가", status)
+
+    def test_the_autonomous_round_features_are_registered_where_they_belong(self):
+        image = self.entries("IMAGE_PROCESSING")
+        for expected in ("reference_generation_service.py::ReferenceGenerationService", "batch_adjust_service.py::BatchAdjustService",
+                         "concept_run_service.py::ConceptRunService", "concept_recommendation.py::recommend"):
+            self.assertIn(expected, image)
+        self.assertIn("offer_rules.py::rank_offers", self.entries("SUPPLIER_RECOMMENDATION"))
+        self.assertIn("margin_watch_service.py::MarginWatchService", self.entries("PRICING_INVENTORY"))
+        returns = self.entries("ORDER_SHIPMENT_RETURN")
+        for expected in ("cs_reply_draft_service.py::CsReplyDraftService", "return_economics.py::calculate"):
+            self.assertIn(expected, returns)
+
+    def test_the_new_statuses_do_not_claim_a_real_image_api_real_ai_or_policy_checks(self):
+        image = self.status("IMAGE_PROCESSING")
+        self.assertIn("실제 이미지 생성 API는 한 번도 호출하지 않았다", image)
+        self.assertIn("NOT_CHECKED", image)
+        self.assertIn("미확인", image)
+        self.assertIn("실제 AI 호출은 아직 하지 않았다", self.status("ORDER_SHIPMENT_RETURN"))
+        self.assertIn("실제 공급처 호출은 하지 않았다", self.status("SUPPLIER_RECOMMENDATION"))
+        self.assertIn("고치지 않고", self.status("PRICING_INVENTORY"))
+        image_gaps = " ".join(BY_CODE["IMAGE_PROCESSING"].unimplemented_dependencies)
+        self.assertIn("실제 이미지 생성 API 없음", image_gaps)
+        self.assertIn("정책 적합", image_gaps)
 
     def test_unimplemented_parts_are_stated(self):
         returns = " ".join(BY_CODE["ORDER_SHIPMENT_RETURN"].unimplemented_dependencies)
