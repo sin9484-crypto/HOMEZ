@@ -13180,3 +13180,19 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 오늘 할 일 › **AI 점검 도구**(`f4289cf`)에 카드 7개를 모았다: 마진 점검·답변 초안·반품 손익·공급 조건 비교·정책 변경 비교·약관 점검·제안 기록과 전후 비교. 저장·전송·가격 변경은 없다. 답변 초안만 누를 때 AI를 부르고, 전후 비교만 누를 때 쿠팡 매출을 읽는다(허용 필요·읽기 전용).
 - **제안 기록 표 `marketing_suggestion_records`(Migration `20261023_00`)는 저장소에만 추가했다. 앱을 다시 시작하면 승인 대기 Migration으로 보이며, 사용자가 승인 화면에서 승인해야 백업 후 적용된다.** 승인 전에는 제안 기록 카드가 "준비되지 않음"을 알린다. 새 경로는 SuperAdmin 전용이다(기존 계약).
 - 상세: `docs/HOMEZ_AI_AUTONOMOUS_BUILD_REPORT_20261022.md` 7장.
+
+## 2026-10-24 — 제안 기록 Migration 실제 적용(사용자 승인) + 쿠팡 쓰기 1번: 옵션 재고 수량 변경(코드·시험·격리 확인까지, **실제 쿠팡 쓰기 0회**)
+
+- **Migration `20261023_00` 실제 적용**: 사용자가 HOMEZ 앱 창에서 직접 승인했다(10-24 10:24 KST, 이력 79행, 무결성 ok). 표 `marketing_suggestion_records`와 색인 3개, 행 0.
+  - 순수 복원점: `C:\Users\Daum pc\Homez-Backups\v7_pre_migration_20261023_00_20261024_091454\homez_pre_apply.db`(읽기 전용). 앱 자동 백업: `storage\backups\homez_pre_bootstrap_migration_20261024_102404.db`.
+  - 복원점과 비교한 162개 표 중 행 수가 달라진 곳은 로그인 기록(`audit_logs`·`auth_sessions`·`refresh_token_families`·`refresh_tokens`), 이력 1행, 백업 기록 1행뿐이다.
+  - 앱은 외부 네트워크 차단 가드를 걸고 개발 모드로 띄웠고, 가드 기록에 외부 연결 시도는 없었다.
+- **쿠팡 옵션 재고 수량 변경**(사용자 지시 "쿠팡 쓰기 1번부터", 커밋 `8de8446`): 공식 문서 두 개를 읽기 전용으로 확인했다(상품 아이템별 수량 변경 `PUT …/vendor-items/{id}/quantities/{q}`, 수량·가격·상태 조회 `GET …/inventories`).
+  - 출고일 변경과 같은 틀(작업 장부·승인 센터 허용·운영자 승인 모드·비상정지·전송 뒤 다시 읽기)로 만들었다: `purchase_task/coupang_stock_service.py`·`coupang_stock_schema.py`, 공급자 `_StockMixin`, API 3개(`/purchase-tasks/coupang-vendor-items/{id}/stock/preview|send|reconcile`).
+  - 승인 센터 목적 "쿠팡 재고 수량 변경"(`STOCK_UPDATE`, 허용 없으면 막음, 기본 읽기 3·쓰기 1 — 한 번 바꾸는 데 읽기 3회). 쉬운 보기 › 승인 화면에 "쿠팡 재고 수량 바꾸기" 구역.
+  - 규칙: 현재 재고는 그 자리에서 읽고, 화면에서 본 값과 다르면 보내지 않는다. 0은 확인 칸을 체크해야 보낸다. 요청마다 참조값을 둬 같은 요청이 두 번 나가지 않는다. 결과불명은 다시 보내지 않고 조회로만 확인한다. 상한 99,999는 HOMEZ 자체 값이다.
+- **검증**:
+  - 시험 `test_coupang_stock` 37건·`test_easy_stock_ui` 9건, 관련 회귀 761건 통과.
+  - 변이 33건 중 28건을 첫 실행에 감지했고, 4건은 시험 보강 후 감지했다. 1건은 동등 변이다.
+  - 격리 서버(가짜 쿠팡)에서 미리보기 → 확인창 → 변경 → 다시 읽기, 0 확인 칸, 허용 소진 차단을 브라우저로 확인했다.
+- **실제 쿠팡 쓰기는 아직 0회다.** 처음 실제 1건은 대상 옵션·수량을 사용자가 정하고 승인 센터 허용을 준 뒤에 한다.
