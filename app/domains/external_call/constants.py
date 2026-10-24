@@ -39,9 +39,10 @@ class CallPurpose:
     AI_ANALYSIS = "AI_ANALYSIS"                    # URL 상품 분석 AI(페이지 글을 AI 서비스에 보내 상품 해석·위험 신호를 받는다 — 호출마다 사용료)
     INVOICE_UPLOAD = "INVOICE_UPLOAD"              # 쿠팡 송장 등록(발주서 조회·송장 전송)
     PRODUCT_OUTBOUND_DAYS = "PRODUCT_OUTBOUND_DAYS"  # 등록 상품 기준 출고일 변경(상품 조회·수정)
+    STOCK_UPDATE = "STOCK_UPDATE"                  # 2026-10-24 쿠팡 옵션 재고 수량 변경(재고 조회·수정)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
@@ -52,10 +53,11 @@ class CallPurpose:
         AI_ADVICE: "반려 사유 AI 설명",
         INVOICE_UPLOAD: "쿠팡 송장 등록",
         PRODUCT_OUTBOUND_DAYS: "상품 출고일 변경",
+        STOCK_UPDATE: "쿠팡 재고 수량 변경",
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE})
 
 
 class AllowanceMode:

@@ -39,6 +39,7 @@ from app.core.guard import AdminGuard
 from app.core.guard import StaffGuard
 from app.domains.purchase_task.coupang_invoice_schema import CoupangInvoiceSendRequest
 from app.domains.purchase_task.coupang_product_days_schema import CoupangProductDaysSendRequest
+from app.domains.purchase_task.coupang_stock_schema import CoupangStockSendRequest
 from app.core.recent_auth import consume_recent_auth_token
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
 from app.domains.purchase_task.channel_adapter import get_purchase_channel_adapter
@@ -1168,6 +1169,56 @@ def reconcile_coupang_product_days(
     from app.domains.purchase_task.coupang_product_days_service import CoupangProductDaysService
 
     return CoupangProductDaysService(db).reconcile(current_user.company_id, seller_product_id, days)
+
+
+@router.get("/coupang-vendor-items/{vendor_item_id}/stock/preview")
+def preview_coupang_stock(
+    vendor_item_id: str,
+    quantity: int = Query(ge=0, le=99_999, description="바꾸려는 재고 수량"),
+    request_ref: str | None = Query(default=None, description="화면이 미리보기마다 새로 만드는 요청 참조값"),
+    live: bool = Query(default=True, description="true면 쿠팡 재고를 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-24 쿠팡 옵션 재고 수량 변경 **미리보기** — 현재 재고·막는 이유. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_stock_service import CoupangStockService
+
+    return CoupangStockService(db).plan(current_user.company_id, vendor_item_id, quantity, request_ref=request_ref, live=live).to_dict()
+
+
+@router.post("/coupang-vendor-items/{vendor_item_id}/stock/send")
+def send_coupang_stock(
+    vendor_item_id: str,
+    data: CoupangStockSendRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 옵션 재고 수량을 **바꾼다(외부 변경)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용이 필요하고, 미리보기에서 본
+    현재 재고와 쿠팡의 지금 재고가 같을 때만 한 번 보낸다(0은 따로 확인). 작업 장부가 중복을 막고, 성공 뒤 재고를 다시 읽어 확인한다."""
+
+    from app.domains.purchase_task.coupang_stock_service import CoupangStockService
+
+    return CoupangStockService(db).send(
+        current_user.company_id, current_user.id, vendor_item_id, data.quantity,
+        expected_current_stock=data.expected_current_stock, request_ref=data.request_ref, confirm_zero=data.confirm_zero,
+        retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-vendor-items/{vendor_item_id}/stock/reconcile")
+def reconcile_coupang_stock(
+    vendor_item_id: str,
+    quantity: int = Query(ge=0, le=99_999),
+    request_ref: str = Query(pattern=r"^[A-Za-z0-9-]{8,40}$"),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 재고 변경 요청을 쿠팡 재고 조회로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_stock_service import CoupangStockService
+
+    return CoupangStockService(db).reconcile(current_user.company_id, vendor_item_id, quantity, request_ref)
 
 
 @router.get("/{task_id}/coupang-invoice/preview")

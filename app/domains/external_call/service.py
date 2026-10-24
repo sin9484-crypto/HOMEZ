@@ -68,6 +68,9 @@ _DEFAULT_REQUEST = {
     (CallPurpose.INVOICE_UPLOAD, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     (CallPurpose.PRODUCT_OUTBOUND_DAYS, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
     (CallPurpose.PRODUCT_OUTBOUND_DAYS, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
+    # 2026-10-24 재고 수량 변경: 한 번 바꾸는 데 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기는 1회씩만.
+    (CallPurpose.STOCK_UPDATE, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
+    (CallPurpose.STOCK_UPDATE, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
 }
 
 

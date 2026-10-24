@@ -1221,6 +1221,16 @@
           <div class="ez-sec" id="ez-days-anchor">${esc(T("easy.ap.days_title"))}<small>${esc(T("easy.ap.days_sub"))}</small></div>
           <div id="ez-days-box">${todo.length ? todo.map((p) => `<div class="ez-block" style="margin-top:10px"><div class="ez-field" style="grid-template-columns:1fr auto"><div class="v">${esc(p.product_name)}<small>${esc(T("easy.today.coupang_no", { id: p.seller_product_id }))} · ${esc(p.saved_days ? T("easy.today.days_sub_saved", { days: p.saved_days }) : T("easy.today.days_sub_unset", { days: 1 }))}</small></div>
             <button type="button" class="ez-btn sm" data-ez-days="${esc(p.seller_product_id)}">${esc(T("easy.ap.days_check"))}</button></div><div id="ez-days-${esc(p.seller_product_id)}" style="padding:0 18px 12px"></div></div>`).join("") : `<div class="ez-empty">${esc(T("easy.ap.days_none"))}</div>`}</div>
+          <div class="ez-sec" id="ez-stock-anchor">${esc(T("easy.stock.title"))}<small>${esc(T("easy.stock.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <label>${esc(T("easy.stock.item_label"))}<br><input type="text" inputmode="numeric" id="ez-stock-item" maxlength="20" placeholder="${esc(T("easy.stock.item_placeholder"))}"></label>
+              <label>${esc(T("easy.stock.qty_label"))}<br><input type="number" id="ez-stock-qty" min="0" max="${STOCK_MAX}" step="1"></label>
+              <button type="button" class="ez-btn sm" id="ez-stock-check">${esc(T("easy.stock.check"))}</button>
+            </div>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.stock.where_id"))}</div>
+            <div id="ez-stock-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1256,6 +1266,7 @@
     const custom = $("ez-ap-grant-custom");
     if (custom) custom.addEventListener("click", () => grantDialog(null));
     root.querySelectorAll("[data-ez-days]").forEach((btn) => btn.addEventListener("click", () => daysPreview(btn.dataset.ezDays)));
+    $("ez-stock-check").addEventListener("click", () => stockPreview($("ez-stock-item").value, $("ez-stock-qty").value));
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1295,7 +1306,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>
@@ -1362,6 +1373,89 @@
         result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
         loadApprovals();
       } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+    });
+  }
+
+  // 2026-10-24 쿠팡 옵션 재고 수량 변경: 현재 재고 확인(쿠팡 조회, 허용 필요) → 확인 → 변경 → 서버가 다시 읽어 확인.
+  // 0은 따로 확인해야 보낸다. 요청마다 참조값을 새로 만들어 같은 요청이 두 번 나가지 않게 하고, 결과불명이면 다시 보내지 않고 조회로만 확인한다.
+  const STOCK_MAX = 99999;
+
+  function stockInputProblem(itemId, qtyText) {
+    const item = String(itemId || "").trim();
+    if (!/^\d{1,20}$/.test(item)) return "easy.stock.err_item";
+    const q = String(qtyText === undefined || qtyText === null ? "" : qtyText).trim();
+    if (!/^\d+$/.test(q) || Number(q) > STOCK_MAX) return "easy.stock.err_qty";
+    return null;
+  }
+
+  function stockRef() {
+    const raw = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+    return String(raw).replace(/[^A-Za-z0-9-]/g, "").slice(0, 40);
+  }
+
+  function stockResultHtml(result, quantity) {
+    // 끝난 뒤 화면에 남기는 기록(토스트만으로 끝내지 않는다).
+    let tone = "bad";
+    let text = `${result.outcome}: ${result.detail || ""}`;
+    if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T("easy.stock.ok", { q: quantity }); }
+    else if (result.outcome === "SUCCEEDED" && result.verified === false) { tone = "warn"; text = T("easy.stock.after_diff", { q: quantity, after: result.after_stock }); }
+    else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.stock.unverified"); }
+    else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.stock.already_done"); }
+    else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.stock.unknown"); }
+    else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+    return `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+  }
+
+  async function stockPreview(itemId, qtyText) {
+    const box = $("ez-stock-box");
+    const problem = stockInputProblem(itemId, qtyText);
+    if (problem) { box.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem, { max: STOCK_MAX.toLocaleString("ko-KR") }))}</div></div>`; return; }
+    const item = String(itemId).trim();
+    const quantity = Number(String(qtyText).trim());
+    const ref = stockRef();
+    box.innerHTML = loadingHtml();
+    let plan;
+    try { plan = await api(`/purchase-tasks/coupang-vendor-items/${encodeURIComponent(item)}/stock/preview?quantity=${quantity}&request_ref=${encodeURIComponent(ref)}&live=true`); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    const reasons = (plan.blockers || []).concat(plan.gate_blockers || []);
+    const cp = plan.coupang || {};
+    let state;
+    if (plan.already_applied) state = `<div class="ez-note ok"><div>${esc(T("easy.stock.already", { q: quantity }))}</div></div>`;
+    else if (plan.sendable) {
+      const sale = cp.on_sale === true ? T("easy.stock.on_sale") : (cp.on_sale === false ? T("easy.stock.off_sale") : T("easy.stock.sale_unknown"));
+      const price = Number.isInteger(cp.sale_price) ? cp.sale_price.toLocaleString("ko-KR") : "—";
+      state = `<div class="ez-note ok"><div>${esc(T("easy.stock.ready", { cur: cp.current_stock, q: quantity, price, sale }))}</div></div>`;
+    } else state = `<div class="ez-note warn"><div>${reasons.map((b) => esc(b.message)).join("<br>")}</div></div>`;
+    const zero = plan.sendable && plan.zero_warning
+      ? `<div class="ez-note bad" style="margin-top:8px"><div>${esc(T("easy.stock.zero_warn"))}<br><label><input type="checkbox" id="ez-stock-zero"> ${esc(T("easy.stock.zero_confirm"))}</label></div></div>` : "";
+    box.innerHTML = `${state}${zero}${plan.sendable ? `<button type="button" class="ez-btn sm" id="ez-stock-send" style="margin-top:10px">${esc(T("easy.stock.send", { q: quantity }))}</button>` : ""}<div id="ez-stock-result" style="margin-top:10px"></div>`;
+    const send = $("ez-stock-send");
+    if (!send) return;
+    send.addEventListener("click", async () => {
+      const zeroBox = $("ez-stock-zero");
+      if (plan.zero_warning && !(zeroBox && zeroBox.checked)) { B.toast(T("easy.stock.zero_needed"), "error"); return; }
+      const ok = await B.askConfirm(T("easy.stock.confirm", { id: item, cur: cp.current_stock, q: quantity }), { title: T("easy.stock.title"), okLabel: T("easy.stock.send", { q: quantity }) });
+      if (!ok) return;
+      send.disabled = true;
+      try {
+        const result = await api(`/purchase-tasks/coupang-vendor-items/${encodeURIComponent(item)}/stock/send`, {
+          method: "POST", body: JSON.stringify({ quantity, expected_current_stock: cp.current_stock, request_ref: ref, confirm_zero: plan.zero_warning === true && !!(zeroBox && zeroBox.checked), retry_action_required: false }),
+        });
+        $("ez-stock-result").innerHTML = stockResultHtml(result, quantity)
+          + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" id="ez-stock-reconcile" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+        B.toast(T(result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "easy.stock.toast_done" : "easy.stock.toast_check"), result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
+        const rec = $("ez-stock-reconcile");
+        if (rec) rec.addEventListener("click", async () => {
+          try {
+            const r = await api(`/purchase-tasks/coupang-vendor-items/${encodeURIComponent(item)}/stock/reconcile?quantity=${quantity}&request_ref=${encodeURIComponent(ref)}`, { method: "POST" });
+            $("ez-stock-result").innerHTML = stockResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null }, quantity);
+          } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+        });
+      } catch (err) {
+        send.disabled = false;
+        $("ez-stock-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+      }
     });
   }
 

@@ -86,6 +86,16 @@ PRODUCT_DETAIL_PATH = "/v2/providers/seller_api/apis/api/v1/marketplace/seller-p
 MIN_OUTBOUND_DAYS = 1
 MAX_OUTBOUND_DAYS = 14  # HOMEZ 자체 상한(쿠팡 공식 상한이 아님)
 
+# 상품 아이템별 수량 변경 — 2026-10-24 공식 문서 확인(developers.coupang.com "상품 아이템별 수량 변경"):
+# PUT .../vendor-items/{vendorItemId}/quantities/{quantity}, 본문 없음, 응답 {"code":"SUCCESS","message":"재고 변경을 완료했습니다."}.
+# 400 = 유효하지 않은 재고수량·삭제된 옵션·없는 옵션. 판매 승인 후 vendorItemId가 발급된 옵션만 가능.
+# 수량 상한·0의 의미·즉시 반영 여부·호출 한도는 문서에 없다 → 상한은 HOMEZ 자체 값, 결과는 재고 조회(GET .../inventories의 amountInStock)로 다시 확인한다.
+STOCK_QUANTITY_PATH = (
+    "/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/{vendor_item_id}/quantities/{quantity}"
+)
+MAX_STOCK_QUANTITY = 99_999  # HOMEZ 자체 상한(쿠팡 공식 상한이 아님) — 잘못 친 큰 수를 막는다
+MAX_VENDOR_ITEM_ID_DIGITS = 20
+
 BIG_CANCEL_CODE = "CANERR"
 MIDDLE_CANCEL_CODE_INVENTORY = "CCTTER"  # 재고 연동 오류(공급 불가에 해당하는 유일한 코드)
 
@@ -141,6 +151,18 @@ class ProductDaysSnapshot:
     ok: bool
     status_name: str | None = None  # 쿠팡이 준 원문(영문/한글)
     days: tuple[int, ...] = ()  # items[] 마다의 기준출고일(옵션 순서)
+    detail: str = ""
+    http_status: int | None = None
+
+
+@dataclass(frozen=True)
+class StockSnapshot:
+    """옵션 1개의 재고·가격·판매 상태 읽기 결과(GET .../inventories). ok=False면 아래 값은 모두 알 수 없다."""
+
+    ok: bool
+    amount_in_stock: int | None = None
+    sale_price: int | None = None
+    on_sale: bool | None = None
     detail: str = ""
     http_status: int | None = None
 
@@ -426,7 +448,89 @@ class _ProductDaysMixin:
         return ProviderReadResult(True, all(d == days for d in snapshot.days), "", 200)
 
 
-class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin):
+class _StockMixin:
+    """옵션별 재고 수량 변경(쓰기)과 재고 조회(읽기). 2026-10-24 쿠팡 쓰기 1번(사용자 지시)."""
+
+    @staticmethod
+    def _valid_vendor_item(vendor_item_id: Any) -> bool:
+        text = str(vendor_item_id or "").strip()
+        return text.isdigit() and len(text) <= MAX_VENDOR_ITEM_ID_DIGITS and not isinstance(vendor_item_id, bool)
+
+    @staticmethod
+    def _valid_quantity(quantity: Any) -> bool:
+        return isinstance(quantity, int) and not isinstance(quantity, bool) and 0 <= quantity <= MAX_STOCK_QUANTITY
+
+    def validate_stock(self, vendor_item_id: str, quantity: Any) -> ProviderCallResult | None:
+        if not self._valid_vendor_item(vendor_item_id):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_TARGET",
+                "쿠팡 옵션번호(vendorItemId)가 숫자가 아니라 요청하지 않았다",
+            )
+        if not self._valid_quantity(quantity):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_QUANTITY",
+                f"재고 수량은 0~{MAX_STOCK_QUANTITY:,}의 정수여야 해서 요청하지 않았다",
+            )
+        return None
+
+    def update_stock(self, vendor_item_id: str, quantity: int) -> ProviderCallResult:
+        invalid = self.validate_stock(vendor_item_id, quantity)
+        if invalid is not None:
+            return invalid
+        path = STOCK_QUANTITY_PATH.format(vendor_item_id=str(vendor_item_id).strip(), quantity=int(quantity))
+        sent = self._write("PUT", path, None)
+        if isinstance(sent, ProviderCallResult):
+            return sent
+        failure = self._classify_status(sent)
+        if failure is not None:
+            return failure
+        body = _body(sent)
+        code = str((body or {}).get("code") or "").strip().upper()
+        if code == "SUCCESS":
+            return ProviderCallResult(CallKind.SUCCEEDED, 200, None, _summary(body))
+        if code == "ERROR":
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, 200, "REJECTED", _summary(body))
+        return ProviderCallResult(
+            CallKind.UNKNOWN, 200, "INVALID_RESPONSE",
+            "200 응답이지만 성공·실패를 판정할 수 없는 본문이라 적용 여부를 알 수 없다",
+        )
+
+    def read_stock(self, vendor_item_id: str) -> StockSnapshot:
+        """옵션 1개의 재고·가격·판매 상태(GET 1회). 재고 수량을 읽지 못하면 ok=False(추측하지 않는다)."""
+
+        if not self._valid_vendor_item(vendor_item_id):
+            return StockSnapshot(False, detail="옵션번호 형식 오류")
+        path = INVENTORY_PATH.format(vendor_item_id=str(vendor_item_id).strip())
+        try:
+            response = self._send("GET", path)
+        except requests.RequestException:
+            return StockSnapshot(False, detail="조회 통신 오류")
+        if response.status_code != 200:
+            return StockSnapshot(False, detail=_summary(_body(response)), http_status=response.status_code)
+        body = _body(response) or {}
+        data = body.get("data")
+        if str(body.get("code") or "").upper() != "SUCCESS" or not isinstance(data, dict):
+            return StockSnapshot(False, detail="재고 응답 해석 불가", http_status=200)
+        amount = data.get("amountInStock")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            return StockSnapshot(False, detail="재고 수량을 읽지 못함", http_status=200)
+        price = data.get("salePrice")
+        on_sale = data.get("onSale")
+        return StockSnapshot(
+            True, amount, price if isinstance(price, int) and not isinstance(price, bool) else None,
+            on_sale if isinstance(on_sale, bool) else None, "", 200,
+        )
+
+    def read_stock_applied(self, vendor_item_id: str, quantity: int) -> ProviderReadResult:
+        """결과불명 대조 — 재고가 요청한 수량이면 value=True. 그사이 주문으로 줄었을 수 있어 False는 '같지 않다'일 뿐이다."""
+
+        snapshot = self.read_stock(vendor_item_id)
+        if not snapshot.ok:
+            return ProviderReadResult(False, None, snapshot.detail, snapshot.http_status)
+        return ProviderReadResult(True, snapshot.amount_in_stock == quantity, "", 200)
+
+
+class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin, _StockMixin):
     """쿠팡 옵션 판매중지·주문 취소(쓰기)와 결과 대조(읽기). 자동 재시도·스케줄 없음 —
     재시도 정책은 호출하는 작업 장부 서비스의 몫이다."""
 
