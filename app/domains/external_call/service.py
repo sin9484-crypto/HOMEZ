@@ -80,6 +80,9 @@ _DEFAULT_REQUEST = {
     # 2026-10-25 문의 답변: 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기 1회씩만.
     (CallPurpose.INQUIRY_REPLY, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
     (CallPurpose.INQUIRY_REPLY, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
+    # 2026-10-26 반품 입고 확인·승인: 한 번 처리에 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기 1회씩만.
+    (CallPurpose.RETURN_PROCESS, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
+    (CallPurpose.RETURN_PROCESS, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     # 2026-10-25 AI 이미지 생성: 한 번 만들 때 최대 6장 — 장마다 1회(사용료가 들어 횟수로만, 상시 불가).
     (CallPurpose.IMAGE_GENERATION, CallKind.WRITE): (AllowanceMode.COUNTED, 6, None),
 }

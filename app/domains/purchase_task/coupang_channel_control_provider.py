@@ -239,6 +239,7 @@ def _int_or_zero(value: Any) -> int:
 
 from app.domains.purchase_task.coupang_after_sales_provider import _AfterSalesMixin  # noqa: E402
 from app.domains.purchase_task.coupang_inquiry_reply_provider import _InquiryReplyMixin  # noqa: E402
+from app.domains.purchase_task.coupang_return_action_provider import _ReturnActionMixin  # noqa: E402
 
 
 class _InvoiceMixin:
@@ -705,6 +706,7 @@ class _ProductNameMixin:
 
 class CoupangChannelControlProvider(
     _InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin, _StockMixin, _PriceMixin, _ProductNameMixin, _InquiryReplyMixin,
+    _ReturnActionMixin,
 ):
     """쿠팡 옵션 판매중지·주문 취소(쓰기)와 결과 대조(읽기). 자동 재시도·스케줄 없음 —
     재시도 정책은 호출하는 작업 장부 서비스의 몫이다."""

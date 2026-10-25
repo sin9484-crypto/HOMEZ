@@ -372,6 +372,8 @@ class CoupangChannelActions:
         ChannelActionType.PRICE_UPDATE: (ExtPurpose.PRICE_UPDATE, "PUT"),
         ChannelActionType.PRODUCT_NAME_UPDATE: (ExtPurpose.PRODUCT_NAME_UPDATE, "PUT"),
         ChannelActionType.INQUIRY_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),
+        ChannelActionType.RETURN_RECEIVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
+        ChannelActionType.RETURN_APPROVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -921,6 +923,58 @@ class CoupangChannelActions:
             action_type=ChannelActionType.INQUIRY_REPLY, target_key=self.inquiry_reply_key(inquiry_id),
             read=lambda p: p.read_inquiry_reply_applied(inquiry_id, content),
             applied_when=True,  # 우리 답이 붙어 있으면 적용(답이 없으면 안 받음, 다른 답만 있으면 판단하지 않음)
+        )
+
+    # ---- 반품 입고 확인·승인(2026-10-26) ----
+
+    _RETURN_ACTION_TYPES = {"RECEIVE": ChannelActionType.RETURN_RECEIVE, "APPROVE": ChannelActionType.RETURN_APPROVE}
+
+    @classmethod
+    def return_action_type(cls, action: str) -> str:
+        return cls._RETURN_ACTION_TYPES[action]
+
+    @staticmethod
+    def return_action_key(receipt_id: str, action: str) -> str:
+        """한 반품접수번호에는 동작마다 한 번만 보낸다."""
+
+        return f"rcpt:{str(receipt_id).strip()}:{action}"
+
+    def read_return(self, *, company_id: int, store_connection_id: int, receipt_id: str):
+        """반품 단건 읽기(GET 1회). 허용은 반품 처리 목적으로 센다. 장부를 쓰지 않는다."""
+
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.RETURN_APPROVE)
+        if denied is not None:
+            return None, denied
+        try:
+            snapshot = provider.read_return_request(receipt_id)
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 반품 조회 예외: %s", type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "반품 조회에 실패했다")
+        self._external_finish(ticket, succeeded=bool(snapshot.ok), http_status=snapshot.http_status)
+        return snapshot, None
+
+    def process_return(
+        self, *, company_id: int, store_connection_id: int, receipt_id: str, action: str, cancel_count: int | None,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=self.return_action_type(action), target_key=self.return_action_key(receipt_id, action),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.process_return(receipt_id, action, cancel_count),
+            validate=lambda p: p.validate_return_action(receipt_id, action, cancel_count),
+        )
+
+    def check_return(self, *, company_id: int, store_connection_id: int, receipt_id: str, action: str) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=self.return_action_type(action), target_key=self.return_action_key(receipt_id, action),
+            read=lambda p: p.read_return_action_applied(receipt_id, action),
+            applied_when=True,  # 적용 뒤 상태면 적용(처리 전 상태면 안 받음, 그 밖은 판단하지 않음)
         )
 
 

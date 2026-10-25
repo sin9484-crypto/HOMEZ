@@ -1260,6 +1260,16 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.inq.where"))}</div>
             <div id="ez-inq-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-sec" id="ez-ret-anchor">${esc(T("easy.ret.title"))}<small>${esc(T("easy.ret.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <label>${esc(T("easy.ret.id_label"))}<br><input type="text" inputmode="numeric" id="ez-ret-id" maxlength="20" placeholder="${esc(T("easy.ret.id_placeholder"))}"></label>
+              <label>${esc(T("easy.ret.action_label"))}<br><select id="ez-ret-action"><option value="RECEIVE">${esc(T("easy.ret.action_receive"))}</option><option value="APPROVE">${esc(T("easy.ret.action_approve"))}</option></select></label>
+              <button type="button" class="ez-btn sm" id="ez-ret-check">${esc(T("easy.ret.check"))}</button>
+            </div>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.ret.where"))}</div>
+            <div id="ez-ret-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1299,6 +1309,7 @@
     $("ez-price-check").addEventListener("click", () => pricePreview($("ez-price-item").value, $("ez-price-new").value, $("ez-price-cost").value, $("ez-price-ship").value));
     $("ez-pname-check").addEventListener("click", () => pnamePreview($("ez-pname-id").value, $("ez-pname-display").value, $("ez-pname-seller").value));
     $("ez-inq-load").addEventListener("click", () => inquiryList());
+    $("ez-ret-check").addEventListener("click", () => returnPreview($("ez-ret-id").value, $("ez-ret-action").value));
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1338,7 +1349,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>
@@ -1743,6 +1754,79 @@
       btn.disabled = false;
       out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
     }
+  }
+
+  // 2026-10-26 쿠팡 반품 입고 확인·승인: 반품 상태 확인(쿠팡 조회, 허용 필요) → 상품 수령 확인 칸(승인은 환불 확인 칸도) → 확인 → 처리
+  // → 서버가 다시 읽어 확인. 승인 수량은 쿠팡이 준 접수 수량을 그대로 쓴다. 고객 환불로 이어져 확인 문구에 그 점을 적는다.
+  // 상태·귀책 이름은 반품 알림과 같은 문구(easy.rs.*·easy.fault.*)를 쓴다. 모르는 값은 코드 그대로.
+  function returnStatusLabel(status) {
+    return status ? tryT(`easy.rs.${String(status).toLowerCase()}`, String(status)) : "—";
+  }
+
+  function returnResultHtml(result, action) {
+    // 끝난 뒤 화면에 남기는 기록(토스트만으로 끝내지 않는다).
+    let tone = "bad";
+    let text = `${result.outcome}: ${result.detail || ""}`;
+    const after = returnStatusLabel(result.after_status);
+    if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T(action === "APPROVE" ? "easy.ret.ok_approve" : "easy.ret.ok_receive", { status: after }); }
+    else if (result.outcome === "SUCCEEDED" && result.verified === false) { tone = "warn"; text = T("easy.ret.not_changed", { status: after }); }
+    else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.ret.unverified"); }
+    else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.ret.already", { status: returnStatusLabel((result.plan || {}).coupang ? result.plan.coupang.status : null) }); }
+    else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.ret.unknown"); }
+    else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+    return `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+  }
+
+  async function returnPreview(receiptId, action) {
+    const box = $("ez-ret-box");
+    const id = String(receiptId || "").trim();
+    if (!/^\d{1,20}$/.test(id)) { box.innerHTML = `<div class="ez-note warn"><div>${esc(T("easy.ret.err_id"))}</div></div>`; return; }
+    if (action !== "RECEIVE" && action !== "APPROVE") return;
+    box.innerHTML = loadingHtml();
+    let plan;
+    try { plan = await api(`/purchase-tasks/coupang-returns/${encodeURIComponent(id)}/preview?action=${action}&live=true`); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    const reasons = (plan.blockers || []).concat(plan.gate_blockers || []);
+    const cp = plan.coupang || {};
+    const facts = plan.live_checked
+      ? `<div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.ret.facts", { status: returnStatusLabel(cp.status), order: cp.order_id || "—", count: cp.cancel_count === null || cp.cancel_count === undefined ? "—" : cp.cancel_count, fault: cp.fault_by ? tryT(`easy.fault.${String(cp.fault_by).toLowerCase()}`, String(cp.fault_by)) : "—", charge: Number.isInteger(cp.return_shipping_charge) ? cp.return_shipping_charge.toLocaleString("ko-KR") : "—" }))}</div>` : "";
+    let state;
+    if (plan.already_applied) state = `<div class="ez-note ok"><div>${esc(T("easy.ret.already", { status: returnStatusLabel(cp.status) }))}</div></div>`;
+    else if (plan.sendable) state = `<div class="ez-note ok"><div>${esc(T(action === "APPROVE" ? "easy.ret.ready_approve" : "easy.ret.ready_receive", { count: cp.cancel_count }))}</div></div>`;
+    else state = `<div class="ez-note warn"><div>${reasons.map((b) => esc(b.message)).join("<br>")}</div></div>`;
+    const prerefund = plan.sendable && action === "RECEIVE" && cp.pre_refund === true
+      ? `<div class="ez-note bad" style="margin-top:8px"><div>${esc(T("easy.ret.prerefund_warn"))}</div></div>` : "";
+    const checks = plan.sendable
+      ? `<div class="ez-note bad" style="margin-top:8px"><div><label><input type="checkbox" id="ez-ret-received"> ${esc(T("easy.ret.received_confirm"))}</label>${action === "APPROVE" ? `<br><label><input type="checkbox" id="ez-ret-refund"> ${esc(T("easy.ret.refund_confirm", { count: cp.cancel_count }))}</label>` : ""}</div></div>` : "";
+    box.innerHTML = `${state}${facts}${prerefund}${checks}${plan.sendable ? `<button type="button" class="ez-btn sm" id="ez-ret-send" style="margin-top:10px">${esc(T(action === "APPROVE" ? "easy.ret.send_approve" : "easy.ret.send_receive"))}</button>` : ""}<div id="ez-ret-result" style="margin-top:10px"></div>`;
+    const send = $("ez-ret-send");
+    if (!send) return;
+    send.addEventListener("click", async () => {
+      const received = $("ez-ret-received");
+      const refund = $("ez-ret-refund");
+      if (!(received && received.checked) || (action === "APPROVE" && !(refund && refund.checked))) { B.toast(T("easy.ret.confirm_needed"), "error"); return; }
+      const ok = await B.askConfirm(T(action === "APPROVE" ? "easy.ret.confirm_approve" : "easy.ret.confirm_receive", { id, count: cp.cancel_count }), { title: T("easy.ret.title"), okLabel: T(action === "APPROVE" ? "easy.ret.send_approve" : "easy.ret.send_receive") });
+      if (!ok) return;
+      send.disabled = true;
+      try {
+        const result = await api(`/purchase-tasks/coupang-returns/${encodeURIComponent(id)}/send`, {
+          method: "POST", body: JSON.stringify({ action, expected_status: cp.status, expected_cancel_count: action === "APPROVE" ? cp.cancel_count : null, confirm_received: !!(received && received.checked), confirm_refund: action === "APPROVE" && !!(refund && refund.checked), retry_action_required: false }),
+        });
+        $("ez-ret-result").innerHTML = returnResultHtml(result, action)
+          + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" id="ez-ret-reconcile" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+        B.toast(T(result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "easy.ret.toast_done" : "easy.ret.toast_check"), result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
+        const rec = $("ez-ret-reconcile");
+        if (rec) rec.addEventListener("click", async () => {
+          try {
+            const r = await api(`/purchase-tasks/coupang-returns/${encodeURIComponent(id)}/reconcile?action=${action}`, { method: "POST" });
+            $("ez-ret-result").innerHTML = returnResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null }, action);
+          } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+        });
+      } catch (err) {
+        send.disabled = false;
+        $("ez-ret-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+      }
+    });
   }
 
   // =========================================================

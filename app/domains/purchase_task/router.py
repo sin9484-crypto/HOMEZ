@@ -42,6 +42,7 @@ from app.domains.purchase_task.coupang_product_days_schema import CoupangProduct
 from app.domains.purchase_task.coupang_price_schema import CoupangPriceSendRequest
 from app.domains.purchase_task.coupang_inquiry_reply_schema import CoupangInquiryReplyRequest
 from app.domains.purchase_task.coupang_product_name_schema import CoupangProductNameSendRequest
+from app.domains.purchase_task.coupang_return_action_schema import CoupangReturnActionRequest
 from app.domains.purchase_task.coupang_stock_schema import CoupangStockSendRequest
 from app.core.recent_auth import consume_recent_auth_token
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
@@ -1388,6 +1389,54 @@ def reconcile_coupang_inquiry_reply(
     from app.domains.purchase_task.coupang_inquiry_reply_service import CoupangInquiryReplyService
 
     return CoupangInquiryReplyService(db).reconcile(current_user.company_id, inquiry_id, data.content)
+
+
+@router.get("/coupang-returns/{receipt_id}/preview")
+def preview_coupang_return_action(
+    receipt_id: str,
+    action: str = Query(pattern=r"^(RECEIVE|APPROVE)$", description="RECEIVE = 입고 확인, APPROVE = 반품 승인"),
+    live: bool = Query(default=True, description="true면 쿠팡 반품을 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-26 쿠팡 반품 입고 확인·승인 **미리보기** — 지금 상태·접수 수량·귀책·빠른환불 여부·막는 이유. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_return_action_service import CoupangReturnActionService
+
+    return CoupangReturnActionService(db).plan(current_user.company_id, receipt_id, action, live=live).to_dict()
+
+
+@router.post("/coupang-returns/{receipt_id}/send")
+def send_coupang_return_action(
+    receipt_id: str,
+    data: CoupangReturnActionRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 반품을 **입고 확인하거나 승인한다(외부 변경 — 고객 환불로 이어진다)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용 +
+    상품 수령 확인(승인은 환불 확인도)이 필요하고, 미리보기에서 본 상태·수량과 쿠팡의 지금 값이 같을 때만 한 번 보낸다."""
+
+    from app.domains.purchase_task.coupang_return_action_service import CoupangReturnActionService
+
+    return CoupangReturnActionService(db).send(
+        current_user.company_id, current_user.id, receipt_id, data.action, expected_status=data.expected_status,
+        expected_cancel_count=data.expected_cancel_count, confirm_received=data.confirm_received, confirm_refund=data.confirm_refund,
+        retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-returns/{receipt_id}/reconcile")
+def reconcile_coupang_return_action(
+    receipt_id: str,
+    action: str = Query(pattern=r"^(RECEIVE|APPROVE)$"),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 반품 처리를 쿠팡 반품 단건 조회로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_return_action_service import CoupangReturnActionService
+
+    return CoupangReturnActionService(db).reconcile(current_user.company_id, receipt_id, action)
 
 
 @router.get("/{task_id}/coupang-invoice/preview")
