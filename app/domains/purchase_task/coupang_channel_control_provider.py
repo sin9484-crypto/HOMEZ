@@ -107,6 +107,13 @@ MAX_SALE_PRICE = 10_000_000  # HOMEZ 자체 상한(쿠팡 공식 상한이 아�
 COUPANG_MAX_DECREASE = 0.5  # 공식: 변경 전 가격 대비 최대 50% 인하
 COUPANG_MAX_INCREASE = 1.0  # 공식: 최대 100% 인상
 
+# 상품 수정(승인필요) — 2026-10-25 공식 문서 확인(developers.coupang.com "상품 수정 (승인필요)"):
+# PUT .../seller-products, 본문은 **상품 조회 응답 전체**에서 바꿀 값만 고쳐 그대로 보낸다(sellerProductId·옵션마다 sellerProductItemId 필수 —
+# 없으면 새 옵션으로 본다). "이 API를 사용하면 승인 후에 반영됩니다." 성공 예시 {"code":"200","data":{"code":"SUCCESS","data":<sellerProductId>}}.
+# 승인완료 상품을 고칠 때 requested 값의 의미와 판매 유지 여부는 공식 문서에 없다(🔴 미확인 — 연동사 안내: 상태가 승인대기로 바뀌고 판매는 유지).
+PRODUCT_UPDATE_PATH = "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products"
+MAX_PRODUCT_NAME_CHARS = 100  # 공식: sellerProductName·displayProductName 최대 100자
+
 BIG_CANCEL_CODE = "CANERR"
 MIDDLE_CANCEL_CODE_INVENTORY = "CCTTER"  # 재고 연동 오류(공급 불가에 해당하는 유일한 코드)
 
@@ -231,6 +238,7 @@ def _int_or_zero(value: Any) -> int:
 
 
 from app.domains.purchase_task.coupang_after_sales_provider import _AfterSalesMixin  # noqa: E402
+from app.domains.purchase_task.coupang_inquiry_reply_provider import _InquiryReplyMixin  # noqa: E402
 
 
 class _InvoiceMixin:
@@ -594,7 +602,110 @@ class _PriceMixin:
         return ProviderReadResult(True, snapshot.sale_price == price, "", 200)
 
 
-class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin, _StockMixin, _PriceMixin):
+@dataclass(frozen=True)
+class ProductFullSnapshot:
+    """상품 조회(GET 1회) 응답의 data 전체. ok=False면 data는 None이다(일부만 읽은 것을 값으로 쓰지 않는다)."""
+
+    ok: bool
+    data: dict | None = None
+    status_name: str | None = None
+    display_name: str | None = None
+    seller_name: str | None = None
+    detail: str = ""
+    http_status: int | None = None
+
+
+class _ProductNameMixin:
+    """등록 상품의 상품명 수정(쓰기 — 상품 수정 승인필요 API)과 상품 전체 조회(읽기). 2026-10-25 쿠팡 쓰기 3번."""
+
+    def read_product_full(self, seller_product_id: str) -> ProductFullSnapshot:
+        product = str(seller_product_id or "").strip()
+        if not product.isdigit() or len(product) > MAX_VENDOR_ITEM_ID_DIGITS:
+            return ProductFullSnapshot(False, detail="등록상품번호 형식 오류")
+        try:
+            response = self._send("GET", PRODUCT_DETAIL_PATH.format(seller_product_id=product))
+        except requests.RequestException:
+            return ProductFullSnapshot(False, detail="조회 통신 오류")
+        if response.status_code != 200:
+            return ProductFullSnapshot(False, detail=_summary(_body(response)), http_status=response.status_code)
+        body = _body(response) or {}
+        data = body.get("data")
+        # 실제 상품 조회에서 확인된 것은 data 구조뿐이다(최상위 code 값은 관측 기록 없음) — 명시적 ERROR만 실패로 본다.
+        if str(body.get("code") or "").upper() == "ERROR" or not isinstance(data, dict):
+            return ProductFullSnapshot(False, detail="상품 응답 해석 불가", http_status=200)
+        if str(data.get("sellerProductId") or "").strip() != product:
+            return ProductFullSnapshot(False, detail="응답의 등록상품번호가 요청과 다르다", http_status=200)
+        items = data.get("items")
+        if not isinstance(items, list) or not items or not all(isinstance(i, dict) for i in items):
+            return ProductFullSnapshot(False, detail="상품 옵션을 읽지 못함", http_status=200)
+
+        def text(key):
+            value = data.get(key)
+            return value.strip() if isinstance(value, str) and value.strip() else None
+
+        return ProductFullSnapshot(True, data, text("statusName"), text("displayProductName"), text("sellerProductName"), "", 200)
+
+    @staticmethod
+    def _valid_product_body(seller_product_id: str, body: Any) -> bool:
+        if not isinstance(body, dict) or str(body.get("sellerProductId") or "").strip() != str(seller_product_id or "").strip():
+            return False
+        items = body.get("items")
+        # 옵션마다 sellerProductItemId가 없으면 쿠팡은 새 옵션으로 본다 — 기존 옵션을 고치는 요청에서는 절대 보내지 않는다.
+        return isinstance(items, list) and bool(items) and all(
+            isinstance(i, dict) and str(i.get("sellerProductItemId") or "").strip().isdigit() for i in items
+        )
+
+    def validate_product_update(self, seller_product_id: str, body: Any) -> ProviderCallResult | None:
+        if not str(seller_product_id or "").strip().isdigit():
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_TARGET",
+                "쿠팡 등록상품번호(sellerProductId)가 숫자가 아니라 요청하지 않았다",
+            )
+        if not self._valid_product_body(seller_product_id, body):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_BODY",
+                "상품 수정 본문에 등록상품번호나 옵션 번호(sellerProductItemId)가 없어 요청하지 않았다",
+            )
+        return None
+
+    def update_product(self, seller_product_id: str, body: dict) -> ProviderCallResult:
+        invalid = self.validate_product_update(seller_product_id, body)
+        if invalid is not None:
+            return invalid
+        sent = self._write("PUT", PRODUCT_UPDATE_PATH, body)
+        if isinstance(sent, ProviderCallResult):
+            return sent
+        failure = self._classify_status(sent)
+        if failure is not None:
+            return failure
+        payload = _body(sent) or {}
+        top = str(payload.get("code") or "").strip().upper()
+        inner = payload.get("data")
+        inner_code = str(inner.get("code") or "").strip().upper() if isinstance(inner, dict) else ""
+        if top in ("200", "SUCCESS") and inner_code == "SUCCESS":
+            return ProviderCallResult(CallKind.SUCCEEDED, 200, None, _summary(payload))
+        if top == "ERROR" or inner_code == "ERROR":
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, 200, "REJECTED", _summary(inner if inner_code == "ERROR" else payload))
+        return ProviderCallResult(
+            CallKind.UNKNOWN, 200, "INVALID_RESPONSE",
+            "200 응답이지만 성공·실패를 판정할 수 없는 본문이라 적용 여부를 알 수 없다",
+        )
+
+    def read_product_name_applied(self, seller_product_id: str, display_name: str) -> ProviderReadResult:
+        """결과불명 대조 — 노출상품명이 요청한 값이면 value=True. 다르면 **판단하지 않는다**(ok=False):
+        수정은 쿠팡 승인 뒤에 반영돼 '아직 안 바뀜'이 '안 받음'을 뜻하지 않는다. 그때는 사용자가 윙에서 확인한다."""
+
+        snapshot = self.read_product_full(seller_product_id)
+        if not snapshot.ok:
+            return ProviderReadResult(False, None, snapshot.detail, snapshot.http_status)
+        if snapshot.display_name == display_name:
+            return ProviderReadResult(True, True, "", 200)
+        return ProviderReadResult(False, None, "노출상품명이 아직 그대로다(쿠팡 승인 대기일 수 있음) — 윙에서 확인 필요", 200)
+
+
+class CoupangChannelControlProvider(
+    _InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin, _StockMixin, _PriceMixin, _ProductNameMixin, _InquiryReplyMixin,
+):
     """쿠팡 옵션 판매중지·주문 취소(쓰기)와 결과 대조(읽기). 자동 재시도·스케줄 없음 —
     재시도 정책은 호출하는 작업 장부 서비스의 몫이다."""
 

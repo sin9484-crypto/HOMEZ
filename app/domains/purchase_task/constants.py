@@ -854,8 +854,10 @@ class ChannelActionType:
     PRODUCT_OUTBOUND_DAYS = "PRODUCT_OUTBOUND_DAYS"  # 쿠팡 등록 상품의 기준 출고일 변경(상품 수정 승인불필요 API)
     STOCK_UPDATE = "STOCK_UPDATE"  # 2026-10-24 쿠팡 옵션별 재고 수량 변경(상품 아이템별 수량 변경 API)
     PRICE_UPDATE = "PRICE_UPDATE"  # 2026-10-25 쿠팡 옵션별 판매가 변경(상품 아이템별 가격 변경 API)
+    PRODUCT_NAME_UPDATE = "PRODUCT_NAME_UPDATE"  # 2026-10-25 쿠팡 등록 상품의 상품명 수정(상품 수정 승인필요 API)
+    INQUIRY_REPLY = "INQUIRY_REPLY"  # 2026-10-25 쿠팡 상품 문의 답변 등록(상품별 고객문의 답변 API — 고객에게 바로 보인다)
 
-    ALL = (SALE_STOP, ORDER_CANCEL, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE)
+    ALL = (SALE_STOP, ORDER_CANCEL, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY)
 
 
 class ChannelActionStatus:

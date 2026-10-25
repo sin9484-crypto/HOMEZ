@@ -40,6 +40,8 @@ from app.core.guard import StaffGuard
 from app.domains.purchase_task.coupang_invoice_schema import CoupangInvoiceSendRequest
 from app.domains.purchase_task.coupang_product_days_schema import CoupangProductDaysSendRequest
 from app.domains.purchase_task.coupang_price_schema import CoupangPriceSendRequest
+from app.domains.purchase_task.coupang_inquiry_reply_schema import CoupangInquiryReplyRequest
+from app.domains.purchase_task.coupang_product_name_schema import CoupangProductNameSendRequest
 from app.domains.purchase_task.coupang_stock_schema import CoupangStockSendRequest
 from app.core.recent_auth import consume_recent_auth_token
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
@@ -1275,6 +1277,117 @@ def reconcile_coupang_price(
     from app.domains.purchase_task.coupang_price_service import CoupangPriceService
 
     return CoupangPriceService(db).reconcile(current_user.company_id, vendor_item_id, price, request_ref)
+
+
+@router.get("/coupang-products/{seller_product_id}/name/preview")
+def preview_coupang_product_name(
+    seller_product_id: str,
+    display_name: str = Query(min_length=1, max_length=100, description="바꿀 노출상품명"),
+    seller_name: str | None = Query(default=None, max_length=100, description="바꿀 등록상품명(비우면 그대로)"),
+    request_ref: str | None = Query(default=None, description="화면이 미리보기마다 새로 만드는 요청 참조값"),
+    live: bool = Query(default=True, description="true면 쿠팡 상품을 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-25 쿠팡 등록 상품의 상품명 수정 **미리보기** — 지금 이름·상태·막는 이유. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_product_name_service import CoupangProductNameService
+
+    return CoupangProductNameService(db).plan(
+        current_user.company_id, seller_product_id, display_name, seller_name=seller_name, request_ref=request_ref, live=live,
+    ).to_dict()
+
+
+@router.post("/coupang-products/{seller_product_id}/name/send")
+def send_coupang_product_name(
+    seller_product_id: str,
+    data: CoupangProductNameSendRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 등록 상품의 상품명을 **바꾸도록 요청한다(외부 변경 — 쿠팡 승인 뒤 반영)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 +
+    승인 센터 허용이 필요하고, 미리보기에서 본 지금 이름과 같을 때만 상품 조회 응답 전체에서 이름만 바꿔 한 번 보낸다."""
+
+    from app.domains.purchase_task.coupang_product_name_service import CoupangProductNameService
+
+    return CoupangProductNameService(db).send(
+        current_user.company_id, current_user.id, seller_product_id, data.display_name, seller_name=data.seller_name,
+        expected_display_name=data.expected_display_name, request_ref=data.request_ref, confirm_review=data.confirm_review,
+        retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-products/{seller_product_id}/name/reconcile")
+def reconcile_coupang_product_name(
+    seller_product_id: str,
+    display_name: str = Query(min_length=1, max_length=100),
+    request_ref: str = Query(pattern=r"^[A-Za-z0-9-]{8,40}$"),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 상품명 수정 요청을 쿠팡 상품 조회로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_product_name_service import CoupangProductNameService
+
+    return CoupangProductNameService(db).reconcile(current_user.company_id, seller_product_id, display_name, request_ref)
+
+
+@router.get("/coupang-inquiries/unanswered")
+def list_coupang_inquiries_for_reply(
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-25 답하지 않은 쿠팡 상품 문의(최근 7일, 문의 글 포함) — 쿠팡 읽기만. 문의 글은 저장하지 않는다."""
+
+    from app.domains.purchase_task.coupang_inquiry_reply_service import CoupangInquiryReplyService
+
+    return CoupangInquiryReplyService(db).unanswered(current_user.company_id)
+
+
+@router.post("/coupang-inquiries/{inquiry_id}/reply/preview")
+def preview_coupang_inquiry_reply(
+    inquiry_id: str,
+    data: CoupangInquiryReplyRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """문의 답변 **미리보기** — 문의 글·이미 답했는지·막는 이유(쿠팡 읽기만, 쓰기 없음). 답변 글이 길어 본문으로 받는다."""
+
+    from app.domains.purchase_task.coupang_inquiry_reply_service import CoupangInquiryReplyService
+
+    return CoupangInquiryReplyService(db).plan(current_user.company_id, inquiry_id, data.content, live=True).to_dict()
+
+
+@router.post("/coupang-inquiries/{inquiry_id}/reply/send")
+def send_coupang_inquiry_reply(
+    inquiry_id: str,
+    data: CoupangInquiryReplyRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 상품 문의에 **답변을 등록한다(외부 변경 — 고객에게 바로 보인다)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용 +
+    공개 확인이 필요하고, 쿠팡에 답이 없을 때만 한 문의에 한 번 보낸다. 성공 뒤 문의를 다시 읽어 확인한다."""
+
+    from app.domains.purchase_task.coupang_inquiry_reply_service import CoupangInquiryReplyService
+
+    return CoupangInquiryReplyService(db).send(
+        current_user.company_id, current_user.id, inquiry_id, data.content,
+        confirm_public=data.confirm_public, retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-inquiries/{inquiry_id}/reply/reconcile")
+def reconcile_coupang_inquiry_reply(
+    inquiry_id: str,
+    data: CoupangInquiryReplyRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 답변을 쿠팡 문의 조회로 확인한다(읽기, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_inquiry_reply_service import CoupangInquiryReplyService
+
+    return CoupangInquiryReplyService(db).reconcile(current_user.company_id, inquiry_id, data.content)
 
 
 @router.get("/{task_id}/coupang-invoice/preview")

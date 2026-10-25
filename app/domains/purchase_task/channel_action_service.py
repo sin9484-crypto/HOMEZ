@@ -24,6 +24,7 @@ File : app/domains/purchase_task/channel_action_service.py
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -369,6 +370,8 @@ class CoupangChannelActions:
         ChannelActionType.PRODUCT_OUTBOUND_DAYS: (ExtPurpose.PRODUCT_OUTBOUND_DAYS, "PUT"),
         ChannelActionType.STOCK_UPDATE: (ExtPurpose.STOCK_UPDATE, "PUT"),
         ChannelActionType.PRICE_UPDATE: (ExtPurpose.PRICE_UPDATE, "PUT"),
+        ChannelActionType.PRODUCT_NAME_UPDATE: (ExtPurpose.PRODUCT_NAME_UPDATE, "PUT"),
+        ChannelActionType.INQUIRY_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -815,6 +818,109 @@ class CoupangChannelActions:
             target_key=self.price_key(vendor_item_id, price, request_ref),
             read=lambda p: p.read_price_applied(vendor_item_id, price),
             applied_when=True,  # 판매가가 요청한 값이면 적용된 것
+        )
+
+    # ---- 상품명(2026-10-25) ----
+
+    @staticmethod
+    def product_name_key(seller_product_id: str, display_name: str, request_ref: str) -> str:
+        """상품명은 길어(최대 100자) 지문(sha256 앞 16자)만 키에 넣는다. 사용자 요청마다 참조값을 붙인다."""
+
+        digest = hashlib.sha256(str(display_name).encode("utf-8")).hexdigest()[:16]
+        return f"sp:{str(seller_product_id).strip()}:name:{digest}:req:{request_ref}"
+
+    def read_product(self, *, company_id: int, store_connection_id: int, seller_product_id: str):
+        """상품 전체 읽기(GET 1회). 허용은 상품명 수정 목적으로 센다. 장부를 쓰지 않는다."""
+
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.PRODUCT_NAME_UPDATE)
+        if denied is not None:
+            return None, denied
+        try:
+            snapshot = provider.read_product_full(seller_product_id)
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 상품 조회 예외: %s", type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "상품 조회에 실패했다")
+        self._external_finish(ticket, succeeded=bool(snapshot.ok), http_status=snapshot.http_status)
+        return snapshot, None
+
+    def set_product_name(
+        self, *, company_id: int, store_connection_id: int, seller_product_id: str, display_name: str, body: dict,
+        request_ref: str, triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRODUCT_NAME_UPDATE,
+            target_key=self.product_name_key(seller_product_id, display_name, request_ref),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.update_product(seller_product_id, body),
+            validate=lambda p: p.validate_product_update(seller_product_id, body),
+        )
+
+    def check_product_name(
+        self, *, company_id: int, store_connection_id: int, seller_product_id: str, display_name: str, request_ref: str,
+    ) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRODUCT_NAME_UPDATE,
+            target_key=self.product_name_key(seller_product_id, display_name, request_ref),
+            read=lambda p: p.read_product_name_applied(seller_product_id, display_name),
+            applied_when=True,  # 노출상품명이 요청한 값이면 적용된 것(다르면 판단하지 않는다)
+        )
+
+    # ---- 상품 문의 답변(2026-10-25) ----
+
+    @staticmethod
+    def inquiry_reply_key(inquiry_id: str) -> str:
+        """한 문의에는 한 번만 답한다 — 대상 키가 문의 번호뿐이다(글이 달라도 같은 요청으로 본다)."""
+
+        return f"inq:{str(inquiry_id).strip()}"
+
+    def _inquiry_read(self, company_id: int, store_connection_id: int, read: Callable, label: str):
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.INQUIRY_REPLY)
+        if denied is not None:
+            return None, denied
+        try:
+            result = read(provider)
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 %s 예외: %s", label, type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, f"{label}에 실패했다")
+        self._external_finish(ticket, succeeded=bool(result.ok), http_status=result.http_status)
+        return result, None
+
+    def read_inquiries(self, *, company_id: int, store_connection_id: int):
+        """답하지 않은 상품 문의 목록(최근 7일). 허용은 문의 답변 목적으로 센다. 장부를 쓰지 않는다."""
+
+        return self._inquiry_read(company_id, store_connection_id, lambda p: p.read_inquiries_for_reply(), "문의 조회")
+
+    def find_inquiry(self, *, company_id: int, store_connection_id: int, inquiry_id: str):
+        return self._inquiry_read(company_id, store_connection_id, lambda p: p.find_online_inquiry(inquiry_id), "문의 조회")
+
+    def reply_inquiry(
+        self, *, company_id: int, store_connection_id: int, inquiry_id: str, content: str,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.INQUIRY_REPLY, target_key=self.inquiry_reply_key(inquiry_id),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.reply_online_inquiry(inquiry_id, content),
+            validate=lambda p: p.validate_inquiry_reply(inquiry_id, content),
+        )
+
+    def check_inquiry_reply(self, *, company_id: int, store_connection_id: int, inquiry_id: str, content: str) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.INQUIRY_REPLY, target_key=self.inquiry_reply_key(inquiry_id),
+            read=lambda p: p.read_inquiry_reply_applied(inquiry_id, content),
+            applied_when=True,  # 우리 답이 붙어 있으면 적용(답이 없으면 안 받음, 다른 답만 있으면 판단하지 않음)
         )
 
 

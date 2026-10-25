@@ -1243,6 +1243,23 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.price.where"))}</div>
             <div id="ez-price-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-sec" id="ez-pname-anchor">${esc(T("easy.pname.title"))}<small>${esc(T("easy.pname.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <label>${esc(T("easy.pname.id_label"))}<br><input type="text" inputmode="numeric" id="ez-pname-id" maxlength="20" placeholder="${esc(T("easy.pname.id_placeholder"))}"></label>
+              <label style="flex:1;min-width:240px">${esc(T("easy.pname.display_label"))}<br><input type="text" id="ez-pname-display" maxlength="${PNAME_MAX}" style="width:100%"></label>
+              <label style="flex:1;min-width:200px">${esc(T("easy.pname.seller_label"))}<br><input type="text" id="ez-pname-seller" maxlength="${PNAME_MAX}" style="width:100%"></label>
+              <button type="button" class="ez-btn sm" id="ez-pname-check">${esc(T("easy.pname.check"))}</button>
+            </div>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.pname.where"))}</div>
+            <div id="ez-pname-box" style="margin-top:10px"></div>
+          </div>
+          <div class="ez-sec" id="ez-inq-anchor">${esc(T("easy.inq.title"))}<small>${esc(T("easy.inq.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <button type="button" class="ez-btn sm" id="ez-inq-load">${esc(T("easy.inq.load"))}</button>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.inq.where"))}</div>
+            <div id="ez-inq-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1280,6 +1297,8 @@
     root.querySelectorAll("[data-ez-days]").forEach((btn) => btn.addEventListener("click", () => daysPreview(btn.dataset.ezDays)));
     $("ez-stock-check").addEventListener("click", () => stockPreview($("ez-stock-item").value, $("ez-stock-qty").value));
     $("ez-price-check").addEventListener("click", () => pricePreview($("ez-price-item").value, $("ez-price-new").value, $("ez-price-cost").value, $("ez-price-ship").value));
+    $("ez-pname-check").addEventListener("click", () => pnamePreview($("ez-pname-id").value, $("ez-pname-display").value, $("ez-pname-seller").value));
+    $("ez-inq-load").addEventListener("click", () => inquiryList());
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1319,7 +1338,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>
@@ -1561,6 +1580,169 @@
         $("ez-price-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
       }
     });
+  }
+
+  // 2026-10-25 쿠팡 등록 상품의 상품명 수정: 지금 이름·상태 확인(쿠팡 조회, 허용 필요) → 승인 뒤 반영 확인 칸 → 확인 → 요청 → 서버가 다시 읽어 확인.
+  // 쿠팡은 상품 전체를 다시 받는다 — 서버가 방금 읽은 상품에서 이름만 바꿔 보낸다(화면은 본문을 만들지 않는다).
+  const PNAME_MAX = 100;
+
+  function pnameInputProblem(productId, displayText, sellerText) {
+    if (!/^\d{1,20}$/.test(String(productId || "").trim())) return "easy.pname.err_id";
+    const bad = (v) => v.length > PNAME_MAX || /[\u0000-\u001f\u007f]/.test(v);
+    const display = String(displayText === undefined || displayText === null ? "" : displayText).trim();
+    if (!display || bad(display)) return "easy.pname.err_display";
+    const seller = String(sellerText === undefined || sellerText === null ? "" : sellerText).trim();
+    if (seller && bad(seller)) return "easy.pname.err_seller";
+    return null;
+  }
+
+  function pnameResultHtml(result, name) {
+    // 끝난 뒤 화면에 남기는 기록(토스트만으로 끝내지 않는다).
+    let tone = "bad";
+    let text = `${result.outcome}: ${result.detail || ""}`;
+    const after = result.after || {};
+    if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T("easy.pname.ok", { name }); }
+    else if (result.outcome === "SUCCEEDED" && after.status_name) { tone = "warn"; text = T("easy.pname.waiting", { status: after.status_name }); }
+    else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.pname.unverified"); }
+    else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.stock.already_done"); }
+    else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.pname.unknown"); }
+    else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+    return `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+  }
+
+  async function pnamePreview(productId, displayText, sellerText) {
+    const box = $("ez-pname-box");
+    const problem = pnameInputProblem(productId, displayText, sellerText);
+    if (problem) { box.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem, { max: PNAME_MAX }))}</div></div>`; return; }
+    const id = String(productId).trim();
+    const displayName = String(displayText).trim();
+    const sellerName = String(sellerText || "").trim();
+    const ref = stockRef();
+    box.innerHTML = loadingHtml();
+    let plan;
+    try { plan = await api(`/purchase-tasks/coupang-products/${encodeURIComponent(id)}/name/preview?display_name=${encodeURIComponent(displayName)}${sellerName ? `&seller_name=${encodeURIComponent(sellerName)}` : ""}&request_ref=${encodeURIComponent(ref)}&live=true`); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    const reasons = (plan.blockers || []).concat(plan.gate_blockers || []);
+    const cp = plan.coupang || {};
+    let state;
+    if (plan.already_applied) state = `<div class="ez-note ok"><div>${esc(T("easy.pname.already"))}</div></div>`;
+    else if (plan.sendable) {
+      state = `<div class="ez-note ok"><div>${esc(T(plan.mode === "RESUBMIT" ? "easy.pname.ready_resubmit" : "easy.pname.ready", { cur: cp.display_name || "—", name: displayName, status: cp.status_name || "—", options: cp.option_count }))}</div></div>`;
+    } else state = `<div class="ez-note warn"><div>${reasons.map((b) => esc(b.message)).join("<br>")}</div></div>`;
+    const review = plan.sendable
+      ? `<div class="ez-note bad" style="margin-top:8px"><div>${esc(T("easy.pname.review_warn"))}<br><label><input type="checkbox" id="ez-pname-review"> ${esc(T("easy.pname.review_confirm"))}</label></div></div>` : "";
+    box.innerHTML = `${state}${review}${plan.sendable ? `<button type="button" class="ez-btn sm" id="ez-pname-send" style="margin-top:10px">${esc(T("easy.pname.send"))}</button>` : ""}<div id="ez-pname-result" style="margin-top:10px"></div>`;
+    const send = $("ez-pname-send");
+    if (!send) return;
+    send.addEventListener("click", async () => {
+      const reviewBox = $("ez-pname-review");
+      if (!(reviewBox && reviewBox.checked)) { B.toast(T("easy.pname.review_needed"), "error"); return; }
+      const ok = await B.askConfirm(T("easy.pname.confirm", { id, cur: cp.display_name || "—", name: displayName }), { title: T("easy.pname.title"), okLabel: T("easy.pname.send") });
+      if (!ok) return;
+      send.disabled = true;
+      try {
+        const result = await api(`/purchase-tasks/coupang-products/${encodeURIComponent(id)}/name/send`, {
+          method: "POST", body: JSON.stringify({ display_name: displayName, seller_name: sellerName || null, expected_display_name: cp.display_name || "", request_ref: ref, confirm_review: !!(reviewBox && reviewBox.checked), retry_action_required: false }),
+        });
+        $("ez-pname-result").innerHTML = pnameResultHtml(result, displayName)
+          + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" id="ez-pname-reconcile" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+        B.toast(T(result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "easy.pname.toast_done" : "easy.pname.toast_check"), result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
+        const rec = $("ez-pname-reconcile");
+        if (rec) rec.addEventListener("click", async () => {
+          try {
+            const r = await api(`/purchase-tasks/coupang-products/${encodeURIComponent(id)}/name/reconcile?display_name=${encodeURIComponent(displayName)}&request_ref=${encodeURIComponent(ref)}`, { method: "POST" });
+            $("ez-pname-result").innerHTML = pnameResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null }, displayName);
+          } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+        });
+      } catch (err) {
+        send.disabled = false;
+        $("ez-pname-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+      }
+    });
+  }
+
+  // 2026-10-25 쿠팡 상품 문의 답변: 답하지 않은 문의 불러오기(쿠팡 조회 1회) → 답변 쓰기 → 고객에게 바로 보인다는 확인 칸 → 확인 → 등록
+  // (서버가 보내기 직전에 문의를 다시 읽어 아직 답이 없을 때만 보내고, 보낸 뒤 다시 읽어 확인한다). 한 문의에는 한 번만 보낸다.
+  const INQ_MAX = 1000;
+
+  function inquiryReplyProblem(text) {
+    const value = String(text === undefined || text === null ? "" : text).replace(/\r\n?/g, "\n").trim();
+    if (!value || value.length > INQ_MAX) return "easy.inq.err_content";
+    if (/\[(전화번호|이메일|주소창|주소|번호|이름)\]/.test(value) || value.includes("※ 초안입니다")) return "easy.inq.err_draft";
+    return null;
+  }
+
+  function inquiryTime(value) {
+    // 쿠팡 문의 시각은 시간대 없이 온다(예: 2026-10-25T09:00:00) — 브라우저가 다른 시간대로 바꾸지 않게 받은 그대로 보인다.
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(value || ""));
+    return m ? `${m[1]} ${m[2]}` : (value ? String(value) : "—");
+  }
+
+  function inquiryResultHtml(result) {
+    // 끝난 뒤 화면에 남기는 기록(토스트만으로 끝내지 않는다).
+    let tone = "bad";
+    let text = `${result.outcome}: ${result.detail || ""}`;
+    if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T("easy.inq.ok"); }
+    else if (result.outcome === "SUCCEEDED" && result.verified === false) { tone = "warn"; text = T("easy.inq.not_seen"); }
+    else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.inq.unverified"); }
+    else if (result.outcome === "ALREADY_ANSWERED") { tone = "warn"; text = T("easy.inq.already"); }
+    else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.stock.already_done"); }
+    else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.inq.unknown"); }
+    else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+    return `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+  }
+
+  async function inquiryList() {
+    const box = $("ez-inq-box");
+    box.innerHTML = loadingHtml();
+    let listed;
+    try { listed = await api("/purchase-tasks/coupang-inquiries/unanswered"); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    if (!listed.ok) { box.innerHTML = `<div class="ez-note warn"><div>${(listed.blockers || []).map((b) => esc(b.message)).join("<br>")}</div></div>`; return; }
+    const rows = listed.rows || [];
+    if (!rows.length) { box.innerHTML = `<div class="ez-empty">${esc(T("easy.inq.none"))}</div>`; return; }
+    box.innerHTML = (listed.truncated ? `<div class="ez-note warn"><div>${esc(T("easy.inq.truncated"))}</div></div>` : "")
+      + rows.map((r) => `<div class="ez-block" style="margin-top:10px;padding:10px 14px" data-ez-inq-row="${esc(r.inquiry_id)}">
+        <div class="ez-faint" style="font-size:13px">${esc(T("easy.inq.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), product: r.seller_product_id || "—" }))}</div>
+        <div style="white-space:pre-wrap;margin:6px 0">${esc(r.question || "")}${r.question_clipped ? " …" : ""}</div>
+        <textarea data-ez-inq-text="${esc(r.inquiry_id)}" maxlength="${INQ_MAX}" rows="4" style="width:100%" placeholder="${esc(T("easy.inq.placeholder"))}"></textarea>
+        <label style="display:block;margin-top:6px"><input type="checkbox" data-ez-inq-public="${esc(r.inquiry_id)}"> ${esc(T("easy.inq.public_confirm"))}</label>
+        <button type="button" class="ez-btn sm" data-ez-inq-send="${esc(r.inquiry_id)}" style="margin-top:8px">${esc(T("easy.inq.send"))}</button>
+        <div data-ez-inq-result="${esc(r.inquiry_id)}" style="margin-top:8px"></div></div>`).join("");
+    box.querySelectorAll("[data-ez-inq-send]").forEach((btn) => btn.addEventListener("click", () => inquirySend(btn, btn.dataset.ezInqSend)));
+  }
+
+  async function inquirySend(btn, id) {
+    const box = $("ez-inq-box");
+    const textEl = box.querySelector(`[data-ez-inq-text="${id}"]`);
+    const publicEl = box.querySelector(`[data-ez-inq-public="${id}"]`);
+    const out = box.querySelector(`[data-ez-inq-result="${id}"]`);
+    const content = String(textEl.value || "").replace(/\r\n?/g, "\n").trim();
+    const problem = inquiryReplyProblem(content);
+    if (problem) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem, { max: INQ_MAX.toLocaleString("ko-KR") }))}</div></div>`; return; }
+    if (!(publicEl && publicEl.checked)) { B.toast(T("easy.inq.public_needed"), "error"); return; }
+    const ok = await B.askConfirm(T("easy.inq.confirm", { id, chars: content.length }), { title: T("easy.inq.title"), okLabel: T("easy.inq.send") });
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const result = await api(`/purchase-tasks/coupang-inquiries/${encodeURIComponent(id)}/reply/send`, {
+        method: "POST", body: JSON.stringify({ content, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false }),
+      });
+      out.innerHTML = inquiryResultHtml(result)
+        + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" data-ez-inq-reconcile="${esc(id)}" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+      B.toast(T(result.outcome === "SUCCEEDED" ? "easy.inq.toast_done" : "easy.inq.toast_check"), result.outcome === "SUCCEEDED" ? "success" : "error");
+      if (result.outcome !== "ACTION_REQUIRED") textEl.readOnly = true;
+      const rec = out.querySelector("[data-ez-inq-reconcile]");
+      if (rec) rec.addEventListener("click", async () => {
+        try {
+          const r = await api(`/purchase-tasks/coupang-inquiries/${encodeURIComponent(id)}/reply/reconcile`, { method: "POST", body: JSON.stringify({ content, confirm_public: true }) });
+          out.innerHTML = inquiryResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null });
+        } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+      });
+    } catch (err) {
+      btn.disabled = false;
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+    }
   }
 
   // =========================================================

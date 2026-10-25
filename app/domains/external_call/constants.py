@@ -42,10 +42,12 @@ class CallPurpose:
     PRODUCT_OUTBOUND_DAYS = "PRODUCT_OUTBOUND_DAYS"  # 등록 상품 기준 출고일 변경(상품 조회·수정)
     STOCK_UPDATE = "STOCK_UPDATE"                  # 2026-10-24 쿠팡 옵션 재고 수량 변경(재고 조회·수정)
     PRICE_UPDATE = "PRICE_UPDATE"                  # 2026-10-25 쿠팡 옵션 판매가 변경(재고 조회의 판매가 읽기·가격 수정)
+    PRODUCT_NAME_UPDATE = "PRODUCT_NAME_UPDATE"    # 2026-10-25 쿠팡 등록 상품의 상품명 수정(상품 조회·상품 수정 — 쿠팡 승인 뒤 반영)
+    INQUIRY_REPLY = "INQUIRY_REPLY"                # 2026-10-25 쿠팡 상품 문의 답변(문의 조회·답변 등록 — 고객에게 바로 보인다)
     IMAGE_GENERATION = "IMAGE_GENERATION"          # 2026-10-25 AI 이미지 생성·편집(상품 사진을 Gemini에 보내 새 사진을 받는다 — 장마다 사용료)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, IMAGE_GENERATION, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, IMAGE_GENERATION, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
@@ -58,11 +60,13 @@ class CallPurpose:
         PRODUCT_OUTBOUND_DAYS: "상품 출고일 변경",
         STOCK_UPDATE: "쿠팡 재고 수량 변경",
         PRICE_UPDATE: "쿠팡 판매가 변경",
+        PRODUCT_NAME_UPDATE: "쿠팡 상품명 수정",
+        INQUIRY_REPLY: "쿠팡 문의 답변",
         IMAGE_GENERATION: "AI 이미지 생성",
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, IMAGE_GENERATION})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, IMAGE_GENERATION})
 
 
 class AllowanceMode:
