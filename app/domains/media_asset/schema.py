@@ -149,6 +149,18 @@ class ReferenceGenerationRequestSchema(BaseModel):
     count: int = Field(default=1, ge=1, le=6)
     # 대표(MAIN)에 AI 생성 사진을 쓰는 데 대한 사용자 최종 확인. 서버가 MAIN이면 이 값이 True여야만 실행한다.
     confirmed_main: bool = False
+    # 2026-10-25 — FAKE(시연용) 또는 GEMINI(실제 AI, 설정·키·승인 센터 허용 필요). 대화로 준 요청 글(선택, 500자).
+    provider_code: Literal["FAKE", "GEMINI"] = "FAKE"
+    instruction: str | None = Field(default=None, max_length=500)
+
+
+class ImageAiSettingsSchema(BaseModel):
+    """2026-10-25 AI 이미지(Gemini) 설정. API 키는 저장할 때만 보내고 응답에는 실리지 않는다(빈 값이면 기존 키 유지)."""
+
+    model: str = Field(min_length=3, max_length=80)
+    image_size: Literal["1K", "2K", "4K"] = "2K"
+    price_per_image_krw: float = Field(default=0, ge=0, le=100_000)
+    api_key: str | None = Field(default=None, max_length=300)
 
 
 class ReferenceGenerationResponseSchema(BaseModel):

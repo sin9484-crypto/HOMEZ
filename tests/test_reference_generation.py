@@ -74,6 +74,7 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(rg.MAX_BACKGROUNDS, 3)
         self.assertEqual(rg.MAX_POSES, 3)
         self.assertEqual(rg.ALLOWED_PROVIDER_CODES, ("FAKE",))
+        self.assertEqual(rg.HELD_PROVIDER_CODES, ("GEMINI",))          # 2026-10-25 실제 AI 이미지는 비용 때문에 보류(사용자 결정)
         self.assertEqual(rg.ALLOWED_PURPOSES, ("MAIN", "ADDITIONAL", "DETAIL"))
         self.assertEqual(rg.MAIN_EXTRA_CHECKS, ("MAIN_IMAGE_SPEC",))
         self.assertEqual(rg.GENERATED_LABEL_KO, "AI 생성 이미지")

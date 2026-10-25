@@ -51,6 +51,10 @@ MAX_POSES = 3
 
 # 실제 제공자는 아직 없다. 늘리려면 별도 승인 + 이 값과 시험을 함께 바꾼다.
 ALLOWED_PROVIDER_CODES = ("FAKE",)
+# 2026-10-25 실제 AI 이미지(Gemini) 연결 코드는 만들어 두었지만(`gemini_image_client.py`·`image_ai_service.py`) 사용자 결정으로
+# **비용 때문에 보류**한다 — 여기 있는 제공자는 거절하고(실제 호출·비용 0), 보류를 풀 때 ALLOWED_PROVIDER_CODES로 옮긴다.
+HELD_PROVIDER_CODES = ("GEMINI",)
+HELD_PROVIDER_MESSAGE_KO = "실제 AI 이미지 생성(Gemini)은 비용 때문에 보류 중입니다(2026-10-25 사용자 결정). 지금은 시연용만 쓸 수 있습니다."
 
 ALLOWED_PURPOSES = (PURPOSE_MAIN, PURPOSE_ADDITIONAL, PURPOSE_DETAIL)
 
@@ -281,6 +285,8 @@ def to_provider_request(
 ) -> ImageGenerationRequest:
     """계획을 제공자 요청으로 바꾼다. 실제 제공자(FAKE 외)는 이 단계에서 거절한다."""
 
+    if provider_code in HELD_PROVIDER_CODES and provider_code not in ALLOWED_PROVIDER_CODES:
+        raise ReferenceGenerationError(HELD_PROVIDER_MESSAGE_KO)
     if provider_code not in ALLOWED_PROVIDER_CODES:
         raise ReferenceGenerationError(
             "실제 이미지 생성 제공자는 아직 연결되지 않았습니다 — 연결은 가드 허용·비용 승인 뒤 별도 단계에서 합니다.",
@@ -309,7 +315,7 @@ def to_provider_request(
 
 
 __all__ = [
-    "REFERENCE_GENERATION_VERSION", "MAX_VARIANTS_PER_REQUEST", "MAX_BACKGROUNDS", "MAX_POSES", "ALLOWED_PROVIDER_CODES",
+    "REFERENCE_GENERATION_VERSION", "MAX_VARIANTS_PER_REQUEST", "MAX_BACKGROUNDS", "MAX_POSES", "ALLOWED_PROVIDER_CODES", "HELD_PROVIDER_CODES", "HELD_PROVIDER_MESSAGE_KO",
     "ALLOWED_PURPOSES", "REQUIRED_REVIEW_CHECKS", "MAIN_EXTRA_CHECKS", "MAIN_POLICY_WARNING_KO", "GENERATED_LABEL_KO", "LABEL_PLACEMENT", "FORBIDDEN_IN_IMAGE", "ReferenceGenerationError", "ScenePreset",
     "BACKGROUND_PRESETS", "POSE_PRESETS", "ReferenceImage", "Variant", "ReferenceGenerationPlan", "list_presets",
     "check_reference_image", "build_plan", "to_provider_request",

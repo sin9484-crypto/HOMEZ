@@ -67,10 +67,12 @@ class ReferenceGenerationOutcome:
 
 class ReferenceGenerationService:
 
-    def __init__(self, db: Session, queue: ImageGenerationJobQueueService | None = None):
+    def __init__(self, db: Session, queue: ImageGenerationJobQueueService | None = None, image_ai=None):
         self.db = db
         self.queue = queue or ImageGenerationJobQueueService(db)
         self.rights = ImageRightsEvidenceService(db)
+        # 2026-10-25 실제 제공자(GEMINI)용 — `ImageAiService`(설정·키·승인 센터 허용·사용 기록·완료 알림). 없으면 GEMINI는 쓸 수 없다.
+        self.image_ai = image_ai
 
     # ------------------------------------------------------------
     # 읽기: 참고 사진 → 검증된 입력
@@ -122,7 +124,7 @@ class ReferenceGenerationService:
     def generate(
         self, company_id: int, requested_by: int, reference_asset_id: int, purpose: str,
         backgrounds: list[str], poses: list[str], count: int,
-        confirmed_main: bool = False, provider_code: str = "FAKE",
+        confirmed_main: bool = False, provider_code: str = "FAKE", instruction: str | None = None,
     ) -> ReferenceGenerationOutcome:
         asset, reference = self._load_reference(company_id, reference_asset_id)
         plan = rg.build_plan(reference, purpose, backgrounds, poses, count)
@@ -136,10 +138,22 @@ class ReferenceGenerationService:
             request = rg.to_provider_request(plan, reference, company_id, self._candidate_id(asset), provider_code)
         except rg.ReferenceGenerationError:
             raise
+        if instruction:
+            # 사용자가 대화로 준 요청 글(실제 제공자 프롬프트에 데이터로만 들어간다 — 규칙을 바꾸지 못한다).
+            from dataclasses import replace as _replace
+
+            from app.domains.media_asset.gemini_image_client import clean_instruction
+
+            request = _replace(request, style_params={**request.style_params, "user_instruction": clean_instruction(instruction)})
+        real = provider_code != "FAKE"
+        if real:
+            if self.image_ai is None:
+                raise BadRequestException("실제 AI 이미지 생성 설정을 불러오지 못했습니다.")
+            provider_obj = self.image_ai.provider(company_id, requested_by, target=f"REF{asset.id}")   # 설정·키가 없으면 여기서 막힌다(작업 행 없음)
 
         job = self._start_job(company_id, requested_by, asset, plan, provider_code)
         try:
-            provider = get_provider(provider_code)
+            provider = provider_obj if real else get_provider(provider_code)
             provider_result = provider.generate(request)
         except ImageGenerationProviderError as exc:
             self._fail_job(job.id, company_id, str(exc))
@@ -151,10 +165,13 @@ class ReferenceGenerationService:
 
         assets, succeeded = self._store_results(company_id, asset, plan, provider_result, job.id)
         self._finish_job(job.id, company_id, succeeded=succeeded, total=len(plan.variants))
+        if real:
+            # 사용자 결정(10-24): 대표 사진을 임의로 정하지 않고, 만든 뒤 알린다.
+            self.image_ai.notify_done(company_id, requested_by, created=len(assets), failed=len(plan.variants) - succeeded)
         if not assets:
             raise BadRequestException("생성된 사진이 없습니다(제공자가 모든 항목을 실패 처리했습니다).")
         return ReferenceGenerationOutcome(
-            plan=plan, assets=tuple(assets), job_id=job.id, demo=True, provider_cost=provider_result.provider_cost,
+            plan=plan, assets=tuple(assets), job_id=job.id, demo=not real, provider_cost=provider_result.provider_cost,
         )
 
     # ------------------------------------------------------------
@@ -207,7 +224,8 @@ class ReferenceGenerationService:
                 status=ImageResultStatus.SUCCEEDED, safety_check_status=ImageSafetyCheckStatus.UNKNOWN,  # 사람 검수 전이라 "통과"라고 하지 않는다
                 error_reason=None,
             ))
-            assets.append(generated)
+            if all(existing.id != generated.id for existing in assets):   # 같은 사진이 두 번 오면(같은 바이트) 목록에는 한 번만
+                assets.append(generated)
             succeeded += 1
         self.db.commit()
         return assets, succeeded

@@ -405,7 +405,7 @@ def reference_generation_presets(current_user: User = Depends(admin_guard)):
 
     return {
         **rg.list_presets(), "purposes": list(rg.ALLOWED_PURPOSES), "generated_label": rg.GENERATED_LABEL_KO,
-        "label_placement": rg.LABEL_PLACEMENT, "no_watermark": True, "provider_codes": list(rg.ALLOWED_PROVIDER_CODES),
+        "label_placement": rg.LABEL_PLACEMENT, "no_watermark": True, "provider_codes": list(rg.ALLOWED_PROVIDER_CODES), "held_provider_codes": list(rg.HELD_PROVIDER_CODES),
         "main_policy_warning": rg.MAIN_POLICY_WARNING_KO,
     }
 
@@ -426,21 +426,65 @@ def reference_generation_preview(
     )
 
 
+def get_image_ai_credential_store() -> CredentialStore:
+    """AI 이미지 키 저장소 — 항상 실제 Windows 자격증명 저장소. 시험은 이 의존성을 덮어쓴다."""
+
+    return WindowsCredentialStore()
+
+
+@router.get("/image-ai/settings")
+def image_ai_settings(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_image_ai_credential_store),
+):
+    """AI 이미지(Gemini) 설정 상태(키는 저장 여부만, 값은 돌려주지 않는다)."""
+
+    from app.domains.media_asset.image_ai_service import ImageAiService
+
+    return ImageAiService(db, credential_store).status(current_user.id, current_user.company_id)
+
+
+@router.put("/image-ai/settings")
+def image_ai_save_settings(
+    data: schema.ImageAiSettingsSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_image_ai_credential_store),
+):
+    """AI 이미지(Gemini) 설정 저장. 키는 Windows 자격증명 저장소에만 둔다(빈 값이면 기존 키 유지)."""
+
+    from app.domains.media_asset.image_ai_service import ImageAiService
+
+    return ImageAiService(db, credential_store).save_settings(
+        current_user.id, current_user.company_id, model=data.model, image_size=data.image_size,
+        price_per_image_krw=data.price_per_image_krw, api_key=data.api_key,
+    )
+
+
 @router.post("/reference-generation", response_model=schema.ReferenceGenerationResponseSchema)
 def reference_generation_run(
     data: schema.ReferenceGenerationRequestSchema,
     current_user: User = Depends(admin_guard),
     db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_image_ai_credential_store),
 ):
-    """참고 사진으로 사진을 만든다(FAKE 제공자만 — 시연용 결과). 대표(MAIN)는 confirmed_main=true가 있어야 실행한다.
+    """참고 사진으로 사진을 만든다. FAKE는 시연용 결과, GEMINI는 실제 AI(설정·키·승인 센터 허용이 있어야 부르고, 장마다 허용 1회).
+    대표(MAIN)는 confirmed_main=true가 있어야 실행한다. 대표 사진은 정하지 않고, 실제 AI로 만든 뒤에는 앱 알림을 남긴다.
     이미지에는 워터마크·글자를 넣지 않고 'AI 생성' 표기는 응답·작업 기록에만 둔다."""
 
     from app.domains.media_asset import reference_generation as rg
     from app.domains.media_asset.reference_generation_service import ReferenceGenerationService
 
-    outcome = ReferenceGenerationService(db).generate(
+    image_ai = None
+    if data.provider_code != "FAKE":
+        from app.domains.media_asset.image_ai_service import ImageAiService
+
+        image_ai = ImageAiService(db, credential_store)
+    outcome = ReferenceGenerationService(db, image_ai=image_ai).generate(
         company_id=current_user.company_id, requested_by=current_user.id, reference_asset_id=data.reference_asset_id,
         purpose=data.purpose, backgrounds=data.backgrounds, poses=data.poses, count=data.count, confirmed_main=data.confirmed_main,
+        provider_code=data.provider_code, instruction=data.instruction,
     )
     return {
         "plan": outcome.plan.to_summary(), "assets": [MediaAssetResponse.model_validate(a) for a in outcome.assets],

@@ -440,6 +440,7 @@ class RouteTests(Base_):
         result = self.route("reference_generation_presets")(current_user=self.user())
         self.assertEqual(result["purposes"], ["MAIN", "ADDITIONAL", "DETAIL"])
         self.assertEqual(result["provider_codes"], ["FAKE"])
+        self.assertEqual(result["held_provider_codes"], ["GEMINI"])          # 2026-10-25 실제 AI 이미지는 비용 때문에 보류
         self.assertTrue(result["no_watermark"])
         self.assertEqual(result["label_placement"], "OUTSIDE_IMAGE")
         self.assertEqual(result["generated_label"], "AI 생성 이미지")
