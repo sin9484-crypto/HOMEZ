@@ -368,6 +368,7 @@ class CoupangChannelActions:
         ChannelActionType.INVOICE_UPLOAD: (ExtPurpose.INVOICE_UPLOAD, "POST"),
         ChannelActionType.PRODUCT_OUTBOUND_DAYS: (ExtPurpose.PRODUCT_OUTBOUND_DAYS, "PUT"),
         ChannelActionType.STOCK_UPDATE: (ExtPurpose.STOCK_UPDATE, "PUT"),
+        ChannelActionType.PRICE_UPDATE: (ExtPurpose.PRICE_UPDATE, "PUT"),
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -764,6 +765,56 @@ class CoupangChannelActions:
             target_key=self.stock_key(vendor_item_id, quantity, request_ref),
             read=lambda p: p.read_stock_applied(vendor_item_id, quantity),
             applied_when=True,  # 재고가 요청한 수량이면 적용된 것
+        )
+
+    # ---- 옵션 판매가(2026-10-25) ----
+
+    @staticmethod
+    def price_key(vendor_item_id: str, price: int, request_ref: str) -> str:
+        """판매가도 같은 값으로 되돌리는 일이 있다(할인 후 원복) — 재고와 같이 사용자 요청마다 참조값을 붙인다."""
+
+        return f"vi:{str(vendor_item_id).strip()}:price:{int(price)}:req:{request_ref}"
+
+    def read_price(self, *, company_id: int, store_connection_id: int, vendor_item_id: str):
+        """옵션 판매가 읽기 — 재고 조회(GET 1회)의 salePrice를 쓴다. 허용은 판매가 변경 목적으로 센다. 장부를 쓰지 않는다."""
+
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.PRICE_UPDATE)
+        if denied is not None:
+            return None, denied
+        try:
+            snapshot = provider.read_stock(vendor_item_id)
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 판매가 조회 예외: %s", type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, "판매가 조회에 실패했다")
+        self._external_finish(ticket, succeeded=bool(snapshot.ok), http_status=snapshot.http_status)
+        return snapshot, None
+
+    def set_price(
+        self, *, company_id: int, store_connection_id: int, vendor_item_id: str, price: int, request_ref: str,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRICE_UPDATE,
+            target_key=self.price_key(vendor_item_id, price, request_ref),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.update_price(vendor_item_id, price),
+            validate=lambda p: p.validate_price(vendor_item_id, price),
+        )
+
+    def check_price(
+        self, *, company_id: int, store_connection_id: int, vendor_item_id: str, price: int, request_ref: str,
+    ) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRICE_UPDATE,
+            target_key=self.price_key(vendor_item_id, price, request_ref),
+            read=lambda p: p.read_price_applied(vendor_item_id, price),
+            applied_when=True,  # 판매가가 요청한 값이면 적용된 것
         )
 
 

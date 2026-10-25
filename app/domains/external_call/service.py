@@ -71,6 +71,9 @@ _DEFAULT_REQUEST = {
     # 2026-10-24 재고 수량 변경: 한 번 바꾸는 데 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기는 1회씩만.
     (CallPurpose.STOCK_UPDATE, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
     (CallPurpose.STOCK_UPDATE, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
+    # 2026-10-25 판매가 변경: 재고 변경과 같이 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기 1회씩만.
+    (CallPurpose.PRICE_UPDATE, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
+    (CallPurpose.PRICE_UPDATE, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     # 2026-10-25 AI 이미지 생성: 한 번 만들 때 최대 6장 — 장마다 1회(사용료가 들어 횟수로만, 상시 불가).
     (CallPurpose.IMAGE_GENERATION, CallKind.WRITE): (AllowanceMode.COUNTED, 6, None),
 }

@@ -39,6 +39,7 @@ from app.core.guard import AdminGuard
 from app.core.guard import StaffGuard
 from app.domains.purchase_task.coupang_invoice_schema import CoupangInvoiceSendRequest
 from app.domains.purchase_task.coupang_product_days_schema import CoupangProductDaysSendRequest
+from app.domains.purchase_task.coupang_price_schema import CoupangPriceSendRequest
 from app.domains.purchase_task.coupang_stock_schema import CoupangStockSendRequest
 from app.core.recent_auth import consume_recent_auth_token
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
@@ -1219,6 +1220,61 @@ def reconcile_coupang_stock(
     from app.domains.purchase_task.coupang_stock_service import CoupangStockService
 
     return CoupangStockService(db).reconcile(current_user.company_id, vendor_item_id, quantity, request_ref)
+
+
+@router.get("/coupang-vendor-items/{vendor_item_id}/price/preview")
+def preview_coupang_price(
+    vendor_item_id: str,
+    price: int = Query(ge=10, le=10_000_000, description="바꾸려는 판매가(10원 단위)"),
+    unit_cost: int = Query(ge=1, le=10_000_000, description="사용자가 입력한 매입가(마진 확인용)"),
+    shipping_cost: int = Query(ge=0, le=10_000_000, description="사용자가 입력한 배송비(마진 확인용)"),
+    request_ref: str | None = Query(default=None, description="화면이 미리보기마다 새로 만드는 요청 참조값"),
+    live: bool = Query(default=True, description="true면 쿠팡 판매가를 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-25 쿠팡 옵션 판매가 변경 **미리보기** — 지금 판매가·최저 판매가·마진·막는 이유. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_price_service import CoupangPriceService
+
+    return CoupangPriceService(db).plan(
+        current_user.company_id, vendor_item_id, price, unit_cost=unit_cost, shipping_cost=shipping_cost,
+        request_ref=request_ref, live=live,
+    ).to_dict()
+
+
+@router.post("/coupang-vendor-items/{vendor_item_id}/price/send")
+def send_coupang_price(
+    vendor_item_id: str,
+    data: CoupangPriceSendRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 옵션 판매가를 **바꾼다(외부 변경)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용이 필요하고, 최저 판매가 이상·
+    쿠팡 기본 변경 폭 안·미리보기에서 본 지금 판매가와 같을 때만 한 번 보낸다(20% 이상은 따로 확인). 성공 뒤 판매가를 다시 읽어 확인한다."""
+
+    from app.domains.purchase_task.coupang_price_service import CoupangPriceService
+
+    return CoupangPriceService(db).send(
+        current_user.company_id, current_user.id, vendor_item_id, data.price,
+        unit_cost=data.unit_cost, shipping_cost=data.shipping_cost, expected_current_price=data.expected_current_price,
+        request_ref=data.request_ref, confirm_big_change=data.confirm_big_change, retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-vendor-items/{vendor_item_id}/price/reconcile")
+def reconcile_coupang_price(
+    vendor_item_id: str,
+    price: int = Query(ge=10, le=10_000_000),
+    request_ref: str = Query(pattern=r"^[A-Za-z0-9-]{8,40}$"),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 판매가 변경 요청을 쿠팡 재고 조회의 판매가로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_price_service import CoupangPriceService
+
+    return CoupangPriceService(db).reconcile(current_user.company_id, vendor_item_id, price, request_ref)
 
 
 @router.get("/{task_id}/coupang-invoice/preview")

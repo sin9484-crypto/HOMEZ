@@ -1231,6 +1231,18 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.stock.where_id"))}</div>
             <div id="ez-stock-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-sec" id="ez-price-anchor">${esc(T("easy.price.title"))}<small>${esc(T("easy.price.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <label>${esc(T("easy.price.item_label"))}<br><input type="text" inputmode="numeric" id="ez-price-item" maxlength="20" placeholder="${esc(T("easy.stock.item_placeholder"))}"></label>
+              <label>${esc(T("easy.price.price_label"))}<br><input type="number" id="ez-price-new" min="10" max="${PRICE_MAX}" step="10"></label>
+              <label>${esc(T("easy.price.cost_label"))}<br><input type="number" id="ez-price-cost" min="1" max="${PRICE_MAX}" step="1"></label>
+              <label>${esc(T("easy.price.ship_label"))}<br><input type="number" id="ez-price-ship" min="0" max="${PRICE_MAX}" step="1"></label>
+              <button type="button" class="ez-btn sm" id="ez-price-check">${esc(T("easy.price.check"))}</button>
+            </div>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.price.where"))}</div>
+            <div id="ez-price-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1267,6 +1279,7 @@
     if (custom) custom.addEventListener("click", () => grantDialog(null));
     root.querySelectorAll("[data-ez-days]").forEach((btn) => btn.addEventListener("click", () => daysPreview(btn.dataset.ezDays)));
     $("ez-stock-check").addEventListener("click", () => stockPreview($("ez-stock-item").value, $("ez-stock-qty").value));
+    $("ez-price-check").addEventListener("click", () => pricePreview($("ez-price-item").value, $("ez-price-new").value, $("ez-price-cost").value, $("ez-price-ship").value));
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1306,7 +1319,7 @@
   }
 
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["ANY", "easy.purpose.any"]];
+    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["ANY", "easy.purpose.any"]];
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>
@@ -1455,6 +1468,97 @@
       } catch (err) {
         send.disabled = false;
         $("ez-stock-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+      }
+    });
+  }
+
+  // 2026-10-25 쿠팡 옵션 판매가 변경: 매입가·배송비는 사용자가 넣는다(마진 확인용 — HOMEZ가 추측하지 않는다).
+  // 지금 판매가 확인(쿠팡 조회, 허용 필요) → 최저 판매가·마진 확인 → 확인 → 변경 → 서버가 다시 읽어 확인. 20% 이상은 확인 칸을 체크해야 보낸다.
+  const PRICE_MAX = 10000000;
+
+  function priceInputProblem(itemId, priceText, costText, shipText) {
+    const item = String(itemId || "").trim();
+    if (!/^\d{1,20}$/.test(item)) return "easy.stock.err_item";
+    const txt = (v) => String(v === undefined || v === null ? "" : v).trim();
+    const p = txt(priceText);
+    if (!/^\d+$/.test(p) || Number(p) < 10 || Number(p) > PRICE_MAX || Number(p) % 10 !== 0) return "easy.price.err_price";
+    const c = txt(costText);
+    if (!/^\d+$/.test(c) || Number(c) < 1 || Number(c) > PRICE_MAX) return "easy.price.err_cost";
+    const s = txt(shipText);
+    if (!/^\d+$/.test(s) || Number(s) > PRICE_MAX) return "easy.price.err_ship";
+    return null;
+  }
+
+  function priceNum(n) {
+    return Number.isInteger(n) ? n.toLocaleString("ko-KR") : "—";
+  }
+
+  function priceResultHtml(result, price) {
+    // 끝난 뒤 화면에 남기는 기록(토스트만으로 끝내지 않는다).
+    let tone = "bad";
+    let text = `${result.outcome}: ${result.detail || ""}`;
+    if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T("easy.price.ok", { p: priceNum(price) }); }
+    else if (result.outcome === "SUCCEEDED" && result.verified === false) { tone = "warn"; text = T("easy.price.after_diff", { p: priceNum(price), after: priceNum(result.after_price) }); }
+    else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.price.unverified"); }
+    else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.stock.already_done"); }
+    else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.price.unknown"); }
+    else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+    return `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+  }
+
+  async function pricePreview(itemId, priceText, costText, shipText) {
+    const box = $("ez-price-box");
+    const problem = priceInputProblem(itemId, priceText, costText, shipText);
+    if (problem) { box.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem, { max: PRICE_MAX.toLocaleString("ko-KR") }))}</div></div>`; return; }
+    const item = String(itemId).trim();
+    const price = Number(String(priceText).trim());
+    const unitCost = Number(String(costText).trim());
+    const shippingCost = Number(String(shipText).trim());
+    const ref = stockRef();
+    box.innerHTML = loadingHtml();
+    let plan;
+    try { plan = await api(`/purchase-tasks/coupang-vendor-items/${encodeURIComponent(item)}/price/preview?price=${price}&unit_cost=${unitCost}&shipping_cost=${shippingCost}&request_ref=${encodeURIComponent(ref)}&live=true`); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    const reasons = (plan.blockers || []).concat(plan.gate_blockers || []);
+    const cp = plan.coupang || {};
+    const m = plan.margin || {};
+    const pct = (r) => (typeof r === "number" ? `${(r * 100).toFixed(1)}%` : "—");
+    // 마진은 내림으로 보인다 — 17.97%를 18.0%로 올려 보이면 기준을 지킨 것처럼 읽힌다.
+    const pctDown = (r) => (typeof r === "number" ? `${(Math.floor(r * 1000) / 10).toFixed(1)}%` : "—");
+    const marginLine = Number.isInteger(m.floor_price)
+      ? `<div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.price.margin_line", { floor: priceNum(m.floor_price), margin: pctDown(m.margin_rate), fee: pct(m.fee_rate), reserve: pct(m.return_reserve_rate), min: pct(m.min_margin) }))}</div>` : "";
+    let state;
+    if (plan.already_applied) state = `<div class="ez-note ok"><div>${esc(T("easy.price.already", { p: priceNum(price) }))}</div></div>`;
+    else if (plan.sendable) state = `<div class="ez-note ok"><div>${esc(T("easy.price.ready", { cur: priceNum(cp.current_price), p: priceNum(price), change: pct(plan.change_rate) }))}</div></div>`;
+    else state = `<div class="ez-note warn"><div>${reasons.map((b) => esc(b.message)).join("<br>")}</div></div>`;
+    const big = plan.sendable && plan.big_change
+      ? `<div class="ez-note bad" style="margin-top:8px"><div>${esc(T("easy.price.big_warn", { change: pct(plan.change_rate) }))}<br><label><input type="checkbox" id="ez-price-big"> ${esc(T("easy.price.big_confirm"))}</label></div></div>` : "";
+    box.innerHTML = `${state}${marginLine}${big}${plan.sendable ? `<button type="button" class="ez-btn sm" id="ez-price-send" style="margin-top:10px">${esc(T("easy.price.send", { p: priceNum(price) }))}</button>` : ""}<div id="ez-price-result" style="margin-top:10px"></div>`;
+    const send = $("ez-price-send");
+    if (!send) return;
+    send.addEventListener("click", async () => {
+      const bigBox = $("ez-price-big");
+      if (plan.big_change && !(bigBox && bigBox.checked)) { B.toast(T("easy.price.big_needed"), "error"); return; }
+      const ok = await B.askConfirm(T("easy.price.confirm", { id: item, cur: priceNum(cp.current_price), p: priceNum(price) }), { title: T("easy.price.title"), okLabel: T("easy.price.send", { p: priceNum(price) }) });
+      if (!ok) return;
+      send.disabled = true;
+      try {
+        const result = await api(`/purchase-tasks/coupang-vendor-items/${encodeURIComponent(item)}/price/send`, {
+          method: "POST", body: JSON.stringify({ price, unit_cost: unitCost, shipping_cost: shippingCost, expected_current_price: cp.current_price, request_ref: ref, confirm_big_change: plan.big_change === true && !!(bigBox && bigBox.checked), retry_action_required: false }),
+        });
+        $("ez-price-result").innerHTML = priceResultHtml(result, price)
+          + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" id="ez-price-reconcile" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+        B.toast(T(result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "easy.price.toast_done" : "easy.price.toast_check"), result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
+        const rec = $("ez-price-reconcile");
+        if (rec) rec.addEventListener("click", async () => {
+          try {
+            const r = await api(`/purchase-tasks/coupang-vendor-items/${encodeURIComponent(item)}/price/reconcile?price=${price}&request_ref=${encodeURIComponent(ref)}`, { method: "POST" });
+            $("ez-price-result").innerHTML = priceResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null }, price);
+          } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+        });
+      } catch (err) {
+        send.disabled = false;
+        $("ez-price-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
       }
     });
   }

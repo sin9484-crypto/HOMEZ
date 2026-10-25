@@ -96,6 +96,17 @@ STOCK_QUANTITY_PATH = (
 MAX_STOCK_QUANTITY = 99_999  # HOMEZ 자체 상한(쿠팡 공식 상한이 아님) — 잘못 친 큰 수를 막는다
 MAX_VENDOR_ITEM_ID_DIGITS = 20
 
+# 상품 아이템별 가격 변경 — 2026-10-25 공식 문서 확인(developers.coupang.com "상품 아이템별 가격 변경"):
+# PUT .../vendor-items/{vendorItemId}/prices/{price}, 본문 없음, 가격은 10원 단위. 응답 {"code":"SUCCESS","message":"가격 변경을 완료했습니다."}.
+# 기본(forceSalePriceUpdate=false)은 변경 전 가격 대비 최대 50% 인하·100% 인상까지만 받는다 — HOMEZ는 **force를 보내지 않고**
+# 자동가격조정(apMinSalePrice·apActive)도 보내지 않는다(그 설정은 사용자가 윙에서). 결과는 재고 조회의 salePrice로 다시 확인한다.
+PRICE_PATH = "/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/{vendor_item_id}/prices/{price}"
+PRICE_UNIT = 10
+MIN_SALE_PRICE = 10
+MAX_SALE_PRICE = 10_000_000  # HOMEZ 자체 상한(쿠팡 공식 상한이 아님)
+COUPANG_MAX_DECREASE = 0.5  # 공식: 변경 전 가격 대비 최대 50% 인하
+COUPANG_MAX_INCREASE = 1.0  # 공식: 최대 100% 인상
+
 BIG_CANCEL_CODE = "CANERR"
 MIDDLE_CANCEL_CODE_INVENTORY = "CCTTER"  # 재고 연동 오류(공급 불가에 해당하는 유일한 코드)
 
@@ -530,7 +541,60 @@ class _StockMixin:
         return ProviderReadResult(True, snapshot.amount_in_stock == quantity, "", 200)
 
 
-class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin, _StockMixin):
+class _PriceMixin:
+    """옵션별 판매가 변경(쓰기)과 결과 대조(읽기 — 재고 조회의 salePrice). 2026-10-25 쿠팡 쓰기 2번."""
+
+    @staticmethod
+    def _valid_price(price: Any) -> bool:
+        return (isinstance(price, int) and not isinstance(price, bool) and MIN_SALE_PRICE <= price <= MAX_SALE_PRICE
+                and price % PRICE_UNIT == 0)
+
+    def validate_price(self, vendor_item_id: str, price: Any) -> ProviderCallResult | None:
+        if not _StockMixin._valid_vendor_item(vendor_item_id):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_TARGET",
+                "쿠팡 옵션번호(vendorItemId)가 숫자가 아니라 요청하지 않았다",
+            )
+        if not self._valid_price(price):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_PRICE",
+                f"판매가는 {MIN_SALE_PRICE}~{MAX_SALE_PRICE:,}원의 10원 단위 정수여야 해서 요청하지 않았다",
+            )
+        return None
+
+    def update_price(self, vendor_item_id: str, price: int) -> ProviderCallResult:
+        invalid = self.validate_price(vendor_item_id, price)
+        if invalid is not None:
+            return invalid
+        # forceSalePriceUpdate·자동가격조정 값은 보내지 않는다 — 쿠팡의 변경 폭 제한을 안전장치로 그대로 둔다.
+        path = PRICE_PATH.format(vendor_item_id=str(vendor_item_id).strip(), price=int(price))
+        sent = self._write("PUT", path, None)
+        if isinstance(sent, ProviderCallResult):
+            return sent
+        failure = self._classify_status(sent)
+        if failure is not None:
+            return failure
+        body = _body(sent)
+        code = str((body or {}).get("code") or "").strip().upper()
+        if code == "SUCCESS":
+            return ProviderCallResult(CallKind.SUCCEEDED, 200, None, _summary(body))
+        if code == "ERROR":
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, 200, "REJECTED", _summary(body))
+        return ProviderCallResult(
+            CallKind.UNKNOWN, 200, "INVALID_RESPONSE",
+            "200 응답이지만 성공·실패를 판정할 수 없는 본문이라 적용 여부를 알 수 없다",
+        )
+
+    def read_price_applied(self, vendor_item_id: str, price: int) -> ProviderReadResult:
+        """결과불명 대조 — 재고 조회의 판매가가 요청한 값이면 value=True. 판매가를 읽지 못하면 ok=False."""
+
+        snapshot = self.read_stock(vendor_item_id)
+        if not snapshot.ok or snapshot.sale_price is None:
+            return ProviderReadResult(False, None, snapshot.detail or "판매가를 읽지 못함", snapshot.http_status)
+        return ProviderReadResult(True, snapshot.sale_price == price, "", 200)
+
+
+class CoupangChannelControlProvider(_InvoiceMixin, _ProductDaysMixin, _AfterSalesMixin, _StockMixin, _PriceMixin):
     """쿠팡 옵션 판매중지·주문 취소(쓰기)와 결과 대조(읽기). 자동 재시도·스케줄 없음 —
     재시도 정책은 호출하는 작업 장부 서비스의 몫이다."""
 
