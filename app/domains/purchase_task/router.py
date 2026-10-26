@@ -40,6 +40,7 @@ from app.core.guard import StaffGuard
 from app.domains.purchase_task.coupang_invoice_schema import CoupangInvoiceSendRequest
 from app.domains.purchase_task.coupang_product_days_schema import CoupangProductDaysSendRequest
 from app.domains.purchase_task.coupang_price_schema import CoupangPriceSendRequest
+from app.domains.purchase_task.coupang_call_center_confirm_schema import CoupangCallCenterConfirmRequest
 from app.domains.purchase_task.coupang_call_center_reply_schema import CoupangCallCenterReplyRequest
 from app.domains.purchase_task.coupang_exchange_schema import CoupangExchangeActionRequest
 from app.domains.purchase_task.coupang_inquiry_reply_schema import CoupangInquiryReplyRequest
@@ -1615,6 +1616,48 @@ def reconcile_coupang_call_center_reply(
     from app.domains.purchase_task.coupang_call_center_reply_service import CoupangCallCenterReplyService
 
     return CoupangCallCenterReplyService(db).reconcile(current_user.company_id, inquiry_id, data.expected_parent_answer_id, data.content)
+
+
+@router.get("/coupang-call-center-inquiries/unconfirmed")
+def list_coupang_call_center_unconfirmed(
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-27 확인을 기다리는 쿠팡 고객센터 업체 이관 문의(미확인, 최근 7일) — 쿠팡 읽기만. 개인정보는 가져오지 않는다."""
+
+    from app.domains.purchase_task.coupang_call_center_confirm_service import CoupangCallCenterConfirmService
+
+    return CoupangCallCenterConfirmService(db).unconfirmed(current_user.company_id)
+
+
+@router.post("/coupang-call-center-inquiries/{inquiry_id}/confirm")
+def confirm_coupang_call_center_inquiry(
+    inquiry_id: str,
+    data: CoupangCallCenterConfirmRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 고객센터 업체 이관 문의를 **확인 처리한다(외부 변경)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용(쿠팡 문의 답변) +
+    내용 확인 표시가 필요하고, 쿠팡의 미확인 목록에 지금 있을 때만 한 번 보낸다."""
+
+    from app.domains.purchase_task.coupang_call_center_confirm_service import CoupangCallCenterConfirmService
+
+    return CoupangCallCenterConfirmService(db).send(
+        current_user.company_id, current_user.id, inquiry_id, confirm_seen=data.confirm_seen, retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-call-center-inquiries/{inquiry_id}/confirm/reconcile")
+def reconcile_coupang_call_center_confirm(
+    inquiry_id: str,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 이관 문의 확인을 미확인 목록으로 확인한다(읽기, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_call_center_confirm_service import CoupangCallCenterConfirmService
+
+    return CoupangCallCenterConfirmService(db).reconcile(current_user.company_id, inquiry_id)
 
 
 @router.get("/{task_id}/coupang-invoice/preview")

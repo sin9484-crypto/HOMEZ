@@ -1266,6 +1266,11 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.cc.where"))}</div>
             <div id="ez-cc-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px" id="ez-ccc-anchor">
+            <b>${esc(T("easy.ccc.title"))}</b> <span class="ez-faint" style="font-size:13px">${esc(T("easy.ccc.sub"))}</span>
+            <div style="margin-top:8px"><button type="button" class="ez-btn sm" id="ez-ccc-load">${esc(T("easy.ccc.load"))}</button></div>
+            <div id="ez-ccc-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-sec" id="ez-ret-anchor">${esc(T("easy.ret.title"))}<small>${esc(T("easy.ret.sub"))}</small></div>
           <div class="ez-block" style="margin-top:10px;padding:12px 18px">
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -1333,6 +1338,7 @@
     $("ez-pname-check").addEventListener("click", () => pnamePreview($("ez-pname-id").value, $("ez-pname-display").value, $("ez-pname-seller").value));
     $("ez-inq-load").addEventListener("click", () => inquiryList());
     $("ez-cc-load").addEventListener("click", () => callCenterList());
+    $("ez-ccc-load").addEventListener("click", () => callCenterConfirmList());
     $("ez-ret-check").addEventListener("click", () => returnPreview($("ez-ret-id").value, $("ez-ret-action").value));
     $("ez-pick-check").addEventListener("click", () => pickupPreview($("ez-pick-id").value, $("ez-pick-courier").value, $("ez-pick-invoice").value, $("ez-pick-reg").value));
     $("ez-exch-load").addEventListener("click", () => exchangeList());
@@ -1844,6 +1850,57 @@
           out.innerHTML = inquiryResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null });
         } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
       });
+    } catch (err) {
+      btn.disabled = false;
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+    }
+  }
+
+  // 2026-10-27 쿠팡 고객센터 업체 이관 문의 확인: 확인을 기다리는 이관 문의 불러오기(쿠팡 조회 1회) → 내용 확인 칸 → 확인 → 확인 처리
+  // → 서버가 그 문의가 아직 미확인 목록에 있을 때만 보내고, 보낸 뒤 목록에서 빠졌는지로 확인한다(확인 뒤 상태 값은 공식 문서에 없다).
+  async function callCenterConfirmList() {
+    const box = $("ez-ccc-box");
+    box.innerHTML = loadingHtml();
+    let listed;
+    try { listed = await api("/purchase-tasks/coupang-call-center-inquiries/unconfirmed"); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    if (!listed.ok) { box.innerHTML = `<div class="ez-note warn"><div>${(listed.blockers || []).map((b) => esc(b.message)).join("<br>")}</div></div>`; return; }
+    const rows = listed.rows || [];
+    const gates = (listed.gate_blockers || []).length
+      ? `<div class="ez-note warn"><div>${listed.gate_blockers.map((b) => esc(b.message)).join("<br>")}</div></div>` : "";
+    if (!rows.length) { box.innerHTML = `${gates}<div class="ez-empty">${esc(T("easy.ccc.none"))}</div>`; return; }
+    box.innerHTML = gates + (listed.truncated ? `<div class="ez-note warn"><div>${esc(T("easy.inq.truncated"))}</div></div>` : "")
+      + rows.map((r) => `<div class="ez-block" style="margin-top:10px;padding:10px 14px">
+        <div class="ez-faint" style="font-size:13px">${esc(T("easy.cc.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), order: r.order_id || "—", category: r.category || "—" }))}</div>
+        <div style="white-space:pre-wrap;margin:6px 0">${esc(r.question || "")}</div>
+        <div class="ez-note info" style="margin:6px 0"><div><b>${esc(T("easy.ccc.agent_label"))}</b> <span style="white-space:pre-wrap">${esc(r.agent_text || T("easy.ccc.no_agent_text"))}</span></div></div>
+        ${(listed.gate_blockers || []).length ? "" : `<label style="display:block"><input type="checkbox" data-ez-ccc-seen="${esc(r.inquiry_id)}"> ${esc(T("easy.ccc.seen"))}</label>
+        <button type="button" class="ez-btn sm" data-ez-ccc-send="${esc(r.inquiry_id)}" style="margin-top:6px">${esc(T("easy.ccc.send"))}</button>`}
+        <div data-ez-ccc-result="${esc(r.inquiry_id)}" style="margin-top:8px"></div></div>`).join("");
+    box.querySelectorAll("[data-ez-ccc-send]").forEach((btn) => btn.addEventListener("click", () => callCenterConfirmSend(btn, btn.dataset.ezCccSend)));
+  }
+
+  async function callCenterConfirmSend(btn, id) {
+    const box = $("ez-ccc-box");
+    const seen = box.querySelector(`[data-ez-ccc-seen="${id}"]`);
+    const out = box.querySelector(`[data-ez-ccc-result="${id}"]`);
+    if (!(seen && seen.checked)) { B.toast(T("easy.ret.confirm_needed"), "error"); return; }
+    if (!(await B.askConfirm(T("easy.ccc.ask", { id }), { title: T("easy.ccc.title"), okLabel: T("easy.ccc.send") }))) return;
+    btn.disabled = true;
+    try {
+      const result = await api(`/purchase-tasks/coupang-call-center-inquiries/${encodeURIComponent(id)}/confirm`, {
+        method: "POST", body: JSON.stringify({ confirm_seen: !!(seen && seen.checked), retry_action_required: false }),
+      });
+      let tone = "bad";
+      let text = `${result.outcome}: ${result.detail || ""}`;
+      if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T("easy.ccc.ok"); }
+      else if (result.outcome === "SUCCEEDED" && result.verified === false) { tone = "warn"; text = T("easy.ccc.still"); }
+      else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.ret.unverified"); }
+      else if (result.outcome === "NOT_PENDING") { tone = "warn"; text = T("easy.ccc.not_pending"); }
+      else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.ret.unknown"); }
+      else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+      out.innerHTML = `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+      B.toast(T(result.outcome === "SUCCEEDED" ? "easy.ccc.toast_done" : "easy.ccc.toast_check"), result.outcome === "SUCCEEDED" ? "success" : "error");
     } catch (err) {
       btn.disabled = false;
       out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;

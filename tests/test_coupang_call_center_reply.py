@@ -110,6 +110,10 @@ class PureTests(unittest.TestCase):
     def test_parsing_keeps_no_personal_data_and_picks_exactly_one_pending_transfer(self):
         row = parse_call_center_inquiry(cc())
         self.assertEqual((row["pending_count"], row["pending_answer_id"], row["pending_text"]), (1, PARENT, TRANSFER))
+        self.assertEqual(row["agent_text"], TRANSFER)
+        later = parse_call_center_inquiry(cc(replies=[agent(1, content="첫 글"), vendor(), agent(2, status="answered", content="마지막 상담 글")]))
+        self.assertEqual(later["agent_text"], "마지막 상담 글")                        # 상담사 마지막 글(판매자 글 제외)
+        self.assertIsNone(parse_call_center_inquiry(cc(replies=[vendor()]))["agent_text"])
         self.assertEqual((row["vendor_item_id"], row["order_id"], row["inquiry_status"]), ("70012345678", "31100000001", "progress"))
         dumped = json.dumps(row, ensure_ascii=False)
         for personal in ("010-9999-8888", "상담사김", "cs_kim"):

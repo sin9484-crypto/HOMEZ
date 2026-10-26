@@ -378,6 +378,7 @@ class CoupangChannelActions:
         ChannelActionType.RETURN_PICKUP_INVOICE: (ExtPurpose.RETURN_PROCESS, "POST"),  # 반품 입고 확인·승인과 같은 허용 목적
         ChannelActionType.EXCHANGE_REJECT: (ExtPurpose.RETURN_PROCESS, "PATCH"),  # 교환도 반품 처리 허용으로 센다
         ChannelActionType.EXCHANGE_PICKUP_INVOICE: (ExtPurpose.RETURN_PROCESS, "POST"),
+        ChannelActionType.CALL_CENTER_CONFIRM: (ExtPurpose.INQUIRY_REPLY, "POST"),  # 문의 답변과 같은 허용 목적
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -1113,6 +1114,35 @@ class CoupangChannelActions:
             action_type=ChannelActionType.EXCHANGE_PICKUP_INVOICE, target_key=self.exchange_action_key(exchange_id, "PICKUP"),
             read=lambda p: p.read_exchange_pickup_applied(exchange_id, invoice_number),
             applied_when=True,  # 그 송장이 붙어 있으면 적용(회수연동전에 송장이 없으면 안 받음, 그 밖은 판단하지 않음)
+        )
+
+    # ---- 고객센터 업체 이관 문의 확인(2026-10-27) — 허용은 문의 답변과 같은 목적으로 센다 ----
+
+    @staticmethod
+    def call_center_confirm_key(inquiry_id: str) -> str:
+        return f"cc:{str(inquiry_id).strip()}:CONFIRM"
+
+    def read_call_center_transfer_list(self, *, company_id: int, store_connection_id: int):
+        return self._inquiry_read(company_id, store_connection_id, lambda p: p.read_call_center_transfers(), "고객센터 문의 조회")
+
+    def confirm_call_center_inquiry(
+        self, *, company_id: int, store_connection_id: int, inquiry_id: str,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.CALL_CENTER_CONFIRM, target_key=self.call_center_confirm_key(inquiry_id),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.confirm_call_center(inquiry_id),
+            validate=lambda p: p.validate_call_center_confirm(inquiry_id),
+        )
+
+    def check_call_center_confirm(self, *, company_id: int, store_connection_id: int, inquiry_id: str) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.CALL_CENTER_CONFIRM, target_key=self.call_center_confirm_key(inquiry_id),
+            read=lambda p: p.read_call_center_confirm_applied(inquiry_id),
+            applied_when=True,  # 미확인 목록에 그대로면 안 받음, 빠졌으면 판단하지 않음
         )
 
 

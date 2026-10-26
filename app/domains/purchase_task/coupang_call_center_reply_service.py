@@ -94,7 +94,7 @@ def _public_row(row: dict) -> dict:
     """화면에 보낼 모양 — 이관글 목록 대신 답할 이관글 내용만."""
 
     keys = ("inquiry_id", "inquiry_status", "counseling_status", "inquiry_at", "order_id", "vendor_item_id", "item_name", "category",
-            "question", "pending_count", "pending_answer_id", "pending_text")
+            "question", "pending_count", "pending_answer_id", "pending_text", "agent_text")
     return {k: row.get(k) for k in keys}
 
 
