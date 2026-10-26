@@ -376,6 +376,8 @@ class CoupangChannelActions:
         ChannelActionType.RETURN_APPROVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
         ChannelActionType.CALL_CENTER_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),  # 상품 문의 답변과 같은 허용 목적
         ChannelActionType.RETURN_PICKUP_INVOICE: (ExtPurpose.RETURN_PROCESS, "POST"),  # 반품 입고 확인·승인과 같은 허용 목적
+        ChannelActionType.EXCHANGE_REJECT: (ExtPurpose.RETURN_PROCESS, "PATCH"),  # 교환도 반품 처리 허용으로 센다
+        ChannelActionType.EXCHANGE_PICKUP_INVOICE: (ExtPurpose.RETURN_PROCESS, "POST"),
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -1041,6 +1043,76 @@ class CoupangChannelActions:
             action_type=ChannelActionType.RETURN_PICKUP_INVOICE, target_key=self.pickup_invoice_key(receipt_id),
             read=lambda p: p.read_pickup_invoice_applied(receipt_id, invoice_number),
             applied_when=True,  # 그 송장이 붙어 있으면 적용(반품접수에 송장이 없으면 안 받음, 그 밖은 판단하지 않음)
+        )
+
+    # ---- 교환 거부·교환 회수 송장(2026-10-27) — 허용은 반품 처리와 같은 목적으로 센다 ----
+
+    def _return_process_read(self, company_id: int, store_connection_id: int, read: Callable, label: str):
+        provider, failure = self._provider(company_id, store_connection_id)
+        if failure is not None:
+            return None, failure
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.EXCHANGE_REJECT)
+        if denied is not None:
+            return None, denied
+        try:
+            result = read(provider)
+        except Exception as exc:  # noqa: BLE001 — 읽기 실패는 값이 아니라 실패로 다룬다
+            logger.warning("쿠팡 %s 예외: %s", label, type(exc).__name__)
+            self._external_finish(ticket, succeeded=False)
+            return None, ActionResult(ActionOutcome.ACTION_REQUIRED, f"{label}에 실패했다")
+        self._external_finish(ticket, succeeded=bool(result.ok), http_status=result.http_status)
+        return result, None
+
+    @staticmethod
+    def exchange_action_key(exchange_id: str, action: str) -> str:
+        """한 교환에는 동작마다 한 번만 보낸다."""
+
+        return f"exch:{str(exchange_id).strip()}:{action}"
+
+    def read_exchange_list(self, *, company_id: int, store_connection_id: int):
+        return self._return_process_read(company_id, store_connection_id, lambda p: p.read_exchanges(), "교환 조회")
+
+    def find_exchange(self, *, company_id: int, store_connection_id: int, exchange_id: str):
+        return self._return_process_read(company_id, store_connection_id, lambda p: p.find_exchange(exchange_id), "교환 조회")
+
+    def reject_exchange_request(
+        self, *, company_id: int, store_connection_id: int, exchange_id: str, reject_code: str,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.EXCHANGE_REJECT, target_key=self.exchange_action_key(exchange_id, "REJECT"),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.reject_exchange(exchange_id, reject_code),
+            validate=lambda p: p.validate_exchange_reject(exchange_id, reject_code),
+        )
+
+    def register_exchange_pickup(
+        self, *, company_id: int, store_connection_id: int, exchange_id: str, courier_code: str, invoice_number: str,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.EXCHANGE_PICKUP_INVOICE, target_key=self.exchange_action_key(exchange_id, "PICKUP"),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.register_pickup_invoice(exchange_id, courier_code, invoice_number, None, "EXCHANGE"),
+            validate=lambda p: p.validate_pickup_invoice(exchange_id, courier_code, invoice_number, None, "EXCHANGE"),
+        )
+
+    def check_exchange_reject(self, *, company_id: int, store_connection_id: int, exchange_id: str) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.EXCHANGE_REJECT, target_key=self.exchange_action_key(exchange_id, "REJECT"),
+            read=lambda p: p.read_exchange_reject_applied(exchange_id),
+            applied_when=True,  # 교환 상태가 REJECT면 적용(열린 상태면 안 받음, 그 밖은 판단하지 않음)
+        )
+
+    def check_exchange_pickup(self, *, company_id: int, store_connection_id: int, exchange_id: str, invoice_number: str) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.EXCHANGE_PICKUP_INVOICE, target_key=self.exchange_action_key(exchange_id, "PICKUP"),
+            read=lambda p: p.read_exchange_pickup_applied(exchange_id, invoice_number),
+            applied_when=True,  # 그 송장이 붙어 있으면 적용(회수연동전에 송장이 없으면 안 받음, 그 밖은 판단하지 않음)
         )
 
 

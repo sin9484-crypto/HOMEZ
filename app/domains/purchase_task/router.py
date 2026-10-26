@@ -41,6 +41,7 @@ from app.domains.purchase_task.coupang_invoice_schema import CoupangInvoiceSendR
 from app.domains.purchase_task.coupang_product_days_schema import CoupangProductDaysSendRequest
 from app.domains.purchase_task.coupang_price_schema import CoupangPriceSendRequest
 from app.domains.purchase_task.coupang_call_center_reply_schema import CoupangCallCenterReplyRequest
+from app.domains.purchase_task.coupang_exchange_schema import CoupangExchangeActionRequest
 from app.domains.purchase_task.coupang_inquiry_reply_schema import CoupangInquiryReplyRequest
 from app.domains.purchase_task.coupang_product_name_schema import CoupangProductNameSendRequest
 from app.domains.purchase_task.coupang_return_action_schema import CoupangReturnActionRequest
@@ -1490,6 +1491,72 @@ def reconcile_coupang_return_pickup(
     from app.domains.purchase_task.coupang_return_pickup_service import CoupangReturnPickupService
 
     return CoupangReturnPickupService(db).reconcile(current_user.company_id, receipt_id, invoice_number)
+
+
+@router.get("/coupang-exchanges/open")
+def list_coupang_open_exchanges(
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-27 열린 쿠팡 교환 요청(최근 7일 미만, 접수·진행) — 쿠팡 읽기만. 구매자 개인정보는 가져오지 않는다."""
+
+    from app.domains.purchase_task.coupang_exchange_service import CoupangExchangeService
+
+    return CoupangExchangeService(db).open_exchanges(current_user.company_id)
+
+
+@router.get("/coupang-exchanges/{exchange_id}/preview")
+def preview_coupang_exchange_action(
+    exchange_id: str,
+    action: str = Query(pattern=r"^(REJECT|PICKUP)$", description="REJECT = 교환 거부, PICKUP = 교환 회수 송장 등록"),
+    reject_code: str | None = Query(default=None, pattern=r"^(SOLDOUT|WITHDRAW)$"),
+    courier: str | None = Query(default=None, max_length=30),
+    invoice_number: str | None = Query(default=None, max_length=30),
+    live: bool = Query(default=True, description="true면 쿠팡 교환 목록을 읽는다. false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """교환 거부·회수 송장 등록 **미리보기** — 지금 교환 상태·회수 상태·거부 가능 여부·막는 이유. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_exchange_service import CoupangExchangeService
+
+    return CoupangExchangeService(db).plan(
+        current_user.company_id, exchange_id, action, reject_code=reject_code, courier=courier, invoice_number=invoice_number, live=live,
+    ).to_dict()
+
+
+@router.post("/coupang-exchanges/{exchange_id}/send")
+def send_coupang_exchange_action(
+    exchange_id: str,
+    data: CoupangExchangeActionRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 교환을 **거부하거나 회수 송장을 등록한다(외부 변경)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용(쿠팡 반품 처리) +
+    따로 받는 확인이 필요하고, 미리보기에서 본 상태와 쿠팡의 지금 상태가 같을 때만 한 번 보낸다."""
+
+    from app.domains.purchase_task.coupang_exchange_service import CoupangExchangeService
+
+    return CoupangExchangeService(db).send(
+        current_user.company_id, current_user.id, exchange_id, data.action, reject_code=data.reject_code, courier=data.courier,
+        invoice_number=data.invoice_number, expected_status=data.expected_status, confirm=data.confirm,
+        retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-exchanges/{exchange_id}/reconcile")
+def reconcile_coupang_exchange_action(
+    exchange_id: str,
+    action: str = Query(pattern=r"^(REJECT|PICKUP)$"),
+    invoice_number: str | None = Query(default=None, max_length=30),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 교환 처리를 교환 목록으로 확인한다(읽기, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_exchange_service import CoupangExchangeService
+
+    return CoupangExchangeService(db).reconcile(current_user.company_id, exchange_id, action, invoice_number)
 
 
 @router.get("/coupang-call-center-inquiries/unanswered")

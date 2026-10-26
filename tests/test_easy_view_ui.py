@@ -53,6 +53,8 @@ DYNAMIC = {
     "easy.settle.st_": ["subject", "done"],
     # 2026-10-21 반영 A: 읽기 허용 목적 이름(브리핑 문구에 끼워 넣는다) — 키는 easy.brief.reads_ + 목적 코드 소문자로 만든다.
     "easy.brief.reads_": ["order_tracking", "after_sales_check", "product_status_check"],
+    # 2026-10-27 쿠팡 교환 상태 이름 — 키는 easy.exch.st. + 쿠팡 교환 상태 코드 소문자로 만든다.
+    "easy.exch.st.": ["receipt", "progress", "success", "reject", "cancel"],
 }
 
 

@@ -13343,3 +13343,36 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
     - 같은 송장 "이미 붙어 있음", 다른 송장 덮어쓰기 차단
   - 관련 회귀: 58개 모듈 1,341건 중 실패 1건 — 알려진 간헐 결함 `test_marketing_name_service` 동시 클릭 시험(이번 변경과 무관, 별도 작업에서 수정 중). 그 외 전부 통과.
 - **실제 쿠팡 쓰기는 아직 0회다.** 남은 후보: 교환 처리(조회·회수 송장·거부 등), 고객센터 문의확인.
+
+## 2026-10-27 (후속) — 쿠팡 쓰기 8번: 교환 거부·교환 회수 송장 등록(코드·시험·격리 확인까지, **실제 쿠팡 쓰기 0회**)
+
+- 공식 문서 확인:
+  - 교환요청 목록조회 `GET …/v4/vendors/{vendorId}/exchangeRequests`. 기간은 7일 미만이고 nextToken으로 넘긴다. 단건 조회 API는 없다.
+  - 교환요청 거부 처리 `PATCH …/exchangeRequests/{exchangeId}/rejection`. 본문은 {exchangeId(string), vendorId, exchangeRejectCode: SOLDOUT|WITHDRAW}이고 응답은 data.resultCode다.
+  - 회수 송장 등록(EXCHANGE, 회수연동전일 때만).
+- **만들지 않은 것**:
+  - 교환상품 입고 확인: 처리 가능 상태·처리 뒤 상태가 문서에 없어 결과를 확인할 수 없다.
+  - 교환상품 송장 업로드: 요청 본문 형식이 한·영 문서 모두에 없다(🔴 추측해서 보내지 않는다).
+  - 이 둘은 쿠팡 윙에서 처리한다.
+- 구현:
+  - `purchase_task/coupang_exchange_provider.py`(`_ExchangeMixin`)·`coupang_exchange_service.py`·`coupang_exchange_schema.py`.
+  - 회수 송장 등록에 구분(RETURN|EXCHANGE)을 더했다(기존 기본값 RETURN 유지).
+  - API 4개(`/purchase-tasks/coupang-exchanges/open`, `/{id}/preview|send|reconcile`). 작업 장부 종류 `EXCHANGE_REJECT`·`EXCHANGE_PICKUP_INVOICE`(키 = 교환번호 + 동작).
+  - 허용은 "쿠팡 반품 처리"(`RETURN_PROCESS`)를 같이 쓴다.
+  - 쉬운 보기 › 승인 화면에 "쿠팡 교환 처리" 구역을 추가했다(열린 교환 불러오기 → 교환마다 가능한 처리만 보인다).
+- 규칙:
+  - 교환은 목록(7일 미만)에서 번호로 찾고, 못 찾으면 보내지 않는다.
+  - 거부는 쿠팡이 거부 가능(rejectable)으로 알린 열린 교환(접수·진행)만 한다. 사유는 매진·고객 철회 두 가지뿐이고, "고객 교환이 이뤄지지 않는다" 확인이 필요하다.
+  - 회수 송장은 회수연동전이고 송장이 없을 때만 보낸다. 택배사는 공식 이름표로만 바꾼다.
+  - 목록에서 본 상태(거부는 교환 상태, 회수 송장은 회수 상태)와 다르면 보내지 않는다.
+  - 구매자 이름·주소·연락처와 자유 글(reasonEtcDetail 등)은 읽지 않는다.
+- **검증**:
+  - 시험 `test_coupang_exchange` 35건·`test_easy_exchange_ui` 7건 통과. 교환 상태 이름 문구는 기존 화면 시험의 조합 키 목록에 등록했다.
+  - 변이 45건 중 43건 감지(4건은 시험 보강 후), 2건 동등.
+  - 격리 서버(가짜 쿠팡)에서 브라우저로 확인했다:
+    - 목록(사유 HTML 이스케이프·개인정보 없음·처리 불가 교환은 윙 안내)
+    - 회수 송장 등록(교환 구분) → 다시 읽어 확인
+    - 확인 칸 없이 거부 차단 → 거부(고객 철회) → '거부' 상태 확인
+  - 가짜 쿠팡이 받은 쓰기는 POST 1건·PATCH 1건이었다.
+  - 관련 회귀: 60개 모듈 1,383건 중 실패 1건 — 알려진 간헐 결함 `test_marketing_name_service` 동시 클릭 시험(이번 변경과 무관, 별도 작업에서 수정 중). 그 외 전부 통과.
+- **실제 쿠팡 쓰기는 아직 0회다.** 남은 후보: 고객센터 문의확인(`/confirms`).

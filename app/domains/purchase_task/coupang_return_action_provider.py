@@ -200,13 +200,17 @@ class _ReturnActionMixin:
     def _valid_reg_number(number: Any) -> bool:
         return number is None or (isinstance(number, str) and 1 <= len(number) <= 30 and number.isalnum())
 
-    def validate_pickup_invoice(self, receipt_id: Any, courier_code: Any, invoice_number: Any, reg_number: Any = None):
+    def validate_pickup_invoice(
+        self, receipt_id: Any, courier_code: Any, invoice_number: Any, reg_number: Any = None, delivery_type: str = "RETURN",
+    ):
         from app.domains.purchase_task.coupang_channel_control_provider import CallKind
         from app.domains.purchase_task.coupang_channel_control_provider import ProviderCallResult
         from app.domains.purchase_task.coupang_invoice_service import COURIER_CODES_BY_NAME
 
+        if delivery_type not in ("RETURN", "EXCHANGE"):
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, None, "INVALID_TYPE", "회수 구분은 RETURN·EXCHANGE만 쓸 수 있어 요청하지 않았다")
         if not valid_receipt_id(receipt_id):
-            return ProviderCallResult(CallKind.ACTION_REQUIRED, None, "INVALID_TARGET", "반품접수번호(receiptId)가 숫자가 아니라 요청하지 않았다")
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, None, "INVALID_TARGET", "반품·교환 접수번호가 숫자가 아니라 요청하지 않았다")
         if courier_code not in set(COURIER_CODES_BY_NAME.values()):
             return ProviderCallResult(
                 CallKind.ACTION_REQUIRED, None, "INVALID_COURIER", "택배사 코드가 쿠팡 공식 목록에 없어 요청하지 않았다 — 추측해서 채우지 않는다",
@@ -219,17 +223,19 @@ class _ReturnActionMixin:
             return ProviderCallResult(CallKind.ACTION_REQUIRED, None, "INVALID_REG_NUMBER", "회수번호 형식(영문·숫자 30자 이하)이 아니라 요청하지 않았다")
         return None
 
-    def register_pickup_invoice(self, receipt_id: Any, courier_code: str, invoice_number: str, reg_number: str | None = None):
+    def register_pickup_invoice(
+        self, receipt_id: Any, courier_code: str, invoice_number: str, reg_number: str | None = None, delivery_type: str = "RETURN",
+    ):
         from app.domains.purchase_task.coupang_channel_control_provider import CallKind
         from app.domains.purchase_task.coupang_channel_control_provider import ProviderCallResult
         from app.domains.purchase_task.coupang_channel_control_provider import _body
         from app.domains.purchase_task.coupang_channel_control_provider import _summary
 
-        invalid = self.validate_pickup_invoice(receipt_id, courier_code, invoice_number, reg_number)
+        invalid = self.validate_pickup_invoice(receipt_id, courier_code, invoice_number, reg_number, delivery_type)
         if invalid is not None:
             return invalid
         payload: dict = {
-            "returnExchangeDeliveryType": "RETURN", "receiptId": int(str(receipt_id).strip()),  # 문서: receiptId는 number
+            "returnExchangeDeliveryType": delivery_type, "receiptId": int(str(receipt_id).strip()),  # 문서: receiptId는 number(교환은 exchangeId)
             "deliveryCompanyCode": courier_code, "invoiceNumber": invoice_number,
         }
         if reg_number is not None:

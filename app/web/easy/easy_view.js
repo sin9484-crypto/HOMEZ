@@ -1287,6 +1287,12 @@
             </div>
             <div id="ez-pick-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-sec" id="ez-exch-anchor">${esc(T("easy.exch.title"))}<small>${esc(T("easy.exch.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <button type="button" class="ez-btn sm" id="ez-exch-load">${esc(T("easy.exch.load"))}</button>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.exch.where"))}</div>
+            <div id="ez-exch-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1329,6 +1335,7 @@
     $("ez-cc-load").addEventListener("click", () => callCenterList());
     $("ez-ret-check").addEventListener("click", () => returnPreview($("ez-ret-id").value, $("ez-ret-action").value));
     $("ez-pick-check").addEventListener("click", () => pickupPreview($("ez-pick-id").value, $("ez-pick-courier").value, $("ez-pick-invoice").value, $("ez-pick-reg").value));
+    $("ez-exch-load").addEventListener("click", () => exchangeList());
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1983,6 +1990,84 @@
         $("ez-pick-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
       }
     });
+  }
+
+  // 2026-10-27 쿠팡 교환 처리: 열린 교환 불러오기(쿠팡 조회 1회) → 교환마다 할 수 있는 처리만 보인다 —
+  // 거부(쿠팡이 거부 가능으로 알린 교환만, 사유는 매진·고객 철회)·회수 송장 등록(회수연동전이고 송장이 없을 때만). 확인 칸 → 확인 → 처리.
+  // 서버가 보내기 직전에 다시 찾아 상태가 그대로일 때만 보내고 다시 읽어 확인한다. 입고 확인·교환품 송장은 공식 문서가 모자라 윙에서 한다.
+  function exchangeStatusLabel(status) {
+    return status ? tryT(`easy.exch.st.${String(status).toLowerCase()}`, String(status)) : "—";
+  }
+
+  async function exchangeList() {
+    const box = $("ez-exch-box");
+    box.innerHTML = loadingHtml();
+    let listed;
+    try { listed = await api("/purchase-tasks/coupang-exchanges/open"); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    if (!listed.ok) { box.innerHTML = `<div class="ez-note warn"><div>${(listed.blockers || []).map((b) => esc(b.message)).join("<br>")}</div></div>`; return; }
+    const rows = listed.rows || [];
+    if (!rows.length) { box.innerHTML = `<div class="ez-empty">${esc(T("easy.exch.none"))}</div>`; return; }
+    box.innerHTML = (listed.truncated ? `<div class="ez-note warn"><div>${esc(T("easy.inq.truncated"))}</div></div>` : "")
+      + rows.map((r) => {
+        const id = esc(r.exchange_id);
+        const items = (r.items || []).map((i) => `${esc(i.order_item || "—")} → ${esc(i.target_item || "—")}${Number.isInteger(i.quantity) ? ` × ${i.quantity}` : ""}`).join("<br>");
+        const canPickup = r.collect_status === "BeforeDirection" && !(r.return_invoices || []).length;
+        const reject = r.rejectable ? `<div style="margin-top:8px"><b>${esc(T("easy.exch.reject_title"))}</b>
+          <select data-ez-exch-code="${id}"><option value="SOLDOUT">${esc(T("easy.exch.code_soldout"))}</option><option value="WITHDRAW">${esc(T("easy.exch.code_withdraw"))}</option></select>
+          <label style="display:block"><input type="checkbox" data-ez-exch-confirm-reject="${id}"> ${esc(T("easy.exch.reject_confirm"))}</label>
+          <button type="button" class="ez-btn sm" data-ez-exch-reject="${id}" data-ez-exch-status="${esc(r.status)}">${esc(T("easy.exch.reject_send"))}</button></div>` : "";
+        const pickup = canPickup ? `<div style="margin-top:8px"><b>${esc(T("easy.pick.title"))}</b>
+          <input type="text" data-ez-exch-courier="${id}" maxlength="30" placeholder="${esc(T("easy.pick.courier_placeholder"))}">
+          <input type="text" data-ez-exch-invoice="${id}" maxlength="30" placeholder="${esc(T("easy.pick.invoice_label"))}">
+          <label style="display:block"><input type="checkbox" data-ez-exch-confirm-pickup="${id}"> ${esc(T("easy.pick.confirm_box"))}</label>
+          <button type="button" class="ez-btn sm" data-ez-exch-pickup="${id}" data-ez-exch-collect="${esc(r.collect_status)}">${esc(T("easy.pick.send"))}</button></div>` : "";
+        return `<div class="ez-block" style="margin-top:10px;padding:10px 14px">
+          <div class="ez-faint" style="font-size:13px">${esc(T("easy.exch.meta", { id: r.exchange_id, at: inquiryTime(r.created_at), order: r.order_id || "—", status: exchangeStatusLabel(r.status), reason: r.reason || "—" }))}</div>
+          <div style="margin:6px 0">${items}</div>
+          ${reject}${pickup}${reject || pickup ? "" : `<div class="ez-note info"><div>${esc(T("easy.exch.nothing"))}</div></div>`}
+          <div data-ez-exch-result="${id}" style="margin-top:8px"></div></div>`;
+      }).join("");
+    box.querySelectorAll("[data-ez-exch-reject]").forEach((btn) => btn.addEventListener("click", () => exchangeSend(btn, btn.dataset.ezExchReject, "REJECT")));
+    box.querySelectorAll("[data-ez-exch-pickup]").forEach((btn) => btn.addEventListener("click", () => exchangeSend(btn, btn.dataset.ezExchPickup, "PICKUP")));
+  }
+
+  async function exchangeSend(btn, id, action) {
+    const box = $("ez-exch-box");
+    const out = box.querySelector(`[data-ez-exch-result="${id}"]`);
+    let body;
+    if (action === "REJECT") {
+      const confirmEl = box.querySelector(`[data-ez-exch-confirm-reject="${id}"]`);
+      if (!(confirmEl && confirmEl.checked)) { B.toast(T("easy.ret.confirm_needed"), "error"); return; }
+      const code = box.querySelector(`[data-ez-exch-code="${id}"]`).value;
+      body = { action, reject_code: code, expected_status: btn.dataset.ezExchStatus, confirm: true, retry_action_required: false };
+      if (!(await B.askConfirm(T("easy.exch.reject_ask", { id }), { title: T("easy.exch.title"), okLabel: T("easy.exch.reject_send") }))) return;
+    } else {
+      const confirmEl = box.querySelector(`[data-ez-exch-confirm-pickup="${id}"]`);
+      const courier = String(box.querySelector(`[data-ez-exch-courier="${id}"]`).value || "").trim();
+      const invoice = String(box.querySelector(`[data-ez-exch-invoice="${id}"]`).value || "").trim();
+      const problem = pickupInputProblem(id, courier, invoice, "");
+      if (problem) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem))}</div></div>`; return; }
+      if (!(confirmEl && confirmEl.checked)) { B.toast(T("easy.ret.confirm_needed"), "error"); return; }
+      body = { action, courier, invoice_number: invoice, expected_status: btn.dataset.ezExchCollect, confirm: true, retry_action_required: false };
+      if (!(await B.askConfirm(T("easy.exch.pickup_ask", { id, invoice }), { title: T("easy.exch.title"), okLabel: T("easy.pick.send") }))) return;
+    }
+    btn.disabled = true;
+    try {
+      const result = await api(`/purchase-tasks/coupang-exchanges/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
+      let tone = "bad";
+      let text = `${result.outcome}: ${result.detail || ""}`;
+      if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T(action === "REJECT" ? "easy.exch.reject_ok" : "easy.exch.pickup_ok"); }
+      else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.ret.unverified"); }
+      else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.stock.already_done"); }
+      else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.ret.unknown"); }
+      else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+      out.innerHTML = `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`;
+      B.toast(T(result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "easy.ret.toast_done" : "easy.ret.toast_check"), result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
+    } catch (err) {
+      btn.disabled = false;
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+    }
   }
 
   // =========================================================
