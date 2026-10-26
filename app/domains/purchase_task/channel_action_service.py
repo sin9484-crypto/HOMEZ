@@ -374,6 +374,7 @@ class CoupangChannelActions:
         ChannelActionType.INQUIRY_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),
         ChannelActionType.RETURN_RECEIVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
         ChannelActionType.RETURN_APPROVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
+        ChannelActionType.CALL_CENTER_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),  # 상품 문의 답변과 같은 허용 목적
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -975,6 +976,42 @@ class CoupangChannelActions:
             action_type=self.return_action_type(action), target_key=self.return_action_key(receipt_id, action),
             read=lambda p: p.read_return_action_applied(receipt_id, action),
             applied_when=True,  # 적용 뒤 상태면 적용(처리 전 상태면 안 받음, 그 밖은 판단하지 않음)
+        )
+
+    # ---- 고객센터(콜센터) 이관 문의 답변(2026-10-26) — 허용은 상품 문의 답변과 같은 목적으로 센다 ----
+
+    @staticmethod
+    def call_center_reply_key(inquiry_id: str, parent_answer_id: str | None) -> str:
+        """한 이관글에는 한 번만 답한다(같은 문의가 다시 이관되면 이관글 번호가 달라 새 요청이다)."""
+
+        return f"cc:{str(inquiry_id).strip()}:{str(parent_answer_id or '').strip()}"
+
+    def read_call_center_list(self, *, company_id: int, store_connection_id: int):
+        return self._inquiry_read(company_id, store_connection_id, lambda p: p.read_call_center_for_reply(), "고객센터 문의 조회")
+
+    def read_call_center(self, *, company_id: int, store_connection_id: int, inquiry_id: str):
+        return self._inquiry_read(company_id, store_connection_id, lambda p: p.read_call_center_inquiry(inquiry_id), "고객센터 문의 조회")
+
+    def reply_call_center_inquiry(
+        self, *, company_id: int, store_connection_id: int, inquiry_id: str, parent_answer_id: str, content: str,
+        triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.CALL_CENTER_REPLY, target_key=self.call_center_reply_key(inquiry_id, parent_answer_id),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.reply_call_center(inquiry_id, parent_answer_id, content),
+            validate=lambda p: p.validate_call_center_reply(inquiry_id, parent_answer_id, content),
+        )
+
+    def check_call_center_reply(
+        self, *, company_id: int, store_connection_id: int, inquiry_id: str, parent_answer_id: str, content: str,
+    ) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.CALL_CENTER_REPLY, target_key=self.call_center_reply_key(inquiry_id, parent_answer_id),
+            read=lambda p: p.read_call_center_reply_applied(inquiry_id, parent_answer_id, content),
+            applied_when=True,  # 우리 답이 있으면 적용(이관글이 그대로 '답변 요청'이고 판매자 글이 없으면 안 받음, 그 밖은 판단하지 않음)
         )
 
 

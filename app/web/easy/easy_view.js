@@ -1260,6 +1260,12 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.inq.where"))}</div>
             <div id="ez-inq-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-sec" id="ez-cc-anchor">${esc(T("easy.cc.title"))}<small>${esc(T("easy.cc.sub"))}</small></div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px">
+            <button type="button" class="ez-btn sm" id="ez-cc-load">${esc(T("easy.cc.load"))}</button>
+            <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.cc.where"))}</div>
+            <div id="ez-cc-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-sec" id="ez-ret-anchor">${esc(T("easy.ret.title"))}<small>${esc(T("easy.ret.sub"))}</small></div>
           <div class="ez-block" style="margin-top:10px;padding:12px 18px">
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -1309,6 +1315,7 @@
     $("ez-price-check").addEventListener("click", () => pricePreview($("ez-price-item").value, $("ez-price-new").value, $("ez-price-cost").value, $("ez-price-ship").value));
     $("ez-pname-check").addEventListener("click", () => pnamePreview($("ez-pname-id").value, $("ez-pname-display").value, $("ez-pname-seller").value));
     $("ez-inq-load").addEventListener("click", () => inquiryList());
+    $("ez-cc-load").addEventListener("click", () => callCenterList());
     $("ez-ret-check").addEventListener("click", () => returnPreview($("ez-ret-id").value, $("ez-ret-action").value));
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
@@ -1747,6 +1754,74 @@
       if (rec) rec.addEventListener("click", async () => {
         try {
           const r = await api(`/purchase-tasks/coupang-inquiries/${encodeURIComponent(id)}/reply/reconcile`, { method: "POST", body: JSON.stringify({ content, confirm_public: true }) });
+          out.innerHTML = inquiryResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null });
+        } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+      });
+    } catch (err) {
+      btn.disabled = false;
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+    }
+  }
+
+  // 2026-10-26 쿠팡 고객센터(콜센터) 이관 문의 답변: 답변을 기다리는 이관 문의 불러오기(쿠팡 조회 1회) → 상담사 글을 보고 답변 쓰기(2~1,000자)
+  // → 확인 칸 → 확인 → 등록(서버가 그 상담사 글이 아직 답변을 기다릴 때만 보내고 다시 읽어 확인). 허용은 상품 문의 답변과 같다.
+  const CC_MIN = 2;
+
+  function callCenterReplyProblem(text) {
+    const value = String(text === undefined || text === null ? "" : text).replace(/\r\n?/g, "\n").trim();
+    if (value.length < CC_MIN || value.length > INQ_MAX) return "easy.cc.err_content";
+    return inquiryReplyProblem(value) === "easy.inq.err_draft" ? "easy.inq.err_draft" : null;
+  }
+
+  async function callCenterList() {
+    const box = $("ez-cc-box");
+    box.innerHTML = loadingHtml();
+    let listed;
+    try { listed = await api("/purchase-tasks/coupang-call-center-inquiries/unanswered"); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    if (!listed.ok) { box.innerHTML = `<div class="ez-note warn"><div>${(listed.blockers || []).map((b) => esc(b.message)).join("<br>")}</div></div>`; return; }
+    const rows = listed.rows || [];
+    if (!rows.length) { box.innerHTML = `<div class="ez-empty">${esc(T("easy.cc.none"))}</div>`; return; }
+    box.innerHTML = (listed.truncated ? `<div class="ez-note warn"><div>${esc(T("easy.inq.truncated"))}</div></div>` : "")
+      + rows.map((r) => {
+        const answerable = r.pending_count === 1 && r.pending_answer_id;
+        return `<div class="ez-block" style="margin-top:10px;padding:10px 14px">
+        <div class="ez-faint" style="font-size:13px">${esc(T("easy.cc.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), order: r.order_id || "—", category: r.category || "—" }))}</div>
+        <div style="white-space:pre-wrap;margin:6px 0">${esc(r.question || "")}</div>
+        ${answerable ? `<div class="ez-note info" style="margin:6px 0"><div><b>${esc(T("easy.cc.agent_label"))}</b> <span style="white-space:pre-wrap">${esc(r.pending_text || "")}</span></div></div>
+        <textarea data-ez-cc-text="${esc(r.inquiry_id)}" maxlength="${INQ_MAX}" rows="4" style="width:100%" placeholder="${esc(T("easy.inq.placeholder"))}"></textarea>
+        <label style="display:block;margin-top:6px"><input type="checkbox" data-ez-cc-public="${esc(r.inquiry_id)}"> ${esc(T("easy.cc.public_confirm"))}</label>
+        <button type="button" class="ez-btn sm" data-ez-cc-send="${esc(r.inquiry_id)}" data-ez-cc-parent="${esc(r.pending_answer_id)}" style="margin-top:8px">${esc(T("easy.inq.send"))}</button>`
+          : `<div class="ez-note warn"><div>${esc(T("easy.cc.multiple"))}</div></div>`}
+        <div data-ez-cc-result="${esc(r.inquiry_id)}" style="margin-top:8px"></div></div>`;
+      }).join("");
+    box.querySelectorAll("[data-ez-cc-send]").forEach((btn) => btn.addEventListener("click", () => callCenterSend(btn, btn.dataset.ezCcSend, btn.dataset.ezCcParent)));
+  }
+
+  async function callCenterSend(btn, id, parent) {
+    const box = $("ez-cc-box");
+    const textEl = box.querySelector(`[data-ez-cc-text="${id}"]`);
+    const publicEl = box.querySelector(`[data-ez-cc-public="${id}"]`);
+    const out = box.querySelector(`[data-ez-cc-result="${id}"]`);
+    const content = String(textEl.value || "").replace(/\r\n?/g, "\n").trim();
+    const problem = callCenterReplyProblem(content);
+    if (problem) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem, { min: CC_MIN, max: INQ_MAX.toLocaleString("ko-KR") }))}</div></div>`; return; }
+    if (!(publicEl && publicEl.checked)) { B.toast(T("easy.inq.public_needed"), "error"); return; }
+    const ok = await B.askConfirm(T("easy.cc.confirm", { id, chars: content.length }), { title: T("easy.cc.title"), okLabel: T("easy.inq.send") });
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const result = await api(`/purchase-tasks/coupang-call-center-inquiries/${encodeURIComponent(id)}/reply/send`, {
+        method: "POST", body: JSON.stringify({ content, expected_parent_answer_id: parent, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false }),
+      });
+      out.innerHTML = inquiryResultHtml(result)
+        + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" data-ez-cc-reconcile="${esc(id)}" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+      B.toast(T(result.outcome === "SUCCEEDED" ? "easy.inq.toast_done" : "easy.inq.toast_check"), result.outcome === "SUCCEEDED" ? "success" : "error");
+      if (result.outcome !== "ACTION_REQUIRED") textEl.readOnly = true;
+      const rec = out.querySelector("[data-ez-cc-reconcile]");
+      if (rec) rec.addEventListener("click", async () => {
+        try {
+          const r = await api(`/purchase-tasks/coupang-call-center-inquiries/${encodeURIComponent(id)}/reply/reconcile`, { method: "POST", body: JSON.stringify({ content, expected_parent_answer_id: parent }) });
           out.innerHTML = inquiryResultHtml({ ...r, verified: r.outcome === "SUCCEEDED" ? true : null });
         } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
       });
