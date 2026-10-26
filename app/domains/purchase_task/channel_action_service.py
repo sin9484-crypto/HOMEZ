@@ -375,6 +375,7 @@ class CoupangChannelActions:
         ChannelActionType.RETURN_RECEIVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
         ChannelActionType.RETURN_APPROVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
         ChannelActionType.CALL_CENTER_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),  # 상품 문의 답변과 같은 허용 목적
+        ChannelActionType.RETURN_PICKUP_INVOICE: (ExtPurpose.RETURN_PROCESS, "POST"),  # 반품 입고 확인·승인과 같은 허용 목적
         ChannelActionType.SALE_STOP: (ChannelActionType.SALE_STOP, "PUT"),
         ChannelActionType.ORDER_CANCEL: (ChannelActionType.ORDER_CANCEL, "POST"),
     }
@@ -1012,6 +1013,34 @@ class CoupangChannelActions:
             action_type=ChannelActionType.CALL_CENTER_REPLY, target_key=self.call_center_reply_key(inquiry_id, parent_answer_id),
             read=lambda p: p.read_call_center_reply_applied(inquiry_id, parent_answer_id, content),
             applied_when=True,  # 우리 답이 있으면 적용(이관글이 그대로 '답변 요청'이고 판매자 글이 없으면 안 받음, 그 밖은 판단하지 않음)
+        )
+
+    # ---- 반품 회수 송장 등록(2026-10-27) — 허용은 반품 처리와 같은 목적으로 센다(조회는 read_return을 같이 쓴다) ----
+
+    @staticmethod
+    def pickup_invoice_key(receipt_id: str) -> str:
+        """한 반품에는 회수 송장을 한 번만 등록한다."""
+
+        return f"rcpt:{str(receipt_id).strip()}:PICKUP"
+
+    def register_return_pickup(
+        self, *, company_id: int, store_connection_id: int, receipt_id: str, courier_code: str, invoice_number: str,
+        reg_number: str | None, triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.RETURN_PICKUP_INVOICE, target_key=self.pickup_invoice_key(receipt_id),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.register_pickup_invoice(receipt_id, courier_code, invoice_number, reg_number),
+            validate=lambda p: p.validate_pickup_invoice(receipt_id, courier_code, invoice_number, reg_number),
+        )
+
+    def check_return_pickup(self, *, company_id: int, store_connection_id: int, receipt_id: str, invoice_number: str) -> ActionResult:
+        return self._reconcile(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.RETURN_PICKUP_INVOICE, target_key=self.pickup_invoice_key(receipt_id),
+            read=lambda p: p.read_pickup_invoice_applied(receipt_id, invoice_number),
+            applied_when=True,  # 그 송장이 붙어 있으면 적용(반품접수에 송장이 없으면 안 받음, 그 밖은 판단하지 않음)
         )
 
 

@@ -1276,6 +1276,17 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.ret.where"))}</div>
             <div id="ez-ret-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-block" style="margin-top:10px;padding:12px 18px" id="ez-pick-anchor">
+            <b>${esc(T("easy.pick.title"))}</b> <span class="ez-faint" style="font-size:13px">${esc(T("easy.pick.sub"))}</span>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
+              <label>${esc(T("easy.ret.id_label"))}<br><input type="text" inputmode="numeric" id="ez-pick-id" maxlength="20" placeholder="${esc(T("easy.ret.id_placeholder"))}"></label>
+              <label>${esc(T("easy.pick.courier_label"))}<br><input type="text" id="ez-pick-courier" maxlength="30" placeholder="${esc(T("easy.pick.courier_placeholder"))}"></label>
+              <label>${esc(T("easy.pick.invoice_label"))}<br><input type="text" id="ez-pick-invoice" maxlength="30"></label>
+              <label>${esc(T("easy.pick.reg_label"))}<br><input type="text" id="ez-pick-reg" maxlength="30"></label>
+              <button type="button" class="ez-btn sm" id="ez-pick-check">${esc(T("easy.ret.check"))}</button>
+            </div>
+            <div id="ez-pick-box" style="margin-top:10px"></div>
+          </div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1317,6 +1328,7 @@
     $("ez-inq-load").addEventListener("click", () => inquiryList());
     $("ez-cc-load").addEventListener("click", () => callCenterList());
     $("ez-ret-check").addEventListener("click", () => returnPreview($("ez-ret-id").value, $("ez-ret-action").value));
+    $("ez-pick-check").addEventListener("click", () => pickupPreview($("ez-pick-id").value, $("ez-pick-courier").value, $("ez-pick-invoice").value, $("ez-pick-reg").value));
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1900,6 +1912,75 @@
       } catch (err) {
         send.disabled = false;
         $("ez-ret-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+      }
+    });
+  }
+
+  // 2026-10-27 쿠팡 반품 회수 송장 등록(직접 회수): 반품 상태 확인(쿠팡 조회) → 직접 회수 확인 칸 → 확인 → 등록 → 서버가 다시 읽어 확인.
+  // 택배사는 이름(예: CJ대한통운)이나 공식 코드로 넣고, 서버가 공식 목록으로만 코드로 바꾼다(없는 이름은 막는다).
+  function pickupInputProblem(receiptId, courier, invoice, reg) {
+    if (!/^\d{1,20}$/.test(String(receiptId || "").trim())) return "easy.ret.err_id";
+    if (!String(courier || "").trim()) return "easy.pick.err_courier";
+    if (!/^[A-Za-z0-9-]{6,30}$/.test(String(invoice || "").trim())) return "easy.pick.err_invoice";
+    const r = String(reg || "").trim();
+    if (r && !/^[A-Za-z0-9]{1,30}$/.test(r)) return "easy.pick.err_reg";
+    return null;
+  }
+
+  async function pickupPreview(receiptId, courier, invoice, reg) {
+    const box = $("ez-pick-box");
+    const problem = pickupInputProblem(receiptId, courier, invoice, reg);
+    if (problem) { box.innerHTML = `<div class="ez-note warn"><div>${esc(T(problem))}</div></div>`; return; }
+    const id = String(receiptId).trim();
+    const c = String(courier).trim();
+    const n = String(invoice).trim();
+    const r = String(reg || "").trim();
+    box.innerHTML = loadingHtml();
+    let plan;
+    try { plan = await api(`/purchase-tasks/coupang-returns/${encodeURIComponent(id)}/pickup-invoice/preview?courier=${encodeURIComponent(c)}&invoice_number=${encodeURIComponent(n)}${r ? `&reg_number=${encodeURIComponent(r)}` : ""}&live=true`); }
+    catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    const reasons = (plan.blockers || []).concat(plan.gate_blockers || []);
+    const cp = plan.coupang || {};
+    let state;
+    if (plan.already_applied) state = `<div class="ez-note ok"><div>${esc(T("easy.pick.already", { invoice: n }))}</div></div>`;
+    else if (plan.sendable) state = `<div class="ez-note ok"><div>${esc(T("easy.pick.ready", { status: returnStatusLabel(cp.status), courier: plan.courier_code, invoice: n }))}</div></div>`;
+    else state = `<div class="ez-note warn"><div>${reasons.map((b) => esc(b.message)).join("<br>")}</div></div>`;
+    const check = plan.sendable
+      ? `<div class="ez-note bad" style="margin-top:8px"><div><label><input type="checkbox" id="ez-pick-confirm"> ${esc(T("easy.pick.confirm_box"))}</label></div></div>` : "";
+    box.innerHTML = `${state}${check}${plan.sendable ? `<button type="button" class="ez-btn sm" id="ez-pick-send" style="margin-top:10px">${esc(T("easy.pick.send"))}</button>` : ""}<div id="ez-pick-result" style="margin-top:10px"></div>`;
+    const send = $("ez-pick-send");
+    if (!send) return;
+    send.addEventListener("click", async () => {
+      const box2 = $("ez-pick-confirm");
+      if (!(box2 && box2.checked)) { B.toast(T("easy.ret.confirm_needed"), "error"); return; }
+      const ok = await B.askConfirm(T("easy.pick.confirm", { id, courier: plan.courier_code, invoice: n }), { title: T("easy.pick.title"), okLabel: T("easy.pick.send") });
+      if (!ok) return;
+      send.disabled = true;
+      try {
+        const result = await api(`/purchase-tasks/coupang-returns/${encodeURIComponent(id)}/pickup-invoice/send`, {
+          method: "POST", body: JSON.stringify({ courier: c, invoice_number: n, reg_number: r || null, expected_status: cp.status, confirm_pickup: !!(box2 && box2.checked), retry_action_required: false }),
+        });
+        let tone = "bad";
+        let text = `${result.outcome}: ${result.detail || ""}`;
+        if (result.outcome === "SUCCEEDED" && result.verified === true) { tone = "ok"; text = T("easy.pick.ok", { invoice: n }); }
+        else if (result.outcome === "SUCCEEDED") { tone = "warn"; text = T("easy.ret.unverified"); }
+        else if (result.outcome === "ALREADY_DONE") { tone = "ok"; text = T("easy.pick.already", { invoice: n }); }
+        else if (result.outcome === "UNKNOWN") { tone = "warn"; text = T("easy.ret.unknown"); }
+        else if (result.outcome === "ACTION_REQUIRED") { text = T("easy.stock.rejected", { detail: result.detail || "" }); }
+        $("ez-pick-result").innerHTML = `<div class="ez-note ${tone}"><div>${esc(text)}</div></div>`
+          + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" id="ez-pick-reconcile" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
+        B.toast(T(result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "easy.ret.toast_done" : "easy.ret.toast_check"), result.outcome === "SUCCEEDED" || result.outcome === "ALREADY_DONE" ? "success" : "error");
+        const rec = $("ez-pick-reconcile");
+        if (rec) rec.addEventListener("click", async () => {
+          try {
+            const rr = await api(`/purchase-tasks/coupang-returns/${encodeURIComponent(id)}/pickup-invoice/reconcile?invoice_number=${encodeURIComponent(n)}`, { method: "POST" });
+            const done = rr.outcome === "SUCCEEDED";
+            $("ez-pick-result").innerHTML = `<div class="ez-note ${done ? "ok" : "warn"}"><div>${esc(done ? T("easy.pick.ok", { invoice: n }) : `${rr.outcome}: ${rr.detail || ""}`)}</div></div>`;
+          } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+        });
+      } catch (err) {
+        send.disabled = false;
+        $("ez-pick-result").innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
       }
     });
   }

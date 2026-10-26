@@ -17,6 +17,11 @@ File : app/domains/purchase_task/coupang_return_action_provider.py
       입고완료(VENDOR_WAREHOUSE_CONFIRM)만. 승인하면 **환불 처리**된다. cancelCount는 접수 수량과 같아야 한다.
       400 "이미 반품이 완료 되었습니다"·"수량이 일치하지 않습니다", 500 "승인할 수 없는 상태". 성공 {"code":"200","message":"OK"}.
 
+  - 회수 송장 등록  POST .../v4/vendors/{vendorId}/return-exchange-invoices/manual  (2026-10-27 확인)
+      본문 {returnExchangeDeliveryType: RETURN|EXCHANGE, receiptId(number), deliveryCompanyCode, invoiceNumber, regNumber(선택)}.
+      굿스플로(반품 자동 연동)를 쓰지 않고 직접 회수하는 판매자용. 반품은 반품접수(RETURNS_UNCHECKED)일 때만. 배송 송장과 같은 번호는 400.
+      등록해도 택배기사가 회수하기 전에는 고객이 반품을 철회할 수 있다. 성공 {"code":200,"data":{...,"invoiceNumberId":…}}.
+
 규칙:
   - 구매자 개인정보(요청자 이름·연락처·주소)는 읽지 않는다. 남기는 것은 번호·상태·수량·귀책·빠른환불 여부·반품배송비 금액뿐이다.
   - 응답이 예상 모양이 아니면 추측하지 않고 실패(ok=False)로 돌려준다.
@@ -32,6 +37,8 @@ from urllib.parse import quote
 RETURN_ONE_PATH = "/v2/providers/openapi/apis/api/v6/vendors/{vendor_id}/returnRequests/{receipt_id}"
 RETURN_RECEIVE_PATH = "/v2/providers/openapi/apis/api/v4/vendors/{vendor_id}/returnRequests/{receipt_id}/receiveConfirmation"
 RETURN_APPROVE_PATH = "/v2/providers/openapi/apis/api/v4/vendors/{vendor_id}/returnRequests/{receipt_id}/approval"
+PICKUP_INVOICE_PATH = "/v2/providers/openapi/apis/api/v4/vendors/{vendor_id}/return-exchange-invoices/manual"
+PICKUP_REQUIRED_STATUS = "RETURNS_UNCHECKED"  # 공식: 반품은 반품접수일 때만 회수 송장을 등록한다
 MAX_RECEIPT_ID_DIGITS = 20
 
 RECEIVE = "RECEIVE"
@@ -81,12 +88,15 @@ class ReturnSnapshot:
     complete_confirm_type: str | None = None
     detail: str = ""
     http_status: int | None = None
+    # 이미 붙어 있는 회수 송장(returnDeliveryDtos 중 송장번호가 있는 것) — (택배사 코드, 송장번호). 수취인 정보는 읽지 않는다.
+    return_invoices: tuple[tuple[str | None, str], ...] = ()
 
     def to_dict(self) -> dict:
         return {
             "receipt_id": self.receipt_id, "order_id": self.order_id, "status": self.status, "cancel_count": self.cancel_count,
             "item_count": self.item_count, "fault_by": self.fault_by, "pre_refund": self.pre_refund,
             "return_shipping_charge": self.return_shipping_charge, "complete_confirm_type": self.complete_confirm_type,
+            "return_invoices": [{"courier": c, "invoice": n} for c, n in self.return_invoices],
         }
 
 
@@ -126,9 +136,15 @@ class _ReturnActionMixin:
         charge = record.get("returnShippingCharge")
         units = _int(charge.get("units")) if isinstance(charge, dict) else _int(charge)
         pre = record.get("preRefund")
+        dtos = record.get("returnDeliveryDtos")
+        invoices = tuple(
+            (_text(d.get("deliveryCompanyCode")), _text(d.get("deliveryInvoiceNo")))
+            for d in (dtos if isinstance(dtos, list) else []) if isinstance(d, dict) and _text(d.get("deliveryInvoiceNo"))
+        )
         return ReturnSnapshot(
             True, target, _text(record.get("orderId")), status, cancel, len(items), _text(record.get("faultByType")),
             pre if isinstance(pre, bool) else None, units, _text(record.get("completeConfirmType")), "", 200,
+            return_invoices=tuple(dict.fromkeys(invoices)),  # 문서 예시처럼 같은 송장이 두 번 올 수 있다
         )
 
     def validate_return_action(self, receipt_id: Any, action: str, cancel_count: Any = None):
@@ -174,6 +190,81 @@ class _ReturnActionMixin:
             CallKind.UNKNOWN, 200, "INVALID_RESPONSE", "200 응답이지만 성공·실패를 판정할 수 없는 본문이라 적용 여부를 알 수 없다",
         )
 
+    # ---- 회수 송장 등록(2026-10-27) ----
+
+    @staticmethod
+    def _valid_pickup_invoice(number: Any) -> bool:
+        return isinstance(number, str) and 6 <= len(number) <= 30 and all(c.isalnum() or c == "-" for c in number)
+
+    @staticmethod
+    def _valid_reg_number(number: Any) -> bool:
+        return number is None or (isinstance(number, str) and 1 <= len(number) <= 30 and number.isalnum())
+
+    def validate_pickup_invoice(self, receipt_id: Any, courier_code: Any, invoice_number: Any, reg_number: Any = None):
+        from app.domains.purchase_task.coupang_channel_control_provider import CallKind
+        from app.domains.purchase_task.coupang_channel_control_provider import ProviderCallResult
+        from app.domains.purchase_task.coupang_invoice_service import COURIER_CODES_BY_NAME
+
+        if not valid_receipt_id(receipt_id):
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, None, "INVALID_TARGET", "반품접수번호(receiptId)가 숫자가 아니라 요청하지 않았다")
+        if courier_code not in set(COURIER_CODES_BY_NAME.values()):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_COURIER", "택배사 코드가 쿠팡 공식 목록에 없어 요청하지 않았다 — 추측해서 채우지 않는다",
+            )
+        if not self._valid_pickup_invoice(invoice_number):
+            return ProviderCallResult(
+                CallKind.ACTION_REQUIRED, None, "INVALID_INVOICE_NUMBER", "회수 송장번호 형식(6~30자 영문·숫자·하이픈)이 아니라 요청하지 않았다",
+            )
+        if not self._valid_reg_number(reg_number):
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, None, "INVALID_REG_NUMBER", "회수번호 형식(영문·숫자 30자 이하)이 아니라 요청하지 않았다")
+        return None
+
+    def register_pickup_invoice(self, receipt_id: Any, courier_code: str, invoice_number: str, reg_number: str | None = None):
+        from app.domains.purchase_task.coupang_channel_control_provider import CallKind
+        from app.domains.purchase_task.coupang_channel_control_provider import ProviderCallResult
+        from app.domains.purchase_task.coupang_channel_control_provider import _body
+        from app.domains.purchase_task.coupang_channel_control_provider import _summary
+
+        invalid = self.validate_pickup_invoice(receipt_id, courier_code, invoice_number, reg_number)
+        if invalid is not None:
+            return invalid
+        payload: dict = {
+            "returnExchangeDeliveryType": "RETURN", "receiptId": int(str(receipt_id).strip()),  # 문서: receiptId는 number
+            "deliveryCompanyCode": courier_code, "invoiceNumber": invoice_number,
+        }
+        if reg_number is not None:
+            payload["regNumber"] = reg_number
+        sent = self._write("POST", PICKUP_INVOICE_PATH.format(vendor_id=quote(self.vendor_id, safe="")), payload)
+        if isinstance(sent, ProviderCallResult):
+            return sent
+        failure = self._classify_status(sent)
+        if failure is not None:
+            return failure
+        body = _body(sent) or {}
+        code = str(body.get("code") or "").strip().upper()
+        if code in ("200", "SUCCESS"):
+            return ProviderCallResult(CallKind.SUCCEEDED, 200, None, _summary(body))
+        if code == "ERROR":
+            return ProviderCallResult(CallKind.ACTION_REQUIRED, 200, "REJECTED", _summary(body))
+        return ProviderCallResult(
+            CallKind.UNKNOWN, 200, "INVALID_RESPONSE", "200 응답이지만 성공·실패를 판정할 수 없는 본문이라 적용 여부를 알 수 없다",
+        )
+
+    def read_pickup_invoice_applied(self, receipt_id: Any, invoice_number: str):
+        """결과불명 대조 — 반품에 그 회수 송장이 붙어 있으면 True. 반품접수 상태에 회수 송장이 하나도 없으면 False(안 받음).
+        그 밖(다른 송장이 붙음, 상태가 바뀜)은 판단하지 않는다(ok=False)."""
+
+        from app.domains.purchase_task.coupang_channel_control_provider import ProviderReadResult
+
+        snapshot = self.read_return_request(receipt_id)
+        if not snapshot.ok:
+            return ProviderReadResult(False, None, snapshot.detail, snapshot.http_status)
+        if any(n == invoice_number for _, n in snapshot.return_invoices):
+            return ProviderReadResult(True, True, "", 200)
+        if snapshot.status == PICKUP_REQUIRED_STATUS and not snapshot.return_invoices:
+            return ProviderReadResult(True, False, "", 200)
+        return ProviderReadResult(False, None, "회수 송장 상태를 판단할 수 없다 — 윙에서 확인 필요", 200)
+
     def read_return_action_applied(self, receipt_id: Any, action: str):
         """결과불명 대조 — 적용 뒤 상태면 True, 아직 처리 전 상태면 False(안 받음), 그 밖(쿠팡 확인 요청 등)은 판단하지 않는다."""
 
@@ -191,5 +282,5 @@ class _ReturnActionMixin:
 
 __all__ = [
     "_ReturnActionMixin", "ReturnSnapshot", "RECEIVE", "APPROVE", "REQUIRED_STATUS", "APPLIED_STATUSES", "KNOWN_STATUSES",
-    "RETURN_ONE_PATH", "RETURN_RECEIVE_PATH", "RETURN_APPROVE_PATH", "valid_receipt_id",
+    "RETURN_ONE_PATH", "RETURN_RECEIVE_PATH", "RETURN_APPROVE_PATH", "valid_receipt_id", "PICKUP_INVOICE_PATH", "PICKUP_REQUIRED_STATUS",
 ]

@@ -44,6 +44,7 @@ from app.domains.purchase_task.coupang_call_center_reply_schema import CoupangCa
 from app.domains.purchase_task.coupang_inquiry_reply_schema import CoupangInquiryReplyRequest
 from app.domains.purchase_task.coupang_product_name_schema import CoupangProductNameSendRequest
 from app.domains.purchase_task.coupang_return_action_schema import CoupangReturnActionRequest
+from app.domains.purchase_task.coupang_return_pickup_schema import CoupangReturnPickupRequest
 from app.domains.purchase_task.coupang_stock_schema import CoupangStockSendRequest
 from app.core.recent_auth import consume_recent_auth_token
 from app.domains.purchase_task.channel_adapter import PurchaseChannelAdapterError
@@ -1438,6 +1439,57 @@ def reconcile_coupang_return_action(
     from app.domains.purchase_task.coupang_return_action_service import CoupangReturnActionService
 
     return CoupangReturnActionService(db).reconcile(current_user.company_id, receipt_id, action)
+
+
+@router.get("/coupang-returns/{receipt_id}/pickup-invoice/preview")
+def preview_coupang_return_pickup(
+    receipt_id: str,
+    courier: str = Query(min_length=1, max_length=30, description="택배사 이름 또는 쿠팡 공식 코드"),
+    invoice_number: str = Query(min_length=6, max_length=30, description="회수 송장번호"),
+    reg_number: str | None = Query(default=None, max_length=30, description="택배사 회수번호(있으면)"),
+    live: bool = Query(default=True, description="true면 쿠팡 반품을 읽는다(GET 1회). false면 로컬 판정만."),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """2026-10-27 쿠팡 반품 회수 송장 등록 **미리보기** — 반품 상태·이미 붙은 회수 송장·막는 이유. 쓰기 없음."""
+
+    from app.domains.purchase_task.coupang_return_pickup_service import CoupangReturnPickupService
+
+    return CoupangReturnPickupService(db).plan(
+        current_user.company_id, receipt_id, courier, invoice_number, reg_number=reg_number, live=live,
+    ).to_dict()
+
+
+@router.post("/coupang-returns/{receipt_id}/pickup-invoice/send")
+def send_coupang_return_pickup(
+    receipt_id: str,
+    data: CoupangReturnPickupRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """쿠팡 반품에 **회수 송장을 등록한다(외부 변경)**. 관리자 + 운영자 승인 모드 + 비상정지 꺼짐 + 승인 센터 허용(쿠팡 반품 처리) + 직접 회수
+    확인이 필요하고, 반품접수 상태이며 회수 송장이 아직 없고 미리보기에서 본 상태와 같을 때만 한 번 보낸다."""
+
+    from app.domains.purchase_task.coupang_return_pickup_service import CoupangReturnPickupService
+
+    return CoupangReturnPickupService(db).send(
+        current_user.company_id, current_user.id, receipt_id, data.courier, data.invoice_number, reg_number=data.reg_number,
+        expected_status=data.expected_status, confirm_pickup=data.confirm_pickup, retry_action_required=data.retry_action_required,
+    )
+
+
+@router.post("/coupang-returns/{receipt_id}/pickup-invoice/reconcile")
+def reconcile_coupang_return_pickup(
+    receipt_id: str,
+    invoice_number: str = Query(pattern=r"^[A-Za-z0-9-]{6,30}$"),
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+):
+    """결과불명(UNKNOWN)인 회수 송장 등록을 쿠팡 반품 단건 조회로 확인한다(읽기 GET 1회, 다시 보내지 않는다)."""
+
+    from app.domains.purchase_task.coupang_return_pickup_service import CoupangReturnPickupService
+
+    return CoupangReturnPickupService(db).reconcile(current_user.company_id, receipt_id, invoice_number)
 
 
 @router.get("/coupang-call-center-inquiries/unanswered")
