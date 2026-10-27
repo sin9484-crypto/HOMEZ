@@ -11,7 +11,7 @@ File : app/domains/purchase_task/coupang_inquiry_reply_service.py
      남아 있으면 보내지 않는다. 문의 상태는 쿠팡 문의 조회로 그 자리에서 읽는다(최근 7일 — 쿠팡 조회 한도).
   2) **한 문의에 한 번만** — 작업 장부의 대상 키가 문의 번호뿐이다(같은 문의에 HOMEZ가 두 번 답하지 않는다). 쿠팡에 이미 답이 달려 있으면
      (윙에서 답했을 수도 있다) 보내지 않는다.
-  3) 고객에게 바로 보인다는 점을 사용자가 따로 확인(`confirm_public`)해야 보낸다. 답변자(replyBy)는 자격증명의 WING 아이디만 쓴다.
+  3) 고객에게 바로 보인다는 점을 사용자가 따로 확인(`confirm_public`)해야 보낸다. 답변자(replyBy)는 자격증명(없으면 판매자 고정값 — `coupang_seller_wing.py`)의 WING 아이디만 쓴다.
   4) 안전 — 비상 정지가 켜져 있거나 기능 모드가 "운영자 승인"이 아니면 보내지 않는다. 승인 센터의 "쿠팡 문의 답변" 허용이 없으면
      읽지도 보내지도 않는다(읽기·쓰기 각각 횟수형).
   5) 결과불명은 문의 조회로만 확인한다 — 우리 답이 붙었으면 성공, 답이 없으면 안 받음, 다른 답만 있으면 판단하지 않는다.
@@ -37,6 +37,7 @@ from app.domains.automation_safety.service import SafetyService
 from app.domains.order.cs_reply_draft import PLACEHOLDERS
 from app.domains.purchase_task.channel_action_service import ActionOutcome
 from app.domains.purchase_task.channel_action_service import CoupangChannelActions
+from app.domains.purchase_task.coupang_seller_wing import actions_with_seller_wing
 from app.domains.purchase_task.constants import ChannelActionType
 from app.domains.purchase_task.coupang_inquiry_reply_provider import MAX_REPLY_CHARS
 from app.domains.purchase_task.coupang_inquiry_reply_provider import normalize_reply
@@ -100,7 +101,7 @@ class CoupangInquiryReplyService:
         safety: SafetyService | None = None,
     ):
         self.db = db
-        self._actions_factory = actions_factory or (lambda session: CoupangChannelActions(session))
+        self._actions_factory = actions_factory or actions_with_seller_wing
         self.safety = safety or SafetyService(db)
 
     # ------------------------------------------------------------
@@ -197,7 +198,7 @@ class CoupangInquiryReplyService:
             return
         if not found.reply_ready:
             plan.blockers.append(ReplyBlocker(
-                "MISSING_WING_USER_ID", "쿠팡 연결 정보에 WING 아이디가 없어 답변자를 정할 수 없다 — 연결 설정에서 WING 아이디를 넣어 주세요.",
+                "MISSING_WING_USER_ID", "쿠팡 연결 정보와 판매자 고정값에 WING 아이디가 없어(또는 사용자마다 달라) 답변자를 정할 수 없다 — 상품 등록 5단계에서 WING 아이디를 고정값으로 저장해 주세요.",
             ))
         plan.live_checked = True
         row = found.row

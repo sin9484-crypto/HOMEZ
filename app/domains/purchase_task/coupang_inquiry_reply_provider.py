@@ -115,7 +115,7 @@ class _InquiryReplyMixin:
         if not getattr(self, "_wing_user_id", ""):
             return ProviderCallResult(
                 CallKind.ACTION_REQUIRED, None, "MISSING_WING_USER_ID",
-                "쿠팡 문의 답변 API가 요구하는 판매자 WING 아이디(replyBy)가 자격증명에 없어 요청하지 않았다 — 추측해서 채우지 않는다",
+                "쿠팡 문의 답변 API가 요구하는 판매자 WING 아이디(replyBy)가 자격증명·판매자 고정값에 없어 요청하지 않았다 — 추측해서 채우지 않는다",
             )
         return None
 

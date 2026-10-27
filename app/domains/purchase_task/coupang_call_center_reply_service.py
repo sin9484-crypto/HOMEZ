@@ -10,7 +10,7 @@ File : app/domains/purchase_task/coupang_call_center_reply_service.py
   1) 답변 글은 사람이 쓴다(2~1,000자, 초안 가림 표시가 남으면 보내지 않는다). 문의 상태는 단건 조회로 그 자리에서 읽는다.
   2) 답할 이관글은 쿠팡 상담사가 '답변 요청'으로 넘긴 글이 **정확히 하나**일 때만 고른다. 사용자가 미리보기에서 본 이관글과 지금 이관글이
      다르면 보내지 않는다. 문의가 끝났거나(complete) 답할 이관글이 없으면 보내지 않는다(24시간 지나 쿠팡이 닫은 경우 포함 — 윙에서 처리).
-  3) 고객에게 바로 쓰인다는 확인(`confirm_public`)이 있어야 보낸다. 답변자는 자격증명의 WING 아이디만 쓴다.
+  3) 고객에게 바로 쓰인다는 확인(`confirm_public`)이 있어야 보낸다. 답변자는 자격증명(없으면 판매자 고정값 — `coupang_seller_wing.py`)의 WING 아이디만 쓴다.
   4) 안전 — 비상 정지·운영자 승인 모드 확인, 승인 센터의 "쿠팡 문의 답변" 허용(상품 문의 답변과 같은 목적)이 없으면 읽지도 보내지도 않는다.
      쿠팡이 과도한 조회를 막을 수 있어 조회는 미리보기·전송 직전·전송 뒤 1회씩만 한다.
   5) 한 이관글에 한 번만(작업 장부 키 = 상담번호 + 이관글 번호). 결과불명은 단건 조회로만 확인한다.
@@ -36,6 +36,7 @@ from app.domains.automation_safety.constants import AutomationMode
 from app.domains.automation_safety.service import SafetyService
 from app.domains.purchase_task.channel_action_service import ActionOutcome
 from app.domains.purchase_task.channel_action_service import CoupangChannelActions
+from app.domains.purchase_task.coupang_seller_wing import actions_with_seller_wing
 from app.domains.purchase_task.constants import ChannelActionType
 from app.domains.purchase_task.coupang_call_center_reply_provider import MAX_CC_REPLY_CHARS
 from app.domains.purchase_task.coupang_call_center_reply_provider import MIN_CC_REPLY_CHARS
@@ -105,7 +106,7 @@ class CoupangCallCenterReplyService:
         safety: SafetyService | None = None,
     ):
         self.db = db
-        self._actions_factory = actions_factory or (lambda session: CoupangChannelActions(session))
+        self._actions_factory = actions_factory or actions_with_seller_wing
         self.safety = safety or SafetyService(db)
 
     # ------------------------------------------------------------
@@ -209,7 +210,7 @@ class CoupangCallCenterReplyService:
         plan.ledger = self._ledger_summary(company_id, plan)
         if not snap.reply_ready:
             plan.blockers.append(CcBlocker(
-                "MISSING_WING_USER_ID", "쿠팡 연결 정보에 WING 아이디가 없어 답변자를 정할 수 없다 — 연결 설정에서 WING 아이디를 넣어 주세요.",
+                "MISSING_WING_USER_ID", "쿠팡 연결 정보와 판매자 고정값에 WING 아이디가 없어(또는 사용자마다 달라) 답변자를 정할 수 없다 — 상품 등록 5단계에서 WING 아이디를 고정값으로 저장해 주세요.",
             ))
 
     # ------------------------------------------------------------

@@ -9,7 +9,7 @@ File : app/domains/purchase_task/coupang_call_center_confirm_service.py
 
   1) 확인을 기다리는 문의(미확인 TRANSFER)는 쿠팡 목록에서 그 자리에서 읽는다. 목록에 없는 번호는 보내지 않는다
      (이미 확인했거나 24시간이 지났을 수 있다 — 윙으로 안내).
-  2) 사용자가 문의와 상담 내용을 봤다는 확인(`confirm_seen`)이 있어야 보낸다. 확인자(confirmBy)는 자격증명의 WING 아이디만 쓴다.
+  2) 사용자가 문의와 상담 내용을 봤다는 확인(`confirm_seen`)이 있어야 보낸다. 확인자(confirmBy)는 자격증명(없으면 판매자 고정값 — `coupang_seller_wing.py`)의 WING 아이디만 쓴다.
   3) 확인 뒤 상태 값은 공식 문서에 없다 — 보낸 뒤 미확인 목록에서 빠졌으면 확인으로 보고, 그대로면 '확인되지 않음'으로 알린다.
      결과불명은 목록에 그대로면 '안 받음', 빠졌으면 판단하지 않는다(다시 보내지 않는다).
   4) 안전 — 비상 정지·운영자 승인 모드, 승인 센터 허용이 없으면 읽지도 보내지도 않는다. 한 문의에 한 번만(작업 장부).
@@ -31,6 +31,7 @@ from app.domains.automation_safety.constants import AutomationMode
 from app.domains.automation_safety.service import SafetyService
 from app.domains.purchase_task.channel_action_service import ActionOutcome
 from app.domains.purchase_task.channel_action_service import CoupangChannelActions
+from app.domains.purchase_task.coupang_seller_wing import actions_with_seller_wing
 from app.domains.purchase_task.coupang_call_center_reply_provider import valid_cc_id
 from app.domains.purchase_task.coupang_call_center_reply_service import _public_row
 from app.domains.store_connection.constants import ConnectionStatus
@@ -46,7 +47,7 @@ class CoupangCallCenterConfirmService:
         safety: SafetyService | None = None,
     ):
         self.db = db
-        self._actions_factory = actions_factory or (lambda session: CoupangChannelActions(session))
+        self._actions_factory = actions_factory or actions_with_seller_wing
         self.safety = safety or SafetyService(db)
 
     def _store(self, company_id: int) -> tuple[int | None, list[dict]]:
