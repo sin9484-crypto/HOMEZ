@@ -77,7 +77,9 @@ class ScoreAxis:
     # 이 두 축은 "위험"이 아니라 정책/안전 차단 신호다 — 점수로 상쇄되지
     # 않고 이 축 자체가 임계 미달이면 평가 전체가 REVIEW_REQUIRED로
     # 강등된다(서비스 레벨에서 강제).
-    HARD_BLOCK_AXES = (POLICY_PROHIBITED_RISK,)
+    # 2026-10-29(평가기 1.1.0): 상표·지식재산 위험도 같은 차단 신호로 본다 — 고위험 상표 단어 상품이 다른 점수로
+    # 승인 추천까지 가던 것을 막는다(D1 초안 6장 #7).
+    HARD_BLOCK_AXES = (POLICY_PROHIBITED_RISK, BRAND_IP_RISK)
 
 
 class EvaluationRecommendation:

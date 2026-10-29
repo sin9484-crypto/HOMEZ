@@ -40,6 +40,10 @@ class DecisionSupplementaryInputs(BaseModel):
     brand_ip_risk_score: Decimal | None = Field(
         default=None, ge=0, le=100,
     )
+    # 정책·금지상품 안전도(안전할수록 높음, 0~100) — 후보에 risk_score가 없을 때만 쓴다(2026-10-29, 후보 사전 평가에서 제안).
+    policy_prohibited_score: Decimal | None = Field(
+        default=None, ge=0, le=100,
+    )
     required_funding: Decimal | None = Field(default=None, ge=0)
     available_funding: Decimal | None = Field(default=None, ge=0)
 

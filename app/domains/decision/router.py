@@ -290,6 +290,19 @@ def get_audit_log_for_candidate(
     ]
 
 
+@router.get(
+    "/candidates/{candidate_id}/suggested-inputs",
+)
+def get_suggested_inputs(
+    candidate_id: int,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """후보 사전 평가(S2)로 만든 평가 보강 입력 **제안**(2026-10-29). 읽기만 한다 — 저장·평가 실행 없음."""
+
+    return DecisionService(db).suggest_inputs(candidate_id, current_user.company_id)
+
+
 # --------------------------------------------------
 # 정책 관리 (admin 전용, 별도 명시 작업, 전역)
 # --------------------------------------------------

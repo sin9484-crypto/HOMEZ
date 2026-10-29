@@ -153,8 +153,8 @@ class DecisionTenantIsolationTestCase(unittest.TestCase):
             market="COUPANG",
             product_name="테넌트 격리 Decision 테스트 상품",
             status="RECOMMENDED",
-            trend_score=80.0, novelty_score=70.0, demand_score=85.0,
-            competition_score=60.0, margin_score=75.0, risk_score=10.0,
+            trend_score=0.80, novelty_score=0.70, demand_score=0.85,
+            competition_score=0.60, margin_score=0.75, risk_score=0.10,
             confidence=0.9,
         )
         self.db.add(self.candidate)

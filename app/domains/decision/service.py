@@ -77,7 +77,12 @@ from app.domains.product_candidate.model import ProductCandidate
 from app.domains.product_candidate.service import ProductCandidateService
 
 EVALUATOR_KIND = "deterministic"
-EVALUATOR_VERSION = "1.0.0"
+# 1.1.0(2026-10-29, D1 평가 기준 초안과 함께) — ① 후보 점수는 V3 계약대로 0~1을 0~100으로 바꿔 읽는다(전에는 0~100으로
+# 읽어 실제 트렌드 0.8이 0.8점이 됐다) ② 근거 없는 축을 0점으로 더하지 않고 근거 있는 축의 가중치로 나눠 총점을 낸다
+# (모름 ≠ 나쁨) — 대신 근거 있는 가중치 비중이 기준 미만이면 데이터 부족 ③ 승인 추천에는 필수 확인 축이 모두 있어야
+# 한다 ④ 예상 마진율이 회사 최소 목표 마진율 미만이면 점수와 무관하게 검토 필요 ⑤ 검토 사유를 실제로 걸린 축 이름으로 쓴다
+# ⑥ 상표·지식재산 위험 40점 미만도 정책 위험처럼 차단한다.
+EVALUATOR_VERSION = "1.1.0"
 
 _SCORE_Q = Decimal("0.0001")
 _ZERO = Decimal("0")
@@ -90,6 +95,31 @@ _POLICY_HARD_BLOCK_THRESHOLD = Decimal("40")
 # 사용 가능한(데이터가 있는) 축이 이 개수 미만이면 전체를
 # INSUFFICIENT_DATA로 처리한다(12개 중 절반).
 _MIN_SUFFICIENT_AXES = 6
+
+# 근거 있는 축의 가중치 합이 이 비중 미만이면 INSUFFICIENT_DATA — 개수만 세면 가벼운 축 6개로 무거운 축(마진 등)
+# 없이도 추천이 나올 수 있다.
+_MIN_WEIGHT_COVERAGE = Decimal("0.70")
+
+# 승인 추천(RECOMMEND_APPROVE)에는 이 축들에 근거가 있어야 한다 — 무재고 중개에서 돈(마진)·판매 금지·상표권·공급
+# 중단은 '모름'인 채로 팔면 손실·제재로 이어진다. 하나라도 없으면 점수가 높아도 보류 추천까지만 낸다.
+REQUIRED_FOR_APPROVE = (
+    ScoreAxis.MARGIN_AND_FEES,
+    ScoreAxis.POLICY_PROHIBITED_RISK,
+    ScoreAxis.BRAND_IP_RISK,
+    ScoreAxis.SUPPLY_STABILITY,
+)
+
+# 축이 걸린 이유 — 검토 사유 문구를 실제로 걸린 축으로 쓴다.
+FLAG_POLICY = "POLICY"
+FLAG_BRAND = "BRAND"
+FLAG_MARGIN = "MARGIN"
+FLAG_FUNDING = "FUNDING"
+_FLAG_MESSAGES = {
+    FLAG_POLICY: "정책·금지상품 위험이 기준(40점) 미만",
+    FLAG_BRAND: "상표·지식재산 위험이 기준(40점) 미만",
+    FLAG_MARGIN: "예상 마진율이 회사 최소 목표 마진율 미만",
+    FLAG_FUNDING: "필요 자금이 가용 자금보다 많음",
+}
 
 
 def _q_score(value) -> Decimal:
@@ -120,12 +150,13 @@ class AxisResult:
 
     __slots__ = (
         "axis", "raw_score", "confidence", "data_sufficient",
-        "risk_flag", "evidence_text",
+        "risk_flag", "evidence_text", "flag_kind",
     )
 
     def __init__(
         self, axis: str, raw_score: Decimal, confidence: Decimal,
         data_sufficient: bool, risk_flag: bool, evidence_text: str,
+        flag_kind: str | None = None,
     ):
 
         self.axis = axis
@@ -134,6 +165,8 @@ class AxisResult:
         self.data_sufficient = data_sufficient
         self.risk_flag = risk_flag
         self.evidence_text = evidence_text
+        # risk_flag가 참일 때 왜 걸렸는지(FLAG_POLICY/FLAG_MARGIN/FLAG_FUNDING)
+        self.flag_kind = flag_kind if risk_flag else None
 
 
 def _insufficient(axis: str, reason: str) -> AxisResult:
@@ -156,24 +189,28 @@ def _candidate_score_axis(
     if candidate_value is None:
         return _insufficient(axis, f"ProductCandidate.{field_label} 없음")
 
+    # V3 계약: 후보 점수(trend/novelty/demand/competition/margin/risk)는 0~1이다(TrendDiscoveryService·화면 점수 막대와 같다).
     value = _q_score(candidate_value)
-    if value < 0 or value > 100:
+    if value < 0 or value > 1:
         raise BadRequestException(
-            f"{field_label} 값은 0~100 범위여야 합니다: {value}",
+            f"{field_label} 값은 0~1 범위여야 합니다: {value}",
         )
 
-    score = _clamp_score(_HUNDRED - value if invert else value)
+    scaled = value * _HUNDRED
+    score = _clamp_score(_HUNDRED - scaled if invert else scaled)
     confidence = (
         _q_score(candidate_confidence)
         if candidate_confidence is not None
         else Decimal("0.5000")
     )
+    flagged = axis in ScoreAxis.HARD_BLOCK_AXES and score < _POLICY_HARD_BLOCK_THRESHOLD
 
     return AxisResult(
         axis=axis, raw_score=score, confidence=_clamp_score(confidence),
         data_sufficient=True,
-        risk_flag=(axis in ScoreAxis.HARD_BLOCK_AXES and score < _POLICY_HARD_BLOCK_THRESHOLD),
+        risk_flag=flagged,
         evidence_text=f"ProductCandidate.{field_label}={value} 기반 산출",
+        flag_kind=FLAG_POLICY,
     )
 
 
@@ -185,23 +222,29 @@ def _supplementary_score_axis(
         return _insufficient(axis, f"보강 입력 {label} 미제공")
 
     score = _clamp_score(_q_score(value))
+    flagged = axis in ScoreAxis.HARD_BLOCK_AXES and score < _POLICY_HARD_BLOCK_THRESHOLD
 
     return AxisResult(
         axis=axis, raw_score=score, confidence=Decimal("0.9000"),
-        data_sufficient=True, risk_flag=False,
+        data_sufficient=True, risk_flag=flagged,
         evidence_text=f"운영자 제공 {label}={score} 기반 산출",
+        flag_kind=FLAG_BRAND if axis == ScoreAxis.BRAND_IP_RISK else FLAG_POLICY,
     )
 
 
 def evaluate_axes(
     candidate: ProductCandidate,
     supplementary: DecisionSupplementaryInputs,
+    min_margin_rate: Decimal | None = None,
 ) -> list[AxisResult]:
     """
     순수 함수 — 동일한 candidate 필드값과 supplementary 입력이 주어지면
     항상 동일한 결과를 반환한다(결정적 평가). 외부 AI 호출이 준비되지
     않아 fixture/deterministic evaluator를 사용한다(가짜 AI를 실제 AI로
     보고하지 않기 위해 evaluator_kind="deterministic"으로 명시한다).
+
+    `min_margin_rate`(회사 최소 목표 마진율)를 주면 예상 마진율이 그보다
+    낮을 때 마진 축에 risk_flag(FLAG_MARGIN)를 건다 — 점수로 상쇄하지 않는다.
     """
 
     results: list[AxisResult] = []
@@ -261,11 +304,16 @@ def evaluate_axes(
                 "expected_margin_rate는 음수일 수 없습니다.",
             )
         score = _clamp_score(rate * Decimal("400"))
+        below = min_margin_rate is not None and rate < Decimal(min_margin_rate)
         results.append(AxisResult(
             axis=ScoreAxis.MARGIN_AND_FEES, raw_score=score,
             confidence=Decimal("0.9000"), data_sufficient=True,
-            risk_flag=False,
-            evidence_text=f"예상 마진율 {rate} 기반 산출",
+            risk_flag=below,
+            evidence_text=(
+                f"예상 마진율 {rate} 기반 산출"
+                + (f" — 회사 최소 목표 마진율 {Decimal(min_margin_rate)} 미만" if below else "")
+            ),
+            flag_kind=FLAG_MARGIN,
         ))
     else:
         results.append(_candidate_score_axis(
@@ -309,10 +357,17 @@ def evaluate_axes(
 
     # 정책·금지상품 위험 — risk_score(위험할수록 높음)를 반전해
     # "안전할수록 높음" 축으로 통일한다. HARD_BLOCK 축.
-    results.append(_candidate_score_axis(
-        ScoreAxis.POLICY_PROHIBITED_RISK, candidate.risk_score,
-        candidate.confidence, "risk_score", invert=True,
-    ))
+    # 후보에 risk_score가 없으면 보강 입력 policy_prohibited_score(안전할수록 높음, 후보 사전 평가에서 제안)를 쓴다.
+    if candidate.risk_score is None and supplementary.policy_prohibited_score is not None:
+        results.append(_supplementary_score_axis(
+            ScoreAxis.POLICY_PROHIBITED_RISK, supplementary.policy_prohibited_score,
+            "policy_prohibited_score",
+        ))
+    else:
+        results.append(_candidate_score_axis(
+            ScoreAxis.POLICY_PROHIBITED_RISK, candidate.risk_score,
+            candidate.confidence, "risk_score", invert=True,
+        ))
 
     results.append(_supplementary_score_axis(
         ScoreAxis.BRAND_IP_RISK, supplementary.brand_ip_risk_score,
@@ -357,6 +412,7 @@ def evaluate_axes(
             evidence_text=(
                 f"필요자금 {required} / 가용자금 {available} 기반 산출"
             ),
+            flag_kind=FLAG_FUNDING,
         ))
     else:
         results.append(_insufficient(
@@ -365,6 +421,23 @@ def evaluate_axes(
         ))
 
     return results
+
+
+def aggregate_scores(
+    axis_results: list[AxisResult], weights: dict[str, Decimal],
+) -> tuple[Decimal, Decimal, Decimal]:
+    """(총점, 신뢰도, 근거 비중). 근거 있는 축만 그 가중치로 평균한다 — 근거 없는 축을 0점으로 더하면 '모름'이 '나쁨'이
+    되고, 무거운 축이 비면 아무리 좋은 후보도 승인 기준에 닿을 수 없다. 근거 비중은 따로 돌려줘 기준 미달이면 데이터 부족으로
+    처리한다(INSUFFICIENT_DATA)."""
+
+    coverage = sum((weights[r.axis] for r in axis_results if r.data_sufficient), _ZERO)
+    if coverage <= 0:
+        return _ZERO.quantize(_SCORE_Q), _ZERO.quantize(_SCORE_Q), _ZERO.quantize(_SCORE_Q)
+    weighted_score = sum((r.raw_score * weights[r.axis] for r in axis_results if r.data_sufficient), _ZERO)
+    weighted_confidence = sum((r.confidence * weights[r.axis] for r in axis_results if r.data_sufficient), _ZERO)
+    total = _clamp_score(weighted_score / coverage).quantize(_SCORE_Q)
+    confidence = (weighted_confidence / coverage).quantize(_SCORE_Q)
+    return total, confidence, coverage.quantize(_SCORE_Q)
 
 
 class DecisionService:
@@ -694,40 +767,29 @@ class DecisionService:
             self.db,
         ).get_visible_for_company(candidate_id, company_id)
 
-        axis_results = evaluate_axes(candidate, supplementary_inputs)
+        min_margin_rate = self._min_margin_rate(company_id)
+        axis_results = evaluate_axes(candidate, supplementary_inputs, min_margin_rate=min_margin_rate)
 
         weights = {
             k: Decimal(v)
             for k, v in json.loads(policy.axis_weights_json).items()
         }
 
-        total_score = _ZERO
-        weighted_confidence = _ZERO
-        sufficient_count = 0
-        hard_block_triggered = False
-
-        for axis_result in axis_results:
-            weight = weights[axis_result.axis]
-            weighted_score = _clamp_score(
-                axis_result.raw_score * weight,
-            ).quantize(_SCORE_Q)
-            total_score += weighted_score
-            weighted_confidence += (axis_result.confidence * weight)
-
-            if axis_result.data_sufficient:
-                sufficient_count += 1
-
-            if axis_result.risk_flag:
-                hard_block_triggered = True
-
-        total_score = total_score.quantize(_SCORE_Q)
-        confidence = weighted_confidence.quantize(_SCORE_Q)
+        total_score, confidence, coverage = aggregate_scores(axis_results, weights)
+        sufficient_count = sum(1 for r in axis_results if r.data_sufficient)
+        flagged_kinds = [r.flag_kind for r in axis_results if r.risk_flag]
+        missing_required = [
+            r.axis for r in axis_results
+            if r.axis in REQUIRED_FOR_APPROVE and not r.data_sufficient
+        ]
 
         recommendation, reason = self._decide_recommendation(
             total_score=total_score,
             confidence=confidence,
             sufficient_count=sufficient_count,
-            hard_block_triggered=hard_block_triggered,
+            coverage=coverage,
+            flagged_kinds=flagged_kinds,
+            missing_required=missing_required,
             policy=policy,
         )
 
@@ -744,6 +806,7 @@ class DecisionService:
             "supplementary": json.loads(
                 supplementary_inputs.model_dump_json(),
             ),
+            "min_margin_rate": str(min_margin_rate),
         }
         snapshot_json = json.dumps(
             snapshot, sort_keys=True, ensure_ascii=False,
@@ -841,14 +904,62 @@ class DecisionService:
 
         return evaluation, scores, False
 
+    def suggest_inputs(self, candidate_id: int, company_id: int) -> dict:
+        """후보 사전 평가(S2) 이유와 마진 분석 스냅샷으로 보강 입력을 **제안**한다(input_suggestion.py 변환표). 읽기 전용 —
+        저장·평가 실행·외부 호출 없음. 다른 회사의 비공개 후보는 평가와 같은 가시성 규칙으로 막는다."""
+
+        from app.domains.decision.input_suggestion import suggest_inputs
+        from app.domains.product_candidate import candidate_evaluation as precheck
+        from app.domains.product_candidate.candidate_evaluation_service import CandidateEvaluationService
+        from app.domains.product_candidate.model import ProductCandidateEvidence
+
+        candidate = ProductCandidateService(self.db).get_visible_for_company(candidate_id, company_id)
+        report = CandidateEvaluationService(self.db).evaluate_all(company_id)
+        item = next((i for i in report.get("items", []) if i.get("candidate_id") == candidate.id), None)
+        snapshot = None
+        rows = (
+            self.db.query(ProductCandidateEvidence)
+            .filter(ProductCandidateEvidence.candidate_id == candidate.id)
+            .order_by(ProductCandidateEvidence.id)
+            .all()
+        )
+        for row in rows:
+            parsed = precheck.parse_snapshot(row.payload_summary)
+            if parsed is not None:
+                snapshot = parsed  # 가장 나중 것을 쓴다(사전 평가와 같은 규칙)
+        result = suggest_inputs(item.get("reasons") if item else None, snapshot)
+        if item is None:
+            result["notes"].insert(0, "후보 사전 평가 목록에 이 후보가 없어(목록 한도 초과 등) 사전 평가 근거 없이 제안했습니다.")
+        result["inputs"] = {k: str(v) for k, v in result["inputs"].items()}
+        result.update({
+            "candidate_id": candidate.id, "product_name": candidate.product_name,
+            "precheck_decision": item.get("decision") if item else None,
+        })
+        return result
+
+    def _min_margin_rate(self, company_id: int) -> Decimal:
+        """회사 최소 목표 마진율(설정 없으면 확정 기본값 18%). 설정 표를 읽지 못해도 기본값을 쓴다 — 기본값은 결정된 사업
+        기준이라 '모름'이 아니고, 이 값은 승인을 막는 쪽으로만 쓰인다."""
+
+        from app.domains.channel_policy.service import ChannelPolicyService
+
+        # 표가 없는 환경(초기·시험)에서는 조회하지 않는다 — 실패한 조회로 세션을 흐리지 않는다.
+        if "company_channel_policy_settings" not in set(inspect(self.db.get_bind()).get_table_names()):
+            return Decimal(ChannelPolicyService.DEFAULT_MIN_TARGET_MARGIN_RATE)
+        return Decimal(ChannelPolicyService(self.db).get_effective_min_target_margin_rate(company_id))
+
     @staticmethod
     def _decide_recommendation(
         total_score: Decimal,
         confidence: Decimal,
         sufficient_count: int,
-        hard_block_triggered: bool,
+        coverage: Decimal,
+        flagged_kinds: list,
+        missing_required: list,
         policy: DecisionPolicy,
     ) -> tuple[str, str]:
+
+        coverage_text = f"근거 있는 항목 비중 {(coverage * _HUNDRED).quantize(Decimal('1'))}%"
 
         if sufficient_count < _MIN_SUFFICIENT_AXES:
             return (
@@ -858,11 +969,18 @@ class DecisionService:
                 "점수를 만들지 않고 데이터 부족으로 처리합니다.",
             )
 
-        if hard_block_triggered:
+        if coverage < _MIN_WEIGHT_COVERAGE:
+            return (
+                EvaluationRecommendation.INSUFFICIENT_DATA,
+                f"{coverage_text} — 기준({(_MIN_WEIGHT_COVERAGE * _HUNDRED).quantize(Decimal('1'))}%) 미만이라 "
+                "데이터 부족으로 처리합니다(근거 없는 항목을 0점으로도, 만점으로도 보지 않습니다).",
+            )
+
+        if flagged_kinds:
+            reasons = [_FLAG_MESSAGES[k] for k in (FLAG_POLICY, FLAG_BRAND, FLAG_MARGIN, FLAG_FUNDING) if k in flagged_kinds]
             return (
                 EvaluationRecommendation.REVIEW_REQUIRED,
-                "정책·금지상품 위험 축이 임계값 미만입니다 — 총점이 "
-                "높아도 점수로 상쇄하지 않고 운영자 검토가 필요합니다.",
+                " / ".join(reasons) + " — 총점이 높아도 점수로 상쇄하지 않고 운영자 검토가 필요합니다.",
             )
 
         if confidence < policy.min_confidence_for_recommendation:
@@ -873,9 +991,15 @@ class DecisionService:
             )
 
         if total_score >= policy.min_approve_total_score:
+            if missing_required:
+                return (
+                    EvaluationRecommendation.RECOMMEND_HOLD,
+                    f"총점 {total_score}점({coverage_text})이지만 승인 추천에 필요한 항목의 근거가 없습니다: "
+                    + ", ".join(missing_required) + " — 확인한 뒤 다시 평가해 주세요.",
+                )
             return (
                 EvaluationRecommendation.RECOMMEND_APPROVE,
-                f"총점 {total_score}점 — 정책 기준"
+                f"총점 {total_score}점({coverage_text}) — 정책 기준"
                 f"({policy.min_approve_total_score}점) 이상으로 승인을 "
                 "추천합니다. 최종 승인은 운영자가 결정해야 합니다.",
             )

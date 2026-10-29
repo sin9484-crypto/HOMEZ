@@ -151,12 +151,12 @@ class DecisionAITestCase(unittest.TestCase):
     def _create_candidate(
         self,
         ref="CAND-1",
-        trend_score=80.0,
-        novelty_score=70.0,
-        demand_score=85.0,
-        competition_score=60.0,
-        margin_score=75.0,
-        risk_score=10.0,
+        trend_score=0.80,
+        novelty_score=0.70,
+        demand_score=0.85,
+        competition_score=0.60,
+        margin_score=0.75,
+        risk_score=0.10,
         confidence=0.9,
     ) -> ProductCandidate:
 
@@ -274,11 +274,11 @@ class DecisionAITestCase(unittest.TestCase):
 
         self._create_safety_tables()
         self._seed_policy()
-        # risk_score=95 → POLICY_PROHIBITED_RISK 축은 100-95=5로 반전되어
+        # risk_score=0.95(0~1 계약) → POLICY_PROHIBITED_RISK 축은 100-95=5로 반전되어
         # 임계값(40) 미만 → hard block. 나머지는 전부 만점급으로 설정.
         candidate = self._create_candidate(
-            trend_score=95.0, novelty_score=95.0, demand_score=95.0,
-            competition_score=95.0, margin_score=95.0, risk_score=95.0,
+            trend_score=0.95, novelty_score=0.95, demand_score=0.95,
+            competition_score=0.95, margin_score=0.95, risk_score=0.95,
             confidence=0.95,
         )
         supplementary = self._full_supplementary(
@@ -449,8 +449,8 @@ class DecisionAITestCase(unittest.TestCase):
             source_type="COUPANG_API", market="COUPANG",
             source_reference="RACE-1", product_name="경쟁 테스트 상품",
             status=CandidateStatus.RECOMMENDED,
-            trend_score=80.0, demand_score=80.0, competition_score=60.0,
-            margin_score=75.0, risk_score=10.0, confidence=0.9,
+            trend_score=0.80, demand_score=0.80, competition_score=0.60,
+            margin_score=0.75, risk_score=0.10, confidence=0.9,
         )
         setup_db.add(candidate)
         setup_db.commit()
