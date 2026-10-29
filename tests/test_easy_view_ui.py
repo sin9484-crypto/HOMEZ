@@ -179,7 +179,7 @@ class ExternalCallTimingTests(unittest.TestCase):
     def test_granting_an_allowance_always_re_checks_the_password(self):
         for name in ("approveDialog", "grantDialog"):
             body = function_body(name)
-            self.assertLess(body.index("B.promptRecentAuthToken()"), body.index('"X-Recent-Auth-Token": token'), name)
+            self.assertLess(body.index("B.promptRecentAuthToken({ summary })"), body.index('"X-Recent-Auth-Token": token'), name)
             self.assertIn("if (token === null) return;", body, name)
 
     def test_the_manual_registration_record_asks_before_recording(self):
@@ -300,7 +300,7 @@ class DeliveryTrackingRowTests(unittest.TestCase):
     def test_the_tracking_allowance_can_be_granted_from_the_approval_center_with_a_password(self):
         self.assertIn('purpose: "ORDER_TRACKING", mode: "STANDING", per_hour_limit: 30, hours: 24', JS)
         self.assertIn('["ORDER_TRACKING", "easy.purpose.tracking"]', JS)
-        self.assertLess(function_body("grantDialog").index("B.promptRecentAuthToken()"), function_body("grantDialog").index('"X-Recent-Auth-Token": token'))
+        self.assertLess(function_body("grantDialog").index("B.promptRecentAuthToken({ summary })"), function_body("grantDialog").index('"X-Recent-Auth-Token": token'))
 
     def test_a_finished_delivery_has_no_check_button(self):
         self.assertIn('const done = s === "FINAL_DELIVERY";', function_body("trackHtml"))

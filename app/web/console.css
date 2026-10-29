@@ -1709,6 +1709,22 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 
 .confirm-dialog form { padding: 20px; }
 
+/* 비밀번호 재확인 창의 "무엇을 승인하는지" 요약(2026-10-29) — 승인 직전에 내용을 다시 보여 준다 */
+.ra-summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--light);
+}
+.ra-summary[hidden] { display: none; }
+.ra-summary dt { color: var(--text-muted); }
+.ra-summary dd { margin: 0; color: var(--text); font-weight: 600; }
+.ra-summary dd.is-strong { color: var(--danger); }
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

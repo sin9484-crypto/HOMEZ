@@ -1954,9 +1954,26 @@
   // 헬퍼. 성공 시 토큰 문자열을, 사용자가 취소하면 null을 반환한다.
   // 비밀번호 자체는 이 함수 밖으로 절대 나가지 않는다(/auth/recent-auth
   // 호출에만 쓰고 즉시 버린다).
+  // `options.summary`([{label, value, strong}])를 주면 비밀번호 칸 위에
+  // 무엇을 승인하는지 다시 보여 준다(2026-10-29 — 허용 창의 기본값이 내용
+  // 확인 없이 그대로 승인된 일이 있었다). 값은 텍스트로만 넣는다.
   // --------------------------------------------------
 
-  function promptRecentAuthToken() {
+  function renderRecentAuthSummary(summaryEl, rows) {
+    summaryEl.replaceChildren();
+    const list = Array.isArray(rows) ? rows.filter((r) => r && r.label) : [];
+    list.forEach((row) => {
+      const dt = document.createElement("dt");
+      dt.textContent = String(row.label);
+      const dd = document.createElement("dd");
+      dd.textContent = String(row.value == null ? "" : row.value);
+      if (row.strong) dd.classList.add("is-strong");
+      summaryEl.append(dt, dd);
+    });
+    summaryEl.hidden = list.length === 0;
+  }
+
+  function promptRecentAuthToken(options) {
     return new Promise((resolve) => {
       const dialog = el("recent-auth-dialog");
       const pwInput = el("ra-password");
@@ -1964,7 +1981,9 @@
       const progressEl = el("ra-progress");
       const okBtn = el("ra-ok");
       const cancelBtn = el("ra-cancel");
+      const summaryEl = el("ra-summary");
 
+      if (summaryEl) renderRecentAuthSummary(summaryEl, options && options.summary);
       pwInput.value = "";
       errEl.textContent = "";
       progressEl.hidden = true;

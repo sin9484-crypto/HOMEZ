@@ -1346,6 +1346,28 @@
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
 
+  const GRANT_PURPOSES = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"], ["ANY", "easy.purpose.any"]];
+
+  // 비밀번호 재확인 창에 다시 보여 줄 "무엇을 허용하는지" 요약(2026-10-29). 목적·종류·보내는 곳·범위를 사람이 읽는 말로 만든다.
+  // 변경(쓰기)과 '모든 목적'은 눈에 띄게 표시한다. 상시형은 시간당 상한이 있을 때, 아니면 횟수형이다.
+  function allowanceSummaryRows(a) {
+    const purposeKey = (GRANT_PURPOSES.find(([v]) => v === a.purpose) || [])[1];
+    const purpose = a.purpose_label || (purposeKey ? T(purposeKey) : String(a.purpose || ""));
+    const write = a.kind === "WRITE";
+    const kind = write ? T("easy.ap.sum_write") : T("easy.kind.read");
+    const system = a.system_label || T(a.system === "ONCH" ? "easy.sys.onch" : "easy.sys.coupang");
+    const perHour = Number(a.per_hour_limit) || 0;
+    const amount = perHour
+      ? T("easy.ap.sum_standing", { n: perHour, h: Number(a.hours) || 24 })
+      : (Number(a.count) ? T("easy.ap.sum_count", { n: Number(a.count) }) : T("easy.ap.sum_count_unset"));
+    return [
+      { label: T("easy.ap.sum_purpose"), value: purpose, strong: a.purpose === "ANY" },
+      { label: T("easy.ap.sum_kind"), value: kind, strong: write },
+      { label: T("easy.ap.sum_system"), value: system },
+      { label: T("easy.ap.sum_amount"), value: amount },
+    ];
+  }
+
   // 허용 조건을 정하는 대화상자(횟수형은 횟수, 상시형은 시간당 상한과 기간)
   async function approveDialog(allowance) {
     if (!allowance) return;
@@ -1356,9 +1378,10 @@
       : `<p>${esc(T("easy.ap.d_counted_p"))}</p><label>${esc(T("easy.ap.d_count"))}</label><input name="count" type="number" min="1" max="50" value="${allowance.requested_count || 1}">`;
     const result = await ezDialog({ title: `${allowance.purpose_label} · ${allowance.system_label} ${allowance.kind_label}`, bodyHtml: body, okLabel: T("easy.ap.allow") });
     if (!result) return;
-    const token = await B.promptRecentAuthToken();
-    if (token === null) return;
     const payload = standing ? { per_hour_limit: Number(result.get("per_hour")), hours: Number(result.get("hours")) } : { count: Number(result.get("count")) };
+    const summary = allowanceSummaryRows({ ...allowance, ...(standing ? { per_hour_limit: payload.per_hour_limit, hours: payload.hours } : { per_hour_limit: null, count: payload.count }) });
+    const token = await B.promptRecentAuthToken({ summary });
+    if (token === null) return;
     try {
       await api(`/external-calls/requests/${allowance.id}/approve`, { method: "POST", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(payload) });
       B.toast(T("easy.ap.approved"), "success");
@@ -1380,12 +1403,13 @@
     } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
   }
 
+  // 목적은 미리 골라 두지 않는다(빈 칸 → 고르지 않으면 허용하지 않음). 비밀번호 확인 창에 허용할 내용을 다시 보여 준다(2026-10-29).
   async function grantDialog(preset) {
-    const purposes = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"], ["ANY", "easy.purpose.any"]];
-    const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose">${purposes.map(([v, k]) => `<option value="${v}" ${preset && preset.purpose === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
+    const picked = preset && preset.purpose;
+    const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose" required><option value="" ${picked ? "" : "selected"}>${esc(T("easy.ap.d_pick"))}</option>${GRANT_PURPOSES.map(([v, k]) => `<option value="${v}" ${picked === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
       <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>
-      <label>${esc(T("easy.ap.d_count"))} <span class="ez-faint" style="font-weight:400">${esc(T("easy.ap.d_count_hint"))}</span></label><input name="count" type="number" min="1" max="50" value="${preset && preset.mode === "STANDING" ? "" : 1}">
+      <label>${esc(T("easy.ap.d_count"))} <span class="ez-faint" style="font-weight:400">${esc(T("easy.ap.d_count_hint"))}</span></label><input name="count" type="number" min="1" max="50" value="${preset && preset.mode === "STANDING" ? "" : (preset && Number(preset.count)) || 1}">
       <label>${esc(T("easy.ap.d_per_hour"))} <span class="ez-faint" style="font-weight:400">${esc(T("easy.ap.d_standing_hint"))}</span></label><input name="per_hour" type="number" min="1" max="120" value="${preset && preset.per_hour_limit ? preset.per_hour_limit : ""}">
       <label>${esc(T("easy.ap.d_hours"))}</label><input name="hours" type="number" min="1" max="720" value="${preset && preset.hours ? preset.hours : ""}">`;
     const result = await ezDialog({ title: T("easy.ap.grant_title"), bodyHtml: body, okLabel: T("easy.ap.allow") });
@@ -1394,7 +1418,12 @@
     const perHour = Number(result.get("per_hour")) || null;
     const hours = Number(result.get("hours")) || null;
     const standing = Boolean(perHour);
-    const token = await B.promptRecentAuthToken();
+    if (!result.get("purpose")) {
+      B.toast(T("easy.ap.d_pick_needed"), "error");
+      return grantDialog({ purpose: "", kind: result.get("kind"), mode: standing ? "STANDING" : "COUNTED", count, per_hour_limit: perHour, hours });
+    }
+    const summary = allowanceSummaryRows({ purpose: result.get("purpose"), kind: result.get("kind"), system: result.get("system"), count, per_hour_limit: perHour, hours });
+    const token = await B.promptRecentAuthToken({ summary });
     if (token === null) return;
     try {
       await api("/external-calls/allowances", {
