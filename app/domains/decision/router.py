@@ -36,6 +36,7 @@ from app.domains.decision.schema import DecisionCriteriaConfirmRequest
 from app.domains.decision.schema import DecisionEvaluationRequest
 from app.domains.decision.schema import DecisionEvaluationResponse
 from app.domains.decision.schema import DecisionOverrideRequest
+from app.domains.decision.schema import DecisionPreviewRequest
 from app.domains.decision.schema import DecisionPolicyCreateRequest
 from app.domains.decision.schema import DecisionPolicyResponse
 from app.domains.decision.schema import DecisionReviewRequest
@@ -81,6 +82,18 @@ def evaluate_candidate(
     )
 
     return evaluation
+
+
+@router.post("/preview")
+def preview_evaluation(
+    data: DecisionPreviewRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """평가 결과를 **저장하지 않고** 미리 계산한다(2026-10-31, 쉬운 보기 '평가하기'). 평가 실행과 같은 막힘 규칙(긴급 중지·
+    기준 없음 등)을 따르고, 평가·점수·감사 기록을 남기지 않는다. 기록은 /evaluate가 한다."""
+
+    return DecisionService(db).preview_candidate(data.candidate_id, current_user.company_id, data.supplementary_inputs)
 
 
 @router.get(

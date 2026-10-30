@@ -924,31 +924,14 @@ class DecisionService:
             self.db,
         ).get_visible_for_company(candidate_id, company_id)
 
-        min_margin_rate = self._min_margin_rate(company_id)
-        axis_results = evaluate_axes(candidate, supplementary_inputs, min_margin_rate=min_margin_rate)
-
-        weights = {
-            k: Decimal(v)
-            for k, v in json.loads(policy.axis_weights_json).items()
-        }
-
-        total_score, confidence, coverage = aggregate_scores(axis_results, weights)
-        sufficient_count = sum(1 for r in axis_results if r.data_sufficient)
-        flagged_kinds = [r.flag_kind for r in axis_results if r.risk_flag]
-        missing_required = [
-            r.axis for r in axis_results
-            if r.axis in REQUIRED_FOR_APPROVE and not r.data_sufficient
-        ]
-
-        recommendation, reason = self._decide_recommendation(
-            total_score=total_score,
-            confidence=confidence,
-            sufficient_count=sufficient_count,
-            coverage=coverage,
-            flagged_kinds=flagged_kinds,
-            missing_required=missing_required,
-            policy=policy,
-        )
+        scored = self._score(candidate, supplementary_inputs, policy, company_id)
+        min_margin_rate = scored["min_margin_rate"]
+        axis_results = scored["axis_results"]
+        weights = scored["weights"]
+        total_score = scored["total_score"]
+        confidence = scored["confidence"]
+        recommendation = scored["recommendation"]
+        reason = scored["reason"]
 
         snapshot = {
             "candidate": {
@@ -1061,6 +1044,81 @@ class DecisionService:
 
         return evaluation, scores, False
 
+    def _score(self, candidate, supplementary_inputs: DecisionSupplementaryInputs, policy, company_id: int) -> dict:
+        """축별 점수 → 총점·신뢰도·근거 비중 → 추천. 평가 실행과 미리 보기가 같은 계산을 쓴다(저장 없음)."""
+
+        min_margin_rate = self._min_margin_rate(company_id)
+        axis_results = evaluate_axes(candidate, supplementary_inputs, min_margin_rate=min_margin_rate)
+
+        weights = {
+            k: Decimal(v)
+            for k, v in json.loads(policy.axis_weights_json).items()
+        }
+
+        total_score, confidence, coverage = aggregate_scores(axis_results, weights)
+        sufficient_count = sum(1 for r in axis_results if r.data_sufficient)
+        flagged_kinds = [r.flag_kind for r in axis_results if r.risk_flag]
+        missing_required = [
+            r.axis for r in axis_results
+            if r.axis in REQUIRED_FOR_APPROVE and not r.data_sufficient
+        ]
+
+        recommendation, reason = self._decide_recommendation(
+            total_score=total_score,
+            confidence=confidence,
+            sufficient_count=sufficient_count,
+            coverage=coverage,
+            flagged_kinds=flagged_kinds,
+            missing_required=missing_required,
+            policy=policy,
+        )
+        return {
+            "min_margin_rate": min_margin_rate, "axis_results": axis_results, "weights": weights,
+            "total_score": total_score, "confidence": confidence, "coverage": coverage,
+            "sufficient_count": sufficient_count, "missing_required": missing_required,
+            "recommendation": recommendation, "reason": reason,
+        }
+
+    def preview_candidate(
+        self, candidate_id: int, company_id: int, supplementary_inputs: DecisionSupplementaryInputs,
+    ) -> dict:
+        """평가를 **저장하지 않고** 결과만 미리 계산한다(2026-10-31, 평가하기 화면). 평가 실행과 같은 막힘 규칙을 따른다 —
+        긴급 중지·AI 기능 비활성·사용 가능한 기준 없음이면 거절한다. 기록(감사 로그 포함)은 남기지 않는다."""
+
+        safety_block_reason = self._check_safety_gate()
+        if safety_block_reason is not None:
+            raise ForbiddenException(safety_block_reason)
+        require_active_capability(CapabilityCode.PRODUCT_SELECTION)
+        policy, policy_source = self._resolve_policy(company_id)
+        candidate = ProductCandidateService(self.db).get_visible_for_company(candidate_id, company_id)
+
+        scored = self._score(candidate, supplementary_inputs, policy, company_id)
+        weights = scored["weights"]
+        return {
+            "candidate_id": candidate.id,
+            "policy_source": policy_source,
+            "policy_version": policy.policy_version,
+            "recommendation": scored["recommendation"],
+            "reason": scored["reason"],
+            "total_score": str(scored["total_score"]),
+            "confidence": str(scored["confidence"]),
+            "coverage": str(scored["coverage"]),
+            "sufficient_count": scored["sufficient_count"],
+            "missing_required": list(scored["missing_required"]),
+            "min_margin_rate": str(scored["min_margin_rate"]),
+            "fixed_rules": {
+                "min_sufficient_axes": _MIN_SUFFICIENT_AXES,
+                "min_weight_coverage": str(_MIN_WEIGHT_COVERAGE),
+            },
+            "axes": [
+                {
+                    "axis": r.axis, "raw_score": str(r.raw_score), "weight": str(weights[r.axis]),
+                    "data_sufficient": r.data_sufficient, "risk_flag": r.risk_flag, "evidence_text": r.evidence_text,
+                }
+                for r in scored["axis_results"]
+            ],
+        }
+
     def suggest_inputs(self, candidate_id: int, company_id: int) -> dict:
         """후보 사전 평가(S2) 이유와 마진 분석 스냅샷으로 보강 입력을 **제안**한다(input_suggestion.py 변환표). 읽기 전용 —
         저장·평가 실행·외부 호출 없음. 다른 회사의 비공개 후보는 평가와 같은 가시성 규칙으로 막는다."""
@@ -1084,7 +1142,7 @@ class DecisionService:
             parsed = precheck.parse_snapshot(row.payload_summary)
             if parsed is not None:
                 snapshot = parsed  # 가장 나중 것을 쓴다(사전 평가와 같은 규칙)
-        result = suggest_inputs(item.get("reasons") if item else None, snapshot)
+        result = suggest_inputs(item.get("reasons") if item else None, snapshot, self._wizard_economics(candidate.id, company_id))
         if item is None:
             result["notes"].insert(0, "후보 사전 평가 목록에 이 후보가 없어(목록 한도 초과 등) 사전 평가 근거 없이 제안했습니다.")
         result["inputs"] = {k: str(v) for k, v in result["inputs"].items()}
@@ -1093,6 +1151,21 @@ class DecisionService:
             "precheck_decision": item.get("decision") if item else None,
         })
         return result
+
+    def _wizard_economics(self, candidate_id: int, company_id: int) -> list[tuple[int, str, str | None]]:
+        """이 회사가 이 후보로 만든 등록 위저드의 (id, 상태, 마진 계산 결과). 읽기만 한다. 다른 회사의 위저드는 보지 않는다."""
+
+        from app.domains.marketplace_listing.model import ListingWizard
+
+        # 표가 없는 환경(초기·시험)에서는 조회하지 않는다 — 위저드 마진이 없을 뿐 다른 제안은 그대로 낸다.
+        if ListingWizard.__tablename__ not in set(inspect(self.db.get_bind()).get_table_names()):
+            return []
+        rows = (
+            self.db.query(ListingWizard.id, ListingWizard.status, ListingWizard.economics_result_json)
+            .filter(ListingWizard.product_candidate_id == candidate_id, ListingWizard.company_id == company_id)
+            .all()
+        )
+        return [(row[0], row[1], row[2]) for row in rows]
 
     def _min_margin_rate(self, company_id: int) -> Decimal:
         """회사 최소 목표 마진율(설정 없으면 확정 기본값 18%). 설정 표를 읽지 못해도 기본값을 쓴다 — 기본값은 결정된 사업

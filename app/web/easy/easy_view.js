@@ -2518,6 +2518,179 @@
 
   // ---- /평가 기준 ----
 
+  // ---- 평가하기 (2026-10-31, AI 통합 계획 1단계 마무리) ----
+  // 후보 하나를 골라 자동 제안(위저드 마진·사전 평가)을 보고, 사람이 아는 점수를 더 넣은 뒤 '미리 보기'로 결과를 본다(저장 없음).
+  // '평가 기록하기'를 눌러야 평가가 남고 판매 판단 대기 목록에 오른다. 승인·보류·거절은 기존 판단 상세 화면에서 사람이 한다.
+  // 상품 상태·가격·쿠팡에는 아무것도 하지 않는다. 미리 본 값과 지금 입력이 다르면 기록하지 않는다.
+
+  const EVAL_FIELDS = [
+    ["expected_margin_rate", "easy.eval.f_margin", "pct", true, "easy.eval.h_margin"],
+    ["policy_prohibited_score", "easy.eval.f_policy", "score", true, "easy.eval.h_policy"],
+    ["brand_ip_risk_score", "easy.eval.f_brand", "score", true, "easy.eval.h_brand"],
+    ["supply_stability_score", "easy.eval.f_supply", "score", true, "easy.eval.h_supply"],
+    ["return_claim_risk_score", "easy.eval.f_return", "score", false, "easy.eval.h_return"],
+    ["price_competitiveness_score", "easy.eval.f_price", "score", false, "easy.eval.h_price"],
+    ["inventory_shipping_risk_score", "easy.eval.f_shipping", "score", false, "easy.eval.h_shipping"],
+  ];
+  const evalState = { candidateId: null, suggestion: null, preview: null, previewKey: "", recordKey: "", busy: false };
+
+  // 입력칸 → 서버로 보낼 보강 입력. 빈칸은 '모름'이라 보내지 않는다. 마진은 %로 받아 비율(0.1824)로 바꾼다.
+  function evalReadForm(root) {
+    const inputs = {};
+    let problem = "";
+    EVAL_FIELDS.forEach(([field, labelKey, kind]) => {
+      const el = root.querySelector(`[data-ez-eval="${field}"]`);
+      const text = el ? String(el.value).trim() : "";
+      if (text === "") return;
+      const v = Number(text);
+      const ok = Number.isFinite(v) && v >= 0 && (kind === "pct" ? v < 100 : v <= 100);
+      if (!ok) { if (!problem) problem = T(kind === "pct" ? "easy.eval.err_pct" : "easy.eval.err_score", { name: T(labelKey) }); return; }
+      inputs[field] = kind === "pct" ? (Math.round(v * 100) / 10000).toFixed(4) : String(v);
+    });
+    return { inputs, problem };
+  }
+
+  function evalFormHtml(sug) {
+    const basis = new Map((sug.basis || []).map((b) => [b.field, b]));
+    const start = sug.inputs || {};
+    const rows = EVAL_FIELDS.map(([field, labelKey, kind, required, hintKey]) => {
+      const raw = start[field];
+      const value = raw === undefined ? "" : (kind === "pct" ? (Number(raw) * 100).toFixed(2) : String(Number(raw)));
+      const b = basis.get(field);
+      const why = b ? `<span class="ez-chip blue">${esc(T("easy.eval.suggested"))}</span> ${esc(b.note || "")}` : `<span class="ez-muted">${esc(T(hintKey))}</span>`;
+      return `<tr><td><b>${esc(T(labelKey))}</b>${required ? ` <span class="ez-chip blue">${esc(T("easy.crit.required"))}</span>` : ""}</td>
+        <td><input class="ez-crit-in ez-eval-in" type="number" step="${kind === "pct" ? "0.01" : "1"}" min="0" max="100" inputmode="decimal" data-ez-eval="${field}" aria-label="${esc(T(labelKey))}" value="${esc(value)}">${kind === "pct" ? " %" : ""}</td>
+        <td class="ez-eval-why">${why}</td></tr>`;
+    }).join("");
+    const notes = (sug.notes || []).map((text) => `<li>${esc(text)}</li>`).join("");
+    return `<table class="ez-table ez-eval"><thead><tr>${["easy.eval.col_item", "easy.eval.col_value", "easy.eval.col_why"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>
+      ${notes ? `<ul class="ez-crit-rules">${notes}</ul>` : ""}
+      <p class="ez-muted" style="margin:10px 0 0">${esc(T("easy.eval.blank_unknown"))}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button type="button" class="ez-btn" id="ez-eval-preview">${esc(T("easy.eval.preview_btn"))}</button></div>
+      <div id="ez-eval-out" aria-live="polite"></div>`;
+  }
+
+  function evalPreviewHtml(p) {
+    const labels = new Map(CRIT_AXES);
+    const rec = `<span class="ez-chip ${REC_CHIP[p.recommendation] || "gray"}">${esc(REC_KEY[p.recommendation] ? T(REC_KEY[p.recommendation]) : String(p.recommendation))}</span>`;
+    const rows = (p.axes || []).map((a) => {
+      const state = !a.data_sufficient ? `<span class="ez-chip gray">${esc(T("easy.eval.st_unknown"))}</span>`
+        : (a.risk_flag ? `<span class="ez-chip red">${esc(T("easy.eval.st_risk"))}</span>` : `<span class="ez-chip ok">${esc(T("easy.eval.st_ok"))}</span>`);
+      return `<tr><td>${esc(labels.has(a.axis) ? T(labels.get(a.axis)) : a.axis)}</td><td class="ez-num">${esc(critNum(a.weight, 2))}</td>
+        <td class="ez-num">${a.data_sufficient ? esc(critNum(a.raw_score, 0)) : "—"}</td><td>${state}</td></tr>`;
+    }).join("");
+    const fr = p.fixed_rules || {};
+    return `<div class="ez-sec">${esc(T("easy.eval.result_title"))}<small>${esc(T("easy.eval.result_sub"))}</small></div>
+      <div class="ez-cards">
+        <div class="ez-card accent"><div class="k">${esc(T("easy.eval.k_rec"))}</div><div class="v" style="font-size:18px">${rec}</div></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.eval.k_total"))}</div><div class="v">${esc(critNum(p.total_score, 1))}</div></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.eval.k_cover"))}</div><div class="v">${esc(critPct(p.coverage))}</div><div class="s">${esc(T("easy.eval.k_cover_s", { p: critPct(fr.min_weight_coverage) }))}</div></div>
+        <div class="ez-card"><div class="k">${esc(T("easy.eval.k_axes"))}</div><div class="v">${esc(p.sufficient_count)}/12</div><div class="s">${esc(T("easy.eval.k_axes_s", { n: fr.min_sufficient_axes === undefined ? "—" : fr.min_sufficient_axes }))}</div></div></div>
+      <div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(p.reason || "")}</div></div>
+      <table class="ez-table"><thead><tr>${["easy.crit.col_axis", "easy.eval.col_weight", "easy.eval.col_score", "easy.col.state"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>
+      <p class="ez-muted" style="margin:12px 0 0">${esc(T("easy.eval.record_note"))}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px"><button type="button" class="ez-btn" id="ez-eval-record">${esc(T("easy.eval.record_btn"))}</button></div>`;
+  }
+
+  function evalErrorHtml(message) {
+    return `<div class="ez-note warn" style="margin-top:12px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(message)}
+      <div style="margin-top:8px"><button type="button" class="ez-btn line" data-ez-eval-crit>${esc(T("easy.eval.open_crit"))}</button></div></div></div>`;
+  }
+
+  function evalBindCrit(root) {
+    root.querySelectorAll("[data-ez-eval-crit]").forEach((btn) => btn.addEventListener("click", () => { S.selected.analysisTab = "CRIT"; loadAnalysis(); }));
+  }
+
+  function renderEval(host, cands) {
+    const list = (cands || []).slice().sort((a, b) => b.id - a.id);
+    if (!list.length) { host.innerHTML = emptyHtml("easy.an.empty_cand", "easy.an.empty_cand_s"); return; }
+    host.innerHTML = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.eval.lead"))}</div></div>
+      <label class="ez-eval-pick">${esc(T("easy.eval.pick"))} <select id="ez-eval-cand"><option value="">${esc(T("easy.eval.pick_none"))}</option>${list.map((c) =>
+        `<option value="${c.id}" ${c.id === evalState.candidateId ? "selected" : ""}>#${c.id} ${esc(c.product_name)}</option>`).join("")}</select></label>
+      <div id="ez-eval-body"></div>`;
+    $("ez-eval-cand").addEventListener("change", (event) => {
+      evalState.candidateId = Number(event.target.value) || null;
+      evalLoad();
+    });
+    if (evalState.candidateId && list.some((c) => c.id === evalState.candidateId)) evalLoad();
+  }
+
+  async function evalLoad() {
+    const body = $("ez-eval-body");
+    const id = evalState.candidateId;
+    evalState.suggestion = null;
+    evalState.preview = null;
+    if (!body) return;
+    if (!id) { body.innerHTML = ""; return; }
+    body.innerHTML = loadingHtml();
+    let sug;
+    try {
+      sug = await api(`/decisions/candidates/${encodeURIComponent(id)}/suggested-inputs`);
+    } catch (err) {
+      body.innerHTML = evalErrorHtml((err && err.message) || T("easy.error"));
+      evalBindCrit(body);
+      return;
+    }
+    if (evalState.candidateId !== id || !$("ez-eval-body")) return;  // 그 사이 다른 후보를 골랐다
+    evalState.suggestion = sug;
+    body.innerHTML = evalFormHtml(sug);
+    body.querySelectorAll(".ez-eval-in").forEach((el) => el.addEventListener("input", () => {
+      // 값을 바꾸면 미리 본 결과는 더 이상 이 입력의 결과가 아니다 — 다시 미리 봐야 기록할 수 있다.
+      if (!evalState.preview) return;
+      evalState.preview = null;
+      $("ez-eval-out").innerHTML = `<p class="ez-muted" style="margin:10px 0 0">${esc(T("easy.eval.changed"))}</p>`;
+    }));
+    $("ez-eval-preview").addEventListener("click", () => evalPreview(body));
+  }
+
+  async function evalPreview(body) {
+    if (evalState.busy || !evalState.candidateId) return;
+    const f = evalReadForm(body);
+    if (f.problem) { B.toast(f.problem, "error"); return; }
+    evalState.busy = true;
+    const out = $("ez-eval-out");
+    out.innerHTML = loadingHtml();
+    try {
+      const id = evalState.candidateId;
+      const p = await api("/decisions/preview", { method: "POST", body: JSON.stringify({ candidate_id: id, supplementary_inputs: f.inputs }) });
+      if (evalState.candidateId !== id) return;
+      evalState.preview = p;
+      evalState.previewKey = JSON.stringify([id, f.inputs]);
+      // 같은 입력으로 다시 기록을 눌러도(응답을 못 받은 경우 등) 평가가 하나만 생기도록 미리 본 입력마다 멱등 키를 하나 만든다.
+      evalState.recordKey = `easy-eval-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      out.innerHTML = evalPreviewHtml(p);
+      $("ez-eval-record").addEventListener("click", () => evalRecord(body));
+    } catch (err) {
+      out.innerHTML = evalErrorHtml((err && err.message) || T("easy.error"));
+      evalBindCrit(out);
+    } finally {
+      evalState.busy = false;
+    }
+  }
+
+  async function evalRecord(body) {
+    if (evalState.busy || !evalState.preview) return;
+    const f = evalReadForm(body);
+    const id = evalState.candidateId;
+    if (f.problem || JSON.stringify([id, f.inputs]) !== evalState.previewKey) { B.toast(T("easy.eval.changed"), "error"); return; }
+    evalState.busy = true;
+    try {
+      const ok = await ezDialog({ title: T("easy.eval.ask_title"), bodyHtml: `<p>${esc(T("easy.eval.ask_body"))}</p>`, okLabel: T("easy.eval.record_btn") });
+      if (!ok) return;
+      const res = await api("/decisions/evaluate", {
+        method: "POST", body: JSON.stringify({ candidate_id: id, idempotency_key: evalState.recordKey, supplementary_inputs: f.inputs }),
+      });
+      B.toast(T("easy.eval.done"), "success");
+      B.navigateTo("decision-detail", { id: Number(res.id) });
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    } finally {
+      evalState.busy = false;
+    }
+  }
+
+  // ---- /평가하기 ----
+
   async function loadAnalysis() {
     const root = $("ez-root-easy-analysis");
     root.innerHTML = loadingHtml();
@@ -2552,6 +2725,7 @@
     const perfBadge = perfState.data && perfState.data.ok && perfState.data.summary ? perfState.data.summary.totals.items : "—";
     const tabs = [["CAND", "easy.an.tab_cand", total], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
       ["DEC", "easy.an.tab_dec", (decisions || []).length], ["CRIT", "easy.an.tab_crit", critState.data ? (critState.data.in_use ? "✓" : "!") : ""],
+      ["EVAL", "easy.an.tab_eval", ""],
       ["AI", "easy.an.tab_ai", (models || []).length], ["PERF", "easy.an.tab_perf", perfBadge]];
 
     root.innerHTML = `
@@ -2608,6 +2782,8 @@
       renderPerf(host);
     } else if (tab === "CRIT") {
       renderCriteria(host);
+    } else if (tab === "EVAL") {
+      renderEval(host, cands);
     } else {
       const rows = models || [];
       if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_ai", "easy.an.empty_ai_s"); return; }

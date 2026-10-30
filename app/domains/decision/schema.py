@@ -66,6 +66,15 @@ class DecisionEvaluationRequest(BaseModel):
     )
 
 
+class DecisionPreviewRequest(BaseModel):
+    """평가 미리 보기(저장 없음) — 평가 실행과 같은 입력에서 멱등 키만 뺀 것."""
+
+    candidate_id: int
+    supplementary_inputs: DecisionSupplementaryInputs = Field(
+        default_factory=DecisionSupplementaryInputs,
+    )
+
+
 class DecisionScoreResponse(BaseModel):
 
     id: int
