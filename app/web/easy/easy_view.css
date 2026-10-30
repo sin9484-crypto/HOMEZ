@@ -234,12 +234,23 @@ dialog.ez-dialog::backdrop { background: rgba(20, 24, 30, .45); }
   .ez-table thead { display: none; } .ez-table, .ez-table tbody, .ez-table tr, .ez-table td { display: block; width: 100%; }
   .ez-table tr { border-bottom: 1px solid var(--ez-line); padding: 8px 0; } .ez-table td { border: 0; padding: 4px 10px; }
   .ez-head h1 { font-size: 24px; }
+  /* 평가 기준 표는 좁은 화면에서도 칸 제목이 필요하다(초안·지금·확정할 값) — 표 모양을 유지하고 칸만 좁힌다. */
+  .ez-table.ez-crit { display: table; } .ez-table.ez-crit thead { display: table-header-group; } .ez-table.ez-crit tbody { display: table-row-group; }
+  .ez-table.ez-crit tr { display: table-row; padding: 0; } .ez-table.ez-crit td, .ez-table.ez-crit th { display: table-cell; width: auto; padding: 8px 6px; }
+  .ez-table.ez-crit th { white-space: nowrap; font-size: 13px; } .ez-table.ez-crit .ez-crit-in { width: 64px; }
 }
 #ez-bottom { display: none; position: fixed; left: 0; right: 0; bottom: 0; height: 68px; background: #FAFBFA; border-top: 1px solid var(--ez-line); grid-template-columns: repeat(5, 1fr); z-index: 40; }
 #ez-bottom button { border: 0; background: none; font: inherit; font-size: 11.5px; font-weight: 700; color: #6B7480; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; position: relative; }
 #ez-bottom button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #ez-bottom button[aria-current="page"] { color: var(--ez-g); }
 #ez-bottom .ez-badge { position: absolute; top: 6px; left: 56%; background: var(--ez-red); color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 16px; }
+
+/* 평가 기준 (2026-10-30) */
+.ez-crit-in { width: 84px; padding: 6px 8px; border: 1px solid #CBD2D9; border-radius: 6px; font: inherit; text-align: right; font-variant-numeric: tabular-nums; background: #fff; }
+.ez-crit-in:focus-visible { outline: 3px solid #7BC99B; outline-offset: 1px; }
+.ez-crit-th { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-top: 14px; }
+.ez-crit-th label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.ez-crit-rules { margin: 4px 0 0; padding-left: 20px; color: var(--ez-muted); line-height: 1.7; max-width: 72ch; }
 
 /* 키보드 초점 */
 body.easy-view .ez-nav:focus-visible, body.easy-view .ez-btn:focus-visible, body.easy-view .ez-tab:focus-visible,

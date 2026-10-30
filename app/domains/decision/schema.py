@@ -224,6 +224,20 @@ class DecisionCompanyPolicyResponse(BaseModel):
         from_attributes = True
 
 
+class DecisionCriteriaConfirmRequest(BaseModel):
+    """
+    평가 기준 화면의 '이 기준으로 확정'(2026-10-30, 통합 계획 1단계). 정책 이름·상태·유효기간은 받지 않는다 — 서버가
+    정한다(VERIFIED·완전·지금부터 CONFIRMED_CRITERIA_VALID_DAYS일). company_id도 받지 않는다(current_user에서).
+    expected_in_use_id는 사용자가 화면에서 본 '지금 쓰는 회사 정책' id다(없으면 null) — 그사이 다른 확정이 있었으면
+    덮어쓰지 않고 거절한다.
+    """
+
+    axis_weights: dict[str, Decimal]
+    min_approve_total_score: Decimal
+    min_confidence_for_recommendation: Decimal
+    expected_in_use_id: int | None = None
+
+
 class DecisionAuditLogResponse(BaseModel):
 
     id: int

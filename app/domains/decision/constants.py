@@ -160,6 +160,34 @@ MIN_APPROVE_TOTAL_SCORE = "70.0000"
 MIN_CONFIDENCE_FOR_RECOMMENDATION = "0.5000"
 
 
+# --------------------------------------------------
+# D1 평가 기준 초안(2026-10-29, docs/HOMEZ_D1_DECISION_CRITERIA_DRAFT_20261029.md 1·2장)
+# 평가 기준 화면이 처음 보여 주는 값일 뿐이다 — 이 값으로 정책이 자동 등록되지 않는다. 사용자가 화면에서 보고(고치고)
+# 비밀번호를 다시 확인해 확정해야 회사 정책(VERIFIED)이 된다.
+# --------------------------------------------------
+
+D1_DRAFT_REFERENCE = "docs/HOMEZ_D1_DECISION_CRITERIA_DRAFT_20261029.md"
+D1_DRAFT_AXIS_WEIGHTS = {
+    ScoreAxis.MARGIN_AND_FEES: "0.20",
+    ScoreAxis.POLICY_PROHIBITED_RISK: "0.12",
+    ScoreAxis.BRAND_IP_RISK: "0.12",
+    ScoreAxis.SUPPLY_STABILITY: "0.12",
+    ScoreAxis.DEMAND_TREND_STRENGTH: "0.10",
+    ScoreAxis.RETURN_CLAIM_RISK: "0.08",
+    ScoreAxis.PRICE_COMPETITIVENESS: "0.07",
+    ScoreAxis.COMPETITION_INTENSITY: "0.06",
+    ScoreAxis.INVENTORY_SHIPPING_RISK: "0.05",
+    ScoreAxis.REVENUE_POTENTIAL: "0.04",
+    ScoreAxis.FUNDING_LIMIT_IMPACT: "0.02",
+    ScoreAxis.DATA_RELIABILITY: "0.02",
+}
+D1_DRAFT_MIN_APPROVE_TOTAL_SCORE = "70"
+D1_DRAFT_MIN_CONFIDENCE = "0.60"
+
+# 화면에서 확정한 회사 정책의 유효기간 — 만료되면 평가가 다시 막힌다(fail-closed). 기준을 1년에 한 번은 다시 본다.
+CONFIRMED_CRITERIA_VALID_DAYS = 365
+
+
 __all__ = [
     "DecisionPolicyStatus",
     "PolicySource",
@@ -173,6 +201,11 @@ __all__ = [
     "ROUNDING",
     "SCORE_MIN",
     "SCORE_MAX",
+    "D1_DRAFT_REFERENCE",
+    "D1_DRAFT_AXIS_WEIGHTS",
+    "D1_DRAFT_MIN_APPROVE_TOTAL_SCORE",
+    "D1_DRAFT_MIN_CONFIDENCE",
+    "CONFIRMED_CRITERIA_VALID_DAYS",
     "MIN_APPROVE_TOTAL_SCORE",
     "MIN_CONFIDENCE_FOR_RECOMMENDATION",
 ]

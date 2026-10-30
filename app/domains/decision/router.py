@@ -21,14 +21,18 @@ import uuid
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Header
 from fastapi import Query
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
 from app.core.desktop_auth import require_desktop_token
+from app.core.exceptions import UnauthorizedException
 from app.core.guard import admin_guard
+from app.core.recent_auth import consume_recent_auth_token
 from app.domains.decision.schema import DecisionCompanyPolicyCreateRequest
 from app.domains.decision.schema import DecisionCompanyPolicyResponse
+from app.domains.decision.schema import DecisionCriteriaConfirmRequest
 from app.domains.decision.schema import DecisionEvaluationRequest
 from app.domains.decision.schema import DecisionEvaluationResponse
 from app.domains.decision.schema import DecisionOverrideRequest
@@ -378,6 +382,42 @@ def list_company_policies(
     service = DecisionService(db)
 
     return service.list_company_policies(current_user.company_id)
+
+
+# --------------------------------------------------
+# 평가 기준 화면 (2026-10-30, 통합 계획 1단계)
+# --------------------------------------------------
+
+
+@company_policy_router.get("/criteria")
+def get_criteria(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """지금 쓰는 평가 기준·D1 초안·고정 규칙·확정 기록. 읽기만 한다."""
+
+    return DecisionService(db).criteria_overview(current_user.company_id)
+
+
+@company_policy_router.post("/criteria/confirm")
+def confirm_criteria(
+    data: DecisionCriteriaConfirmRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    _desktop: None = Depends(require_desktop_token),
+    recent_auth_token: str | None = Header(default=None, alias="X-Recent-Auth-Token"),
+):
+    """
+    화면에서 본 기준으로 이 회사의 평가 정책을 확정(VERIFIED)한다. 앱 창에서만, 비밀번호를 다시 확인한 뒤에만 된다
+    (`X-Recent-Auth-Token`, 5분·1회용 — 승인 센터 허용과 같은 관례). 이 정책이 생기면 판매 판단 AI가 평가를 시작할 수
+    있으므로 화면 클릭만으로는 만들지 않는다.
+    """
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise UnauthorizedException(
+            "DECISION_CRITERIA_RECENT_AUTH_REQUIRED: 평가 기준을 확정하려면 현재 비밀번호를 다시 확인해야 합니다.",
+        )
+    return DecisionService(db).confirm_criteria(data, current_user.company_id, current_user.id)
 
 
 __all__ = [

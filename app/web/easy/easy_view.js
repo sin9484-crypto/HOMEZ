@@ -2338,6 +2338,186 @@
 
   // ---- /판매 성과 ----
 
+  // ---- 평가 기준 (2026-10-30, AI 통합 계획 1단계) ----
+  // 판매 판단 AI가 쓸 기준(12개 항목 비중·승인 추천 점수·신뢰도)을 보고, 고치고, 확정한다. 화면을 여는 것은 읽기만 한다.
+  // 확정은 확인 창 → 비밀번호 재확인(요약 표시) → 서버가 회사 정책을 만든다. 차단 규칙·근거 비중 기준은 평가 프로그램에 있어 여기서 바꾸지 않는다.
+
+  const CRIT_AXES = [
+    ["MARGIN_AND_FEES", "easy.crit.ax_margin"], ["POLICY_PROHIBITED_RISK", "easy.crit.ax_policy"], ["BRAND_IP_RISK", "easy.crit.ax_brand"],
+    ["SUPPLY_STABILITY", "easy.crit.ax_supply"], ["DEMAND_TREND_STRENGTH", "easy.crit.ax_demand"], ["RETURN_CLAIM_RISK", "easy.crit.ax_return"],
+    ["PRICE_COMPETITIVENESS", "easy.crit.ax_price"], ["COMPETITION_INTENSITY", "easy.crit.ax_competition"], ["INVENTORY_SHIPPING_RISK", "easy.crit.ax_shipping"],
+    ["REVENUE_POTENTIAL", "easy.crit.ax_revenue"], ["FUNDING_LIMIT_IMPACT", "easy.crit.ax_funding"], ["DATA_RELIABILITY", "easy.crit.ax_reliability"],
+  ];
+  const critState = { data: null, error: "", busy: false };
+
+  function critNum(value, digits) {
+    return value === null || value === undefined || value === "" || Number.isNaN(Number(value)) ? "—" : Number(value).toFixed(digits);
+  }
+
+  function critPct(rate) {
+    return rate === null || rate === undefined || rate === "" ? "—" : `${Math.round(Number(rate) * 100)}%`;
+  }
+
+  function critDate(iso) {
+    return iso ? new Date(`${iso}Z`).toLocaleDateString() : "—";
+  }
+
+  // 입력칸의 지금 값. 비중 합은 만분율 정수로 더해 소수 오차 없이 1.00인지 본다(서버도 소수 4자리로 확인한다).
+  function critReadForm(root) {
+    const weights = {};
+    let bad = false;
+    CRIT_AXES.forEach(([axis]) => {
+      const el = root.querySelector(`[data-ez-crit-w="${axis}"]`);
+      const text = el ? String(el.value).trim() : "";
+      const v = Number(text);
+      if (text === "" || !Number.isFinite(v) || v < 0 || v > 1) bad = true;
+      weights[axis] = text;
+    });
+    const sumBp = bad ? NaN : CRIT_AXES.reduce((acc, [axis]) => acc + Math.round(Number(weights[axis]) * 10000), 0);
+    const scoreEl = root.querySelector("#ez-crit-score"), confEl = root.querySelector("#ez-crit-conf");
+    const score = scoreEl && scoreEl.value !== "" ? Number(scoreEl.value) : NaN;
+    const conf = confEl && confEl.value !== "" ? Number(confEl.value) : NaN;
+    return { weights, score, conf, sumBp, bad };
+  }
+
+  function critProblem(f) {
+    if (f.bad) return T("easy.crit.err_weight");
+    if (f.sumBp !== 10000) return T("easy.crit.err_sum", { sum: (f.sumBp / 10000).toFixed(2) });
+    if (!Number.isFinite(f.score) || f.score <= 0 || f.score > 100) return T("easy.crit.err_score");
+    if (!Number.isFinite(f.conf) || f.conf <= 0 || f.conf > 1) return T("easy.crit.err_conf");
+    return "";
+  }
+
+  function critVersionText(version) {
+    if (version === "D1-20261029") return T("easy.crit.ver_draft");
+    if (version === "D1-20261029-EDITED") return T("easy.crit.ver_edited");
+    return String(version || "");
+  }
+
+  function critHtml(d) {
+    const note = (tone, text) => `<div class="ez-note ${tone}" style="margin-top:12px"><span class="ez-dot ${tone}" aria-hidden="true">${tone === "warn" ? "!" : "i"}</span><div>${esc(text)}</div></div>`;
+    const use = d.in_use;
+    const fr = d.fixed_rules || {};
+    const state = !use ? note("warn", T("easy.crit.none"))
+      : (use.source === "COMPANY"
+        ? note("ok", T("easy.crit.company", { ver: critVersionText(use.policy_version), at: critDate(use.effective_at), until: critDate(use.expires_at) }))
+        : note("info", T("easy.crit.global", { ver: use.policy_version })));
+    // 입력칸의 처음 값: 우리 회사 기준이 있으면 그 값, 없으면 초안.
+    const start = use && use.source === "COMPANY" ? use : d.draft;
+    const required = new Set(fr.required_for_approve || []), blocks = new Set(fr.hard_block_axes || []);
+    const rows = CRIT_AXES.map(([axis, key]) => `<tr>
+      <td><b>${esc(T(key))}</b>${required.has(axis) ? ` <span class="ez-chip blue">${esc(T("easy.crit.required"))}</span>` : ""}${blocks.has(axis) ? ` <span class="ez-chip red">${esc(T("easy.crit.block_chip", { n: critNum(fr.hard_block_threshold, 0) }))}</span>` : ""}</td>
+      <td class="ez-num">${esc(critNum((d.draft.axis_weights || {})[axis], 2))}</td>
+      <td class="ez-num">${use ? esc(critNum((use.axis_weights || {})[axis], 2)) : "—"}</td>
+      <td><input class="ez-crit-in" type="number" step="0.01" min="0" max="1" inputmode="decimal" data-ez-crit-w="${axis}" aria-label="${esc(T(key))}" value="${esc(critNum((start.axis_weights || {})[axis], 2))}"></td></tr>`).join("");
+    const history = (d.history || []).map((p) => {
+      const expired = p.expires_at && new Date(`${p.expires_at}Z`).getTime() <= Date.now();
+      const chip = p.in_use ? `<span class="ez-chip ok">${esc(T("easy.crit.st_in_use"))}</span>`
+        : `<span class="ez-chip gray">${esc(T(expired ? "easy.crit.st_expired" : "easy.crit.st_old"))}</span>`;
+      return `<tr><td class="ez-num">${esc(critDate(p.effective_at))}</td><td>${esc(critVersionText(p.policy_version))}<small class="ez-muted" style="display:block;font-size:13px">${esc(T("easy.crit.hist_values", { score: critNum(p.min_approve_total_score, 0), conf: critNum(p.min_confidence_for_recommendation, 2) }))}</small></td>
+        <td class="ez-num">${esc(critDate(p.expires_at))}</td><td>${chip}</td></tr>`;
+    }).join("");
+    return `${note("info", T("easy.crit.lead"))}${state}
+      <table class="ez-table ez-crit"><thead><tr>${["easy.crit.col_axis", "easy.crit.col_draft", "easy.crit.col_now", "easy.crit.col_new"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead>
+        <tbody>${rows}<tr><td><b>${esc(T("easy.crit.total"))}</b></td><td class="ez-num">1.00</td><td class="ez-num">${use ? "1.00" : "—"}</td><td class="ez-num" id="ez-crit-sum"></td></tr></tbody></table>
+      <div class="ez-crit-th">
+        <label>${esc(T("easy.crit.score_label"))} <input class="ez-crit-in" id="ez-crit-score" type="number" step="1" min="1" max="100" inputmode="numeric" value="${esc(critNum(start.min_approve_total_score, 0))}"> <small class="ez-faint">${esc(T("easy.crit.draft_is", { v: critNum(d.draft.min_approve_total_score, 0) }))}</small></label>
+        <label>${esc(T("easy.crit.conf_label"))} <input class="ez-crit-in" id="ez-crit-conf" type="number" step="0.05" min="0.05" max="1" inputmode="decimal" value="${esc(critNum(start.min_confidence_for_recommendation, 2))}"> <small class="ez-faint">${esc(T("easy.crit.draft_is", { v: critNum(d.draft.min_confidence_for_recommendation, 2) }))}</small></label>
+      </div>
+      <div id="ez-crit-msg" aria-live="polite"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+        <button type="button" class="ez-btn" id="ez-crit-confirm">${esc(T("easy.crit.confirm_btn"))}</button>
+        <button type="button" class="ez-btn line" id="ez-crit-reset">${esc(T("easy.crit.reset_btn"))}</button></div>
+      <div class="ez-sec">${esc(T("easy.crit.fixed_title"))}<small>${esc(T("easy.crit.fixed_sub"))}</small></div>
+      <ul class="ez-crit-rules">
+        <li>${esc(T("easy.crit.rule_axes", { n: fr.min_sufficient_axes === undefined ? "—" : fr.min_sufficient_axes }))}</li>
+        <li>${esc(T("easy.crit.rule_coverage", { p: critPct(fr.min_weight_coverage) }))}</li>
+        <li>${esc(T("easy.crit.rule_required"))}</li>
+        <li>${esc(T("easy.crit.rule_block", { n: critNum(fr.hard_block_threshold, 0) }))}</li>
+        <li>${esc(T("easy.crit.rule_margin", { p: critPct(fr.min_margin_rate) }))}</li>
+        <li>${esc(T("easy.crit.rule_funding"))}</li>
+        <li>${esc(T("easy.crit.rule_human"))}</li></ul>
+      <div class="ez-sec">${esc(T("easy.crit.hist_title"))}</div>
+      ${history
+    ? `<table class="ez-table"><thead><tr>${["easy.crit.col_at", "easy.crit.col_ver", "easy.crit.col_until", "easy.col.state"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${history}</tbody></table>`
+    : `<p class="ez-muted">${esc(T("easy.crit.hist_none"))}</p>`}`;
+  }
+
+  async function renderCriteria(host) {
+    host.innerHTML = loadingHtml();
+    try {
+      critState.data = await api("/decision-company-policies/criteria");
+      critState.error = "";
+    } catch (err) {
+      critState.data = null;
+      critState.error = (err && err.message) || T("easy.error");
+    }
+    if (!critState.data) {
+      host.innerHTML = `<div class="ez-note warn" style="margin-top:12px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(critState.error)}</div></div>`;
+      return;
+    }
+    const d = critState.data;
+    host.innerHTML = critHtml(d);
+    const sync = () => {
+      const f = critReadForm(host);
+      const problem = critProblem(f);
+      $("ez-crit-sum").textContent = Number.isFinite(f.sumBp) ? (f.sumBp / 10000).toFixed(2) : "—";
+      $("ez-crit-msg").innerHTML = problem
+        ? `<div class="ez-note warn" style="margin-top:12px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(problem)}</div></div>`
+        : `<p class="ez-muted" style="margin:10px 0 0">${esc(T("easy.crit.sum_ok"))}</p>`;
+    };
+    host.querySelectorAll(".ez-crit-in").forEach((el) => el.addEventListener("input", sync));
+    sync();
+    $("ez-crit-reset").addEventListener("click", () => {
+      CRIT_AXES.forEach(([axis]) => { host.querySelector(`[data-ez-crit-w="${axis}"]`).value = critNum(d.draft.axis_weights[axis], 2); });
+      $("ez-crit-score").value = critNum(d.draft.min_approve_total_score, 0);
+      $("ez-crit-conf").value = critNum(d.draft.min_confidence_for_recommendation, 2);
+      sync();
+    });
+    $("ez-crit-confirm").addEventListener("click", () => confirmCriteria(host));
+  }
+
+  // 확인 창 → 비밀번호 재확인(무엇을 확정하는지 요약) → 확정. 화면을 연 뒤 다른 곳에서 기준이 바뀌었으면 서버가 거절한다(expected_in_use_id).
+  async function confirmCriteria(host) {
+    if (critState.busy || !critState.data) return;
+    const f = critReadForm(host);
+    const problem = critProblem(f);
+    if (problem) { B.toast(problem, "error"); return; }
+    critState.busy = true;
+    try {
+      const d = critState.data;
+      const bp = (v) => Math.round(Number(v) * 10000);
+      const changed = CRIT_AXES.filter(([axis]) => bp(f.weights[axis]) !== bp(d.draft.axis_weights[axis])).map(([, key]) => T(key));
+      const sameAsDraft = !changed.length && f.score === Number(d.draft.min_approve_total_score) && bp(f.conf) === bp(d.draft.min_confidence_for_recommendation);
+      const ok = await ezDialog({ title: T("easy.crit.ask_title"), bodyHtml: `<p>${esc(T("easy.crit.ask_body", { days: d.valid_days }))}</p>`, okLabel: T("easy.crit.confirm_btn") });
+      if (!ok) return;
+      const summary = [
+        { label: T("easy.crit.sum_what"), value: T("easy.crit.sum_what_v") },
+        { label: T("easy.crit.sum_score"), value: String(f.score) },
+        { label: T("easy.crit.sum_conf"), value: f.conf.toFixed(2) },
+        { label: T("easy.crit.sum_weights"), value: changed.length ? T("easy.crit.sum_changed", { list: changed.join(", ") }) : T("easy.crit.sum_draft"), strong: !sameAsDraft },
+        { label: T("easy.crit.sum_valid"), value: T("easy.crit.sum_days", { n: d.valid_days }) },
+      ];
+      const token = await B.promptRecentAuthToken({ summary });
+      if (token === null) return;
+      await api("/decision-company-policies/criteria/confirm", {
+        method: "POST", headers: { "X-Recent-Auth-Token": token },
+        body: JSON.stringify({
+          axis_weights: f.weights, min_approve_total_score: String(f.score), min_confidence_for_recommendation: String(f.conf),
+          expected_in_use_id: d.in_use && d.in_use.source === "COMPANY" ? d.in_use.id : null,
+        }),
+      });
+      B.toast(T("easy.crit.done"), "success");
+      await renderCriteria(host);
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    } finally {
+      critState.busy = false;
+    }
+  }
+
+  // ---- /평가 기준 ----
+
   async function loadAnalysis() {
     const root = $("ez-root-easy-analysis");
     root.innerHTML = loadingHtml();
@@ -2371,7 +2551,8 @@
 
     const perfBadge = perfState.data && perfState.data.ok && perfState.data.summary ? perfState.data.summary.totals.items : "—";
     const tabs = [["CAND", "easy.an.tab_cand", total], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
-      ["DEC", "easy.an.tab_dec", (decisions || []).length], ["AI", "easy.an.tab_ai", (models || []).length], ["PERF", "easy.an.tab_perf", perfBadge]];
+      ["DEC", "easy.an.tab_dec", (decisions || []).length], ["CRIT", "easy.an.tab_crit", critState.data ? (critState.data.in_use ? "✓" : "!") : ""],
+      ["AI", "easy.an.tab_ai", (models || []).length], ["PERF", "easy.an.tab_perf", perfBadge]];
 
     root.innerHTML = `
       <div class="ez-head"><div><h1>${esc(T("easy.nav.analysis"))}</h1><div class="ez-lead">${esc(T("easy.an.lead"))}</div></div></div>
@@ -2425,6 +2606,8 @@
       bindRows(host, "tbody tr", (key) => B.navigateTo("decision-detail", { id: Number(key) }));
     } else if (tab === "PERF") {
       renderPerf(host);
+    } else if (tab === "CRIT") {
+      renderCriteria(host);
     } else {
       const rows = models || [];
       if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_ai", "easy.an.empty_ai_s"); return; }

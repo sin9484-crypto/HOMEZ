@@ -40,6 +40,7 @@ Review/AuditLog는 이제 company_id를 필수로 받는다. 평가 입력·점�
 import hashlib
 import json
 from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 from decimal import InvalidOperation
 
@@ -47,6 +48,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.audit_db import write_audit_log
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
 from app.core.exceptions import ForbiddenException
@@ -54,6 +56,11 @@ from app.core.exceptions import NotFoundException
 from app.domains.ai_governance.constants import CapabilityCode
 from app.domains.ai_governance.service import require_active_capability
 from app.domains.automation_safety.service import SafetyService
+from app.domains.decision.constants import CONFIRMED_CRITERIA_VALID_DAYS
+from app.domains.decision.constants import D1_DRAFT_AXIS_WEIGHTS
+from app.domains.decision.constants import D1_DRAFT_MIN_APPROVE_TOTAL_SCORE
+from app.domains.decision.constants import D1_DRAFT_MIN_CONFIDENCE
+from app.domains.decision.constants import D1_DRAFT_REFERENCE
 from app.domains.decision.constants import SCORE_MAX
 from app.domains.decision.constants import SCORE_MIN
 from app.domains.decision.constants import AuditEventType
@@ -71,6 +78,7 @@ from app.domains.decision.model import DecisionReview
 from app.domains.decision.model import DecisionScore
 from app.domains.decision.repository import DecisionRepository
 from app.domains.decision.schema import DecisionCompanyPolicyCreateRequest
+from app.domains.decision.schema import DecisionCriteriaConfirmRequest
 from app.domains.decision.schema import DecisionPolicyCreateRequest
 from app.domains.decision.schema import DecisionSupplementaryInputs
 from app.domains.product_candidate.model import ProductCandidate
@@ -454,6 +462,13 @@ class DecisionService:
     @staticmethod
     def _validate_axis_weights(axis_weights: dict) -> None:
 
+        # 2026-10-30: 축마다 0~1이어야 한다 — 전에는 합계만 봐서 음수 가중치(예: 1.2와 -0.2)가 통과했다.
+        for axis, w in axis_weights.items():
+            weight = Decimal(str(w))
+            if not weight.is_finite() or weight < 0 or weight > 1:
+                raise BadRequestException(
+                    f"axis_weights[{axis}]는 0 이상 1 이하여야 합니다(현재: {w}).",
+                )
         weight_sum = sum(
             (Decimal(str(w)) for w in axis_weights.values()), Decimal(0),
         )
@@ -599,6 +614,148 @@ class DecisionService:
     ) -> list[CompanyDecisionPolicy]:
 
         return self.repository.list_company_policies(company_id)
+
+    # --------------------------------------------------
+    # 평가 기준 화면 (2026-10-30, 통합 계획 1단계) — 보기·D1 초안·확정
+    # --------------------------------------------------
+
+    @staticmethod
+    def _policy_brief(policy, now: datetime) -> dict:
+
+        try:
+            weights = json.loads(policy.axis_weights_json or "{}")
+        except ValueError:
+            weights = {}
+        return {
+            "id": policy.id,
+            "policy_set_id": policy.policy_set_id,
+            "policy_version": policy.policy_version,
+            "source_reference": policy.source_reference,
+            "status": policy.status,
+            "is_active": bool(policy.is_active),
+            "is_complete": bool(policy.is_complete),
+            "usable": DecisionService._is_policy_usable(policy, now),
+            "axis_weights": {k: str(v) for k, v in weights.items()},
+            "min_approve_total_score": str(policy.min_approve_total_score),
+            "min_confidence_for_recommendation": str(policy.min_confidence_for_recommendation),
+            "effective_at": policy.effective_at.isoformat() if policy.effective_at else None,
+            "expires_at": policy.expires_at.isoformat() if policy.expires_at else None,
+            "created_at": policy.created_at.isoformat() if policy.created_at else None,
+        }
+
+    def criteria_overview(self, company_id: int) -> dict:
+        """
+        지금 평가에 쓰이는 기준(회사 정책 → 없으면 전역 정책 → 둘 다 없으면 없음), D1 초안, 고정 규칙(평가기 코드에
+        있어 정책으로 바꿀 수 없는 것), 이 회사의 확정 기록. 읽기만 한다 — 정책을 만들거나 바꾸지 않는다.
+        """
+
+        now = datetime.utcnow()
+        company_policy = self._get_usable_company_policy(company_id)
+        if company_policy is not None:
+            in_use = {**self._policy_brief(company_policy, now), "source": PolicySource.COMPANY}
+        else:
+            usable = [p for p in self.repository.list_active_policies() if self._is_policy_usable(p, now)]
+            in_use = (
+                {**self._policy_brief(max(usable, key=lambda p: p.id), now), "source": PolicySource.GLOBAL}
+                if usable else None
+            )
+
+        history = [
+            {**self._policy_brief(p, now), "in_use": company_policy is not None and p.id == company_policy.id}
+            for p in self.repository.list_company_policies(company_id)[:20]
+        ]
+        return {
+            "evaluator_version": EVALUATOR_VERSION,
+            "in_use": in_use,
+            "draft": {
+                "reference": D1_DRAFT_REFERENCE,
+                "axis_weights": dict(D1_DRAFT_AXIS_WEIGHTS),
+                "min_approve_total_score": D1_DRAFT_MIN_APPROVE_TOTAL_SCORE,
+                "min_confidence_for_recommendation": D1_DRAFT_MIN_CONFIDENCE,
+            },
+            "fixed_rules": {
+                "min_sufficient_axes": _MIN_SUFFICIENT_AXES,
+                "min_weight_coverage": str(_MIN_WEIGHT_COVERAGE),
+                "hard_block_threshold": str(_POLICY_HARD_BLOCK_THRESHOLD),
+                "hard_block_axes": list(ScoreAxis.HARD_BLOCK_AXES),
+                "required_for_approve": list(REQUIRED_FOR_APPROVE),
+                "min_margin_rate": str(self._min_margin_rate(company_id)),
+            },
+            "valid_days": CONFIRMED_CRITERIA_VALID_DAYS,
+            "history": history,
+        }
+
+    def confirm_criteria(
+        self, data: DecisionCriteriaConfirmRequest, company_id: int, user_id: int,
+    ) -> dict:
+        """
+        사용자가 평가 기준 화면에서 확정한 값으로 회사 정책을 VERIFIED로 만든다. 비밀번호 재확인·앱 창 확인은 라우터가
+        먼저 한다. 이름·상태·유효기간은 서버가 정한다. 사용자가 본 '지금 쓰는 회사 정책'과 실제가 다르면(그사이 다른
+        확정) 만들지 않는다. 정책 행과 감사 기록은 한 트랜잭션이다.
+        """
+
+        self._validate_axis_weights(data.axis_weights)
+        score = Decimal(str(data.min_approve_total_score))
+        confidence = Decimal(str(data.min_confidence_for_recommendation))
+        if not score.is_finite() or score <= 0 or score > _HUNDRED:
+            raise BadRequestException("승인 추천 최소 점수는 0보다 크고 100 이하여야 합니다.")
+        if not confidence.is_finite() or confidence <= 0 or confidence > 1:
+            raise BadRequestException("최소 신뢰도는 0보다 크고 1 이하여야 합니다.")
+
+        current = self._get_usable_company_policy(company_id)
+        current_id = current.id if current is not None else None
+        if data.expected_in_use_id != current_id:
+            raise ConflictException(
+                "그사이 평가 기준이 바뀌었습니다 — 화면을 새로 열어 지금 기준을 확인한 뒤 다시 확정하세요.",
+            )
+
+        draft_same = (
+            all(Decimal(str(data.axis_weights[a])) == Decimal(v) for a, v in D1_DRAFT_AXIS_WEIGHTS.items())
+            and score == Decimal(D1_DRAFT_MIN_APPROVE_TOTAL_SCORE)
+            and confidence == Decimal(D1_DRAFT_MIN_CONFIDENCE)
+        )
+        now = datetime.utcnow()
+        policy = CompanyDecisionPolicy(
+            company_id=company_id,
+            policy_set_id=f"CRITERIA-{now:%Y%m%d%H%M%S%f}",
+            policy_version="D1-20261029" if draft_same else "D1-20261029-EDITED",
+            source_reference=(
+                f"평가 기준 화면에서 사용자 확정(user_id={user_id}) · 초안 {D1_DRAFT_REFERENCE}"
+                + ("" if draft_same else " · 초안에서 값을 고침")
+            ),
+            status=DecisionPolicyStatus.VERIFIED,
+            is_complete=True,
+            is_active=True,
+            axis_weights_json=json.dumps(
+                {k: str(v) for k, v in data.axis_weights.items()}, ensure_ascii=False,
+            ),
+            min_approve_total_score=_q_score(score),
+            min_confidence_for_recommendation=_q_score(confidence),
+            checked_at=now,
+            effective_at=now,
+            expires_at=now + timedelta(days=CONFIRMED_CRITERIA_VALID_DAYS),
+            base_policy_id=None,
+        )
+
+        try:
+            policy = self.repository.add_company_policy_no_commit(policy)
+            write_audit_log(
+                self.db, user_id=user_id, company_id=company_id, action="DECISION_CRITERIA_CONFIRMED",
+                entity="company_decision_policy", entity_id=str(policy.id),
+                description=(
+                    f"평가 기준 확정 {policy.policy_set_id} {policy.policy_version} "
+                    f"승인점수={score} 신뢰도={confidence} 이전={current_id}"
+                ),
+            )
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            raise ConflictException("같은 시각에 확정한 기준이 이미 있습니다 — 화면을 새로 열어 확인하세요.")
+        except Exception:
+            self.db.rollback()
+            raise
+
+        return self._policy_brief(policy, now)
 
     @staticmethod
     def _is_policy_usable(policy, now: datetime) -> bool:
