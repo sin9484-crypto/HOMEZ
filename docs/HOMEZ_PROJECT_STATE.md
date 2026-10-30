@@ -13501,3 +13501,25 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
   - 관련 회귀: 33개 모듈을 하나씩 실행하면 모두 통과했다.
   - 한꺼번에 실행하면 오류 196건이 나는데, **변경 전 HEAD에서도 같다**(같은 앞 12개 모듈로 비교: 현재 72건 = HEAD 72건). 원인은 시험 격리 결함이다 — `Supplier` 모델이 `Product` 없이 먼저 등록돼 매퍼 설정이 실패하고, 같은 프로세스의 뒤 시험이 연쇄 실패한다. 이번 변경과 무관하고 고치지 않았다(별도 작업 칩).
 - 하지 않은 것: 평가 정책 등록(사용자 확정 필요), 평가 기준 화면(1단계), 실제 주문 마진·공급처 재고·반품 이력 자동 연결(D1 문서 10장).
+
+## 2026-10-30 — 시험 격리 결함 수정: 모델이 혼자 import되면 매퍼 설정이 실패하던 문제(외부 호출 0회, 실제 DB 접근 없음)
+
+- 증상(10-29 회귀에서 발견): 의사결정·후보·채널 정책 시험 33개 모듈을 한 프로세스로 돌리면 오류 196건이 났다(앞 12개만 돌려도 72건). 모듈을 하나씩 돌리면 모두 통과했고, 변경 전 HEAD에서도 같았다.
+- 원인:
+  - `Supplier`(그리고 `Brand`·`Category`·`Company`·`Marketplace`)의 relationship("Product"/"User"/"Company")은 공유 Base 레지스트리에서 이름으로 늦게 해석된다.
+  - 같은 패키지의 다른 모듈(예: `supplier/offer_rules.py`)만 불러온 프로세스에서 첫 조회가 일어나면, 참조 대상이 등록돼 있지 않아 매퍼 설정이 실패한다. 그 뒤 같은 프로세스의 시험이 연쇄로 깨진다.
+  - 2026-08-15에 `inventory/model.py`만 같은 방식으로 고쳐 두었었다.
+- 점검: 모든 `app/domains/*/model.py`(100개)를 각각 새 프로세스에서 혼자 import한 뒤 `configure_mappers()`를 실행했다.
+  - 수정 전: 6개 실패(`supplier`·`brand`·`category`·`company`·`marketplace`, `activity_log`).
+  - 수정 후: 1개 실패(`activity_log`, 별도 결함).
+- 수정(5개 모델 파일 끝에 참조 대상 import, inventory와 같은 방식, 클래스 정의 뒤):
+  - `supplier/model.py` → Product·Inventory
+  - `brand/model.py`·`category/model.py` → Product
+  - `company/model.py` → user 모델
+  - `marketplace/model.py` → company 모델
+  - company↔marketplace, company↔user는 파일 머리 import와 순환이라 이름이 아니라 모듈을 import한다(`import app.domains.….model`). 처음에 이름 import로 넣었다가 앱 import가 깨지는 것을 확인하고 바꿨다.
+- **검증**:
+  - 앱 전체 import + `configure_mappers()` 정상.
+  - 재현 묶음 12개 모듈: 오류 72건 → **0건**. 33개 모듈 한 프로세스: 196건 → **0건**.
+  - 이 모델들을 쓰는 시험 142개 모듈: 각각 import 실패 0, 12개씩 12묶음 실행 모두 통과(실패 묶음 0).
+- 남긴 것: `activity_log/model.py`는 Declarative 예약어 `metadata`를 필드 이름으로 써서 import 자체가 실패한다. 앱 어디에서도 쓰지 않고 시험도 없다 — 이번 범위 밖이라 그대로 두었다(쓰기 전에 필드 이름 변경과 Migration 확인이 필요).
