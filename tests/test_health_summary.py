@@ -249,12 +249,14 @@ class ServiceTests(unittest.TestCase):
 
         self.assertEqual(
             set(expected_job_ids()),
-            {jobs.BACKUP_REHEARSAL_JOB_ID, jobs.RECALL_NOTICE_CHECK_JOB_ID, jobs.ORDER_COLLECTION_TICK_JOB_ID, jobs.DELIVERY_TRACKING_JOB_ID, jobs.AFTER_SALES_JOB_ID, jobs.PRODUCT_STATUS_JOB_ID},
+            {jobs.BACKUP_REHEARSAL_JOB_ID, jobs.RECALL_NOTICE_CHECK_JOB_ID, jobs.ORDER_COLLECTION_TICK_JOB_ID, jobs.DELIVERY_TRACKING_JOB_ID, jobs.AFTER_SALES_JOB_ID, jobs.PRODUCT_STATUS_JOB_ID,
+             jobs.DISCOVERY_AUTO_RUN_JOB_ID},  # 2026-10-31 상품 발굴 자동 실행(6단계)
         )
         # 실제로 등록되는 작업과도 같다(작업을 추가하고 이 목록을 빼먹으면 여기서 알린다)
         source = (ROOT / "app/domains/scheduler/jobs.py").read_text(encoding="utf-8")
         registered = set(__import__("re").findall(r"job_id=([A-Z_]+JOB_ID)", source.split("def register_all_jobs")[1]))
-        self.assertEqual(registered, {"BACKUP_REHEARSAL_JOB_ID", "RECALL_NOTICE_CHECK_JOB_ID", "ORDER_COLLECTION_TICK_JOB_ID", "DELIVERY_TRACKING_JOB_ID", "AFTER_SALES_JOB_ID", "PRODUCT_STATUS_JOB_ID"})
+        self.assertEqual(registered, {"BACKUP_REHEARSAL_JOB_ID", "RECALL_NOTICE_CHECK_JOB_ID", "ORDER_COLLECTION_TICK_JOB_ID", "DELIVERY_TRACKING_JOB_ID", "AFTER_SALES_JOB_ID", "PRODUCT_STATUS_JOB_ID",
+                                      "DISCOVERY_AUTO_RUN_JOB_ID"})
 
 
 class RouteTests(unittest.TestCase):

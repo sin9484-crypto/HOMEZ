@@ -44,6 +44,7 @@ def expected_job_ids() -> list[str]:
     return [
         jobs.BACKUP_REHEARSAL_JOB_ID, jobs.RECALL_NOTICE_CHECK_JOB_ID, jobs.ORDER_COLLECTION_TICK_JOB_ID,
         jobs.DELIVERY_TRACKING_JOB_ID, jobs.AFTER_SALES_JOB_ID, jobs.PRODUCT_STATUS_JOB_ID,
+        jobs.DISCOVERY_AUTO_RUN_JOB_ID,
     ]
 
 

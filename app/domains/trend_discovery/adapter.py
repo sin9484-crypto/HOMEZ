@@ -142,7 +142,11 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
         lookback_days: int = DEFAULT_LOOKBACK_DAYS,
         http_post: Callable | None = None,
         usage_tracker: ApiUsageTracker | None = None,
+        call_gate=None,
     ):
+        # 2026-10-31 — 승인 센터 문(`open(target)`·`close(ticket, succeeded=, http_status=)`). 있으면 실제 호출 직전에 묻는다:
+        # 허용이 없으면 `open()`이 예외를 내고 호출하지 않는다(조용히 None으로 바꾸지 않는다 — 사람이 '허용 필요'를 봐야 한다).
+        self.call_gate = call_gate
         self.credential_store = credential_store
         self.credential_reference = credential_reference
         self.lookback_days = lookback_days
@@ -196,6 +200,8 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
         end_date = date.today()
         start_date = end_date - timedelta(days=self.lookback_days)
 
+        ticket = self.call_gate.open(target=f"kw:{keyword}"[:120]) if self.call_gate is not None else None
+
         # 실제 호출을 시도하기 직전에 기록한다 — 이 아래에서 네트워크
         # 예외가 나거나 응답이 실패여도 네이버 쪽에는 이미 호출
         # 시도가 접수된 것이므로(재시도하지 않으므로 이중 집계 없음).
@@ -220,8 +226,10 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
                 timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
         except Exception:  # noqa: BLE001 — 네트워크 실패는 fail-closed로 None
+            self._close_gate(ticket, False, None)
             return None
 
+        self._close_gate(ticket, response.status_code == 200, response.status_code)
         if response.status_code != 200:
             return None
 
@@ -245,6 +253,14 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
             observed_at=datetime.utcnow().isoformat() + "Z",
             source="naver_api_hub_search_trend",
         )
+
+    def _close_gate(self, ticket, succeeded: bool, http_status: int | None) -> None:
+        if self.call_gate is None:
+            return
+        try:
+            self.call_gate.close(ticket, succeeded=succeeded, http_status=http_status)
+        except Exception:  # noqa: BLE001 — 결과 기록 실패가 이미 받은 응답을 버리게 하지 않는다
+            pass
 
 
 __all__ = [

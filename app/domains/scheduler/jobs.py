@@ -106,6 +106,10 @@ AFTER_SALES_INTERVAL_MINUTES = 10
 PRODUCT_STATUS_JOB_ID = "coupang_product_status_check"
 PRODUCT_STATUS_INTERVAL_MINUTES = 30
 
+# 2026-10-31 상품 발굴 자동 실행(하루 한 번) — '상품 발굴' 자동화 모드가 '자동'일 때만. 네이버 조회는 허용(TREND_LOOKUP)이 있어야 나간다.
+DISCOVERY_AUTO_RUN_JOB_ID = "daily_discovery_auto_run"
+DISCOVERY_AUTO_RUN_INTERVAL_MINUTES = 60
+
 
 def run_backup_rehearsal_job(
     *,
@@ -381,6 +385,36 @@ def run_product_status_job(session_factory=None) -> None:
         db.close()
 
 
+def run_discovery_auto_run_job(session_factory=None, adapter_factory=None, now=None) -> None:
+    """2026-10-31 AI 통합 계획 6단계 — 상품 발굴 자동 실행(하루 한 번). 회사별 '상품 발굴' 자동화 모드가 '자동'일 때만 돈다(기본 수동 →
+    아무것도 안 함). 신제품 판정(바깥 호출 없음)과 네이버 검색어 트렌드 조회(승인 센터 허용이 있어야 나감)만 하고, 판매 판단 평가·승인은
+    하지 않는다. 한 번의 실패가 스케줄러를 죽이지 않는다."""
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    db = session_factory()
+    try:
+        from app.domains.product_candidate.discovery_auto_run_service import DiscoveryAutoRunService
+
+        for company_id in DiscoveryAutoRunService.candidate_companies(db):
+            service = DiscoveryAutoRunService(db, adapter_factory=adapter_factory)
+            if not service.due(company_id, now=now):
+                continue
+            summary = service.run(company_id, now=now)
+            logger.info(
+                "상품 발굴 자동 실행: 회사 %s 트렌드 %d·데이터 없음 %d·신제품 판정 %d·건너뜀 %d%s",
+                company_id, summary["trend_saved"], summary["trend_no_data"], summary["new_saved"],
+                summary["skipped_long"] + summary["skipped_empty"],
+                f" · 멈춤 {summary['blocked']}" if summary["blocked"] else "",
+            )
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("상품 발굴 자동 실행 Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -455,10 +489,18 @@ def register_all_jobs() -> None:
         job_id=PRODUCT_STATUS_JOB_ID,
     )
 
+    # 2026-10-31 — 1시간마다 깨어나되, 실제로 돌지는 DiscoveryAutoRunService.due()가 정한다(자동 모드·아침 6시 이후·오늘 아직 안 돎).
+    SchedulerService.add_interval_job(
+        run_discovery_auto_run_job,
+        minutes=DISCOVERY_AUTO_RUN_INTERVAL_MINUTES,
+        job_id=DISCOVERY_AUTO_RUN_JOB_ID,
+    )
+
     logger.info(
-        "Scheduler jobs registered: %s, %s, %s, %s, %s, %s",
+        "Scheduler jobs registered: %s, %s, %s, %s, %s, %s, %s",
         BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
         ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID, AFTER_SALES_JOB_ID, PRODUCT_STATUS_JOB_ID,
+        DISCOVERY_AUTO_RUN_JOB_ID,
     )
 
 
@@ -470,5 +512,7 @@ __all__ = [
     "run_backup_rehearsal_job",
     "run_recall_notice_check_job",
     "run_order_collection_tick_job",
+    "DISCOVERY_AUTO_RUN_JOB_ID",
+    "run_discovery_auto_run_job",
     "register_all_jobs",
 ]

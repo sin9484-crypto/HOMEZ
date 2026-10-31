@@ -16,8 +16,9 @@ class ExternalSystem:
     LLM = "LLM"  # 2026-10-18 — 글 초안을 만드는 AI 서비스(Claude). 상품 정보 글을 바깥으로 보내고 사용료가 든다.
 
     GEMINI = "GEMINI"  # 2026-10-25 — AI 이미지 생성·편집(Google Gemini). 상품 사진을 바깥으로 보내고 장마다 사용료가 든다.
-    ALL = (COUPANG, ONCH, LLM, GEMINI)
-    LABELS = {COUPANG: "쿠팡", ONCH: "온채널", LLM: "AI 글쓰기(Claude)", GEMINI: "AI 이미지(Gemini)"}
+    NAVER = "NAVER"  # 2026-10-31 — 네이버 검색어 트렌드(NAVER API HUB). 검색어 하나를 보내 최근 관심도를 읽는다(무료 한도 월 30,000회).
+    ALL = (COUPANG, ONCH, LLM, GEMINI, NAVER)
+    LABELS = {COUPANG: "쿠팡", ONCH: "온채널", LLM: "AI 글쓰기(Claude)", GEMINI: "AI 이미지(Gemini)", NAVER: "네이버 검색어 트렌드"}
 
 
 class CallKind:
@@ -46,9 +47,10 @@ class CallPurpose:
     INQUIRY_REPLY = "INQUIRY_REPLY"                # 2026-10-25 쿠팡 상품 문의 답변(문의 조회·답변 등록 — 고객에게 바로 보인다)
     RETURN_PROCESS = "RETURN_PROCESS"              # 2026-10-26 쿠팡 반품 입고 확인·승인(반품 단건 조회·처리 — 고객 환불로 이어진다)
     IMAGE_GENERATION = "IMAGE_GENERATION"          # 2026-10-25 AI 이미지 생성·편집(상품 사진을 Gemini에 보내 새 사진을 받는다 — 장마다 사용료)
+    TREND_LOOKUP = "TREND_LOOKUP"                  # 2026-10-31 네이버 검색어 트렌드 조회(후보 검색어 하나당 1회 — 사람이 누를 때·매일 자동 실행 때)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
@@ -65,10 +67,11 @@ class CallPurpose:
         INQUIRY_REPLY: "쿠팡 문의 답변",
         RETURN_PROCESS: "쿠팡 반품 처리",
         IMAGE_GENERATION: "AI 이미지 생성",
+        TREND_LOOKUP: "검색어 트렌드 조회",
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP})
 
 
 class AllowanceMode:

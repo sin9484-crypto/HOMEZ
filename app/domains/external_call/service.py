@@ -85,6 +85,8 @@ _DEFAULT_REQUEST = {
     (CallPurpose.RETURN_PROCESS, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     # 2026-10-25 AI 이미지 생성: 한 번 만들 때 최대 6장 — 장마다 1회(사용료가 들어 횟수로만, 상시 불가).
     (CallPurpose.IMAGE_GENERATION, CallKind.WRITE): (AllowanceMode.COUNTED, 6, None),
+    # 2026-10-31 네이버 검색어 트렌드: 검색어 하나당 1회. 매일 자동 실행은 한 번에 최대 10건이라 10회를 제안한다(무료 — 사용료 없음).
+    (CallPurpose.TREND_LOOKUP, CallKind.READ): (AllowanceMode.COUNTED, 10, None),
 }
 
 

@@ -2970,6 +2970,50 @@
     return chip(done[0], T(done[1]));
   }
 
+  // 2026-10-31 6단계 — 자동 실행(하루 한 번) 칸. 켜짐 여부는 기능별 자동화 모드 '상품 발굴', 마지막 실행은 서버가 남긴 요약을 그대로 보여 준다.
+  const FLOW_BLOCKED_KEYS = { ESTOP: "easy.disc.auto_blk_estop", ALLOWANCE_REQUIRED: "easy.disc.auto_blk_allow", NO_KEY: "easy.disc.auto_blk_key" };
+
+  function flowAutoHtml(auto) {
+    if (!auto) return "";
+    const known = auto.mode !== null && auto.mode !== undefined;
+    const on = known && !!auto.automatic;
+    const last = auto.last_run;
+    const n = (v) => Number(v) || 0;
+    const lastLine = last
+      ? T("easy.disc.auto_last", { at: String(last.at || "—").replace("T", " "), t: n(last.trend_saved), nd: n(last.trend_no_data), n: n(last.new_saved), s: n(last.skipped_long) + n(last.skipped_empty), d: n(last.deferred) })
+      : T("easy.disc.auto_never");
+    const blocked = last && FLOW_BLOCKED_KEYS[last.blocked] ? `<div class="ez-c-red" style="font-size:13px;margin-top:4px">${esc(T(FLOW_BLOCKED_KEYS[last.blocked]))}</div>` : "";
+    const state = !known ? chip("gray", T("easy.disc.auto_unknown")) : (on ? chip("ok", T("easy.disc.auto_on")) : chip("gray", T("easy.disc.auto_off")));
+    const btn = known ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-flow-auto="${on ? "MANUAL" : "AUTOMATIC"}">${esc(T(on ? "easy.disc.auto_turn_off" : "easy.disc.auto_turn_on"))}</button></div>` : "";
+    return `<div class="ez-card" style="margin-top:12px"><div class="k">${esc(T("easy.disc.auto_title"))} ${state}</div>
+      <div class="s" style="margin-top:6px">${esc(T("easy.disc.auto_desc", { h: auto.run_from_hour, max: auto.max_lookups }))}</div>
+      <div class="s" style="margin-top:6px">${esc(lastLine)}</div>${blocked}${btn}</div>`;
+  }
+
+  // 켜기·끄기 — 기존 기능별 자동화 모드 변경 경로를 그대로 쓴다(관리자, 데스크톱 앱 확인). 확인 창을 거친다.
+  async function flowAutoToggle(mode) {
+    const turningOn = mode === "AUTOMATIC";
+    const ok = await ezDialog({
+      title: T(turningOn ? "easy.disc.auto_on_title" : "easy.disc.auto_off_title"),
+      okLabel: T(turningOn ? "easy.disc.auto_confirm_on" : "easy.disc.auto_confirm_off"),
+      bodyHtml: `<p>${esc(T(turningOn ? "easy.disc.auto_on_body" : "easy.disc.auto_off_body"))}</p>`,
+    });
+    if (!ok) return false;
+    try {
+      await api("/console/api/function-modes/PRODUCT_DISCOVERY", { method: "POST", body: JSON.stringify({ mode, reason: T("easy.disc.auto_reason") }) });
+      flowState.note = { tone: "ok", text: T(turningOn ? "easy.disc.auto_done_on" : "easy.disc.auto_done_off") };
+    } catch (err) {
+      flowState.note = { tone: "bad", text: (err && err.message) || T("easy.error") };
+    }
+    return true;
+  }
+
+  // 승인 센터 허용이 없어 서버가 호출하지 않았을 때(고정 문구 EXTERNAL_ALLOWANCE_REQUIRED) — 쉬운 말로 바꿔 보여 준다.
+  function flowTrendError(err) {
+    const message = (err && err.message) || "";
+    return message.includes("EXTERNAL_ALLOWANCE_REQUIRED") ? T("easy.disc.trend_need_allow") : (message || T("easy.error"));
+  }
+
   function flowNoteHtml() {
     const n = flowState.note;
     return n ? `<div class="ez-note ${n.tone}" style="margin-top:12px"><div>${esc(n.text)}</div></div>` : "";
@@ -2993,7 +3037,7 @@
         ? { tone: "ok", text: T("easy.disc.trend_ok", { name: r.product_name, kw: res.keyword, score: Number(res.trend_score).toFixed(2) }) }
         : { tone: "warn", text: T("easy.disc.trend_none", { name: r.product_name, kw: res.keyword || checked.keyword, reason: res.reason || "" }) };
     } catch (err) {
-      flowState.note = { tone: "bad", text: (err && err.message) || T("easy.error") };
+      flowState.note = { tone: "bad", text: flowTrendError(err) };
     }
     return true;
   }
@@ -3017,8 +3061,13 @@
     const notes = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.disc.lead"))}</div></div>`
       + (data.naver_key_registered ? "" : `<div class="ez-note warn" style="margin-top:8px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(T("easy.disc.no_naver"))}</div></div>`)
       + (data.truncated ? `<div class="ez-note warn" style="margin-top:8px"><div>${esc(T("easy.disc.truncated"))}</div></div>` : "")
-      + flowNoteHtml();
-    if (!rows.length) { host.innerHTML = notes + emptyHtml("easy.an.empty_cand", "easy.an.empty_cand_s"); return; }
+      + flowNoteHtml() + flowAutoHtml(data.auto_run);
+    const bindAuto = () => host.querySelectorAll("[data-ez-flow-auto]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      b.disabled = true;
+      try { if (await flowAutoToggle(b.dataset.ezFlowAuto)) { S.selected.analysisTab = "FLOW"; loadAnalysis(); } } finally { b.disabled = false; }
+    }));
+    if (!rows.length) { host.innerHTML = notes + emptyHtml("easy.an.empty_cand", "easy.an.empty_cand_s"); bindAuto(); return; }
     const byId = new Map(rows.map((r) => [String(r.candidate_id), r]));
     host.innerHTML = `${notes}<div style="overflow-x:auto"><table class="ez-table ez-flow"><thead><tr>${["easy.col.product", "easy.disc.col_kw", "easy.an.col_trend", "easy.disc.col_new", "easy.disc.col_dec", "easy.disc.col_next"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => {
       const kw = r.keyword || {};
@@ -3027,6 +3076,7 @@
         <td>${scoreCell(r.trend_score)}</td><td>${flowNewCell(r)}</td><td>${flowDecisionCell(r.decision)}</td><td style="white-space:nowrap">${flowActionHtml(r)}</td></tr>`;
     }).join("")}</tbody></table></div>`;
     const rerun = () => { S.selected.analysisTab = "FLOW"; loadAnalysis(); };
+    bindAuto();
     host.querySelectorAll("[data-ez-flow-trend]").forEach((b) => b.addEventListener("click", async () => {
       const r = byId.get(b.dataset.ezFlowTrend);
       if (!r || b.disabled) return;

@@ -297,7 +297,7 @@ class DecisionTests(ServiceBase):
 
     def test_unknown_values_are_rejected(self):
         with self.assertRaises(BadRequestException):
-            self.grant(system="NAVER")
+            self.grant(system="NO_SUCH_SYSTEM")  # NAVER는 2026-10-31(6단계)부터 알려진 값
         with self.assertRaises(BadRequestException):
             self.grant(purpose="WHATEVER")
         with self.assertRaises(BadRequestException):

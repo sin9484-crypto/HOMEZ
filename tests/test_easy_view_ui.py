@@ -42,7 +42,7 @@ def keys_of(block):
 # 동적으로 만드는 키(`T(`easy.xxx.${값}`)`)의 가능한 값
 DYNAMIC = {
     "easy.flow.": ["prepare", "selling", "new_orders", "shipping", "after_sales", "settlement"],
-    "easy.kind.": ["read", "write"], "easy.sys.": ["coupang", "onch"],
+    "easy.kind.": ["read", "write"], "easy.sys.": ["coupang", "onch", "llm", "gemini", "naver"],
     "easy.step.": ["ordered", "supplier_order", "supplier_shipped", "invoice", "delivered"],
     "easy.next.": ["register_invoice", "order_from_supplier", "wait_supplier_shipment", "check_coupang_order", "wait_delivery", "return_in_progress", "done"],
     "easy.outcome.": ["allowed", "succeeded", "failed", "logged"],

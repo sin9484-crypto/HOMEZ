@@ -431,8 +431,12 @@ class RouterTests(DbCase):
         self.assertIn("NaverDataLabTrendAdapter(", block)
         self.assertIn("NaverDataLabTrendAdapter.DEFAULT_CREDENTIAL_REFERENCE", block)
         self.assertIn("Depends(get_trend_credential_store)", block)
-        built = router_module.get_trend_adapter(FakeStore(True))
+        built = router_module.get_trend_adapter(FakeStore(True), current_user=self.user, db=self.db)
         self.assertEqual(type(built).__name__, "NaverDataLabTrendAdapter")
+        # 2026-10-31 6단계: 실제 Adapter에는 승인 센터 문(네이버 검색어 트렌드 조회)이 붙는다
+        gate = built.call_gate
+        self.assertEqual((gate.system, gate.kind, gate.purpose, gate.company_id, gate.actor_user_id),
+                         ("NAVER", "READ", "TREND_LOOKUP", self.user.company_id, self.user.id))
 
 
 # ---------------------------------------------------------------------------

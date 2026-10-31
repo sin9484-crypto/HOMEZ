@@ -60,11 +60,17 @@ def get_trend_credential_store() -> CredentialStore:
 
 def get_trend_adapter(
     credential_store: CredentialStore = Depends(get_trend_credential_store),
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
 ) -> TrendSourceAdapter:
-    """실제 네이버 검색어 트렌드 Adapter. 2026-10-31 — 격리 시험이 가짜로 바꿀 수 있게 의존성으로 뺐다(동작은 같다)."""
+    """실제 네이버 검색어 트렌드 Adapter. 2026-10-31 — 격리 시험이 가짜로 바꿀 수 있게 의존성으로 뺐다.
+    6단계: 실제 호출 직전에 승인 센터의 '검색어 트렌드 조회' 허용을 묻는다(없으면 호출하지 않고 허용 요청이 올라간다)."""
+
+    from app.domains.product_candidate.discovery_auto_run_service import naver_trend_gate
 
     return NaverDataLabTrendAdapter(
         credential_store, NaverDataLabTrendAdapter.DEFAULT_CREDENTIAL_REFERENCE,
+        call_gate=naver_trend_gate(db, current_user.company_id, actor_user_id=current_user.id),
     )
 
 router = APIRouter(
@@ -261,6 +267,7 @@ def get_discovery_flow(
     네이버 키는 등록 여부만 알려 준다. 정적 경로이므로 `/{candidate_id}`보다 먼저 등록한다.
     """
 
+    from app.domains.product_candidate.discovery_auto_run_service import DiscoveryAutoRunService
     from app.domains.product_candidate.discovery_flow_service import DiscoveryFlowService
 
     try:
@@ -272,6 +279,8 @@ def get_discovery_flow(
     return {
         **DiscoveryFlowService(db).list_flow(current_user.company_id, limit=limit),
         "naver_key_registered": naver_registered,
+        # 6단계 자동 실행: 켜짐 여부(기능별 자동화 모드 '상품 발굴')와 마지막 실행 요약(감사 기록) — 읽기만 한다.
+        "auto_run": DiscoveryAutoRunService(db).status(current_user.company_id),
     }
 
 
