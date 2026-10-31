@@ -138,7 +138,7 @@ class CoupangCallCenterReplyService:
         if problem == "INVALID_CONTENT":
             plan.blockers.append(CcBlocker(problem, f"답변은 {MIN_CC_REPLY_CHARS}~{MAX_CC_REPLY_CHARS:,}자로 써야 한다."))
         elif problem == "DRAFT_MARK_LEFT":
-            plan.blockers.append(CcBlocker(problem, "초안의 가림 표시([전화번호] 등)나 초안 안내 문구가 남아 있다 — 고친 뒤 보내야 한다."))
+            plan.blockers.append(CcBlocker(problem, "초안의 가림 표시([전화번호] 등)·[확인 필요] 자리·초안 안내 문구가 남아 있다 — 고친 뒤 보내야 한다."))
         store_id, store_blockers = self._store(company_id)
         plan.store_connection_id = store_id
         plan.blockers.extend(store_blockers)

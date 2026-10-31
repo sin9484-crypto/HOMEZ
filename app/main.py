@@ -104,6 +104,7 @@ from app.domains.retail_purchase.router import (
     router as retail_purchase_router,
 )
 from app.domains.easy_view.router import router as easy_view_router
+from app.domains.marketplace_listing.ai_settings_router import router as ai_settings_router
 from app.domains.external_call.router import router as external_call_router
 from app.domains.purchase_task.router import (
     router as purchase_task_router,
@@ -660,6 +661,11 @@ app.include_router(
 # 2026-10-16 쉬운 보기 화면용 읽기 전용 집계(DB 쓰기·외부 호출 없음).
 app.include_router(
     easy_view_router,
+)
+
+# 2026-10-31 AI 사용 설정(모델·월 한도·단가·키) — 위저드 밖에서 보고 저장. 새 테이블 없음.
+app.include_router(
+    ai_settings_router,
 )
 
 app.include_router(

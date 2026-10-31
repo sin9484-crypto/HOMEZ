@@ -1740,7 +1740,7 @@
   function inquiryReplyProblem(text) {
     const value = String(text === undefined || text === null ? "" : text).replace(/\r\n?/g, "\n").trim();
     if (!value || value.length > INQ_MAX) return "easy.inq.err_content";
-    if (/\[(전화번호|이메일|주소창|주소|번호|이름)\]/.test(value) || value.includes("※ 초안입니다")) return "easy.inq.err_draft";
+    if (/\[(전화번호|이메일|주소창|주소|번호|이름)\]/.test(value) || value.includes("※ 초안입니다") || value.includes("[확인 필요")) return "easy.inq.err_draft";
     return null;
   }
 
@@ -1748,6 +1748,102 @@
     // 쿠팡 문의 시각은 시간대 없이 온다(예: 2026-10-25T09:00:00) — 브라우저가 다른 시간대로 바꾸지 않게 받은 그대로 보인다.
     const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(value || ""));
     return m ? `${m[1]} ${m[2]}` : (value ? String(value) : "—");
+  }
+
+  // 2026-10-31 문의 순서·경과 시간(AI 통합 계획 2단계). 쿠팡 문의 시각은 시간대 없이 오는 한국 시각으로 본다(위 inquiryTime과 같은 가정).
+  // 쿠팡의 답변 기한은 이 저장소에서 확인하지 못했다(고객 응대 매뉴얼 🔴) — 24시간은 HOMEZ가 정한 '오래됨' 표시 기준일 뿐 기한이라고 말하지 않는다.
+  const INQ_OLD_HOURS = 24;
+
+  function inquiryAgeHours(value, nowMs) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(value || ""));
+    if (!m) return null;
+    const at = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]) - 9, Number(m[5]));
+    const hours = Math.floor(((nowMs === undefined ? Date.now() : nowMs) - at) / 3600000);
+    return hours < 0 ? 0 : hours;
+  }
+
+  function inquiryAgeChip(value, nowMs) {
+    const h = inquiryAgeHours(value, nowMs);
+    if (h === null) return "";
+    return h >= INQ_OLD_HOURS ? chip("red", T("easy.cs.age_old", { h })) : chip("gray", T("easy.cs.age", { h }));
+  }
+
+  // 오래된 문의가 먼저. 시각을 읽을 수 없는 문의는 맨 뒤(순서를 지어내지 않는다).
+  function inquiryOldestFirst(rows) {
+    const key = (r) => { const m = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?/.exec(String(r.inquiry_at || "")); return m ? m[0] : null; };
+    return rows.slice().sort((a, b) => {
+      const ka = key(a); const kb = key(b);
+      if (ka === kb) return 0;
+      if (ka === null) return 1;
+      if (kb === null) return -1;
+      return ka < kb ? -1 : 1;
+    });
+  }
+
+  // AI 답변 초안(고객 응대 답변 초안 — POST /orders/cs-reply-draft). 누를 때만 확인 창을 거쳐 호출한다(월 한도·승인 센터 'AI 초안' 허용 필요).
+  // 초안은 입력 칸에 넣기만 한다 — 보내기는 지금처럼 사람이 고치고 확인 칸·확인 창을 거쳐 직접 누른다. [확인 필요] 자리가 남으면 보내기가 막힌다.
+  const CS_MAX_INQUIRY = 1500;
+  const CS_MAX_FACTS = 8;
+  const CS_KINDS = ["DELIVERY", "RETURN_EXCHANGE", "PRODUCT", "OTHER"];
+
+  function callCenterDraftText(r) {
+    const question = String(r.question || "").trim();
+    const agent = String(r.pending_text || "").trim();
+    return agent ? `${question}\n\n${T("easy.cs.agent_prefix")}\n${agent}` : question;
+  }
+
+  function csParseFacts(text) {
+    // "항목: 내용" 한 줄에 하나. 빈 줄은 건너뛴다. 모양이 틀리면 고쳐 쓰지 않고 몇째 줄인지 알려 준다(기존 화면 atParseFacts와 같은 규칙).
+    const facts = {};
+    const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length; i += 1) {
+      const at = lines[i].indexOf(":");
+      if (at <= 0 || !lines[i].slice(at + 1).trim()) return { facts: null, error: "easy.cs.err_fact", line: i + 1 };
+      facts[lines[i].slice(0, at).trim()] = lines[i].slice(at + 1).trim();
+    }
+    if (Object.keys(facts).length > CS_MAX_FACTS) return { facts: null, error: "easy.cs.err_fact_many", line: null };
+    return { facts, error: null, line: null };
+  }
+
+  function csDraftResultHtml(res) {
+    const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.cs.usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>` : "";
+    const masked = res.masked_count ? `<div class="ez-muted" style="font-size:12px;margin-top:4px">${esc(T("easy.cs.masked", { n: res.masked_count }))}</div>` : "";
+    if (!res.draft) {
+      return `<div class="ez-note warn"><span class="ez-dot warn">!</span><div>${esc(T("easy.cs.rejected"))}${Object.values(res.rejected || {}).map((w) => `<div>${esc(w)}</div>`).join("")}${masked}${usage}</div></div>`;
+    }
+    const needs = (res.draft.needs_check || []).length
+      ? `<div style="margin-top:6px"><b>${esc(T("easy.cs.needs"))}</b><ul style="margin:4px 0 0 18px;padding:0">${res.draft.needs_check.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "";
+    return `<div class="ez-note info"><span class="ez-dot info">AI</span><div>${esc(T("easy.cs.filled"))}${needs}${masked}${usage}</div></div>`;
+  }
+
+  async function csDraftAsk({ btn, kind, text, clipped, textEl, out }) {
+    if (!textEl || !out) return;
+    const inquiry = String(text || "").trim();
+    if (clipped) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T("easy.cs.clipped"))}</div></div>`; return; }
+    if (!inquiry) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T("easy.cs.empty"))}</div></div>`; return; }
+    if (inquiry.length > CS_MAX_INQUIRY) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T("easy.cs.too_long", { max: CS_MAX_INQUIRY.toLocaleString("ko-KR") }))}</div></div>`; return; }
+    const overwrite = String(textEl.value || "").trim() ? `<p class="ez-note warn" style="margin-top:8px"><span>${esc(T("easy.cs.overwrite"))}</span></p>` : "";
+    const picked = await ezDialog({
+      title: T("easy.cs.ask_title"), okLabel: T("easy.cs.go"),
+      bodyHtml: `<p>${esc(T("easy.cs.ask_body"))}</p>${overwrite}
+        <label style="display:block;margin-top:10px">${esc(T("easy.cs.kind"))}<br><select name="kind" style="width:100%">${CS_KINDS.map((k) => `<option value="${k}"${k === kind ? " selected" : ""}>${esc(T(`easy.cs.kind_${k}`))}</option>`).join("")}</select></label>
+        <label style="display:block;margin-top:10px">${esc(T("easy.cs.facts"))}<br><textarea name="facts" rows="3" style="width:100%" placeholder="${esc(T("easy.cs.facts_ph"))}"></textarea></label>`,
+    });
+    if (!picked) return;
+    const chosen = CS_KINDS.includes(picked.get("kind")) ? picked.get("kind") : kind;
+    const parsed = csParseFacts(picked.get("facts"));
+    if (parsed.error) { out.innerHTML = `<div class="ez-note warn"><div>${esc(T(parsed.error, { line: parsed.line, max: CS_MAX_FACTS }))}</div></div>`; return; }
+    btn.disabled = true;
+    out.innerHTML = loadingHtml();
+    try {
+      const res = await api("/orders/cs-reply-draft", { method: "POST", body: JSON.stringify({ kind: chosen, inquiry_text: inquiry, facts: parsed.facts }) });
+      if (res.draft && res.draft.draft) textEl.value = String(res.draft.draft).slice(0, INQ_MAX);
+      out.innerHTML = csDraftResultHtml(res);
+    } catch (err) {
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.cs.failed"))}</div></div>`;
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   function inquiryResultHtml(result) {
@@ -1771,17 +1867,28 @@
     try { listed = await api("/purchase-tasks/coupang-inquiries/unanswered"); }
     catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
     if (!listed.ok) { box.innerHTML = `<div class="ez-note warn"><div>${(listed.blockers || []).map((b) => esc(b.message)).join("<br>")}</div></div>`; return; }
-    const rows = listed.rows || [];
+    const rows = inquiryOldestFirst(listed.rows || []);
     if (!rows.length) { box.innerHTML = `<div class="ez-empty">${esc(T("easy.inq.none"))}</div>`; return; }
     box.innerHTML = (listed.truncated ? `<div class="ez-note warn"><div>${esc(T("easy.inq.truncated"))}</div></div>` : "")
+      + `<p class="ez-faint" style="font-size:13px;margin-top:8px">${esc(T("easy.cs.age_note"))}</p>`
       + rows.map((r) => `<div class="ez-block" style="margin-top:10px;padding:10px 14px" data-ez-inq-row="${esc(r.inquiry_id)}">
-        <div class="ez-faint" style="font-size:13px">${esc(T("easy.inq.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), product: r.seller_product_id || "—" }))}</div>
+        <div class="ez-faint" style="font-size:13px">${esc(T("easy.inq.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), product: r.seller_product_id || "—" }))} ${inquiryAgeChip(r.inquiry_at)}</div>
         <div style="white-space:pre-wrap;margin:6px 0">${esc(r.question || "")}${r.question_clipped ? " …" : ""}</div>
+        <button type="button" class="ez-btn line sm" data-ez-inq-ai="${esc(r.inquiry_id)}" style="margin-bottom:6px">${esc(T("easy.cs.ai_btn"))}</button>
         <textarea data-ez-inq-text="${esc(r.inquiry_id)}" maxlength="${INQ_MAX}" rows="4" style="width:100%" placeholder="${esc(T("easy.inq.placeholder"))}"></textarea>
         <label style="display:block;margin-top:6px"><input type="checkbox" data-ez-inq-public="${esc(r.inquiry_id)}"> ${esc(T("easy.inq.public_confirm"))}</label>
         <button type="button" class="ez-btn sm" data-ez-inq-send="${esc(r.inquiry_id)}" style="margin-top:8px">${esc(T("easy.inq.send"))}</button>
         <div data-ez-inq-result="${esc(r.inquiry_id)}" style="margin-top:8px"></div></div>`).join("");
     box.querySelectorAll("[data-ez-inq-send]").forEach((btn) => btn.addEventListener("click", () => inquirySend(btn, btn.dataset.ezInqSend)));
+    const byId = new Map(rows.map((r) => [String(r.inquiry_id), r]));
+    box.querySelectorAll("[data-ez-inq-ai]").forEach((btn) => btn.addEventListener("click", () => {
+      const r = byId.get(btn.dataset.ezInqAi);
+      if (!r) return;
+      csDraftAsk({
+        btn, kind: "PRODUCT", text: r.question || "", clipped: !!r.question_clipped,
+        textEl: box.querySelector(`[data-ez-inq-text="${btn.dataset.ezInqAi}"]`), out: box.querySelector(`[data-ez-inq-result="${btn.dataset.ezInqAi}"]`),
+      });
+    }));
   }
 
   async function inquirySend(btn, id) {
@@ -1834,15 +1941,17 @@
     try { listed = await api("/purchase-tasks/coupang-call-center-inquiries/unanswered"); }
     catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
     if (!listed.ok) { box.innerHTML = `<div class="ez-note warn"><div>${(listed.blockers || []).map((b) => esc(b.message)).join("<br>")}</div></div>`; return; }
-    const rows = listed.rows || [];
+    const rows = inquiryOldestFirst(listed.rows || []);
     if (!rows.length) { box.innerHTML = `<div class="ez-empty">${esc(T("easy.cc.none"))}</div>`; return; }
     box.innerHTML = (listed.truncated ? `<div class="ez-note warn"><div>${esc(T("easy.inq.truncated"))}</div></div>` : "")
+      + `<p class="ez-faint" style="font-size:13px;margin-top:8px">${esc(T("easy.cs.age_note"))}</p>`
       + rows.map((r) => {
         const answerable = r.pending_count === 1 && r.pending_answer_id;
         return `<div class="ez-block" style="margin-top:10px;padding:10px 14px">
-        <div class="ez-faint" style="font-size:13px">${esc(T("easy.cc.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), order: r.order_id || "—", category: r.category || "—" }))}</div>
+        <div class="ez-faint" style="font-size:13px">${esc(T("easy.cc.meta", { id: r.inquiry_id, at: inquiryTime(r.inquiry_at), order: r.order_id || "—", category: r.category || "—" }))} ${inquiryAgeChip(r.inquiry_at)}</div>
         <div style="white-space:pre-wrap;margin:6px 0">${esc(r.question || "")}</div>
         ${answerable ? `<div class="ez-note info" style="margin:6px 0"><div><b>${esc(T("easy.cc.agent_label"))}</b> <span style="white-space:pre-wrap">${esc(r.pending_text || "")}</span></div></div>
+        <button type="button" class="ez-btn line sm" data-ez-cc-ai="${esc(r.inquiry_id)}" style="margin-bottom:6px">${esc(T("easy.cs.ai_btn"))}</button>
         <textarea data-ez-cc-text="${esc(r.inquiry_id)}" maxlength="${INQ_MAX}" rows="4" style="width:100%" placeholder="${esc(T("easy.inq.placeholder"))}"></textarea>
         <label style="display:block;margin-top:6px"><input type="checkbox" data-ez-cc-public="${esc(r.inquiry_id)}"> ${esc(T("easy.cc.public_confirm"))}</label>
         <button type="button" class="ez-btn sm" data-ez-cc-send="${esc(r.inquiry_id)}" data-ez-cc-parent="${esc(r.pending_answer_id)}" style="margin-top:8px">${esc(T("easy.inq.send"))}</button>`
@@ -1850,6 +1959,15 @@
         <div data-ez-cc-result="${esc(r.inquiry_id)}" style="margin-top:8px"></div></div>`;
       }).join("");
     box.querySelectorAll("[data-ez-cc-send]").forEach((btn) => btn.addEventListener("click", () => callCenterSend(btn, btn.dataset.ezCcSend, btn.dataset.ezCcParent)));
+    const byId = new Map(rows.map((r) => [String(r.inquiry_id), r]));
+    box.querySelectorAll("[data-ez-cc-ai]").forEach((btn) => btn.addEventListener("click", () => {
+      const r = byId.get(btn.dataset.ezCcAi);
+      if (!r) return;
+      csDraftAsk({
+        btn, kind: "OTHER", text: callCenterDraftText(r), clipped: false,
+        textEl: box.querySelector(`[data-ez-cc-text="${btn.dataset.ezCcAi}"]`), out: box.querySelector(`[data-ez-cc-result="${btn.dataset.ezCcAi}"]`),
+      });
+    }));
   }
 
   async function callCenterSend(btn, id, parent) {
@@ -2169,10 +2287,89 @@
       <div class="ez-head"><div><h1>${esc(T("easy.more.title"))}</h1><div class="ez-lead">${esc(T("easy.more.lead"))}</div></div></div>
       <div class="ez-switch"><div style="flex:1"><b>${esc(T("easy.more.switch_title"))}</b><div class="ez-muted" style="font-size:14px">${esc(T("easy.more.switch_sub"))}</div></div>
         <button type="button" class="ez-btn line" id="ez-more-off">${esc(T("easy.more.switch_off"))}</button></div>
+      <div class="ez-block" id="ez-ai-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-groups">${sections.map((s) => `<div class="ez-group"><h3>${esc(T(s.labelKey))}</h3>${s.tabs.map((tab) => `<button type="button" data-ez-go="${esc(tab.view)}">${esc(T(tab.labelKey))}</button>`).join("")}</div>`).join("")}</div>
       <div class="ez-faint" style="margin-top:22px;font-size:13px">${esc(version)}</div>`;
     root.querySelectorAll("[data-ez-go]").forEach((btn) => btn.addEventListener("click", () => B.navigateTo(btn.dataset.ezGo)));
     $("ez-more-off").addEventListener("click", () => setEasyEnabled(false, true));
+    aiSettingsLoad();
+  }
+
+  // 2026-10-31 AI 사용 설정(AI 통합 계획 2단계 준비): Claude를 쓰는 기능이 함께 쓰는 모델·월 한도·단가·API 키와 이번 달 사용 기록.
+  // 보기는 바깥 호출이 없다. 저장은 확인 창 → 비밀번호 재확인을 거친다. 키는 입력만 하고 화면·응답에 다시 나오지 않는다.
+  const AI_PURPOSE_KEY = { CS_DRAFT: "easy.ai.p_cs", DRAFT: "easy.ai.p_draft", NAMES: "easy.ai.p_names", ADVICE: "easy.ai.p_advice", ANALYSIS: "easy.ai.p_analysis", COMPETITOR: "easy.ai.p_competitor" };
+
+  function aiSettingsHtml(s) {
+    const won0 = (v) => `${Math.round(Number(v) || 0).toLocaleString("ko-KR")}원`;
+    const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+    const records = s.records || [];
+    const result = (ok) => (ok === true ? chip("ok", T("easy.ai.ok")) : (ok === false ? chip("wait", T("easy.ai.dropped")) : chip("gray", T("easy.ai.unknown"))));
+    const table = records.length
+      ? `<div style="overflow-x:auto"><table class="ez-table ez-ai-rec"><thead><tr><th>${esc(T("easy.ai.c_purpose"))}</th><th>${esc(T("easy.ai.c_model"))}</th><th>${esc(T("easy.ai.c_tokens"))}</th><th>${esc(T("easy.ai.c_cost"))}</th><th>${esc(T("easy.ai.c_result"))}</th></tr></thead><tbody>`
+        + records.map((r) => `<tr><td>${esc(AI_PURPOSE_KEY[r.purpose] ? T(AI_PURPOSE_KEY[r.purpose]) : (r.purpose || "—"))} <span class="ez-faint">${esc(r.ref || "")}</span></td><td>${esc(r.model || "—")}</td>`
+          + `<td class="ez-num">${r.input_tokens === null || r.input_tokens === undefined ? "—" : esc(`${r.input_tokens} / ${r.output_tokens}`)}</td>`
+          + `<td class="ez-num">${r.cost_krw === null || r.cost_krw === undefined ? "—" : esc(`${Number(r.cost_krw).toLocaleString("ko-KR")}원`)}</td><td>${result(r.ok)}</td></tr>`).join("")
+        + "</tbody></table></div>"
+      : `<div class="ez-muted" style="font-size:14px">${esc(T("easy.ai.rec_none"))}</div>`;
+    return `<h3>${esc(T("easy.ai.title"))} ${s.configured ? chip("ok", T("easy.ai.ready")) : chip("wait", T("easy.ai.not_ready"))}</h3>
+      <p class="ez-muted" style="font-size:14px">${esc(T("easy.ai.lead"))}</p>
+      ${kv(T("easy.ai.key"), s.key_saved ? T("easy.ai.key_saved") : T("easy.ai.key_none"))}
+      ${kv(T("easy.ai.model"), s.model || "—")}
+      ${kv(T("easy.ai.limit"), s.monthly_limit_krw ? won0(s.monthly_limit_krw) : "—")}
+      ${kv(T("easy.ai.price"), s.in_price && s.out_price ? T("easy.ai.price_v", { in: Number(s.in_price).toLocaleString("ko-KR"), out: Number(s.out_price).toLocaleString("ko-KR") }) : "—")}
+      ${kv(T("easy.ai.used"), T("easy.ai.used_v", { used: won0(s.month_used_krw), calls: s.month_calls || 0 }))}
+      <button type="button" class="ez-btn line sm" id="ez-ai-edit" style="margin-top:10px">${esc(T("easy.ai.edit"))}</button>
+      <div class="ez-sec" style="margin-top:16px">${esc(T("easy.ai.records"))}</div>${table}`;
+  }
+
+  async function aiSettingsLoad() {
+    const box = $("ez-ai-box");
+    if (!box) return;
+    let s;
+    try { s = await api("/ai-settings"); } catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    box.innerHTML = aiSettingsHtml(s);
+    $("ez-ai-edit").addEventListener("click", () => aiSettingsEdit(s));
+  }
+
+  // 화면 쪽 모양 검사(서버가 같은 검사를 다시 한다). 고쳐 쓰지 않고 문제 열쇠만 돌려준다.
+  function aiSettingsForm(get) {
+    const model = String(get("model") || "").trim();
+    if (!/^[A-Za-z0-9._:-]{3,80}$/.test(model)) return { error: "easy.ai.err_model" };
+    const limit = Number(String(get("limit") || "").replace(/,/g, ""));
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000000) return { error: "easy.ai.err_limit" };
+    const inPrice = Number(get("in_price"));
+    const outPrice = Number(get("out_price"));
+    if (!(inPrice > 0 && inPrice <= 1000000) || !(outPrice > 0 && outPrice <= 1000000)) return { error: "easy.ai.err_price" };
+    const key = String(get("api_key") || "").trim();
+    const body = { model, monthly_limit_krw: limit, in_price: inPrice, out_price: outPrice };
+    if (key) body.api_key = key;
+    return { body };
+  }
+
+  async function aiSettingsEdit(s) {
+    const field = (name, label, value, attrs) => `<label style="display:block;margin-top:10px">${esc(T(label))}<br><input name="${name}" value="${esc(value === null || value === undefined ? "" : value)}" style="width:100%" ${attrs || ""}></label>`;
+    const picked = await ezDialog({
+      title: T("easy.ai.edit"), okLabel: T("easy.ai.save"),
+      bodyHtml: field("model", "easy.ai.f_model", s.model, `autocomplete="off" placeholder="claude-opus-5-5"`)
+        + `<div class="ez-faint" style="font-size:12px">${esc(T("easy.ai.f_model_hint"))}</div>`
+        + field("limit", "easy.ai.f_limit", s.monthly_limit_krw || "", `inputmode="numeric"`)
+        + field("in_price", "easy.ai.f_in", s.in_price, `inputmode="decimal"`)
+        + field("out_price", "easy.ai.f_out", s.out_price, `inputmode="decimal"`)
+        + `<div class="ez-faint" style="font-size:12px;margin-top:4px">${esc(T("easy.ai.f_price_hint"))}</div>`
+        + field("api_key", s.key_saved ? "easy.ai.f_key_keep" : "easy.ai.f_key", "", `type="password" autocomplete="new-password"`),
+    });
+    if (!picked) return;
+    const form = aiSettingsForm(picked.get);
+    if (form.error) { B.toast(T(form.error), "error"); return; }
+    const token = await B.promptRecentAuthToken();
+    if (token === null) return;
+    try {
+      await api("/ai-settings", { method: "PUT", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(form.body) });
+      B.toast(T("easy.ai.saved"), "success");
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    }
+    aiSettingsLoad();
   }
 
   // =========================================================

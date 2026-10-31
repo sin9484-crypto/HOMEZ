@@ -48,6 +48,8 @@ logger = logging.getLogger("homez")
 
 MAX_INQUIRY_ID_DIGITS = 20
 DRAFT_FOOTER_MARK = "※ 초안입니다"
+# 2026-10-31 — AI 답변 초안이 모르는 내용 자리에 남기는 표시. 사람이 채우지 않은 채 고객에게 나가지 않게 막는다.
+DRAFT_CHECK_MARK = "[확인 필요"
 
 
 def reply_problem(content: Any) -> str | None:
@@ -58,7 +60,7 @@ def reply_problem(content: Any) -> str | None:
     text = normalize_reply(content)
     if not text or len(text) > MAX_REPLY_CHARS:
         return "INVALID_CONTENT"
-    if any(mark in text for mark in PLACEHOLDERS.values()) or DRAFT_FOOTER_MARK in text:
+    if any(mark in text for mark in PLACEHOLDERS.values()) or DRAFT_FOOTER_MARK in text or DRAFT_CHECK_MARK in text:
         return "DRAFT_MARK_LEFT"
     return None
 
@@ -133,7 +135,7 @@ class CoupangInquiryReplyService:
         if problem == "INVALID_CONTENT":
             plan.blockers.append(ReplyBlocker(problem, f"답변은 1~{MAX_REPLY_CHARS:,}자로 써야 한다."))
         elif problem == "DRAFT_MARK_LEFT":
-            plan.blockers.append(ReplyBlocker(problem, "초안의 가림 표시([전화번호] 등)나 초안 안내 문구가 남아 있다 — 고친 뒤 보내야 한다."))
+            plan.blockers.append(ReplyBlocker(problem, "초안의 가림 표시([전화번호] 등)·[확인 필요] 자리·초안 안내 문구가 남아 있다 — 고친 뒤 보내야 한다."))
         store_id, store_blockers = self._store(company_id)
         plan.store_connection_id = store_id
         plan.blockers.extend(store_blockers)

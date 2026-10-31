@@ -181,6 +181,30 @@ class AiDraftService:
                 continue
         return total, calls
 
+    def month_records(self, limit: int = 50) -> list[dict]:
+        """이번 달 AI 사용 기록(최근 것부터). 화면에서 '실제로 몇 번 불렀고 얼마였는지'를 확인하는 용도 — 글·키는 원래 기록에 없다.
+        읽을 수 없는 기록은 건너뛰지 않고 `ok=None`으로 둔다(합계 `_month_usage`와 같은 행을 본다)."""
+
+        rows = self.db.execute(
+            text("SELECT id, entity_id, description FROM audit_logs WHERE action = :a AND entity_id LIKE :p ORDER BY id DESC LIMIT :n"),
+            {"a": USAGE_ACTION, "p": f"{self._month_tag()}:%", "n": max(1, min(int(limit), 200))},
+        ).fetchall()
+        records = []
+        for row_id, entity_id, description in rows:
+            try:
+                payload = json.loads(description)
+            except (ValueError, TypeError):
+                payload = None
+            if not isinstance(payload, dict):
+                records.append({"id": row_id, "ref": str(entity_id).split(":", 1)[-1], "purpose": None, "model": None,
+                                "input_tokens": None, "output_tokens": None, "cost_krw": None, "ok": None})
+                continue
+            records.append({
+                "id": row_id, "ref": str(entity_id).split(":", 1)[-1], "purpose": payload.get("p"), "model": payload.get("m"),
+                "input_tokens": payload.get("i"), "output_tokens": payload.get("o"), "cost_krw": payload.get("c"), "ok": payload.get("ok"),
+            })
+        return records
+
     def _record_usage(self, company_id: int, user_id: int, ref: str, model: str, usage: dict) -> None:
         payload = json.dumps({"m": model, "i": usage["input_tokens"], "o": usage["output_tokens"], "c": usage["cost_krw"], "ok": usage["ok"], "p": usage.get("purpose", "DRAFT")}, separators=(",", ":"))
         write_audit_log(
