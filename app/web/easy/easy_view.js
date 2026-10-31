@@ -297,6 +297,10 @@
   const BRIEF_PSTATUS_STALE_MINUTES = 90;    // 쿠팡 상품 상태 확인(30분 주기) — 아직 승인되지 않은 상품이 있을 때만
   const BRIEF_SYS_KEYS = { SCHEDULER_NOT_RUNNING: "easy.brief.sys_scheduler", JOBS_MISSING: "easy.brief.sys_jobs_missing", JOBS_PAUSED: "easy.brief.sys_jobs_paused", JOBS_OVERDUE: "easy.brief.sys_jobs_overdue", BACKUP_NONE: "easy.brief.sys_backup_none", BACKUP_STALE: "easy.brief.sys_backup_stale", BACKUP_OLD: "easy.brief.sys_backup_old", REHEARSAL_FAILED: "easy.brief.sys_rehearsal_failed", REHEARSAL_STALE: "easy.brief.sys_rehearsal_stale", DISK_LOW: "easy.brief.sys_disk_low", DISK_CRITICAL: "easy.brief.sys_disk_critical", ESTOP_ACTIVE: "easy.brief.sys_estop", DETECTION_NEEDS_ALLOWANCE: "easy.brief.sys_det_allowance", DETECTION_ERROR: "easy.brief.sys_det_error", DETECTION_PAUSED: "easy.brief.sys_det_paused", DETECTION_FAILING: "easy.brief.sys_det_failing", DETECTION_BLOCKED: "easy.brief.sys_det_blocked", DETECTION_ENV_BLOCKED: "easy.brief.sys_det_env", DETECTION_STALE: "easy.brief.sys_det_stale", READS_ALLOWANCE_LAPSED: "easy.brief.sys_reads_lapsed" };
   const BRIEF_STALL_KEYS = { detect: "easy.brief.st_detect", pstatus: "easy.brief.st_pstatus", settle: "easy.brief.st_settle" };  // 문구 키를 글자 그대로 둔다(쓰지 않는 문구 점검이 찾을 수 있게)
+  // 2026-10-31 운영 비서 1단계(AI 통합 계획 4단계): 24시간은 문의 화면의 INQ_OLD_HOURS와 같은 HOMEZ의 '오래됨' 기준일 뿐 쿠팡 기한이 아니다.
+  const BRIEF_OLD_INQUIRY_HOURS = 24;
+  const BRIEF_WHY_KEYS = { inq_old: "easy.brief.why_inq_old", inq: "easy.brief.why_inq", inq_unknown: "easy.brief.why_inq_unknown", pstatus: "easy.brief.why_pstatus", invoice: "easy.brief.why_invoice", return: "easy.brief.why_return", supret: "easy.brief.why_supret", unres: "easy.brief.why_unres", detect: "easy.brief.why_detect", days: "easy.brief.why_days", approval: "easy.brief.why_approval", check: "easy.brief.why_check" };
+  const BRIEF_FLOW_KEYS = { REVIEW: "easy.brief.disc_review", EVALUATE: "easy.brief.disc_evaluate", NEW_PRODUCT: "easy.brief.disc_new", TREND: "easy.brief.disc_trend" };  // 탐색 흐름의 다음 할 일(순서 = 표시 순서)
   const BRIEF_SETTLEMENT_STALE_HOURS = 36;   // 쿠팡 정산 읽기(하루 몇 번)
 
   function parseUtcMs(iso) {
@@ -309,15 +313,36 @@
   // 같은 "내가 할 일"이어도 급한 정도가 다르다: 승인반려·송장·반품/문의처럼 판매와 고객에 바로 닿는 일을 먼저, 출고일 확인 같은 정리성 일을 뒤로.
   function briefWeight(row) {
     const key = String(row.key || "");
-    const kind = key.startsWith("pstatus:") ? 0 : key.startsWith("invoice:") ? 1 : (key.startsWith("return:") || key.startsWith("inq:") || key.startsWith("supret:")) ? 2
+    const oldInquiry = key.startsWith("inq:") && Number.isFinite(row.ageHours) && row.ageHours >= BRIEF_OLD_INQUIRY_HOURS;
+    const kind = oldInquiry ? -1 : key.startsWith("pstatus:") ? 0 : key.startsWith("invoice:") ? 1 : (key.startsWith("return:") || key.startsWith("inq:") || key.startsWith("supret:")) ? 2
       : key.startsWith("unres:") ? 3 : key === "detect" ? 4 : key.startsWith("days:") ? 9 : 5;
     return (row.group === "CHECK" ? 0 : 10) + kind;
   }
 
+  // 상품 발굴(3단계 탐색 흐름) 한 줄 요약 — 서버가 센 다음 할 일 개수를 그대로 쓴다. 읽지 못했으면 null('모름').
+  function briefDiscoveryFrom(flow) {
+    if (!flow || !flow.counts || typeof flow.counts !== "object") return null;
+    const lines = Object.keys(BRIEF_FLOW_KEYS).map((next) => ({ next, n: Number(flow.counts[next]) || 0 })).filter((x) => x.n > 0);
+    return { lines, truncated: !!flow.truncated };
+  }
+
   function briefingFrom({ rows, ext, collect, today, health, nowMs }) {
+    // 왜 먼저인지 — 행의 종류로 정한 규칙 문구(새 판단 없음). 문의는 받은 지 몇 시간인지, 모르면 '모름'.
+    const whyOf = (row) => {
+      const key = String(row.key || "");
+      if (key.startsWith("inq:")) {
+        if (!Number.isFinite(row.ageHours)) return { key: BRIEF_WHY_KEYS.inq_unknown };
+        return { key: row.ageHours >= BRIEF_OLD_INQUIRY_HOURS ? BRIEF_WHY_KEYS.inq_old : BRIEF_WHY_KEYS.inq, h: row.ageHours };
+      }
+      const kind = ["pstatus", "invoice", "return", "supret", "unres", "days"].find((k) => key.startsWith(`${k}:`)) || (key === "detect" ? "detect" : null);
+      if (kind) return { key: BRIEF_WHY_KEYS[kind] };
+      return { key: row.group === "APPROVAL" ? BRIEF_WHY_KEYS.approval : BRIEF_WHY_KEYS.check };
+    };
+    // 같은 무게 안에서는 문의끼리 오래된 것이 먼저(받은 시각을 아는 것끼리만 — 모르는 것은 원래 순서).
+    const ageOrder = (a, b) => (Number.isFinite(a.ageHours) && Number.isFinite(b.ageHours) ? b.ageHours - a.ageHours : 0);
     const mine = (rows || []).filter((r) => r.group !== "PROGRESS")
-      .map((r, index) => ({ r, index, w: briefWeight(r) })).sort((a, b) => a.w - b.w || a.index - b.index).map((x) => x.r);
-    const urgent = mine.slice(0, 3).map((r) => ({ key: r.key, title: r.title, name: (r.product && r.product.name) || "" }));
+      .map((r, index) => ({ r, index, w: briefWeight(r) })).sort((a, b) => a.w - b.w || ageOrder(a.r, b.r) || a.index - b.index).map((x) => x.r);
+    const urgent = mine.slice(0, 3).map((r) => ({ key: r.key, title: r.title, name: (r.product && r.product.name) || "", why: whyOf(r) }));
     const upcoming = [];
     ((ext && Array.isArray(ext.renewable)) ? ext.renewable : []).forEach((r) => {
       if (r.state === "EXPIRED") upcoming.push({ kind: "expired", what: r.purpose_label || "" });
@@ -352,9 +377,16 @@
 
   function briefingHtml(b) {
     const li = (cls, text) => `<li class="${cls}">${esc(text)}</li>`;
+    const why = (u) => (u.why && u.why.key ? `<small class="ez-muted" style="display:block;font-size:12.5px">${esc(T("easy.brief.why_prefix"))} ${esc(T(u.why.key, { h: u.why.h }))}</small>` : "");
     const urgent = b.urgent.length
-      ? b.urgent.map((u) => li("", u.name ? `${u.title} · ${u.name}` : u.title)).join("")
+      ? b.urgent.map((u) => `<li>${esc(u.name ? `${u.title} · ${u.name}` : u.title)}${why(u)}</li>`).join("")
       : li("ez-muted", T("easy.brief.urgent_none"));
+    // 상품 발굴 칸: loadToday가 탐색 흐름을 읽어 b.discovery를 채웠을 때만 보인다(null = 읽지 못함).
+    const hasDisc = b.discovery !== undefined;
+    const d = b.discovery;
+    const discLines = !hasDisc ? "" : (d === null ? li("ez-muted", T("easy.brief.disc_unknown"))
+      : (d.lines.length ? d.lines.map((x) => li(x.next === "REVIEW" ? "ez-c-orange" : "", T(BRIEF_FLOW_KEYS[x.next], { n: x.n }))).join("") : li("ez-muted", T("easy.brief.disc_none"))));
+    const discCard = !hasDisc ? "" : `<div class="ez-card"><div class="k">${esc(T("easy.brief.disc_title"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${discLines}</ul>${d && d.truncated ? `<div class="ez-muted" style="font-size:12.5px;margin-top:4px">${esc(T("easy.brief.disc_truncated"))}</div>` : ""}${d ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-brief-flow>${esc(T("easy.brief.disc_open"))}</button></div>` : ""}</div>`;
     const upcoming = b.upcoming.length
       ? b.upcoming.map((u) => li(u.kind === "expired" ? "ez-c-red" : "ez-c-orange", T(u.kind === "expired" ? "easy.brief.exp_done" : "easy.brief.exp_soon", { what: u.what, h: u.hours }))).join("")
       : li("ez-muted", T("easy.brief.upcoming_none"));
@@ -363,25 +395,28 @@
     const stalled = lines.length ? lines.join("") : li("ez-muted", T("easy.brief.stalled_none"));
     return `<section class="ez-brief" aria-label="${esc(T("easy.brief.title"))}">
       <div class="ez-sec">${esc(T("easy.brief.title"))}<small>${esc(T(b.mine ? "easy.brief.headline" : "easy.brief.headline_none", { n: b.mine }))}</small></div>
-      <div class="ez-cards" style="grid-template-columns:repeat(3,1fr)">
+      <div class="ez-muted" style="font-size:13px;margin-top:2px">${esc(T("easy.brief.promise"))}</div>
+      <div class="ez-cards"${hasDisc ? "" : ' style="grid-template-columns:repeat(3,1fr)"'}>
         <div class="ez-card"><div class="k">${esc(T("easy.brief.urgent"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${urgent}</ul></div>
         <div class="ez-card"><div class="k">${esc(T("easy.brief.upcoming"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${upcoming}</ul></div>
         <div class="ez-card"><div class="k">${esc(T("easy.brief.stalled"))}</div><ul class="ez-brief-list" style="margin:6px 0 0 16px;padding:0;font-size:14px;line-height:1.5">${stalled}</ul>${(b.system || []).length ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-sysadv>${esc(T("easy.sysadv.btn"))}</button></div>` : ""}</div>
+        ${discCard}
       </div></section>`;
   }
 
   async function loadToday() {
     const root = $("ez-root-easy-today");
     root.innerHTML = loadingHtml();
-    let wq, today, safety, ext, collect, sysHealth;
+    let wq, today, safety, ext, collect, sysHealth, discFlow;
     try {
-      [wq, today, safety, ext, collect, sysHealth] = await Promise.all([
+      [wq, today, safety, ext, collect, sysHealth, discFlow] = await Promise.all([
         B.wq.fetchItems(),
         api("/easy-view/today").catch(() => null),
         api("/console/api/safety-status").catch(() => null),
         api("/external-calls/summary").catch(() => null),
         api("/orders/collection-ops/status").catch(() => null),
         api("/diagnostics/health-summary").catch(() => null),
+        api("/product-candidates/discovery-flow?limit=200").catch(() => null),
       ]);
     } catch (err) { errorBox(root, err); return; }
     if (wq.allFailed && !today) { errorBox(root, wq.error); return; }
@@ -430,13 +465,16 @@
         [T("easy.today.return_pickup"), returnPickupText(r)]],
       detail: T("easy.today.return_detail"),
     }));
-    (afterSales.inquiries_open || []).forEach((q) => rows.push({
-      key: `inq:${q.entity_id}`, group: "CHECK", title: T("easy.today.inq_title"), sub: T("easy.today.inq_sub"),
-      product: { name: q.o || "—", sub: T(q.k === "INQ_CALL" ? "easy.today.inq_call" : "easy.today.inq_online", { id: q.id }), thumb: null, icon: "bag" },
-      chip: chip("wait", T("easy.today.inq_unanswered")),
-      action: { label: T("easy.today.inq_action"), run: () => B.navigateTo("easy-orders") },
-      facts: [[T("easy.fact.order"), q.o || "—"]], detail: T("easy.today.inq_detail"),
-    }));
+    // 받은 지 몇 시간(쿠팡 문의 시각은 한국 시각 — 문의 화면과 같은 계산·같은 정렬). 모르면 null로 두고 맨 뒤(순서를 지어내지 않는다).
+    const inqNow = Date.now();
+    inquiryOldestFirst((afterSales.inquiries_open || []).map((q) => ({ q, inquiry_at: q.t, h: inquiryAgeHours(q.t, inqNow) })))
+      .forEach(({ q, h }) => rows.push({
+        key: `inq:${q.entity_id}`, group: "CHECK", title: T("easy.today.inq_title"), sub: T("easy.today.inq_sub"), ageHours: h,
+        product: { name: q.o || "—", sub: T(q.k === "INQ_CALL" ? "easy.today.inq_call" : "easy.today.inq_online", { id: q.id }), thumb: null, icon: "bag" },
+        chip: h !== null && h >= INQ_OLD_HOURS ? chip("red", T("easy.cs.age_old", { h })) : chip("wait", T("easy.today.inq_unanswered")),
+        action: { label: T("easy.today.inq_action"), run: () => B.navigateTo("easy-orders") },
+        facts: [[T("easy.fact.order"), q.o || "—"], [T("easy.brief.f_age"), h === null ? T("easy.brief.age_unknown") : T("easy.cs.age", { h })]], detail: T("easy.today.inq_detail"),
+      }));
 
     // 2-d) 공급처(온채널) 반품 요청 — 쿠팡에 반품이 접수되면 공급처에도 반품을 요청해야 한다(접수는 온채널 화면, HOMEZ는 준비·기록·확인).
     ((today && today.supplier_returns) || []).forEach((c) => {
@@ -525,6 +563,7 @@
     const counts = { CHECK: 0, APPROVAL: 0, PROGRESS: 0 };
     rows.forEach((r) => { counts[r.group] += 1; });
     const brief = briefingFrom({ rows, ext, collect, today, health: sysHealth, nowMs: Date.now() });
+    brief.discovery = briefDiscoveryFrom(discFlow);
     const mine = counts.CHECK + counts.APPROVAL;
     const filter = S.selected.todoFilter || "ALL";
     const visible = rows.filter((r) => filter === "ALL" || (filter === "MINE" ? r.group !== "PROGRESS" : r.group === "PROGRESS"));
@@ -567,6 +606,8 @@
 
     const sysAdv = root.querySelector("[data-ez-sysadv]");
     if (sysAdv) sysAdv.addEventListener("click", () => systemAdviceAsk(brief.system));
+    const briefFlow = root.querySelector("[data-ez-brief-flow]");
+    if (briefFlow) briefFlow.addEventListener("click", () => { S.selected.analysisTab = "FLOW"; B.navigateTo("easy-analysis"); });
     root.querySelectorAll("[data-ez-filter]").forEach((btn) => btn.addEventListener("click", () => { S.selected.todoFilter = btn.dataset.ezFilter; loadToday(); }));
 
     const main = $("ez-today-main");
