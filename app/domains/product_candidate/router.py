@@ -42,17 +42,30 @@ from app.domains.product_candidate.schema import (
 )
 from app.domains.product_candidate.schema import ProductCandidatePrivateCreate
 from app.domains.product_candidate.schema import ProductCandidateResponse
+from app.domains.product_candidate.schema import NewProductRefreshResponse
+from app.domains.product_candidate.schema import TrendAnalysisRefreshRequest
 from app.domains.product_candidate.schema import TrendAnalysisRefreshResponse
 from app.domains.product_candidate.service import ProductCandidateService
 from app.domains.product_candidate.trend_analysis_refresh_service import (
     TrendAnalysisRefreshService,
 )
 from app.domains.trend_discovery.adapter import NaverDataLabTrendAdapter
+from app.domains.trend_discovery.adapter import TrendSourceAdapter
 from app.domains.user.model import User
 
 
 def get_trend_credential_store() -> CredentialStore:
     return WindowsCredentialStore()
+
+
+def get_trend_adapter(
+    credential_store: CredentialStore = Depends(get_trend_credential_store),
+) -> TrendSourceAdapter:
+    """실제 네이버 검색어 트렌드 Adapter. 2026-10-31 — 격리 시험이 가짜로 바꿀 수 있게 의존성으로 뺐다(동작은 같다)."""
+
+    return NaverDataLabTrendAdapter(
+        credential_store, NaverDataLabTrendAdapter.DEFAULT_CREDENTIAL_REFERENCE,
+    )
 
 router = APIRouter(
     prefix="/product-candidates",
@@ -236,6 +249,32 @@ def save_naver_datalab_credential(
     return NaverDataLabCredentialStatusResponse(registered=True)
 
 
+@router.get("/discovery-flow")
+def get_discovery_flow(
+    limit: int = Query(default=200, ge=1, le=500),
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_trend_credential_store),
+):
+    """
+    2026-10-31 — 탐색 흐름(검색어 → 트렌드 → 신제품 → 평가 → 사람 검토) 한눈에 보기. 읽기 전용, 외부 호출 없음.
+    네이버 키는 등록 여부만 알려 준다. 정적 경로이므로 `/{candidate_id}`보다 먼저 등록한다.
+    """
+
+    from app.domains.product_candidate.discovery_flow_service import DiscoveryFlowService
+
+    try:
+        credential_store.read(NaverDataLabTrendAdapter.DEFAULT_CREDENTIAL_REFERENCE)
+        naver_registered = True
+    except (CredentialNotFoundError, CredentialStoreError):
+        naver_registered = False
+
+    return {
+        **DiscoveryFlowService(db).list_flow(current_user.company_id, limit=limit),
+        "naver_key_registered": naver_registered,
+    }
+
+
 @router.get(
     "/{candidate_id}",
     response_model=ProductCandidateResponse,
@@ -350,9 +389,10 @@ def verify_candidate_info(
 )
 def refresh_trend_analysis(
     candidate_id: int,
+    data: TrendAnalysisRefreshRequest | None = None,
     current_user: User = Depends(admin_guard),
     db: Session = Depends(get_db),
-    credential_store: CredentialStore = Depends(get_trend_credential_store),
+    adapter: TrendSourceAdapter = Depends(get_trend_adapter),
 ):
     """
     2026-09-06 신규 — 네이버 데이터랩 공식 API로 이 후보의 실제
@@ -363,19 +403,44 @@ def refresh_trend_analysis(
     위장하지 않는다. company_id 격리는
     TrendAnalysisRefreshService.refresh() 내부의
     get_visible_for_company()가 강제한다.
+
+    2026-10-31 — 검색어는 본문의 `keyword`(사람이 확인·수정한 값)를 쓰고, 없으면 검색어 규칙이 상품명에서 만든다.
     """
 
-    adapter = NaverDataLabTrendAdapter(
-        credential_store, NaverDataLabTrendAdapter.DEFAULT_CREDENTIAL_REFERENCE,
-    )
     service = TrendAnalysisRefreshService(db, adapter)
-    result = service.refresh(candidate_id, current_user.company_id)
+    result = service.refresh(
+        candidate_id, current_user.company_id,
+        keyword=data.keyword if data is not None else None,
+    )
 
     return TrendAnalysisRefreshResponse(
         status=result.status, candidate_id=result.candidate_id,
         trend_score=result.trend_score, confidence=result.confidence,
-        reason=result.reason,
+        reason=result.reason, keyword=result.keyword,
+        keyword_basis=result.keyword_basis,
     )
+
+
+@router.post(
+    "/{candidate_id}/evaluate-new-product",
+    response_model=NewProductRefreshResponse,
+)
+def evaluate_new_product(
+    candidate_id: int,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """
+    2026-10-31 — 후보의 출시일로 15일 신제품 규칙을 돌려 결과를 저장한다(외부 호출 없음).
+    출시일이 없거나 미래면 아무것도 바꾸지 않고 UNKNOWN / FUTURE_DATE를 돌려준다.
+    """
+
+    from app.domains.product_candidate.new_product_analysis_refresh_service import (
+        NewProductAnalysisRefreshService,
+    )
+
+    result = NewProductAnalysisRefreshService(db).refresh(candidate_id, current_user.company_id)
+    return NewProductRefreshResponse(**result.as_dict())
 
 
 @router.post(

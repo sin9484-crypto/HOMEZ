@@ -109,10 +109,31 @@ class TrendAnalysisRefreshResponse(BaseModel):
     status=NO_SIGNAL이면 아무것도 바뀌지 않았다는 뜻이다(reason 참고).
     """
 
-    status: str  # APPLIED / NO_SIGNAL
+    status: str  # APPLIED / NO_SIGNAL / NO_KEYWORD
     candidate_id: int
     trend_score: float | None = None
     confidence: float | None = None
+    reason: str | None = None
+    keyword: str | None = None
+    keyword_basis: str | None = None  # RULE / PERSON
+
+
+class TrendAnalysisRefreshRequest(BaseModel):
+    """2026-10-31 — 사람이 확인·수정한 검색어(선택). 없으면 검색어 규칙이 상품명에서 만든다."""
+
+    keyword: str | None = Field(default=None, max_length=200)
+
+    model_config = {"extra": "forbid"}
+
+
+class NewProductRefreshResponse(BaseModel):
+    """2026-10-31 — 15일 신제품 규칙 실행 결과. UNKNOWN·FUTURE_DATE면 아무것도 바뀌지 않았다(reason 참고)."""
+
+    status: str  # APPLIED / UNKNOWN / FUTURE_DATE
+    candidate_id: int
+    is_new_product: bool | None = None
+    age_days: int | None = None
+    novelty_score: float | None = None
     reason: str | None = None
 
 

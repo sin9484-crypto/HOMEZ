@@ -2888,6 +2888,126 @@
 
   // ---- /평가하기 ----
 
+  // ---- 탐색 흐름(2026-10-31, AI 통합 계획 3단계) ----
+  // 후보마다 검색어 → 트렌드 → 신제품 → 판매 판단 → 사람 검토 중 어디까지 왔는지와 다음 할 일을 보여 준다.
+  // 각 단계는 기존 진입점이 실행한다. 승인은 사람이 하고, 이 화면은 아무것도 자동으로 보내거나 승인하지 않는다.
+  const FLOW_KEYWORD_MAX = 40;
+  const FLOW_DONE_CHIP = {
+    DONE_REVIEWED: ["ok", "easy.disc.next_done_reviewed"],
+    DONE_APPROVED: ["ok", "easy.disc.next_done_approved"],
+    CLOSED: ["gray", "easy.disc.next_closed"],
+  };
+  const flowState = { note: null };
+
+  function flowKeywordCheck(value) {
+    const keyword = String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+    if (!keyword) return { error: "easy.disc.kw_empty" };
+    if (keyword.length > FLOW_KEYWORD_MAX) return { error: "easy.disc.kw_long" };
+    return { keyword };
+  }
+
+  function flowNewCell(r) {
+    if (r.new_product_state === "DONE") return r.is_new_product ? chip("ok", T("easy.disc.new_yes")) : chip("gray", T("easy.disc.new_no"));
+    if (r.new_product_state === "UNKNOWN_DATE") return chip("gray", T("easy.disc.new_unknown"));
+    return `<span class="ez-faint">${esc(T("easy.disc.new_todo"))}</span>`;
+  }
+
+  function flowDecisionCell(d) {
+    if (!d) return '<span class="ez-faint">—</span>';
+    return `<span class="ez-chip ${REC_CHIP[d.recommendation] || "gray"}">${esc(REC_KEY[d.recommendation] ? T(REC_KEY[d.recommendation]) : String(d.recommendation))}</span>`;
+  }
+
+  function flowActionHtml(r) {
+    const id = esc(r.candidate_id);
+    const btn = (attr, key, line) => `<button type="button" class="ez-btn ${line ? "line " : ""}sm" ${attr}="${id}">${esc(T(key))}</button>`;
+    const evalLink = btn("data-ez-flow-eval", "easy.disc.do_eval", true);
+    if (r.next === "TREND") return `${btn("data-ez-flow-trend", "easy.disc.do_trend")} ${evalLink}`;
+    if (r.next === "NEW_PRODUCT") return `${btn("data-ez-flow-new", "easy.disc.do_new")} ${evalLink}`;
+    if (r.next === "EVALUATE") return btn("data-ez-flow-eval", "easy.disc.do_eval");
+    if (r.next === "REVIEW" && r.decision) return `<button type="button" class="ez-btn sm" data-ez-flow-review="${esc(r.decision.id)}">${esc(T("easy.disc.do_review"))}</button>`;
+    const done = FLOW_DONE_CHIP[r.next] || FLOW_DONE_CHIP.CLOSED;
+    return chip(done[0], T(done[1]));
+  }
+
+  function flowNoteHtml() {
+    const n = flowState.note;
+    return n ? `<div class="ez-note ${n.tone}" style="margin-top:12px"><div>${esc(n.text)}</div></div>` : "";
+  }
+
+  async function flowTrendAsk(r) {
+    const kw = r.keyword || {};
+    const removed = (kw.removed || []).length ? `<p class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.disc.kw_removed", { list: kw.removed.join(", ") }))}</p>` : "";
+    const long = kw.needs_shortening ? `<p class="ez-note warn" style="margin-top:8px"><span>${esc(T("easy.disc.kw_long_hint"))}</span></p>` : "";
+    const picked = await ezDialog({
+      title: T("easy.disc.trend_title"), okLabel: T("easy.disc.trend_go"),
+      bodyHtml: `<p>${esc(T("easy.disc.trend_body", { name: r.product_name }))}</p>${removed}${long}
+        <label style="display:block;margin-top:10px">${esc(T("easy.disc.kw_label"))}<br><input name="keyword" maxlength="${FLOW_KEYWORD_MAX}" value="${esc(kw.keyword || "")}" style="width:100%"></label>`,
+    });
+    if (!picked) return false;
+    const checked = flowKeywordCheck(picked.get("keyword"));
+    if (checked.error) { flowState.note = { tone: "warn", text: T(checked.error, { max: FLOW_KEYWORD_MAX }) }; return true; }
+    try {
+      const res = await api(`/product-candidates/${encodeURIComponent(r.candidate_id)}/refresh-trend-analysis`, { method: "POST", body: JSON.stringify({ keyword: checked.keyword }) });
+      flowState.note = res.status === "APPLIED"
+        ? { tone: "ok", text: T("easy.disc.trend_ok", { name: r.product_name, kw: res.keyword, score: Number(res.trend_score).toFixed(2) }) }
+        : { tone: "warn", text: T("easy.disc.trend_none", { name: r.product_name, kw: res.keyword || checked.keyword, reason: res.reason || "" }) };
+    } catch (err) {
+      flowState.note = { tone: "bad", text: (err && err.message) || T("easy.error") };
+    }
+    return true;
+  }
+
+  async function flowNewProduct(r) {
+    try {
+      const res = await api(`/product-candidates/${encodeURIComponent(r.candidate_id)}/evaluate-new-product`, { method: "POST" });
+      if (res.status === "APPLIED") flowState.note = { tone: "ok", text: T(res.is_new_product ? "easy.disc.new_ok_yes" : "easy.disc.new_ok_no", { name: r.product_name, days: res.age_days }) };
+      else flowState.note = { tone: "warn", text: T("easy.disc.new_not_done", { name: r.product_name, reason: res.reason || "" }) };
+    } catch (err) {
+      flowState.note = { tone: "bad", text: (err && err.message) || T("easy.error") };
+    }
+  }
+
+  async function renderFlow(host) {
+    host.innerHTML = loadingHtml();
+    let data;
+    try { data = await api("/product-candidates/discovery-flow?limit=200"); }
+    catch (err) { host.innerHTML = `<div class="ez-note bad" style="margin-top:12px"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    const rows = data.rows || [];
+    const notes = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.disc.lead"))}</div></div>`
+      + (data.naver_key_registered ? "" : `<div class="ez-note warn" style="margin-top:8px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(T("easy.disc.no_naver"))}</div></div>`)
+      + (data.truncated ? `<div class="ez-note warn" style="margin-top:8px"><div>${esc(T("easy.disc.truncated"))}</div></div>` : "")
+      + flowNoteHtml();
+    if (!rows.length) { host.innerHTML = notes + emptyHtml("easy.an.empty_cand", "easy.an.empty_cand_s"); return; }
+    const byId = new Map(rows.map((r) => [String(r.candidate_id), r]));
+    host.innerHTML = `${notes}<div style="overflow-x:auto"><table class="ez-table ez-flow"><thead><tr>${["easy.col.product", "easy.disc.col_kw", "easy.an.col_trend", "easy.disc.col_new", "easy.disc.col_dec", "easy.disc.col_next"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => {
+      const kw = r.keyword || {};
+      return `<tr><td><span class="ez-cell"><span class="ez-thumb">${icon("bag")}</span><span><b>${esc(r.product_name)}</b><small>#${esc(r.candidate_id)} ${esc(r.market || "")}</small></span></span></td>
+        <td>${kw.keyword ? esc(kw.keyword) : '<span class="ez-faint">—</span>'}${kw.needs_shortening ? ` ${chip("wait", T("easy.disc.kw_long_chip"))}` : ""}</td>
+        <td>${scoreCell(r.trend_score)}</td><td>${flowNewCell(r)}</td><td>${flowDecisionCell(r.decision)}</td><td style="white-space:nowrap">${flowActionHtml(r)}</td></tr>`;
+    }).join("")}</tbody></table></div>`;
+    const rerun = () => { S.selected.analysisTab = "FLOW"; loadAnalysis(); };
+    host.querySelectorAll("[data-ez-flow-trend]").forEach((b) => b.addEventListener("click", async () => {
+      const r = byId.get(b.dataset.ezFlowTrend);
+      if (!r || b.disabled) return;
+      b.disabled = true;
+      try { if (await flowTrendAsk(r)) rerun(); } finally { b.disabled = false; }
+    }));
+    host.querySelectorAll("[data-ez-flow-new]").forEach((b) => b.addEventListener("click", async () => {
+      const r = byId.get(b.dataset.ezFlowNew);
+      if (!r || b.disabled) return;
+      b.disabled = true;
+      await flowNewProduct(r);
+      rerun();
+    }));
+    host.querySelectorAll("[data-ez-flow-eval]").forEach((b) => b.addEventListener("click", () => {
+      evalState.candidateId = Number(b.dataset.ezFlowEval) || null;
+      S.selected.analysisTab = "EVAL";
+      loadAnalysis();
+    }));
+    host.querySelectorAll("[data-ez-flow-review]").forEach((b) => b.addEventListener("click", () => B.navigateTo("decision-detail", { id: Number(b.dataset.ezFlowReview) })));
+  }
+
+
   async function loadAnalysis() {
     const root = $("ez-root-easy-analysis");
     root.innerHTML = loadingHtml();
@@ -2920,7 +3040,7 @@
     const total = (cands || []).length;
 
     const perfBadge = perfState.data && perfState.data.ok && perfState.data.summary ? perfState.data.summary.totals.items : "—";
-    const tabs = [["CAND", "easy.an.tab_cand", total], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
+    const tabs = [["CAND", "easy.an.tab_cand", total], ["FLOW", "easy.an.tab_flow", ""], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
       ["DEC", "easy.an.tab_dec", (decisions || []).length], ["CRIT", "easy.an.tab_crit", critState.data ? (critState.data.in_use ? "✓" : "!") : ""],
       ["EVAL", "easy.an.tab_eval", ""],
       ["AI", "easy.an.tab_ai", (models || []).length], ["PERF", "easy.an.tab_perf", perfBadge]];
@@ -2981,6 +3101,8 @@
       renderCriteria(host);
     } else if (tab === "EVAL") {
       renderEval(host, cands);
+    } else if (tab === "FLOW") {
+      renderFlow(host);
     } else {
       const rows = models || [];
       if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_ai", "easy.an.empty_ai_s"); return; }
