@@ -261,3 +261,11 @@ dialog.ez-dialog::backdrop { background: rgba(20, 24, 30, .45); }
 body.easy-view .ez-nav:focus-visible, body.easy-view .ez-btn:focus-visible, body.easy-view .ez-tab:focus-visible,
 body.easy-view .ez-table tbody tr:focus-visible, body.easy-view #ez-bottom button:focus-visible { outline: 3px solid #7BC99B; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { body.easy-view * { transition: none !important; animation: none !important; } }
+
+/* 비서에게 묻기 (2026-11-01) — 좁은 화면에서는 입력 칸과 버튼이 한 줄씩 쌓인다. */
+.ez-ask-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.ez-ask-in { flex: 1 1 260px; min-width: 0; max-width: 560px; padding: 9px 12px; border: 1px solid #CBD2D9; border-radius: 8px; font: inherit; background: #fff; }
+.ez-ask-in:focus-visible { outline: 3px solid #7BC99B; outline-offset: 1px; }
+.ez-ask-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.ez-ask-out:empty { display: none; }
+.ez-ask-out ul { margin: 6px 0 0 18px; padding: 0; line-height: 1.6; }

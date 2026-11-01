@@ -404,6 +404,107 @@
       </div></section>`;
   }
 
+  // ---- 비서에게 묻기 (2026-11-01, AI 통합 계획 5단계의 비용 0 부분) ----
+  // 정해진 질문에 서버가 실제 기록을 규칙으로 센 답을 보여 준다(Claude 없음). 적은 문장은 이 화면 안에서만 아래 낱말과 맞춰 보고,
+  // 서버에는 질문 번호만 보낸다(문장은 보내지 않는다). 낱말 묶음은 모두 맞아야 하고, 묶음 안에서는 하나만 맞으면 된다.
+  const ASK_QUESTIONS = [
+    { id: "TODO_FIRST", words: [["먼저", "할일", "급한", "뭐부터", "first", "todo", "urgent"]] },
+    { id: "ORDERS_TODAY", words: [["주문", "order"], ["오늘", "today"]] },
+    { id: "ORDERS_WEEK", words: [["주문", "order"], ["이번주", "주간", "일주일", "week"]] },
+    { id: "RETURNS_WEEK", words: [["반품", "return"]] },
+    { id: "INQUIRIES_OPEN", words: [["문의", "고객", "답변", "inquir"]] },
+    { id: "APPROVALS", words: [["승인센터", "승인대기", "허용", "approval", "allowance"]] },
+    { id: "PRODUCT_DENIED", words: [["반려", "거절", "denied", "reject"]] },
+    { id: "AI_COST_MONTH", words: [["ai", "claude", "클로드", "인공지능"], ["비용", "금액", "얼마", "사용", "썼", "cost", "spen", "usage"]] },
+    { id: "DISCOVERY", words: [["발굴", "후보", "트렌드", "신제품", "discover", "candidate", "trend"]] },
+  ];
+  const ASK_MAX_CHARS = 100;
+
+  // exact: 낱말 묶음이 모두 맞은 질문, near: 한 묶음이라도 맞은 질문("주문 몇 건?"처럼 '오늘'·'이번 주'를 빼먹은 경우 고르게 한다).
+  function askMatch(text) {
+    const s = String(text || "").toLowerCase().replace(/\s+/g, "");
+    if (!s) return { exact: [], near: [] };
+    const hit = (group) => group.some((w) => s.includes(w));
+    return {
+      exact: ASK_QUESTIONS.filter((q) => q.words.every(hit)).map((q) => q.id),
+      near: ASK_QUESTIONS.filter((q) => q.words.some(hit)).map((q) => q.id),
+    };
+  }
+
+  // 맞춘 결과로 할 일: 딱 하나만 맞으면 바로 묻고, 여럿이면 그중에서, 하나도 없으면 반쯤 맞은 것 중에서 고르게 한다.
+  function askPick(m) {
+    if (m.exact.length === 1) return { run: m.exact[0], choose: [] };
+    return { run: null, choose: m.exact.length ? m.exact : m.near };
+  }
+
+  function askChipsHtml(ids) {
+    return ids.map((id) => `<button type="button" class="ez-btn line sm" data-ez-ask="${esc(id)}">${esc(T(`easy.ask.q_${id.toLowerCase()}`))}</button>`).join("");
+  }
+
+  function askSectionHtml() {
+    return `<section class="ez-ask" aria-label="${esc(T("easy.ask.title"))}">
+      <div class="ez-sec">${esc(T("easy.ask.title"))}<small>${esc(T("easy.ask.sub"))}</small></div>
+      <div class="ez-muted" style="font-size:13px;margin-top:2px">${esc(T("easy.ask.promise"))}</div>
+      <form class="ez-ask-form" data-ez-ask-form>
+        <input type="text" class="ez-ask-in" maxlength="${ASK_MAX_CHARS}" data-ez-ask-text aria-label="${esc(T("easy.ask.input"))}" placeholder="${esc(T("easy.ask.placeholder"))}">
+        <button type="submit" class="ez-btn sm">${esc(T("easy.ask.go"))}</button>
+      </form>
+      <div class="ez-ask-chips">${askChipsHtml(ASK_QUESTIONS.map((q) => q.id))}</div>
+      <div class="ez-ask-out" data-ez-ask-out aria-live="polite"></div>
+    </section>`;
+  }
+
+  // 서버 답(질문 번호·사실 목록)을 글로. 못 읽은 답은 0으로 쓰지 않는다.
+  function askAnswerHtml(id, res) {
+    const head = `<div class="k">${esc(T(`easy.ask.q_${id.toLowerCase()}`))}</div>`;
+    if (!res || res.unknown) return `<div class="ez-card" style="margin-top:12px">${head}<p class="ez-c-orange" style="margin:6px 0 0">${esc(T("easy.ask.unknown"))}</p></div>`;
+    const facts = Array.isArray(res.facts) ? res.facts : [];
+    const lines = facts.map((f) => `<li>${esc(T(`easy.ask.f_${f.key}`, { n: Number(f.n || 0).toLocaleString() }))}</li>`);
+    (res.names || []).forEach((name) => lines.push(`<li class="ez-muted">${esc(name)}</li>`));
+    const body = lines.length ? `<ul>${lines.join("")}</ul>` : `<p style="margin:6px 0 0">${esc(T("easy.ask.nothing"))}</p>`;
+    const since = res.since ? `<div class="ez-muted" style="font-size:12.5px;margin-top:4px">${esc(T("easy.ask.since", { d: res.since }))}</div>` : "";
+    const unread = (res.unknown_sources || []).length ? `<div class="ez-c-orange" style="font-size:12.5px;margin-top:4px">${esc(T("easy.ask.unread", { what: res.unknown_sources.join(", ") }))}</div>` : "";
+    const at = parseUtcMs(res.as_of);
+    const basis = `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.ask.basis", { at: at === null ? "—" : new Date(at).toLocaleString() }))}</div>`;
+    const go = res.link ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-ask-go="${esc(res.link)}">${esc(T("easy.ask.open"))}</button></div>` : "";
+    return `<div class="ez-card" style="margin-top:12px">${head}${body}${since}${unread}${basis}${go}</div>`;
+  }
+
+  async function askRun(id, out) {
+    out.innerHTML = loadingHtml();
+    let res;
+    try {
+      res = await api(`/orchestration/assistant/answer?question_id=${encodeURIComponent(id)}`);
+    } catch (err) {
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`;
+      return;
+    }
+    out.innerHTML = askAnswerHtml(id, res);
+    const go = out.querySelector("[data-ez-ask-go]");
+    if (go) go.addEventListener("click", () => {
+      if (go.dataset.ezAskGo === "easy-analysis") S.selected.analysisTab = "FLOW";
+      B.navigateTo(go.dataset.ezAskGo);
+    });
+  }
+
+  function bindAsk(root) {
+    const out = root.querySelector("[data-ez-ask-out]");
+    const form = root.querySelector("[data-ez-ask-form]");
+    if (!out || !form) return;
+    const bindChips = (scope) => scope.querySelectorAll("[data-ez-ask]").forEach((btn) => btn.addEventListener("click", () => askRun(btn.dataset.ezAsk, out)));
+    bindChips(root.querySelector(".ez-ask-chips"));
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const pick = askPick(askMatch(form.querySelector("[data-ez-ask-text]").value));
+      if (pick.run) { askRun(pick.run, out); return; }
+      const ids = pick.choose;
+      out.innerHTML = ids.length
+        ? `<div class="ez-note info"><div>${esc(T("easy.ask.which"))}<div class="ez-ask-chips">${askChipsHtml(ids)}</div></div></div>`
+        : `<div class="ez-note warn"><div>${esc(T("easy.ask.no_match"))}</div></div>`;
+      bindChips(out);
+    });
+  }
+
   async function loadToday() {
     const root = $("ez-root-easy-today");
     root.innerHTML = loadingHtml();
@@ -592,6 +693,7 @@
       <div class="ez-head"><div><h1>${esc(T("easy.nav.today"))}</h1><div class="ez-lead">${esc(T("easy.today.lead", { mine, watch: counts.PROGRESS }))}</div></div></div>
       ${wq.failed.length ? `<div class="ez-note info"><div>${esc(T("wq.partial_notice", { sources: wq.failed.map((k) => T(`wq.src.${k}`)).join(", ") }))}</div></div>` : ""}
       ${briefingHtml(brief)}
+      ${askSectionHtml()}
       <div class="ez-flow" role="group" aria-label="${esc(T("easy.flow.aria"))}">${flow}</div>
       <div class="ez-tabs" role="tablist">
         ${[["ALL", "easy.tab.all", rows.length], ["MINE", "easy.tab.mine", mine], ["PROGRESS", "easy.tab.progress", counts.PROGRESS]].map(([id, key, n]) =>
@@ -608,6 +710,7 @@
     if (sysAdv) sysAdv.addEventListener("click", () => systemAdviceAsk(brief.system));
     const briefFlow = root.querySelector("[data-ez-brief-flow]");
     if (briefFlow) briefFlow.addEventListener("click", () => { S.selected.analysisTab = "FLOW"; B.navigateTo("easy-analysis"); });
+    bindAsk(root);
     root.querySelectorAll("[data-ez-filter]").forEach((btn) => btn.addEventListener("click", () => { S.selected.todoFilter = btn.dataset.ezFilter; loadToday(); }));
 
     const main = $("ez-today-main");
