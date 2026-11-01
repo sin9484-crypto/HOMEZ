@@ -3250,6 +3250,7 @@
       : T("easy.disc.auto_never");
     const blocked = (last && FLOW_BLOCKED_KEYS[last.blocked] ? `<div class="ez-c-red" style="font-size:13px;margin-top:4px">${esc(T(FLOW_BLOCKED_KEYS[last.blocked]))}</div>` : "")
       + (last && n(last.release_filled) ? `<div class="s" style="margin-top:4px">${esc(T("easy.disc.auto_filled", { n: n(last.release_filled) }))}</div>` : "")
+      + (last && (n(last.kw_saved) || n(last.kw_no_data) || n(last.kw_left)) ? `<div class="s" style="margin-top:4px">${esc(T("easy.disc.auto_kw", { s: n(last.kw_saved), nd: n(last.kw_no_data), l: n(last.kw_left) }))}</div>` : "")
       + (last && FLOW_FILL_BLOCKED[last.release_blocked] ? `<div class="ez-c-red" style="font-size:13px;margin-top:4px">${esc(T(FLOW_FILL_BLOCKED[last.release_blocked]))}</div>` : "");
     const state = !known ? chip("gray", T("easy.disc.auto_unknown")) : (on ? chip("ok", T("easy.disc.auto_on")) : chip("gray", T("easy.disc.auto_off")));
     const btn = known ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-flow-auto="${on ? "MANUAL" : "AUTOMATIC"}">${esc(T(on ? "easy.disc.auto_turn_off" : "easy.disc.auto_turn_on"))}</button></div>` : "";
@@ -3342,6 +3343,118 @@
     }
   }
 
+  // ---- 관심 키워드 (2026-11-01 사용자 결정 D3) ----
+  // 사람이 입력한 키워드의 네이버 검색어 추이를 본다. 값은 키워드마다 따로 잡은 상대 지수라 키워드끼리 검색량을 비교하지 않는다.
+  const kwState = { note: null, draft: "" };
+  const KW_BLOCKED = { ALLOWANCE_REQUIRED: "easy.kw.blk_allow", ESTOP: "easy.disc.auto_blk_estop", NO_KEY: "easy.kw.blk_key" };
+
+  function kwChangeText(r) {
+    const first = Number(r.first), last = Number(r.last);
+    if (r.first === null || r.first === undefined || r.last === null || r.last === undefined || !Number.isFinite(first) || !Number.isFinite(last)) return "—";
+    if (first <= 0) return T("easy.kw.change_new", { first, last });
+    const pct = Math.round(((last - first) / first) * 100);
+    return T("easy.kw.change", { first, last, pct: `${pct > 0 ? "+" : ""}${pct}` });
+  }
+
+  function kwStateCell(r) {
+    if (r.state === "OK") return chip("ok", T("easy.kw.st_ok"));
+    if (r.state === "NO_DATA") return chip("wait", T("easy.kw.st_no_data"));
+    if (r.state === "FEW_DATA") return chip("wait", T("easy.kw.st_few"));
+    return chip("gray", T("easy.kw.st_never"));
+  }
+
+  function kwNote(res) {
+    const n = (v) => Number(v) || 0;
+    const summary = T("easy.kw.done", { s: n(res.saved), nd: n(res.no_data) + n(res.few_data), f: n(res.failed) });
+    const blocked = KW_BLOCKED[res.blocked];
+    const looked = n(res.saved) + n(res.no_data) + n(res.few_data) + n(res.failed);
+    if (blocked) return { tone: looked ? "warn" : "bad", text: looked ? `${summary} ${T(blocked)}` : T(blocked) };
+    if (!looked) return { tone: "warn", text: T("easy.kw.nothing") };
+    const more = n(res.left) ? ` ${T("easy.kw.more", { l: n(res.left) })}` : "";
+    return { tone: n(res.saved) && !n(res.failed) ? "ok" : "warn", text: summary + more };
+  }
+
+  function kwRowsHtml(rows) {
+    return `<div style="overflow-x:auto"><table class="ez-table ez-kw"><thead><tr>${["easy.kw.col_kw", "easy.an.col_trend", "easy.kw.col_change", "easy.kw.col_at", "easy.kw.col_state", "easy.disc.col_next"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows.map((r, i) => {
+      const old = r.state !== "OK" && r.score_at ? `<small class="ez-faint" style="display:block">${esc(T("easy.kw.old_score", { at: String(r.score_at).replace("T", " ") }))}</small>` : "";
+      return `<tr><td><b>${esc(r.keyword)}</b></td><td>${scoreCell(r.score)}${old}</td><td class="ez-num">${esc(kwChangeText(r))}</td>
+        <td class="ez-num">${r.at ? esc(String(r.at).replace("T", " ")) : '<span class="ez-faint">—</span>'}</td><td>${kwStateCell(r)}</td>
+        <td style="white-space:nowrap"><button type="button" class="ez-btn line sm" data-ez-kw-look="${i}">${esc(T("easy.kw.look"))}</button> <button type="button" class="ez-btn line sm" data-ez-kw-del="${i}">${esc(T("easy.kw.del"))}</button></td></tr>`;
+    }).join("")}</tbody></table></div>`;
+  }
+
+  function kwErrorText(err) {
+    return (err && err.message) || T("easy.error");
+  }
+
+  async function renderKeywords(host) {
+    host.innerHTML = loadingHtml();
+    let data;
+    try { data = await api("/product-candidates/trend-keywords"); }
+    catch (err) { host.innerHTML = `<div class="ez-note bad" style="margin-top:12px"><div>${esc(kwErrorText(err))}</div></div>`; return; }
+    const rows = data.rows || [];
+    const n = kwState.note;
+    const full = rows.length >= (data.max || 30);
+    host.innerHTML = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.kw.lead"))}</div></div>
+      ${data.naver_key_registered ? "" : `<div class="ez-note warn" style="margin-top:8px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(T("easy.disc.no_naver"))}</div></div>`}
+      ${n ? `<div class="ez-note ${n.tone}" style="margin-top:8px"><div>${esc(n.text)}</div></div>` : ""}
+      <form class="ez-ask-form" data-ez-kw-form style="margin-top:12px">
+        <input type="text" class="ez-ask-in" maxlength="40" data-ez-kw-text aria-label="${esc(T("easy.kw.input"))}" placeholder="${esc(T("easy.kw.placeholder"))}" value="${esc(kwState.draft)}">
+        <button type="submit" class="ez-btn sm"${full ? " disabled" : ""}>${esc(T("easy.kw.add"))}</button>
+        ${data.due ? `<button type="button" class="ez-btn line sm" data-ez-kw-all>${esc(T("easy.kw.look_all", { n: Math.min(data.due, data.per_press || 10) }))}</button>` : ""}
+      </form>
+      <div class="ez-muted" style="font-size:13px;margin-top:6px">${esc(T("easy.kw.count", { n: rows.length, max: data.max || 30 }))}</div>
+      ${rows.length ? kwRowsHtml(rows) : emptyHtml("easy.kw.empty", "easy.kw.empty_s")}`;
+    const redo = () => renderKeywords(host);
+    const form = host.querySelector("[data-ez-kw-form]");
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const value = form.querySelector("[data-ez-kw-text]").value;
+      if (!value.trim()) return;
+      try {
+        await api("/product-candidates/trend-keywords", { method: "POST", body: JSON.stringify({ keyword: value }) });
+        kwState.note = null;
+        kwState.draft = "";
+      } catch (err) {
+        kwState.note = { tone: "bad", text: kwErrorText(err) };
+        kwState.draft = value;
+      }
+      redo();
+    });
+    const lookup = async (body) => {
+      try {
+        kwState.note = kwNote(await api("/product-candidates/trend-keywords/lookup", { method: "POST", body: JSON.stringify(body) }));
+      } catch (err) {
+        kwState.note = { tone: "bad", text: kwErrorText(err) };
+      }
+      redo();
+    };
+    const all = host.querySelector("[data-ez-kw-all]");
+    if (all) all.addEventListener("click", async () => {
+      const count = Math.min(data.due, data.per_press || 10);
+      const ok = await ezDialog({ title: T("easy.kw.look_title"), bodyHtml: `<p>${esc(T("easy.kw.look_body", { n: count }))}</p>`, okLabel: T("easy.kw.look_go") });
+      if (!ok) return;
+      all.disabled = true;
+      await lookup({});
+    });
+    host.querySelectorAll("[data-ez-kw-look]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      b.disabled = true;
+      await lookup({ keyword: rows[Number(b.dataset.ezKwLook)].keyword });
+    }));
+    host.querySelectorAll("[data-ez-kw-del]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      b.disabled = true;
+      try {
+        await api("/product-candidates/trend-keywords/remove", { method: "POST", body: JSON.stringify({ keyword: rows[Number(b.dataset.ezKwDel)].keyword }) });
+        kwState.note = null;
+      } catch (err) {
+        kwState.note = { tone: "bad", text: kwErrorText(err) };
+      }
+      redo();
+    }));
+  }
+
   async function renderFlow(host) {
     host.innerHTML = loadingHtml();
     let data;
@@ -3427,7 +3540,7 @@
     const total = (cands || []).length;
 
     const perfBadge = perfState.data && perfState.data.ok && perfState.data.summary ? perfState.data.summary.totals.items : "—";
-    const tabs = [["CAND", "easy.an.tab_cand", total], ["FLOW", "easy.an.tab_flow", ""], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
+    const tabs = [["CAND", "easy.an.tab_cand", total], ["FLOW", "easy.an.tab_flow", ""], ["KEYWORD", "easy.an.tab_kw", ""], ["TREND", "easy.an.tab_trend", trendRows.length], ["NEW", "easy.an.tab_new", newRows.length],
       ["DEC", "easy.an.tab_dec", (decisions || []).length], ["CRIT", "easy.an.tab_crit", critState.data ? (critState.data.in_use ? "✓" : "!") : ""],
       ["EVAL", "easy.an.tab_eval", ""],
       ["AI", "easy.an.tab_ai", (models || []).length], ["PERF", "easy.an.tab_perf", perfBadge]];
@@ -3490,6 +3603,8 @@
       renderEval(host, cands);
     } else if (tab === "FLOW") {
       renderFlow(host);
+    } else if (tab === "KEYWORD") {
+      renderKeywords(host);
     } else {
       const rows = models || [];
       if (!rows.length) { host.innerHTML = emptyHtml("easy.an.empty_ai", "easy.an.empty_ai_s"); return; }

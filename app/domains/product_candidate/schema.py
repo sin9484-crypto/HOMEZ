@@ -12,6 +12,7 @@ from datetime import date
 from datetime import datetime
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 
 
@@ -24,6 +25,22 @@ class ProductCandidateDiscover(BaseModel):
     category_hint: str | None = None
     brand_hint: str | None = None
     release_date: date | None = None
+
+
+class TrendKeywordRequest(BaseModel):
+    """2026-11-01 D3 — 관심 키워드 한 개(서버가 정리·검사한다)."""
+
+    keyword: str = Field(..., max_length=200)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TrendKeywordLookupRequest(BaseModel):
+    """비워 두면 오늘 안 본 키워드를 조회한다."""
+
+    keyword: str | None = Field(default=None, max_length=200)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class ProductCandidatePrivateCreate(BaseModel):

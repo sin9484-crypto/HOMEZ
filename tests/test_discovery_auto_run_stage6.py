@@ -339,7 +339,8 @@ class RunTests(DbCase):
         self.assertEqual(sorted(self.http.sent), ["무릎보호대", "생수"])
         self.assertEqual(summary, {"at": "2026-10-31T07:00", "trend_saved": 2, "trend_no_data": 0, "new_saved": 1,
                                    "skipped_long": 1, "skipped_empty": 1, "deferred": 0, "failed": 0, "blocked": None,
-                                   "release_filled": 0, "release_blocked": None})  # 2026-11-01 D4: 온채널 후보가 없으면 채우기는 호출 없이 0건
+                                   "release_filled": 0, "release_blocked": None,  # 2026-11-01 D4: 온채널 후보가 없으면 채우기는 호출 없이 0건
+                                   "kw_saved": 0, "kw_no_data": 0, "kw_left": 0})  # 2026-11-01 D3: 관심 키워드가 없으면 호출 없이 0건
         self.assertIsNotNone(self.candidate(water.id).trend_score)
         self.assertTrue(any("검색어 '생수'(규칙)" in e for e in self.evidence(water.id)))
         self.assertEqual((self.candidate(knee.id).is_new_product, self.candidate(knee.id).novelty_score is not None), (True, True))

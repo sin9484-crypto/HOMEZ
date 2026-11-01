@@ -7,6 +7,7 @@ File : app/domains/product_candidate/discovery_auto_run_service.py
 2026-10-31 — AI 통합 계획 6단계: 상품 발굴 자동 실행(하루 한 번). 3단계 탐색 흐름에서 사람이 누르던 두 가지를 정해진 시간에 대신 누른다.
   - 출시일 채우기(2026-11-01 사용자 결정 D4): 출시일이 빈 온채널 후보를 온채널 등록일로 채운다. 온채널 목록 조회는 승인 센터 허용이 있어야 나간다.
   - 신제품 판정: 출시일이 적힌 후보만(바깥 호출 없음). 채우지 못한 후보는 손대지 않는다('모름').
+  - 관심 키워드(2026-11-01 사용자 결정 D3): 후보 트렌드 조회 뒤 남은 건수 안에서, 사람이 입력한 키워드 중 오늘 안 본 것을 조회한다(같은 허용·같은 상한).
   - 트렌드 조회: 규칙 검색어가 있고 짧은(3단어 이하) 후보만, 한 번에 최대 10건. 네이버 호출은 승인 센터의 '검색어 트렌드 조회' 허용이
     있어야 나가고(없으면 그 자리에서 멈추고 허용 요청이 올라간다), 긴 검색어는 사람이 고르도록 건너뛴다.
 하지 않는 것: 판매 판단 평가·승인·거절·상품 등록·쿠팡 쓰기. 사람 검토를 기다리는 후보는 건드리지 않는다.
@@ -174,7 +175,7 @@ class DiscoveryAutoRunService:
         summary = {
             "at": (now + _KST).strftime("%Y-%m-%dT%H:%M"), "trend_saved": 0, "trend_no_data": 0, "new_saved": 0,
             "skipped_long": 0, "skipped_empty": 0, "deferred": 0, "failed": 0, "blocked": None,
-            "release_filled": 0, "release_blocked": None,
+            "release_filled": 0, "release_blocked": None, "kw_saved": 0, "kw_no_data": 0, "kw_left": 0,
         }
 
         if SafetyService(self.db).is_emergency_stop_active():
@@ -245,7 +246,46 @@ class DiscoveryAutoRunService:
             else:
                 summary["trend_no_data"] += 1
 
+        if summary["blocked"] is None:
+            try:
+                self._watch_keywords(company_id, summary, now)
+            except Exception:  # noqa: BLE001 — 후보 쪽 결과는 그대로 남긴다
+                self.db.rollback()
+                summary["failed"] += 1
+                logger.exception("상품 발굴 자동 실행: 회사 %s 관심 키워드 조회 실패", company_id)
+
         return self._record(company_id, summary)
+
+    def _watch_keywords(self, company_id: int, summary: dict, now: datetime) -> None:
+        from app.domains.trend_discovery.keyword_watch_service import TrendKeywordService
+
+        service = TrendKeywordService(self.db, now_factory=lambda: now)
+        budget = MAX_TREND_LOOKUPS_PER_RUN - summary["trend_saved"] - summary["trend_no_data"] - summary["failed"] - summary["deferred"]
+        due = {user_id: service.due_keywords(user_id, company_id) for user_id in service.company_users(company_id)}
+        due = {user_id: words for user_id, words in due.items() if words}
+        total = sum(len(words) for words in due.values())
+        if not total:
+            return
+        if self._key_check() is False:
+            summary["blocked"] = BLOCKED_NO_KEY
+            summary["kw_left"] = total
+            return
+        adapter = self._adapter_factory(self.db, company_id)
+        done = 0
+        for user_id in due:
+            if budget <= 0:
+                break
+            result = service.lookup(user_id, company_id, adapter, limit=budget)
+            summary["kw_saved"] += result["saved"]
+            summary["kw_no_data"] += result["no_data"] + result["few_data"]
+            summary["failed"] += result["failed"]
+            used = result["saved"] + result["no_data"] + result["few_data"] + result["failed"]
+            done += used
+            budget -= used
+            if result["blocked"]:
+                summary["blocked"] = result["blocked"]
+                break
+        summary["kw_left"] = total - done
 
     def _fill_release_dates(self, company_id: int) -> dict:
         if self._release_filler is not None:

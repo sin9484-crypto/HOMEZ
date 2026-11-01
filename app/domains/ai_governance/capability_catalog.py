@@ -1042,6 +1042,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/orchestration/assistant_qa_service.py::AssistantQaService.answer() (GET /orchestration/assistant/answer — 비서에게 묻기, 규칙)",
             "app/domains/orchestration/assistant_ask_ai_service.py::AssistantAskAiService.ask() (POST /orchestration/assistant/ask-ai — 자유 질문, 사용자가 확인할 때만)",
             "app/domains/product_candidate/release_date_fill_service.py::ReleaseDateFillService.run() (POST /product-candidates/fill-release-dates — 사용자 결정 D4, 온채널 등록일을 출시일로, AI 없음)",
+            "app/domains/trend_discovery/keyword_watch_service.py::TrendKeywordService.lookup() (POST /product-candidates/trend-keywords/lookup — 사용자 결정 D3, 사람이 입력한 키워드의 검색어 추이, AI 없음)",
         ),
         unimplemented_dependencies=(
             "AI 업무 제안 UI 미연결",

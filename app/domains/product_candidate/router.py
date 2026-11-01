@@ -41,6 +41,8 @@ from app.domains.product_candidate.schema import (
     ProductCandidateDecisionRequest,
 )
 from app.domains.product_candidate.schema import ProductCandidatePrivateCreate
+from app.domains.product_candidate.schema import TrendKeywordLookupRequest
+from app.domains.product_candidate.schema import TrendKeywordRequest
 from app.domains.product_candidate.schema import ProductCandidateResponse
 from app.domains.product_candidate.schema import NewProductRefreshResponse
 from app.domains.product_candidate.schema import TrendAnalysisRefreshRequest
@@ -253,6 +255,80 @@ def save_naver_datalab_credential(
     )
 
     return NaverDataLabCredentialStatusResponse(registered=True)
+
+
+def _trend_key_check(credential_store: CredentialStore) -> bool | None:
+    """네이버 키가 저장돼 있는지(값은 쓰지 않는다). 확인할 수 없으면 None."""
+
+    try:
+        credential_store.read(NaverDataLabTrendAdapter.DEFAULT_CREDENTIAL_REFERENCE)
+        return True
+    except CredentialNotFoundError:
+        return False
+    except CredentialStoreError:
+        return None
+
+
+@router.get("/trend-keywords")
+def list_trend_keywords(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_trend_credential_store),
+):
+    """2026-11-01 사용자 결정 D3 — 사람이 입력한 관심 키워드와 마지막 조회 결과(읽기 전용, 바깥 호출 없음)."""
+
+    from app.domains.trend_discovery.keyword_watch_service import TrendKeywordService
+
+    return {
+        **TrendKeywordService(db).list_rows(current_user.id, current_user.company_id),
+        "naver_key_registered": _trend_key_check(credential_store) is not False,
+    }
+
+
+@router.post("/trend-keywords")
+def add_trend_keyword(
+    data: TrendKeywordRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """관심 키워드 추가(바깥 호출 없음)."""
+
+    from app.domains.trend_discovery.keyword_watch_service import TrendKeywordService
+
+    return TrendKeywordService(db).add(current_user.id, current_user.company_id, data.keyword)
+
+
+@router.post("/trend-keywords/remove")
+def remove_trend_keyword(
+    data: TrendKeywordRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """관심 키워드 지우기(바깥 호출 없음)."""
+
+    from app.domains.trend_discovery.keyword_watch_service import TrendKeywordService
+
+    return TrendKeywordService(db).remove(current_user.id, current_user.company_id, data.keyword)
+
+
+@router.post("/trend-keywords/lookup")
+def lookup_trend_keywords(
+    data: TrendKeywordLookupRequest | None = None,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    adapter: TrendSourceAdapter = Depends(get_trend_adapter),
+    credential_store: CredentialStore = Depends(get_trend_credential_store),
+):
+    """네이버 검색어 트렌드 조회(호출마다 승인 센터 허용 1회). 허용이 없으면 호출하지 않고 blocked로 알린다."""
+
+    from app.domains.trend_discovery.keyword_watch_service import TrendKeywordService
+
+    service = TrendKeywordService(db)
+    result = service.lookup(
+        current_user.id, current_user.company_id, adapter,
+        keyword=data.keyword if data is not None else None, key_check=lambda: _trend_key_check(credential_store),
+    )
+    return {**result, **service.list_rows(current_user.id, current_user.company_id)}
 
 
 @router.post("/fill-release-dates")
