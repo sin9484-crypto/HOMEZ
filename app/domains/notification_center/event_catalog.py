@@ -428,6 +428,16 @@ EVENT_CATALOG: dict[str, NotificationEventDefinition] = {
             description_ko="주간 백업 복구 리허설이 실패했습니다 — 실제 복구가 안 될 수 있습니다.",
             description_en="The weekly backup restore rehearsal failed — real recovery may not work.",
         ),
+        # 2026-11-01 AI 통합 계획 6단계 — 아침 브리핑(하루 한 번 요약).
+        # app/domains/orchestration/morning_brief_service.py가 정해진
+        # 시간(scheduler/jobs.py::run_morning_brief_job)에 발생시킨다.
+        # 앱 안 알림만 — 이메일 기본값은 끔(알림 받을 곳은 사용자 결정).
+        _e(
+            "DAILY_BRIEFING", NotificationCategory.ORDER,
+            NotificationSeverity.LOW, wired=True,
+            description_ko="아침 브리핑: 오늘 볼 일(문의·주문·반품·승인·상품 발굴·점검) 개수를 하루 한 번 요약합니다.",
+            description_en="Morning briefing: a once-a-day count of today's work (inquiries, orders, returns, approvals, discovery, checks).",
+        ),
     ]
 }
 

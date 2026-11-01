@@ -670,6 +670,12 @@ textarea { min-height: 60px; resize: vertical; }
   padding: 0;
 }
 
+/* 2026-11-01 — 좁은 화면(≤640px)에서는 벨이 왼쪽에 있어 오른쪽 정렬 드롭다운이 화면 왼쪽 밖으로 나갔다(아침 브리핑 알림 E2E에서 발견).
+   화면 폭에 맞춰 벨 바로 아래에 펼친다. */
+@media (max-width: 640px) {
+  .topbar-notif-dropdown { position: fixed; left: 8px; right: 8px; top: auto; min-width: 0; max-width: none; max-height: 70vh; }
+}
+
 .topbar-notif-head {
   display: flex;
   align-items: center;

@@ -673,6 +673,8 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             # 2026-10-05 — 공급처가 상품 판매중단을 명시해 판매중지·미출고 주문
             # 취소 처리를 시작/준비했을 때(supplier_stop_sale_service.py).
             "SUPPLIER_STOP_SALE_CONFIRMED",
+            # 2026-11-01 — 아침 브리핑(하루 한 번, morning_brief_service.py).
+            "DAILY_BRIEFING",
         }
         actual_wired = {code for code, row in by_code.items() if row.wired}
         self.assertEqual(actual_wired, expected_wired)
@@ -713,6 +715,8 @@ class NotificationPreferenceRouterTestCase(unittest.TestCase):
             Path("app/domains/recall_notice/service.py"),
             # 2026-10-05 — SUPPLIER_STOP_SALE_CONFIRMED가 실제로 발생하는 위치.
             Path("app/domains/purchase_task/supplier_stop_sale_service.py"),
+            # 2026-11-01 — DAILY_BRIEFING이 실제로 발생하는 위치.
+            Path("app/domains/orchestration/morning_brief_service.py"),
         ]
         source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
         for event_code, definition in EVENT_CATALOG.items():

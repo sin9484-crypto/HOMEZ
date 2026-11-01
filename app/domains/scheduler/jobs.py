@@ -110,6 +110,10 @@ PRODUCT_STATUS_INTERVAL_MINUTES = 30
 DISCOVERY_AUTO_RUN_JOB_ID = "daily_discovery_auto_run"
 DISCOVERY_AUTO_RUN_INTERVAL_MINUTES = 60
 
+# 2026-11-01 아침 브리핑(하루 한 번, 한국 시각 7시 이후) — 저장된 값의 개수만 세어 앱 안 알림으로 남긴다. 바깥 호출 없음.
+MORNING_BRIEF_JOB_ID = "daily_morning_brief"
+MORNING_BRIEF_INTERVAL_MINUTES = 60
+
 
 def run_backup_rehearsal_job(
     *,
@@ -415,6 +419,34 @@ def run_discovery_auto_run_job(session_factory=None, adapter_factory=None, now=N
         db.close()
 
 
+def run_morning_brief_job(session_factory=None, now_factory=None) -> None:
+    """2026-11-01 AI 통합 계획 6단계 — 아침 브리핑. 회사마다 활성 사용자에게 앱 안 알림 한 건(같은 사람·같은 날 한 번, 알림 설정에서
+    끈 사람 제외). 저장된 값만 읽고 바깥을 부르지 않으며 아무것도 바꾸지 않는다. 한 회사의 실패가 다른 회사나 스케줄러를 막지 않는다."""
+
+    if session_factory is None:
+        from app.database.session import SessionLocal
+        session_factory = SessionLocal
+
+    db = session_factory()
+    try:
+        from app.domains.orchestration.morning_brief_service import MorningBriefService
+
+        if not MorningBriefService.installed(db):
+            return
+        for company_id in MorningBriefService.candidate_companies(db):
+            try:
+                result = MorningBriefService(db, now_factory=now_factory).run(company_id)
+                if result["sent"]:
+                    logger.info("아침 브리핑: 회사 %s 알림 %d건", company_id, result["sent"])
+            except Exception:  # noqa: BLE001 — 한 회사의 실패가 다른 회사를 막지 않는다
+                db.rollback()
+                logger.exception("아침 브리핑: 회사 %s 실패", company_id)
+    except Exception:  # noqa: BLE001 — 한 번의 Job 실패가 스케줄러를 죽이지 않는다
+        logger.exception("아침 브리핑 Job에서 예외 발생")
+    finally:
+        db.close()
+
+
 def register_all_jobs() -> None:
     """
     2026-09-10 Phase 6 — 현재 등록하는 Job은 백업 복구 리허설
@@ -496,11 +528,18 @@ def register_all_jobs() -> None:
         job_id=DISCOVERY_AUTO_RUN_JOB_ID,
     )
 
+    # 2026-11-01 — 1시간마다 깨어나되, 7시(한국 시각) 전이거나 오늘 이미 받은 사람에게는 보내지 않는다.
+    SchedulerService.add_interval_job(
+        run_morning_brief_job,
+        minutes=MORNING_BRIEF_INTERVAL_MINUTES,
+        job_id=MORNING_BRIEF_JOB_ID,
+    )
+
     logger.info(
-        "Scheduler jobs registered: %s, %s, %s, %s, %s, %s, %s",
+        "Scheduler jobs registered: %s, %s, %s, %s, %s, %s, %s, %s",
         BACKUP_REHEARSAL_JOB_ID, RECALL_NOTICE_CHECK_JOB_ID,
         ORDER_COLLECTION_TICK_JOB_ID, DELIVERY_TRACKING_JOB_ID, AFTER_SALES_JOB_ID, PRODUCT_STATUS_JOB_ID,
-        DISCOVERY_AUTO_RUN_JOB_ID,
+        DISCOVERY_AUTO_RUN_JOB_ID, MORNING_BRIEF_JOB_ID,
     )
 
 
@@ -514,5 +553,7 @@ __all__ = [
     "run_order_collection_tick_job",
     "DISCOVERY_AUTO_RUN_JOB_ID",
     "run_discovery_auto_run_job",
+    "MORNING_BRIEF_JOB_ID",
+    "run_morning_brief_job",
     "register_all_jobs",
 ]
