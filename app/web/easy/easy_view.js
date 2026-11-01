@@ -487,6 +487,55 @@
     });
   }
 
+  // 자유 문장은 Claude로(사용자가 확인 창에서 고를 때만). 보내기 전에 화면에서도 개인정보로 보이는 것을 가려 보여 주고 그 글만 보낸다
+  // (서버가 같은 규칙으로 한 번 더 가린다). 숫자는 서버가 규칙으로 센 답에서만 오고, 그 답을 근거로 함께 보여 준다.
+  const ASK_MASKS = [
+    [/(?:https?:\/\/|www\.)\S+/gi, "[주소창]"],
+    [/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "[이메일]"],
+    [/(?<!\d)(?:\+?82[-\s]?)?0?\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/g, "[전화번호]"],
+    [/\d{8,}/g, "[번호]"],
+  ];
+  function askMask(text) {
+    let value = String(text || "").replace(/\s+/g, " ").trim();
+    ASK_MASKS.forEach(([re, rep]) => { value = value.replace(re, rep); });
+    return value.slice(0, ASK_MAX_CHARS);
+  }
+
+  function askAiHtml(res) {
+    const usage = res.usage ? `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.ask.ai_usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</div>` : "";
+    const masked = res.masked_count ? `<div class="ez-muted" style="font-size:12px;margin-top:4px">${esc(T("easy.ask.ai_masked", { n: res.masked_count }))}</div>` : "";
+    if (res.answerable === null || res.answerable === undefined) {
+      const why = Object.values(res.rejected || {}).map((w) => `<div class="ez-muted" style="font-size:12.5px">${esc(w)}</div>`).join("");
+      return `<div class="ez-note warn" style="margin-top:12px"><div>${esc(T("easy.ask.ai_rejected"))}${why}${usage}</div></div>`;
+    }
+    if (!res.answerable) return `<div class="ez-note info" style="margin-top:12px"><div>${esc(T("easy.ask.ai_cannot"))}<div class="ez-ask-chips">${askChipsHtml(ASK_QUESTIONS.map((q) => q.id))}</div>${usage}</div></div>`;
+    const evidence = (res.evidence || []).map((ev) => askAnswerHtml(ev.question_id, ev)).join("");
+    return `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info">AI</span><div><div>${esc(res.answer || "")}</div>`
+      + `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.ask.ai_note"))}</div>${masked}${usage}</div></div>`
+      + `<div class="ez-muted" style="font-size:12.5px;margin-top:10px">${esc(T("easy.ask.ai_evidence"))}</div>${evidence}`;
+  }
+
+  async function askAiRun(text, out) {
+    const sent = askMask(text);
+    if (!sent) return;
+    const ok = await ezDialog({ title: T("easy.ask.ai_title"), bodyHtml: `<p>${esc(T("easy.ask.ai_body"))}</p><p class="ez-muted" style="font-size:13px">${esc(T("easy.ask.ai_sent"))}</p><p><b>${esc(sent)}</b></p>`, okLabel: T("easy.ask.ai_btn") });
+    if (!ok) return;
+    out.innerHTML = loadingHtml();
+    let res;
+    try {
+      res = await api("/orchestration/assistant/ask-ai", { method: "POST", body: JSON.stringify({ text: sent }) });
+    } catch (err) {
+      out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.ask.ai_failed"))}</div></div>`;
+      return;
+    }
+    out.innerHTML = askAiHtml(res);
+    out.querySelectorAll("[data-ez-ask]").forEach((btn) => btn.addEventListener("click", () => askRun(btn.dataset.ezAsk, out)));
+    out.querySelectorAll("[data-ez-ask-go]").forEach((go) => go.addEventListener("click", () => {
+      if (go.dataset.ezAskGo === "easy-analysis") S.selected.analysisTab = "FLOW";
+      B.navigateTo(go.dataset.ezAskGo);
+    }));
+  }
+
   function bindAsk(root) {
     const out = root.querySelector("[data-ez-ask-out]");
     const form = root.querySelector("[data-ez-ask-form]");
@@ -495,13 +544,18 @@
     bindChips(root.querySelector(".ez-ask-chips"));
     form.addEventListener("submit", (ev) => {
       ev.preventDefault();
-      const pick = askPick(askMatch(form.querySelector("[data-ez-ask-text]").value));
+      const text = form.querySelector("[data-ez-ask-text]").value;
+      const pick = askPick(askMatch(text));
       if (pick.run) { askRun(pick.run, out); return; }
+      // 바로 답할 질문이 하나로 정해지지 않으면 언제나 'Claude에게 묻기'도 둔다(예: '이번 달 매출은 얼마야?'는 '얼마'만 맞아 AI 사용 금액이 뜬다)
       const ids = pick.choose;
+      const aiHtml = `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-ask-ai>${esc(T("easy.ask.ai_btn"))}</button></div>`;
       out.innerHTML = ids.length
-        ? `<div class="ez-note info"><div>${esc(T("easy.ask.which"))}<div class="ez-ask-chips">${askChipsHtml(ids)}</div></div></div>`
-        : `<div class="ez-note warn"><div>${esc(T("easy.ask.no_match"))}</div></div>`;
+        ? `<div class="ez-note info"><div>${esc(T("easy.ask.which"))}<div class="ez-ask-chips">${askChipsHtml(ids)}</div><div class="ez-muted" style="font-size:12.5px;margin-top:8px">${esc(T("easy.ask.which_ai"))}</div>${aiHtml}</div></div>`
+        : `<div class="ez-note warn"><div>${esc(T("easy.ask.no_match"))}${aiHtml}</div></div>`;
       bindChips(out);
+      const aiBtn = out.querySelector("[data-ez-ask-ai]");
+      if (aiBtn) aiBtn.addEventListener("click", () => askAiRun(text, out));
     });
   }
 
@@ -2441,7 +2495,7 @@
 
   // 2026-10-31 AI 사용 설정(AI 통합 계획 2단계 준비): Claude를 쓰는 기능이 함께 쓰는 모델·월 한도·단가·API 키와 이번 달 사용 기록.
   // 보기는 바깥 호출이 없다. 저장은 확인 창 → 비밀번호 재확인을 거친다. 키는 입력만 하고 화면·응답에 다시 나오지 않는다.
-  const AI_PURPOSE_KEY = { CS_DRAFT: "easy.ai.p_cs", DRAFT: "easy.ai.p_draft", NAMES: "easy.ai.p_names", ADVICE: "easy.ai.p_advice", ANALYSIS: "easy.ai.p_analysis", COMPETITOR: "easy.ai.p_competitor" };
+  const AI_PURPOSE_KEY = { CS_DRAFT: "easy.ai.p_cs", DRAFT: "easy.ai.p_draft", NAMES: "easy.ai.p_names", ADVICE: "easy.ai.p_advice", ANALYSIS: "easy.ai.p_analysis", COMPETITOR: "easy.ai.p_competitor", ASK: "easy.ai.p_ask" };
 
   function aiSettingsHtml(s) {
     const won0 = (v) => `${Math.round(Number(v) || 0).toLocaleString("ko-KR")}원`;

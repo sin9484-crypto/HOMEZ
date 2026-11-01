@@ -1021,7 +1021,10 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "2026-10-19 등록: 운영 상태 진단 요약(T1: 자동 작업·백업·복구 시험·디스크·긴급 중지)은 AI 없는 읽기 전용 규칙이고, 그 이상 후보의 원인 설명(T2)은 "
             "사용자가 누를 때만 AI(Claude)에 허용 목록 데이터(점검 코드·수치·고정 뜻 문장)만 보낸다(월 한도·승인 센터 허용 AI_ADVICE·사용 기록·숫자/약속/위험 조치 검증·같은 이상 조합 1회 저장). "
             "재시작·복구·백업·설정 변경을 하지 않고 하라고 약속하지도 않는다. 쉬운 보기 '오늘 브리핑'(P4)도 규칙이다. "
-            "실제 Claude 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). 단순 Dashboard 조회(orchestration."
+            "실제 Claude 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). "
+            "2026-11-01 등록: '비서에게 묻기'는 정해진 질문 9개에 실제 기록을 규칙으로 센 답(AI 없음)이고, 목록에 없는 문장은 사용자가 확인할 때만 "
+            "AI(Claude)에 질문(개인정보로 보이는 것은 가림)과 그 규칙 답(질문·항목 이름·숫자만)을 보내 문장으로 답하게 한다(월 한도·승인 센터 허용 AI_ADVICE·사용 기록, "
+            "답에 규칙 답에 없는 숫자가 있거나 대신 해 준다는 약속이 있으면 버림, 질문·답 저장 없음). 이것도 실제 Claude 호출은 아직 0회다. 단순 Dashboard 조회(orchestration."
             "dashboard_service.get_summary)는 여전히 사람이 언제든 볼 "
             "수 있는 화면으로, 이 capability와 연결되어 있지 않다"
             "(AG-0에서 되돌린 상태 유지 — 완전히 별개의 화면·경로)."
@@ -1036,6 +1039,8 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/diagnostics/health_ai_service.py::HealthAiService.explain() (POST /diagnostics/health-advice — T2, 사용자가 누를 때만)",
             "app/domains/order/product_rejection_ai_service.py::ProductRejectionAiService.explain() (POST /orders/product-rejection-advice — P1b, 사용자가 누를 때만)",
             "app/web/easy/easy_view.js::briefingFrom() (쉬운 보기 오늘 브리핑 — P4, 규칙)",
+            "app/domains/orchestration/assistant_qa_service.py::AssistantQaService.answer() (GET /orchestration/assistant/answer — 비서에게 묻기, 규칙)",
+            "app/domains/orchestration/assistant_ask_ai_service.py::AssistantAskAiService.ask() (POST /orchestration/assistant/ask-ai — 자유 질문, 사용자가 확인할 때만)",
         ),
         unimplemented_dependencies=(
             "AI 업무 제안 UI 미연결",

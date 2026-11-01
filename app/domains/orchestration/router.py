@@ -10,6 +10,8 @@ File : app/domains/orchestration/router.py
 
 from fastapi import APIRouter
 from fastapi import Depends
+from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
@@ -95,6 +97,35 @@ def get_assistant_answer(
         return AssistantQaService(db).answer(current_user.company_id, current_user.id, question_id)
     except KeyError:
         raise BadRequestException("모르는 질문입니다.") from None
+
+
+def get_assistant_ai_credential_store():
+    """AI 키 저장소 — 항상 실제 Windows 자격증명 저장소. 테스트는 이 의존성을 덮어쓴다."""
+
+    from app.core.windows_credential_store import WindowsCredentialStore
+
+    return WindowsCredentialStore()
+
+
+class AssistantAskRequest(BaseModel):
+    text: str = Field(..., max_length=500)
+
+
+@router.post("/assistant/ask-ai")
+def ask_assistant_ai(
+    data: AssistantAskRequest,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_assistant_ai_credential_store),
+):
+    """2026-11-01 AI 통합 계획 5단계(Claude 부분) — 정해진 질문에 맞지 않는 문장을 사용자가 확인했을 때만 AI(Claude)가 답한다
+    (월 한도·승인 센터 허용 `AI_ADVICE` 필요). 숫자는 서버가 규칙으로 센 답에서만 오고, 개인정보로 보이는 것은 보내기 전에 가린다.
+    질문 글과 답은 저장하지 않는다."""
+
+    from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+    from app.domains.orchestration.assistant_ask_ai_service import AssistantAskAiService
+
+    return AssistantAskAiService(db, AiDraftService(db, credential_store)).ask(current_user.company_id, current_user.id, data.text)
 
 
 __all__ = [

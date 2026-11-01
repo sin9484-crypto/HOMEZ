@@ -416,7 +416,7 @@ class ScreenFunctionTests(unittest.TestCase):
         self.assertIn('maxlength="100"', html)
         self.assertEqual(len(re.findall(r"data-ez-ask=\"", html)), len(QUESTIONS))
         self.assertIn("서버로 보내지 않아요", html)
-        self.assertIn("AI(Claude)는 쓰지 않아요", html)
+        self.assertIn("'Claude에게 묻기'를 눌러 확인할 때만 보내요", html)  # 2026-11-01 Claude 부분: 보내는 길은 확인 창 하나뿐
 
 
 class ScreenWiringTests(unittest.TestCase):
@@ -432,8 +432,12 @@ class ScreenWiringTests(unittest.TestCase):
         self.assertNotIn("method:", run)
         bind = function_source("bindAsk")
         self.assertNotIn("api(", bind)
-        self.assertIn('askMatch(form.querySelector("[data-ez-ask-text]").value)', bind)
-        self.assertEqual(bind.count("[data-ez-ask-text]"), 1)  # 적은 문장은 맞춰 보는 데만 쓴다
+        self.assertIn('const text = form.querySelector("[data-ez-ask-text]").value;', bind)
+        self.assertIn("askPick(askMatch(text))", bind)
+        self.assertEqual(bind.count("[data-ez-ask-text]"), 1)
+        # 적은 문장은 맞춰 보는 데와, 목록에 없을 때 사용자가 누르는 'Claude에게 묻기'(확인 창 → askAiRun)에만 쓴다
+        self.assertEqual(len(re.findall(r"\btext\b", bind)), 4)  # 칸 이름·담기·맞춰 보기·Claude에게 묻기
+        self.assertIn("askAiRun(text, out)", bind)
         for name in ("askMatch", "askPick", "askChipsHtml", "askSectionHtml", "askAnswerHtml"):
             for forbidden in ("api(", "apiFetch", "fetch(", "XMLHttpRequest", "localStorage", "method:"):
                 self.assertNotIn(forbidden, function_source(name), (name, forbidden))
@@ -463,7 +467,8 @@ class ScreenWiringTests(unittest.TestCase):
     def test_the_texts_do_not_claim_a_coupang_deadline_or_an_ai_answer(self):
         for value in ask_texts("ko-KR").values():
             self.assertNotIn("기한", value)
-        self.assertNotIn("AI가", " ".join(ask_texts("ko-KR").values()))
+        # 규칙 답 문구는 AI가 썼다고 하지 않는다(AI 글 문구는 'Claude에게 묻기'의 easy.ask.ai_*에만)
+        self.assertNotIn("AI가", " ".join(v for k, v in ask_texts("ko-KR").items() if not k.startswith("easy.ask.ai_")))
 
     def test_the_text_box_shrinks_on_a_narrow_screen(self):
         self.assertRegex(CSS, r"\.ez-ask-form \{[^}]*flex-wrap: wrap")
