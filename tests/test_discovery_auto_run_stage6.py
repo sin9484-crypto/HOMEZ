@@ -338,7 +338,8 @@ class RunTests(DbCase):
         summary = self.service().run(A, now=MORNING)
         self.assertEqual(sorted(self.http.sent), ["무릎보호대", "생수"])
         self.assertEqual(summary, {"at": "2026-10-31T07:00", "trend_saved": 2, "trend_no_data": 0, "new_saved": 1,
-                                   "skipped_long": 1, "skipped_empty": 1, "deferred": 0, "failed": 0, "blocked": None})
+                                   "skipped_long": 1, "skipped_empty": 1, "deferred": 0, "failed": 0, "blocked": None,
+                                   "release_filled": 0, "release_blocked": None})  # 2026-11-01 D4: 온채널 후보가 없으면 채우기는 호출 없이 0건
         self.assertIsNotNone(self.candidate(water.id).trend_score)
         self.assertTrue(any("검색어 '생수'(규칙)" in e for e in self.evidence(water.id)))
         self.assertEqual((self.candidate(knee.id).is_new_product, self.candidate(knee.id).novelty_score is not None), (True, True))
@@ -499,7 +500,8 @@ class ScreenTests(unittest.TestCase):
 
     def run_js(self, expression):
         consts = re.search(r"^  const FLOW_BLOCKED_KEYS = [^\n]+$", JS, re.M).group(0)
-        sources = "\n".join([consts, js_function("flowAutoHtml"), js_function("flowTrendError")])
+        fill_consts = re.search(r"^  const FLOW_FILL_BLOCKED = [^\n]+$", JS, re.M).group(0)
+        sources = "\n".join([consts, fill_consts, js_function("flowAutoHtml"), js_function("flowTrendError")])
         script = HARNESS.replace("__SOURCES__", sources).replace("__EXPR__", expression)
         proc = subprocess.run([NODE, "-e", script], env={**os.environ, "TABLE_JSON": json.dumps(disc_table())},
                               capture_output=True, text=True, encoding="utf-8", timeout=60)

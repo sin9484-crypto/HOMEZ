@@ -2486,11 +2486,13 @@
       <div class="ez-switch"><div style="flex:1"><b>${esc(T("easy.more.switch_title"))}</b><div class="ez-muted" style="font-size:14px">${esc(T("easy.more.switch_sub"))}</div></div>
         <button type="button" class="ez-btn line" id="ez-more-off">${esc(T("easy.more.switch_off"))}</button></div>
       <div class="ez-block" id="ez-ai-box" style="margin-top:16px">${loadingHtml()}</div>
+      <div class="ez-block" id="ez-mail-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-groups">${sections.map((s) => `<div class="ez-group"><h3>${esc(T(s.labelKey))}</h3>${s.tabs.map((tab) => `<button type="button" data-ez-go="${esc(tab.view)}">${esc(T(tab.labelKey))}</button>`).join("")}</div>`).join("")}</div>
       <div class="ez-faint" style="margin-top:22px;font-size:13px">${esc(version)}</div>`;
     root.querySelectorAll("[data-ez-go]").forEach((btn) => btn.addEventListener("click", () => B.navigateTo(btn.dataset.ezGo)));
     $("ez-more-off").addEventListener("click", () => setEasyEnabled(false, true));
     aiSettingsLoad();
+    mailSettingsLoad();
   }
 
   // 2026-10-31 AI 사용 설정(AI 통합 계획 2단계 준비): Claude를 쓰는 기능이 함께 쓰는 모델·월 한도·단가·API 키와 이번 달 사용 기록.
@@ -2568,6 +2570,112 @@
       B.toast((err && err.message) || T("easy.error"), "error");
     }
     aiSettingsLoad();
+  }
+
+  // ---- 아침 브리핑 이메일 (2026-11-01 사용자 결정 D5) ----
+  // 켜 두면 하루 한 번 아침 브리핑을 이메일로도 받는다. 비밀번호는 안전 저장소에만 두고 화면에는 저장 여부만 보인다.
+  const MAIL_REASON_KEY = {
+    EXTERNAL_ALLOWANCE_REQUIRED: "easy.mail.r_allow", EXTERNAL_CALL_BLOCKED_ESTOP: "easy.mail.r_estop",
+    EMAIL_PROVIDER_NOT_CONFIGURED: "easy.mail.r_conf", NO_RECIPIENT_EMAIL: "easy.mail.r_conf",
+  };
+  function mailReasonText(code) {
+    const text = String(code || "");
+    if (MAIL_REASON_KEY[text]) return T(MAIL_REASON_KEY[text]);
+    if (text.startsWith("SMTP_AUTH_FAILED")) return T("easy.mail.r_auth");
+    if (text.startsWith("SMTP_TLS")) return T("easy.mail.r_tls");
+    return T("easy.mail.r_other", { code: text || "—" });
+  }
+
+  function mailLastHtml(last) {
+    if (!last) return `<div class="ez-muted" style="font-size:13px;margin-top:8px">${esc(T("easy.mail.last_none"))}</div>`;
+    const ms = parseUtcMs(last.at);
+    const at = ms === null ? "—" : new Date(ms).toLocaleString();
+    if (last.status === "SENT") return `<div class="ez-muted" style="font-size:13px;margin-top:8px">${esc(T("easy.mail.last_sent", { at }))}</div>`;
+    if (last.status === "SKIPPED_IN_APP_ONLY" || last.status === "SKIPPED_OPTED_OUT") return `<div class="ez-muted" style="font-size:13px;margin-top:8px">${esc(T("easy.mail.last_app", { at }))}</div>`;
+    return `<div class="ez-c-orange" style="font-size:13px;margin-top:8px">${esc(T("easy.mail.last_failed", { at, why: mailReasonText(last.detail) }))}</div>`;
+  }
+
+  function mailSettingsHtml(s) {
+    const kv = (k, v) => `<div style="display:flex;justify-content:space-between;gap:12px;font-size:14px;padding:3px 0;flex-wrap:wrap"><span class="ez-muted">${esc(k)}</span><b style="overflow-wrap:anywhere">${esc(v)}</b></div>`;
+    return `<h3>${esc(T("easy.mail.title"))} ${s.enabled ? chip("ok", T("easy.mail.on")) : chip("gray", T("easy.mail.off"))}</h3>
+      <p class="ez-muted" style="font-size:14px">${esc(T("easy.mail.lead"))}</p>
+      ${kv(T("easy.mail.to"), s.to || "—")}
+      ${kv(T("easy.mail.server"), s.host ? `${s.host}:${s.port} (${s.security})` : "—")}
+      ${kv(T("easy.mail.sender"), s.sender || "—")}
+      ${kv(T("easy.mail.password"), s.password_saved ? T("easy.ai.key_saved") : T("easy.ai.key_none"))}
+      ${mailLastHtml(s.last)}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button type="button" class="ez-btn line sm" id="ez-mail-edit">${esc(T("easy.mail.edit"))}</button>
+      ${s.complete ? `<button type="button" class="ez-btn line sm" id="ez-mail-test">${esc(T("easy.mail.test"))}</button>` : ""}</div>`;
+  }
+
+  async function mailSettingsLoad() {
+    const box = $("ez-mail-box");
+    if (!box) return;
+    let s;
+    try { s = await api("/notifications/brief-email"); } catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    box.innerHTML = mailSettingsHtml(s);
+    $("ez-mail-edit").addEventListener("click", () => mailSettingsEdit(s));
+    const test = $("ez-mail-test");
+    if (test) test.addEventListener("click", () => mailSettingsTest(s));
+  }
+
+  // 화면 쪽 모양 검사(서버가 같은 검사를 다시 한다). 고쳐 쓰지 않고 문제 열쇠만 돌려준다.
+  function mailSettingsForm(get) {
+    const host = String(get("host") || "").trim();
+    if (!/^[A-Za-z0-9.-]{3,253}$/.test(host)) return { error: "easy.mail.err_host" };
+    const port = Number(get("port"));
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: "easy.mail.err_port" };
+    const security = String(get("security") || "");
+    if (security !== "STARTTLS" && security !== "SSL") return { error: "easy.mail.err_port" };
+    const email = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+    const sender = String(get("sender") || "").trim();
+    const to = String(get("to") || "").trim();
+    if (!email.test(sender) || !email.test(to)) return { error: "easy.mail.err_email" };
+    const body = { host, port, security, login: String(get("login") || "").trim(), sender, to, enabled: get("enabled") === "ON" };
+    const password = String(get("password") || "");
+    if (password) body.password = password;
+    return { body };
+  }
+
+  async function mailSettingsEdit(s) {
+    const field = (name, label, value, attrs) => `<label style="display:block;margin-top:10px">${esc(T(label))}<br><input name="${name}" value="${esc(value === null || value === undefined ? "" : value)}" style="width:100%" ${attrs || ""}></label>`;
+    const select = (name, label, value, options) => `<label style="display:block;margin-top:10px">${esc(T(label))}<br><select name="${name}" style="width:100%">${options.map(([v, text]) => `<option value="${esc(v)}"${v === value ? " selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
+    const picked = await ezDialog({
+      title: T("easy.mail.edit"), okLabel: T("easy.ai.save"),
+      bodyHtml: `<p class="ez-muted" style="font-size:13px">${esc(T("easy.mail.hint"))}</p>`
+        + select("enabled", "easy.mail.f_enabled", s.enabled ? "ON" : "OFF", [["OFF", T("easy.mail.off")], ["ON", T("easy.mail.on")]])
+        + field("to", "easy.mail.f_to", s.to, `type="email" autocomplete="off"`)
+        + field("host", "easy.mail.f_host", s.host, `autocomplete="off" placeholder="smtp.gmail.com"`)
+        + field("port", "easy.mail.f_port", s.port, `inputmode="numeric"`)
+        + select("security", "easy.mail.f_security", s.security, [["STARTTLS", "STARTTLS"], ["SSL", "SSL"]])
+        + field("sender", "easy.mail.f_sender", s.sender, `type="email" autocomplete="off"`)
+        + field("login", "easy.mail.f_login", s.login, `autocomplete="off"`)
+        + field("password", s.password_saved ? "easy.mail.f_password_keep" : "easy.mail.f_password", "", `type="password" autocomplete="new-password"`),
+    });
+    if (!picked) return;
+    const form = mailSettingsForm(picked.get);
+    if (form.error) { B.toast(T(form.error), "error"); return; }
+    const token = await B.promptRecentAuthToken();
+    if (token === null) return;
+    try {
+      await api("/notifications/brief-email", { method: "PUT", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(form.body) });
+      B.toast(T("easy.mail.saved"), "success");
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    }
+    mailSettingsLoad();
+  }
+
+  async function mailSettingsTest(s) {
+    const ok = await ezDialog({ title: T("easy.mail.test"), bodyHtml: `<p>${esc(T("easy.mail.test_body", { to: s.to }))}</p>`, okLabel: T("easy.mail.test_send") });
+    if (!ok) return;
+    try {
+      const res = await api("/notifications/brief-email/test", { method: "POST" });
+      if (res.sent) B.toast(T("easy.mail.test_ok", { to: s.to }), "success");
+      else B.toast(mailReasonText(res.reason), "error");
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    }
   }
 
   // =========================================================
@@ -3105,9 +3213,10 @@
   }
 
   function flowNewCell(r) {
-    if (r.new_product_state === "DONE") return r.is_new_product ? chip("ok", T("easy.disc.new_yes")) : chip("gray", T("easy.disc.new_no"));
+    const basis = r.release_date_basis === "ONCHANNEL_CREATED_AT" ? `<small class="ez-faint" style="display:block">${esc(T("easy.disc.new_basis", { d: r.release_date || "—" }))}</small>` : "";
+    if (r.new_product_state === "DONE") return (r.is_new_product ? chip("ok", T("easy.disc.new_yes")) : chip("gray", T("easy.disc.new_no"))) + basis;
     if (r.new_product_state === "UNKNOWN_DATE") return chip("gray", T("easy.disc.new_unknown"));
-    return `<span class="ez-faint">${esc(T("easy.disc.new_todo"))}</span>`;
+    return `<span class="ez-faint">${esc(T("easy.disc.new_todo"))}</span>${basis}`;
   }
 
   function flowDecisionCell(d) {
@@ -3139,7 +3248,9 @@
     const lastLine = last
       ? T("easy.disc.auto_last", { at: String(last.at || "—").replace("T", " "), t: n(last.trend_saved), nd: n(last.trend_no_data), n: n(last.new_saved), s: n(last.skipped_long) + n(last.skipped_empty), d: n(last.deferred) })
       : T("easy.disc.auto_never");
-    const blocked = last && FLOW_BLOCKED_KEYS[last.blocked] ? `<div class="ez-c-red" style="font-size:13px;margin-top:4px">${esc(T(FLOW_BLOCKED_KEYS[last.blocked]))}</div>` : "";
+    const blocked = (last && FLOW_BLOCKED_KEYS[last.blocked] ? `<div class="ez-c-red" style="font-size:13px;margin-top:4px">${esc(T(FLOW_BLOCKED_KEYS[last.blocked]))}</div>` : "")
+      + (last && n(last.release_filled) ? `<div class="s" style="margin-top:4px">${esc(T("easy.disc.auto_filled", { n: n(last.release_filled) }))}</div>` : "")
+      + (last && FLOW_FILL_BLOCKED[last.release_blocked] ? `<div class="ez-c-red" style="font-size:13px;margin-top:4px">${esc(T(FLOW_FILL_BLOCKED[last.release_blocked]))}</div>` : "");
     const state = !known ? chip("gray", T("easy.disc.auto_unknown")) : (on ? chip("ok", T("easy.disc.auto_on")) : chip("gray", T("easy.disc.auto_off")));
     const btn = known ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-flow-auto="${on ? "MANUAL" : "AUTOMATIC"}">${esc(T(on ? "easy.disc.auto_turn_off" : "easy.disc.auto_turn_on"))}</button></div>` : "";
     return `<div class="ez-card" style="margin-top:12px"><div class="k">${esc(T("easy.disc.auto_title"))} ${state}</div>
@@ -3199,6 +3310,28 @@
     return true;
   }
 
+  // 2026-11-01 사용자 결정 D4 — 출시일이 빈 온채널 후보를 온채널 등록일로 채우고 15일 규칙까지 돌린다(서버). 목록 한 쪽마다 승인 센터 허용 1회.
+  const FLOW_FILL_BLOCKED = { ALLOWANCE_REQUIRED: "easy.disc.fill_blk_allow", ESTOP: "easy.disc.auto_blk_estop", NO_CONNECTION: "easy.disc.fill_blk_conn", LOOKUP_ERROR: "easy.disc.fill_blk_error" };
+  function flowFillNote(res) {
+    const n = (v) => Number(v) || 0;
+    const blocked = FLOW_FILL_BLOCKED[res.blocked];
+    const summary = T("easy.disc.fill_done", { f: n(res.filled), y: n(res.judged_new), o: n(res.judged_old), nf: n(res.not_found), bad: n(res.future) + n(res.unreadable) + n(res.judge_failed) });
+    if (blocked) return { tone: n(res.filled) ? "warn" : "bad", text: n(res.filled) ? `${summary} ${T(blocked)}` : T(blocked) };
+    if (res.truncated) return { tone: "warn", text: `${summary} ${T("easy.disc.fill_more")}` };
+    return { tone: n(res.filled) ? "ok" : "warn", text: summary };
+  }
+
+  async function flowFillDates() {
+    const ok = await ezDialog({ title: T("easy.disc.fill_btn"), bodyHtml: `<p>${esc(T("easy.disc.fill_body"))}</p>`, okLabel: T("easy.disc.fill_go") });
+    if (!ok) return false;
+    try {
+      flowState.note = flowFillNote(await api("/product-candidates/fill-release-dates", { method: "POST" }));
+    } catch (err) {
+      flowState.note = { tone: "bad", text: (err && err.message) || T("easy.error") };
+    }
+    return true;
+  }
+
   async function flowNewProduct(r) {
     try {
       const res = await api(`/product-candidates/${encodeURIComponent(r.candidate_id)}/evaluate-new-product`, { method: "POST" });
@@ -3218,7 +3351,8 @@
     const notes = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.disc.lead"))}</div></div>`
       + (data.naver_key_registered ? "" : `<div class="ez-note warn" style="margin-top:8px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(T("easy.disc.no_naver"))}</div></div>`)
       + (data.truncated ? `<div class="ez-note warn" style="margin-top:8px"><div>${esc(T("easy.disc.truncated"))}</div></div>` : "")
-      + flowNoteHtml() + flowAutoHtml(data.auto_run);
+      + flowNoteHtml() + flowAutoHtml(data.auto_run)
+      + (rows.some((r) => r.new_product_state === "UNKNOWN_DATE") ? `<div style="margin-top:10px"><button type="button" class="ez-btn line sm" data-ez-flow-fill>${esc(T("easy.disc.fill_btn"))}</button></div>` : "");
     const bindAuto = () => host.querySelectorAll("[data-ez-flow-auto]").forEach((b) => b.addEventListener("click", async () => {
       if (b.disabled) return;
       b.disabled = true;
@@ -3234,6 +3368,11 @@
     }).join("")}</tbody></table></div>`;
     const rerun = () => { S.selected.analysisTab = "FLOW"; loadAnalysis(); };
     bindAuto();
+    host.querySelectorAll("[data-ez-flow-fill]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      b.disabled = true;
+      try { if (await flowFillDates()) rerun(); } finally { b.disabled = false; }
+    }));
     host.querySelectorAll("[data-ez-flow-trend]").forEach((b) => b.addEventListener("click", async () => {
       const r = byId.get(b.dataset.ezFlowTrend);
       if (!r || b.disabled) return;

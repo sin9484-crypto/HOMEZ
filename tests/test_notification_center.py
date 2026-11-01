@@ -360,7 +360,9 @@ class NotificationRouterContractTestCase(unittest.TestCase):
         # Gate PT-3(2026-08-23 17차 지시)에서 알림 설정 6개 추가
         # (GET/PUT preference, GET catalog, GET/PUT event-preferences,
         # POST preference/test-email) — 총 11개.
-        self.assertEqual(len(routes), 11)
+        # 2026-11-01 D5에서 아침 브리핑 이메일 3개 추가(GET/PUT brief-email,
+        # POST brief-email/test — 관리자 이상) — 총 14개.
+        self.assertEqual(len(routes), 14)
 
         for route in routes:
             self.assertGreater(len(route.dependant.dependencies), 0)

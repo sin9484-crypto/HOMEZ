@@ -86,11 +86,30 @@ class DiscoveryFlowService:
             latest.setdefault(row.candidate_id, row)
         return latest
 
+    def _release_bases(self, candidate_ids: list[int]) -> set[int]:
+        """출시일을 온채널 등록일로 채운 후보(근거 기록으로 안다 — 화면에 '온채널 등록일 기준'으로 표시)."""
+
+        from app.domains.product_candidate.model import ProductCandidateEvidence
+        from app.domains.product_candidate.release_date_fill_service import SOURCE_MARK
+
+        if not candidate_ids:
+            return set()
+        rows = (
+            self.db.query(ProductCandidateEvidence.candidate_id)
+            .filter(
+                ProductCandidateEvidence.candidate_id.in_(candidate_ids),
+                ProductCandidateEvidence.payload_summary.like(f"{SOURCE_MARK}%"),
+            )
+            .all()
+        )
+        return {candidate_id for (candidate_id,) in rows}
+
     def list_flow(self, company_id: int, limit: int = 200) -> dict:
         """이 회사가 볼 수 있는 후보의 탐색 흐름. 다음 할 일 순서 → 최근 후보 순."""
 
         candidates = self.candidate_service.list_candidates_for_company(company_id, limit=limit)
         decisions = self._latest_decisions(company_id, [c.id for c in candidates])
+        onchannel_dated = self._release_bases([c.id for c in candidates])
         rows = []
         for candidate in candidates:
             company_status = self.candidate_service.get_effective_status_for_company(candidate.id, company_id)
@@ -111,6 +130,7 @@ class DiscoveryFlowService:
                 "keyword": suggestion.as_dict(),
                 "trend_score": _float(candidate.trend_score),
                 "release_date": candidate.release_date.isoformat() if candidate.release_date else None,
+                "release_date_basis": "ONCHANNEL_CREATED_AT" if candidate.id in onchannel_dated else None,
                 "is_new_product": candidate.is_new_product,
                 "novelty_score": _float(candidate.novelty_score),
                 "new_product_state": new_state,

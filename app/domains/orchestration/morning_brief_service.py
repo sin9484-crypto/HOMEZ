@@ -10,8 +10,9 @@ File : app/domains/orchestration/morning_brief_service.py
 
   - 언제: 1시간마다 확인해 한국 시각 7시 이후 하루 한 번(6시 상품 발굴 자동 실행 결과가 들어간 뒤).
   - 누구에게: 회사의 활성 사용자마다 한 건. 기존 알림 설정 화면의 '아침 브리핑'을 끈 사용자는 건너뛴다.
-  - 어디로: 기존 알림 센터(`NotificationDeliveryService.dispatch`)의 앱 안 알림. 이메일은 기본으로 보내지 않는다(알림 받을 곳 — 사용자
-    결정 D5, 이메일 발송자도 연결돼 있지 않다). 같은 사람·같은 날은 한 번만(알림 센터의 멱등성 키).
+  - 어디로: 기존 알림 센터(`NotificationDeliveryService.dispatch`)의 앱 안 알림. 같은 사람·같은 날은 한 번만(알림 센터의 멱등성 키).
+    이메일(사용자 결정 D5): 그 사람이 '아침 브리핑 이메일'을 켠 경우에만 같은 내용을 보낸다(`BriefEmailService`, 승인 센터 허용 1회).
+    메일이 실패해도 앱 안 알림은 남고, 같은 날 다시 보내지 않는다(실패 사실은 설정 화면·앱 안 알림으로 알린다).
   - 읽지 못한 칸은 0으로 쓰지 않고 '읽지 못함'에 이름을 남긴다.
 =========================================================
 """
@@ -75,8 +76,9 @@ def _has(db: Session, table: str) -> bool:
 
 class MorningBriefService:
 
-    def __init__(self, db: Session, *, now_factory: Callable[[], datetime] | None = None):
+    def __init__(self, db: Session, *, now_factory: Callable[[], datetime] | None = None, email_service=None):
         self.db = db
+        self._email_service = email_service
         self._now = now_factory or datetime.utcnow
 
     # ---------------- 무엇을 셀까 ----------------
@@ -199,6 +201,19 @@ class MorningBriefService:
             result.append(user_id)
         return result
 
+    def _email_for(self, user_id: int, company_id: int):
+        """(메일 Provider, 받는 주소). 켜지 않았거나 설정을 읽지 못하면 (None, None) — 앱 안 알림은 그대로 나간다."""
+
+        from app.domains.notification_center.brief_email_service import BriefEmailService
+
+        try:
+            found = (self._email_service or BriefEmailService(self.db)).delivery_for(user_id, company_id)
+        except Exception as exc:  # noqa: BLE001
+            self.db.rollback()
+            logger.warning("아침 브리핑: 사용자 %s 이메일 설정 읽기 실패: %s", user_id, type(exc).__name__)
+            return None, None
+        return found if found is not None else (None, None)
+
     def run(self, company_id: int) -> dict:
         """7시(한국 시각) 전이거나 보낼 사람이 없으면 아무것도 하지 않는다. 보낸 사람 수를 돌려준다."""
 
@@ -215,14 +230,15 @@ class MorningBriefService:
 
         from app.domains.notification_center.delivery_service import NotificationDeliveryService
 
-        delivery = NotificationDeliveryService(self.db)
         sent = 0
         for user_id in users:
-            result = delivery.dispatch(
+            provider, to_email = self._email_for(user_id, company_id)
+            result = NotificationDeliveryService(self.db, provider=provider).dispatch(
                 BRIEF_EVENT, company_id=company_id, user_id=user_id,
                 idempotency_key=self.idempotency_key(company_id, user_id, date_text),
                 title=brief["title"], message=brief["message"], link_path=LINK_PATH,
                 entity_ref=f"daily_briefing:{date_text}",
+                to_email=to_email, entity_summary=brief["message"],
             )
             if result.status != "SKIPPED_DUPLICATE":
                 sent += 1

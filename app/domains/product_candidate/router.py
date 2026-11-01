@@ -255,6 +255,22 @@ def save_naver_datalab_credential(
     return NaverDataLabCredentialStatusResponse(registered=True)
 
 
+@router.post("/fill-release-dates")
+def fill_release_dates(
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """
+    2026-11-01 사용자 결정 D4 — 출시일이 빈 온채널 후보를 온채널 상품 등록일로 채우고 15일 규칙까지 돌린다.
+    목록 한 쪽마다 승인 센터 허용(온채널 상품 등록일 조회) 1회. 허용이 없으면 호출하지 않고 blocked로 알린다.
+    정적 경로이므로 `/{candidate_id}`보다 먼저 등록한다.
+    """
+
+    from app.domains.product_candidate.release_date_fill_service import ReleaseDateFillService
+
+    return ReleaseDateFillService(db).run_and_judge(current_user.company_id, actor_user_id=current_user.id)
+
+
 @router.get("/discovery-flow")
 def get_discovery_flow(
     limit: int = Query(default=200, ge=1, le=500),

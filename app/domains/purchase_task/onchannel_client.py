@@ -174,6 +174,8 @@ class OnchannelProduct:
     tax_exempt: bool | None = None
     minor_sale_prohibited: bool | None = None
     notice_info_raw: dict | None = None
+    # 2026-11-01 D4 — 상품 목록 응답의 등록일 원문('YYYY-MM-DD HH:MM:SS'). 상세 응답에는 없어 None이다.
+    created_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -480,6 +482,7 @@ class OnchannelApiClient:
                         )
                         for opt in (item.get("options") or [])
                     ),
+                    created_at=item["created_at"] if isinstance(item.get("created_at"), str) else None,
                 )
                 for item in items
             )

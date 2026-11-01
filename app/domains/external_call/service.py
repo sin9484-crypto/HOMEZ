@@ -87,6 +87,8 @@ _DEFAULT_REQUEST = {
     (CallPurpose.IMAGE_GENERATION, CallKind.WRITE): (AllowanceMode.COUNTED, 6, None),
     # 2026-10-31 네이버 검색어 트렌드: 검색어 하나당 1회. 매일 자동 실행은 한 번에 최대 10건이라 10회를 제안한다(무료 — 사용료 없음).
     (CallPurpose.TREND_LOOKUP, CallKind.READ): (AllowanceMode.COUNTED, 10, None),
+    (CallPurpose.SUPPLIER_RELEASE_DATE, CallKind.READ): (AllowanceMode.COUNTED, 10, None),  # 목록 쪽당 1회, 한 번에 최대 10쪽
+    (CallPurpose.BRIEF_EMAIL, CallKind.WRITE): (AllowanceMode.COUNTED, 30, None),  # 하루 한 통 — 시간이 지나도 끝나지 않게 횟수로 약 한 달
 }
 
 

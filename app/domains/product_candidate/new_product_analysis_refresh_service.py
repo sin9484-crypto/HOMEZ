@@ -8,8 +8,8 @@ File : app/domains/product_candidate/new_product_analysis_refresh_service.py
 잇는 얇은 연결 계층. trend_analysis_refresh_service와 같은 이유로 두 Domain은 서로를 모르고 이 계층만 양쪽을 안다.
 지금까지 신제품 규칙은 어떤 진입점에도 연결되어 있지 않았다.
 
-출시일은 후보에 이미 적힌 `release_date`만 쓴다. 출시일 자료원(D4: 공급처 상품 등록일을 쓸지)은 사용자 결정이 남아 있어
-여기서 날짜를 추정하거나 다른 값으로 채우지 않는다.
+출시일은 후보에 이미 적힌 `release_date`만 쓴다. 여기서 날짜를 추정하거나 다른 값으로 채우지 않는다.
+(온채널 후보의 출시일은 사용자 결정 D4에 따라 `release_date_fill_service`가 온채널 등록일로 채운다.)
   - 출시일 없음 → UNKNOWN(아무것도 바꾸지 않는다 — '모름'을 0점으로 저장하면 추천 단계의 점수 조건을 잘못 통과시킨다)
   - 미래 출시일 → FUTURE_DATE(아무것도 바꾸지 않는다 — 데이터 오류일 수 있어 사람이 확인)
   - 그 밖 → 규칙 결과를 근거와 함께 저장(APPLIED)
@@ -69,7 +69,7 @@ class NewProductAnalysisRefreshService:
                 status="UNKNOWN", candidate_id=candidate_id,
                 reason=(
                     "출시일을 몰라 신제품 여부를 판단하지 않았습니다 — "
-                    "출시일 자료원이 정해지면 채워집니다."
+                    "온채널 후보는 '온채널 등록일로 채우기'로 채울 수 있고, 다른 후보는 출시일을 직접 넣어야 합니다."
                 ),
             )
 

@@ -227,6 +227,7 @@ class ChannelProductSummary:
 
     external_product_id: str
     title: str
+    created_at: str | None = None  # 2026-11-01 D4 — 매입처가 준 등록일 원문(없으면 None)
 
 
 @dataclass(frozen=True)
@@ -819,7 +820,7 @@ class OnchannelChannelAdapter(PurchaseChannelAdapter):
         products = client.list_products(page=page, page_size=page_size)
 
         items = tuple(
-            ChannelProductSummary(external_product_id=p.product_code, title=p.title)
+            ChannelProductSummary(external_product_id=p.product_code, title=p.title, created_at=p.created_at)
             for p in products
         )
         return ProductListLookupResult(

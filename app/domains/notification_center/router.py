@@ -16,12 +16,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Header
+from pydantic import BaseModel
+from pydantic import ConfigDict
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
 from app.core.dependency import get_db
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import NotFoundException
+from app.core.guard import AdminGuard
+from app.core.guard import SuperAdminGuard
+from app.core.recent_auth import consume_recent_auth_token
 from app.domains.notification_center.delivery_service import (
     NotificationDeliveryService,
 )
@@ -386,6 +392,83 @@ def send_test_notification_email(
     )
     result = service.send_test_email(to_email=data.to_email)
     return TestNotificationEmailResponse(status=result.status)
+
+
+# 2026-11-01 사용자 결정 D5 — 아침 브리핑 이메일 설정. 비밀번호는 쓰기 전용(자격증명 저장소), 저장은 최고 관리자 + 비밀번호 재확인(AI 사용 설정과 같다).
+def get_brief_email_credential_store():
+    """메일 비밀번호 저장소 — 항상 실제 Windows 자격증명 저장소. 테스트는 이 의존성을 덮어쓴다."""
+
+    from app.core.windows_credential_store import WindowsCredentialStore
+
+    return WindowsCredentialStore()
+
+
+class BriefEmailSettingsRequest(BaseModel):
+    host: str
+    port: int
+    security: str
+    login: str = ""
+    sender: str
+    to: str
+    enabled: bool
+    password: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.get("/brief-email")
+def read_brief_email_settings(
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_brief_email_credential_store),
+):
+    """아침 브리핑 이메일 설정과 마지막 발송 결과(읽기 전용, 바깥 호출 없음). 비밀번호는 저장 여부만."""
+
+    from app.domains.notification_center.brief_email_service import BriefEmailService
+
+    return BriefEmailService(db, credential_store).status(current_user.id, current_user.company_id)
+
+
+@router.put("/brief-email")
+def save_brief_email_settings(
+    data: BriefEmailSettingsRequest,
+    current_user: User = Depends(SuperAdminGuard),
+    recent_auth_token: str | None = Header(default=None, alias="X-Recent-Auth-Token"),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_brief_email_credential_store),
+):
+    """메일 서버·주소·비밀번호 저장, 켜기·끄기. 비밀값을 다루므로 비밀번호 재확인이 먼저다."""
+
+    from app.core.audit_db import write_audit_log
+    from app.core.exceptions import ForbiddenException
+    from app.domains.notification_center.brief_email_service import BriefEmailService
+
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise ForbiddenException("현재 비밀번호 재확인이 필요합니다.")
+    result = BriefEmailService(db, credential_store).save(
+        current_user.id, current_user.company_id, host=data.host, port=data.port, security=data.security, login=data.login,
+        sender=data.sender, to=data.to, enabled=data.enabled, password=data.password,
+    )
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id, action="BRIEF_EMAIL_SETTINGS_SAVED",
+        entity="notification_email", entity_id="BRIEF_EMAIL",
+        description=f"아침 브리핑 이메일 설정 저장({'켬' if data.enabled else '끔'}, 비밀번호 {'교체' if data.password else '유지'})",
+    )
+    db.commit()
+    return result
+
+
+@router.post("/brief-email/test")
+def send_brief_email_test(
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    credential_store=Depends(get_brief_email_credential_store),
+):
+    """저장된 받는 주소로 시험 메일 한 통(승인 센터 허용 1회). 결과는 고정 코드로만 돌려준다."""
+
+    from app.domains.notification_center.brief_email_service import BriefEmailService
+
+    return BriefEmailService(db, credential_store).send_test(current_user.id, current_user.company_id)
 
 
 __all__ = ["router"]

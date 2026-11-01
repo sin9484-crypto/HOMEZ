@@ -5,7 +5,8 @@ Homez OS
 File : app/domains/product_candidate/discovery_auto_run_service.py
 
 2026-10-31 — AI 통합 계획 6단계: 상품 발굴 자동 실행(하루 한 번). 3단계 탐색 흐름에서 사람이 누르던 두 가지를 정해진 시간에 대신 누른다.
-  - 신제품 판정: 출시일이 적힌 후보만(바깥 호출 없음). 출시일이 없으면 손대지 않는다('모름').
+  - 출시일 채우기(2026-11-01 사용자 결정 D4): 출시일이 빈 온채널 후보를 온채널 등록일로 채운다. 온채널 목록 조회는 승인 센터 허용이 있어야 나간다.
+  - 신제품 판정: 출시일이 적힌 후보만(바깥 호출 없음). 채우지 못한 후보는 손대지 않는다('모름').
   - 트렌드 조회: 규칙 검색어가 있고 짧은(3단어 이하) 후보만, 한 번에 최대 10건. 네이버 호출은 승인 센터의 '검색어 트렌드 조회' 허용이
     있어야 나가고(없으면 그 자리에서 멈추고 허용 요청이 올라간다), 긴 검색어는 사람이 고르도록 건너뛴다.
 하지 않는 것: 판매 판단 평가·승인·거절·상품 등록·쿠팡 쓰기. 사람 검토를 기다리는 후보는 건드리지 않는다.
@@ -83,9 +84,10 @@ class DiscoveryAutoRunService:
 
     def __init__(
         self, db: Session, *, adapter_factory: Callable | None = None, key_check: Callable[[], bool | None] | None = None,
-        now_factory: Callable[[], datetime] | None = None,
+        now_factory: Callable[[], datetime] | None = None, release_filler: Callable | None = None,
     ):
         self.db = db
+        self._release_filler = release_filler
         self._adapter_factory = adapter_factory or _default_adapter_factory
         self._key_check = key_check or _default_key_check
         self._now = now_factory or datetime.utcnow
@@ -172,11 +174,22 @@ class DiscoveryAutoRunService:
         summary = {
             "at": (now + _KST).strftime("%Y-%m-%dT%H:%M"), "trend_saved": 0, "trend_no_data": 0, "new_saved": 0,
             "skipped_long": 0, "skipped_empty": 0, "deferred": 0, "failed": 0, "blocked": None,
+            "release_filled": 0, "release_blocked": None,
         }
 
         if SafetyService(self.db).is_emergency_stop_active():
             summary["blocked"] = BLOCKED_ESTOP
             return self._record(company_id, summary)
+
+        # 0) 출시일 채우기 — 실패해도 아래 판정·조회를 막지 않는다
+        try:
+            filled = self._fill_release_dates(company_id)
+            summary["release_filled"] = filled["filled"]
+            summary["release_blocked"] = filled["blocked"]
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+            summary["failed"] += 1
+            logger.exception("상품 발굴 자동 실행: 회사 %s 출시일 채우기 실패", company_id)
 
         rows = [r for r in flow.DiscoveryFlowService(self.db).list_flow(company_id)["rows"] if r["next"] in (flow.NEXT_TREND, flow.NEXT_NEW_PRODUCT)]
 
@@ -233,6 +246,13 @@ class DiscoveryAutoRunService:
                 summary["trend_no_data"] += 1
 
         return self._record(company_id, summary)
+
+    def _fill_release_dates(self, company_id: int) -> dict:
+        if self._release_filler is not None:
+            return self._release_filler(company_id)
+        from app.domains.product_candidate.release_date_fill_service import ReleaseDateFillService
+
+        return ReleaseDateFillService(self.db, now_factory=self._now).run(company_id)
 
     def _record(self, company_id: int, summary: dict) -> dict:
         from app.core.audit_db import write_audit_log
