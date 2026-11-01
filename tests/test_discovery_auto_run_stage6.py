@@ -298,8 +298,10 @@ class ScheduleTests(DbCase):
         self.automatic(B, mode="MANUAL")
         self.allow(10)
         self.assertEqual(auto.DiscoveryAutoRunService.candidate_companies(self.db), [A, B])
-        for _ in range(2):
-            jobs.run_discovery_auto_run_job(session_factory=self.SessionLocal, adapter_factory=self.adapter_factory, now=MORNING)
+        # 2026-11-02 — 이 경로의 기본 키 확인은 실제 자격증명 저장소를 읽는다(전체 회귀 가드가 잡음). 시험이 PC 상태에 좌우되지 않게 바꾼다.
+        with mock.patch.object(auto, "_default_key_check", return_value=True):
+            for _ in range(2):
+                jobs.run_discovery_auto_run_job(session_factory=self.SessionLocal, adapter_factory=self.adapter_factory, now=MORNING)
         records = self.db.execute(text("SELECT entity_id FROM audit_logs WHERE action = 'DISCOVERY_AUTO_RUN'")).fetchall()
         self.assertEqual([r[0] for r in records], [str(A)])
 
