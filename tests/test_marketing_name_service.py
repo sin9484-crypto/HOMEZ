@@ -333,11 +333,12 @@ class ServiceTests(Base):
 
         slow = Slow(self.GOOD_TEXT)
         results = []
+        wizard_id = self.wizard.id     # 메인 세션의 만료된 객체를 두 스레드가 함께 읽지 않게 미리 꺼낸다
 
         def click():
             session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)()
             try:
-                results.append(self._service(client=slow, db=session).propose(self.wizard.id, self.company_id, self.user_id))
+                results.append(self._service(client=slow, db=session).propose(wizard_id, self.company_id, self.user_id))
             finally:
                 session.close()
 

@@ -42,6 +42,8 @@ from app.domains.external_call.service import ExternalCallPolicyService
 from app.domains.marketplace_listing.llm_client import AnthropicClient
 from app.domains.marketplace_listing.llm_client import LlmError
 from app.domains.marketplace_listing.llm_client import LlmResult
+from app.domains.marketplace_listing.llm_client import LlmIncompleteError
+from app.domains.marketplace_listing.llm_client import output_token_ceiling
 from app.domains.marketplace_listing.llm_draft_provider import SYSTEM_PROMPT
 from app.domains.marketplace_listing.llm_draft_provider import AiDraftInput
 from app.domains.marketplace_listing.llm_draft_provider import build_user_prompt
@@ -66,6 +68,9 @@ def _positive_number(value: Any, label: str, upper: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < float(value) <= upper:
         raise BadRequestException(f"{label}은(는) 0보다 크고 {upper:g} 이하의 숫자여야 합니다.")
     return float(value)
+
+
+USAGE_PURPOSE_INCOMPLETE = "INCOMPLETE"
 
 
 def estimate_cost_krw(input_tokens: float, output_tokens: float, in_price: float, out_price: float) -> float:
@@ -267,7 +272,7 @@ class AiDraftService:
             raise BadRequestException("AI 기능을 쓰려면 모델·월 한도·단가·API 키를 먼저 저장해야 합니다.")
 
         # 최악 추정: 입력은 글자 수만큼을 토큰으로 보고(한국어는 글자당 1토큰 이하), 출력은 상한만큼 쓴다고 본다.
-        worst = estimate_cost_krw(len(system) + len(user_prompt), max_output_tokens, in_price, out_price)
+        worst = estimate_cost_krw(len(system) + len(user_prompt), output_token_ceiling(model, max_output_tokens), in_price, out_price)
         used, _calls = self._month_usage()
         if used + worst > limit:
             raise BadRequestException(
@@ -284,6 +289,15 @@ class AiDraftService:
         client = self._client_factory(api_key, model)
         try:
             result = client.complete(system, user_prompt, max_output_tokens=max_output_tokens)
+        except LlmIncompleteError as exc:
+            # 잘림·거절도 요금이 든다. 쓸 답은 없지만 사용 기록과 월 한도에는 넣는다.
+            if policy:
+                policy.finish(ticket, succeeded=False, http_status=200)
+            cost = round(estimate_cost_krw(exc.input_tokens, exc.output_tokens, in_price, out_price), 2)
+            self.record_usage(company_id, user_id, target, exc.model, {
+                "input_tokens": exc.input_tokens, "output_tokens": exc.output_tokens, "cost_krw": cost, "ok": False, "purpose": USAGE_PURPOSE_INCOMPLETE,
+            })
+            raise ServiceUnavailableException(f"{exc} 이번 호출은 사용 기록에 남겼어요.") from None
         except LlmError as exc:
             if policy:
                 policy.finish(ticket, succeeded=False)

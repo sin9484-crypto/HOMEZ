@@ -2497,7 +2497,7 @@
 
   // 2026-10-31 AI 사용 설정(AI 통합 계획 2단계 준비): Claude를 쓰는 기능이 함께 쓰는 모델·월 한도·단가·API 키와 이번 달 사용 기록.
   // 보기는 바깥 호출이 없다. 저장은 확인 창 → 비밀번호 재확인을 거친다. 키는 입력만 하고 화면·응답에 다시 나오지 않는다.
-  const AI_PURPOSE_KEY = { CS_DRAFT: "easy.ai.p_cs", DRAFT: "easy.ai.p_draft", NAMES: "easy.ai.p_names", ADVICE: "easy.ai.p_advice", ANALYSIS: "easy.ai.p_analysis", COMPETITOR: "easy.ai.p_competitor", ASK: "easy.ai.p_ask" };
+  const AI_PURPOSE_KEY = { CS_DRAFT: "easy.ai.p_cs", DRAFT: "easy.ai.p_draft", NAMES: "easy.ai.p_names", ADVICE: "easy.ai.p_advice", ANALYSIS: "easy.ai.p_analysis", COMPETITOR: "easy.ai.p_competitor", ASK: "easy.ai.p_ask", INCOMPLETE: "easy.ai.p_incomplete" };
 
   function aiSettingsHtml(s) {
     const won0 = (v) => `${Math.round(Number(v) || 0).toLocaleString("ko-KR")}원`;

@@ -33,6 +33,7 @@ from app.domains.external_call.service import ExternalCallPolicyService
 from app.domains.marketplace_listing.ai_draft_service import CREDENTIAL_TARGET
 from app.domains.marketplace_listing.ai_draft_service import AiDraftService
 from app.domains.marketplace_listing.listing_wizard_schema import WizardDraftUpdateRequest
+from app.domains.marketplace_listing.llm_client import AnthropicClient
 from app.domains.marketplace_listing.llm_client import LlmError
 from app.domains.marketplace_listing.llm_client import LlmResult
 from app.domains.user_settings.model import UserSetting
@@ -186,7 +187,78 @@ class AiDraftServiceTests(Base):
         self.assertEqual(self.usage_rows(), [])
         self.assertEqual(self.db.query(ExternalCallLog).filter(ExternalCallLog.system == "LLM").one().outcome, "FAILED")
 
+    # ---------------- 잘림·거절 ----------------
+
+    def _real_client_svc(self, stop_reason, output_tokens=500):
+        class Response:
+            status_code = 200
+
+            def json(self):
+                return {"model": "claude-test", "stop_reason": stop_reason, "content": [{"type": "text", "text": GOOD_TEXT}],
+                        "usage": {"input_tokens": 1000, "output_tokens": output_tokens}}
+
+        class Transport:
+            def post(self, url, *, headers, json_body, timeout):
+                return Response()
+
+        return AiDraftService(self.db, self.store, now_factory=lambda: self.NOW,
+                              client_factory=lambda k, m: AnthropicClient(k, m, transport=Transport()))
+
+    def test_a_cut_off_answer_gives_no_proposal_but_its_cost_is_recorded(self):
+        self.configure()
+        self.grant()
+        before = self.service.get(self.wizard.id, self.company_id)
+        with self.assertRaises(ServiceUnavailableException) as ctx:
+            self._real_client_svc("max_tokens").propose(self.wizard.id, self.company_id, self.user_id)
+        self.assertIn("잘려", str(ctx.exception))
+        self.assertIn("사용 기록", str(ctx.exception))
+        rows = self.usage_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], f"202610:WZ{self.wizard.id}")
+        payload = json.loads(rows[0][1])
+        self.assertEqual((payload["i"], payload["o"], payload["c"], payload["ok"], payload["p"], payload["m"]),
+                         (1000, 500, 14.0, False, "INCOMPLETE", "claude-test"))
+        log = self.db.query(ExternalCallLog).filter(ExternalCallLog.system == "LLM").one()
+        self.assertEqual((log.outcome, log.http_status), ("FAILED", 200))
+        self.assertEqual(self.db.query(ExternalCallAllowance).one().remaining_count, 2)     # 나간 호출이므로 허용을 쓴다
+        after = self.service.get(self.wizard.id, self.company_id)
+        self.assertEqual((after.version, after.draft_json), (before.version, before.draft_json))
+
+    def test_the_cost_of_a_cut_off_answer_counts_against_the_monthly_limit(self):
+        self.configure(limit=90)     # 첫 호출 최악 약 34원은 통과, 기록된 64원을 더하면 넘는다
+        self.grant()
+        with self.assertRaises(ServiceUnavailableException):
+            self._real_client_svc("refusal", output_tokens=3000).propose(self.wizard.id, self.company_id, self.user_id)
+        self.assertEqual(self.svc().status(self.user_id, self.company_id)["month_used_krw"], 64.0)
+        with self.assertRaises(BadRequestException) as ctx:
+            self.svc().propose(self.wizard.id, self.company_id, self.user_id)
+        self.assertIn("한도", str(ctx.exception))
+        self.assertEqual(self.client.calls, [])
+
+    def test_a_finished_answer_is_not_affected(self):
+        self.configure()
+        self.grant()
+        result = self._real_client_svc("end_turn").propose(self.wizard.id, self.company_id, self.user_id)
+        self.assertTrue(result["fields"])
+        self.assertEqual(json.loads(self.usage_rows()[0][1])["p"], "DRAFT")
+
     # ---------------- 한도 ----------------
+
+    def _configure_model(self, model, limit):
+        self.svc().save_settings(self.user_id, self.company_id, model=model, monthly_limit_krw=limit, in_price=4000.0, out_price=20000.0, api_key=KEY)
+        self.grant()
+
+    def test_the_worst_case_estimate_includes_room_for_thinking(self):
+        self._configure_model("claude-opus-5-5", 50)    # 답 1,500토큰만이면 30원대라 통과, 생각 몫을 더하면 70원을 넘는다
+        with self.assertRaises(BadRequestException) as ctx:
+            self.svc().propose(self.wizard.id, self.company_id, self.user_id)
+        self.assertIn("한도", str(ctx.exception))
+        self.assertEqual(self.client.calls, [])
+
+    def test_the_same_limit_passes_for_a_model_without_thinking(self):
+        self._configure_model("claude-test", 50)
+        self.svc().propose(self.wizard.id, self.company_id, self.user_id)
+        self.assertEqual(len(self.client.calls), 1)
 
     def test_the_monthly_limit_blocks_before_calling(self):
         self.configure(limit=5)  # 최악 추정이 5원을 넘는다
