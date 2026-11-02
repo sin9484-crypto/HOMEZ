@@ -13827,3 +13827,11 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 한계: 복원점이 하루 약 5MB씩 쌓이고 자동 삭제가 없다. 실행기는 앱이 정상으로 떴는지 확인하지 않는다(시작 실패는 앱 자체 오류 창에 의존). 앱이 꺼져 있는 동안 알려 주는 수단은 여전히 없다.
 - 하지 않은 것: 바탕화면 아이콘 변경, 시작 프로그램 등록(사용자 승인 필요). 전체 회귀.
 - 별도 과제로 표시: 시험 실행이 운영 로그(`logs/homez.log`, `storage/logs/homez-desktop.log`)에 기록을 남겨 조사를 방해한다.
+
+## 2026-11-02 (후속 6) — 바탕화면 아이콘 교체·시작 프로그램 등록(사용자 승인 "아이콘과 자동 시작 승인")
+
+- 바탕화면 `HOMEZ.lnk`: 대상을 `venv\Scripts\pythonw.exe "tools\start_homez_live.py"`(작업 폴더 저장소)로 변경. 기존 아이콘은 `HOMEZ(옛 설치본).lnk`로 복사해 보존(대상 `EVERY HOMEZ\Homez.exe`, 09-02 그대로). 아이콘 그림은 설치본 것을 쓴다(저장소에서 `homez-app.ico`를 찾지 못함).
+- 시작 프로그램: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\HOMEZ 운영 앱.lnk` 추가(같은 대상). Claude 앱 전용 가상 폴더(`Packages\Claude_...\LocalCache\Roaming`)에는 파일이 없어 실제 폴더에 쓰인 것으로 판단했다.
+- **확인한 것**: 세 바로가기의 대상·작업 폴더를 다시 읽어 일치 확인, 실행기 `--check` 통과. 설치본·그 DB·레지스트리·예약 작업은 건드리지 않았다.
+- **확인하지 못한 것**: 실제 PC 재시작 후 자동 실행과 아이콘 클릭 실행(실행기 실제 실행 0회). 지금 앱은 켜져 있어 그대로 둔다. 다음 재시작 뒤 프로세스·`Homez-Backups\auto_start_*`·`order_auto_collection_states`로 확인한다.
+- 되돌리기: `HOMEZ.lnk`를 지우고 `HOMEZ(옛 설치본).lnk` 이름을 되돌리며, 시작 프로그램의 바로가기를 지운다.
