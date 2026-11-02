@@ -1973,6 +1973,16 @@
     summaryEl.hidden = list.length === 0;
   }
 
+  // 2026-11-02: 제출 버튼 없는 <form method="dialog">는 입력칸에서 Enter를 누르면 창이 조용히 닫힌다(암묵 제출).
+  // 버튼 처리기가 그대로 남아 작업이 사라진 것처럼 보이고, 다음 확인 때 함께 실행됐다. 이런 폼의 기본 동작을 막는다.
+  function blockImplicitDialogSubmit(event) {
+    const form = event.target;
+    if (!form || !form.getAttribute || form.getAttribute("method") !== "dialog") return;
+    if (form.querySelector('button[type="submit"], button:not([type]), input[type="submit"]')) return;
+    event.preventDefault();
+  }
+  document.addEventListener("submit", blockImplicitDialogSubmit, true);
+
   function promptRecentAuthToken(options) {
     return new Promise((resolve) => {
       const dialog = el("recent-auth-dialog");
@@ -1982,6 +1992,8 @@
       const okBtn = el("ra-ok");
       const cancelBtn = el("ra-cancel");
       const summaryEl = el("ra-summary");
+      const form = dialog.querySelector("form");
+      let finished = false;
 
       if (summaryEl) renderRecentAuthSummary(summaryEl, options && options.summary);
       pwInput.value = "";
@@ -1990,9 +2002,13 @@
       okBtn.disabled = false;
 
       function cleanup() {
+        finished = true;
         okBtn.removeEventListener("click", onOk);
         cancelBtn.removeEventListener("click", onCancel);
         dialog.removeEventListener("cancel", onCancel);
+        dialog.removeEventListener("close", onCancel);
+        form.removeEventListener("submit", onEnter);
+        pwInput.value = "";
         dialog.close();
       }
 
@@ -2001,7 +2017,13 @@
         resolve(null);
       }
 
+      function onEnter(event) {
+        event.preventDefault();
+        onOk();
+      }
+
       async function onOk() {
+        if (okBtn.disabled) return;
         const currentPassword = pwInput.value;
         if (!currentPassword) {
           errEl.textContent = HomezI18n.t("ma.error_current_password_required");
@@ -2015,9 +2037,11 @@
             method: "POST",
             body: JSON.stringify({ current_password: currentPassword }),
           }, { skipAuthHandling: true });
+          if (finished) return;
           cleanup();
           resolve(recentAuth.recent_auth_token);
         } catch (err) {
+          if (finished) return;
           progressEl.hidden = true;
           okBtn.disabled = false;
           if (err instanceof ApiError && err.status === 401) {
@@ -2033,6 +2057,8 @@
       okBtn.addEventListener("click", onOk);
       cancelBtn.addEventListener("click", onCancel);
       dialog.addEventListener("cancel", onCancel);
+      dialog.addEventListener("close", onCancel);
+      form.addEventListener("submit", onEnter);
       dialog.showModal();
       pwInput.focus();
     });
