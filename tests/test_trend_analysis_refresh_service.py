@@ -124,6 +124,46 @@ class TrendAnalysisRefreshServiceTest(unittest.TestCase):
         self.assertIsNone(unchanged.trend_score)
         self.assertEqual(unchanged.status, CandidateStatus.DISCOVERED)
 
+    def test_too_little_data_is_unknown_not_a_zero_score(self):
+        for points in ([], [50], [50, 60]):
+            name = f"자료{len(points)}개"
+            candidate = self._seed_candidate(COMPANY_A, name)
+            adapter = _StubTrendAdapter({name: TrendSignal(
+                keyword=name, market="NAVER_SHOPPING", search_volume_series=points, source="naver_datalab_official_api",
+            )})
+            result = TrendAnalysisRefreshService(self.db, adapter).refresh(candidate.id, COMPANY_A)
+            self.assertEqual(result.status, "NO_SIGNAL", name)
+            self.assertIsNone(result.trend_score, name)
+            self.assertIn(f"{len(points)}개뿐", result.reason)
+            self.assertEqual(result.keyword, name)
+
+            self.db.expire_all()
+            unchanged = self.db.get(ProductCandidate, candidate.id)
+            self.assertIsNone(unchanged.trend_score, name)
+            self.assertEqual(unchanged.status, CandidateStatus.DISCOVERED, name)
+            evidences = self.db.query(ProductCandidateEvidence).filter(
+                ProductCandidateEvidence.candidate_id == candidate.id,
+                ProductCandidateEvidence.evidence_type == "TREND_ANALYSIS",
+            ).count()
+            self.assertEqual(evidences, 0, name)
+
+    def test_the_minimum_amount_of_data_is_scored(self):
+        candidate = self._seed_candidate(COMPANY_A, "자료3개")
+        adapter = _StubTrendAdapter({"자료3개": TrendSignal(
+            keyword="자료3개", market="NAVER_SHOPPING", search_volume_series=[10, 20, 40], source="naver_datalab_official_api",
+        )})
+        result = TrendAnalysisRefreshService(self.db, adapter).refresh(candidate.id, COMPANY_A)
+        self.assertEqual(result.status, "APPLIED")
+        self.assertIsNotNone(result.trend_score)
+
+    def test_a_banned_category_still_records_its_zero(self):
+        candidate = self._seed_candidate(COMPANY_A, "금지상품")
+        adapter = _StubTrendAdapter({"금지상품": TrendSignal(
+            keyword="금지상품", market="NAVER_SHOPPING", search_volume_series=[10], source="naver_datalab_official_api", is_banned_category=True,
+        )})
+        result = TrendAnalysisRefreshService(self.db, adapter).refresh(candidate.id, COMPANY_A)
+        self.assertEqual((result.status, result.trend_score), ("APPLIED", 0.0))
+
     def test_company_isolation_blocks_other_companys_candidate(self):
         candidate = self._seed_candidate(COMPANY_A, "회사A전용상품")
         adapter = _StubTrendAdapter({

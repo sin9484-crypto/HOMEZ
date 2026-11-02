@@ -106,6 +106,16 @@ class TrendAnalysisRefreshService:
                 keyword=search_keyword, keyword_basis=basis,
             )
 
+        # 2026-11-02: 자료가 모자라면 평가 결과가 0.0이다. 이걸 저장하면 '수요 없음' 점수로 읽히고
+        # 판매 판단의 수요 축에도 들어가므로 '모름' 그대로 둔다. 금지 카테고리의 0점은 그대로 저장한다.
+        points = len(signal.search_volume_series)
+        if not signal.is_banned_category and points < TrendDiscoveryService.MIN_DATA_POINTS:
+            return TrendAnalysisRefreshResult(
+                status="NO_SIGNAL", candidate_id=candidate_id,
+                reason=f"검색 자료가 {points}개뿐이라(최소 {TrendDiscoveryService.MIN_DATA_POINTS}개) 점수를 저장하지 않았습니다.",
+                keyword=search_keyword, keyword_basis=basis,
+            )
+
         result = self.trend_discovery_service.evaluate(signal)
 
         self.candidate_service.apply_trend_analysis(
