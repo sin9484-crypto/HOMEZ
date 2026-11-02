@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / "tools" / "packaged_guard_hook.py"
@@ -35,6 +36,13 @@ PROBE = (
     "except PermissionError:\n"
     "    print('OPEN_BLOCKED')\n"
 )
+
+
+def _child_inherits_regression_guard():
+    """이 환경을 물려받은 파이썬 자식이 격리 회귀 가드를 불러오는가(PYTHONPATH 기준)."""
+    guard_dir = os.path.normcase(os.path.realpath(GUARD.parent))
+    entries = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    return any(os.path.normcase(os.path.realpath(e)) == guard_dir for e in entries if e)
 
 
 class PackagedGuardHookTestCase(unittest.TestCase):
@@ -71,6 +79,9 @@ class PackagedGuardHookTestCase(unittest.TestCase):
         self.assertIn("GUARD_ACTIVE", log)
         self.assertIn("ATTEMPT_BLOCKED", log)
 
+    # 자식이 물려받은 회귀 가드가 합성 보호 파일을 막으므로 "훅이 없으면 열린다"를 볼 수 없다.
+    # PYTHONPATH를 지운 자식은 회귀 가드가 차단하므로 가드 없는 실행에서만 판정한다.
+    @unittest.skipIf(_child_inherits_regression_guard(), "격리 회귀 가드 아래에서는 판정 불가, 가드 없이 실행")
     def test_without_the_environment_variable_the_hook_is_inert(self):
         proc = self._run()
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -90,6 +101,34 @@ class PackagedGuardHookTestCase(unittest.TestCase):
                                HOMEZ_GUARD_PROTECTED_PATHS=None)
         self.assertEqual(no_targets.returncode, 98)                   # 보호 대상이 없는 빈 가드
         self.assertNotIn("OPEN_", no_targets.stdout)
+
+
+class RegressionGuardDetectionTestCase(unittest.TestCase):
+    """건너뛰기 조건이 넓어지면 가드 없는 실행에서도 판정이 조용히 사라지므로 조건 자체를 고정한다."""
+
+    def _detect(self, pythonpath):
+        with mock.patch.dict(os.environ, {"PYTHONPATH": pythonpath}):
+            return _child_inherits_regression_guard()
+
+    def test_true_when_the_guard_directory_is_on_pythonpath(self):
+        guard_dir = str(GUARD.parent)
+        self.assertTrue(self._detect(guard_dir))
+        self.assertTrue(self._detect(os.pathsep.join([str(ROOT), guard_dir])))
+        self.assertTrue(self._detect(os.path.relpath(guard_dir)))           # 샤드 실행의 상대 경로 표기
+        self.assertTrue(self._detect(guard_dir.upper()))                    # Windows 대소문자
+
+    def test_false_otherwise(self):
+        self.assertFalse(self._detect(""))
+        self.assertFalse(self._detect(str(ROOT)))
+        self.assertFalse(self._detect(str(GUARD.parent.parent)))            # 상위 디렉터리는 가드를 싣지 않는다
+        self.assertFalse(self._detect(str(GUARD.parent / "other")))
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PYTHONPATH", None)
+            self.assertFalse(_child_inherits_regression_guard())
+
+    def test_the_inert_test_is_skipped_exactly_when_the_guard_is_inherited(self):
+        inert = PackagedGuardHookTestCase.test_without_the_environment_variable_the_hook_is_inert
+        self.assertEqual(getattr(inert, "__unittest_skip__", False), _child_inherits_regression_guard())
 
 
 if __name__ == "__main__":
