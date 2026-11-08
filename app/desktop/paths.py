@@ -116,17 +116,44 @@ def get_homez_db_path(*, confirm: bool = False) -> Path:
     return get_data_dir() / "homez.db"
 
 
+def get_test_logs_override() -> Path | None:
+    """
+    2026-11-02 — 시험 실행이 운영 로그(storage\\logs\\*, logs\\homez.log)에
+    기록을 남겨 앱 중단 원인 조사 때 진짜 기록을 가려내기 어려웠다.
+    `HOMEZ_TEST_LOG_ROOT`가 설정돼 있으면 그 경로를 로그 위치로 쓴다.
+    격리 회귀 가드(tests/support/regression_guard/sitecustomize.py)가
+    임시 폴더로 설정한다.
+
+    `HOMEZ_TEST_MEDIA_ROOT`와 같은 계약이다 — **개발 모드(is_frozen()==
+    False)에서만** 동작하고, 설치된 실행 파일은 이 값이 있어도 참조하지
+    않는다. 빈 값은 설정 안 함과 같다. 아무 것도 이 환경변수를 자동으로
+    설정하지 않으므로 운영 앱의 로그 위치는 바뀌지 않는다.
+    """
+
+    if is_frozen():
+        return None
+
+    override = os.environ.get("HOMEZ_TEST_LOG_ROOT", "").strip()
+
+    return Path(override) if override else None
+
+
 def get_logs_dir() -> Path:
     """
     Desktop 런처 로그 디렉터리.
 
     개발 모드: 저장소의 기존 storage\\logs (scripts/start_homez.ps1과
     동일한 위치, 로그 정책을 이원화하지 않기 위함).
+    `HOMEZ_TEST_LOG_ROOT`가 있으면 그 경로(`get_test_logs_override()`).
     패키징 모드(향후): %LOCALAPPDATA%\\HOMEZ\\logs.
     """
 
     if is_frozen():
         return _frozen_data_root() / "logs"
+
+    override = get_test_logs_override()
+    if override is not None:
+        return override
 
     return get_repo_root() / "storage" / "logs"
 
@@ -202,6 +229,7 @@ __all__ = [
     "get_repo_root",
     "get_data_dir",
     "get_homez_db_path",
+    "get_test_logs_override",
     "get_logs_dir",
     "get_backups_dir",
     "get_config_dir",

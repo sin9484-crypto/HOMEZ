@@ -13956,3 +13956,11 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 확인: 재시작 뒤 첫 주문 감지 05:06:28(KST) 성공, 연결 #2 위치가 끄기 전 마지막 성공 지점에서 이어져 꺼져 있던 4~5분도 읽었다.
 - 시작 때 생긴 것: '판매채널 상품등록 계정 동기화'가 연결 #2(`쿠팡`)로 상품등록 계정 #2를 새로 만들었다(설계된 동작, 비밀값 없음). 옛 계정 #1(`홈즈쿠팡`, 연결 #1은 사용 중지)도 활성으로 남아 있어 등록 화면에 계정이 둘 보일 수 있다. 기존 등록 4건은 계정 #1을 가리킨다. 바꾸지 않았다(🟡 사용자 결정).
 - 로그 메모: 11-08 22:55의 'port=1234 … E1003' 기록은 전체 회귀 시험이 운영 로그에 남긴 가짜 기록이다(별도 세션 과제와 같은 문제).
+
+## 2026-11-09 — 시험 기록이 운영 로그에 섞이지 않게 하는 수정 병합(11-02 별도 세션 작업)
+
+- 출처: worktree `affectionate-cray-cb4fa5`(브랜치 `claude/eager-lalande-5bb940`)의 커밋 안 된 변경. 11-02 15:21 이후 손대지 않은 상태였고, 그 뒤 main에서 대상 파일이 바뀌지 않아 그대로 얹었다. worktree 자체는 지우지 않았다.
+- 내용: 개발 모드 전용 환경변수 `HOMEZ_TEST_LOG_ROOT`(`app/desktop/paths.py::get_test_logs_override`)가 있으면 `homez.log`(`app/core/logger.py`)와 Desktop 기록(`get_logs_dir`)이 그 폴더로 간다. 격리 회귀 가드(`tests/support/regression_guard/sitecustomize.py`)가 프로세스마다 임시 폴더를 잡고 끝날 때 지운다. 값이 없으면 운영 경로는 전과 같고 설치본은 읽지 않는다.
+- 시험: 신규 `tests/test_regression_guard_log_isolation.py`, 보강 `tests/test_desktop_paths_isolation.py` 포함 로그·경로·가드 관련 18개 모듈 332개 OK(건너뜀 3).
+- 실제 확인: 운영 앱이 켜진 채 위 시험을 돌린 05:09~05:13(KST) 동안 `logs/homez.log`·`storage/logs/homez-desktop.log`에 새 줄 0(운영 앱 기록은 05:05가 마지막). 수정 전인 11-08 전체 회귀는 `homez-desktop.log`에 'port=1234 … E1003' 가짜 기록을 남겼다.
+- 한계: 가드 없이 돌린 시험은 여전히 운영 로그에 쓴다. 지금 실행 중인 앱은 이 변경 전 코드지만, 바뀐 것은 시험 때만 쓰는 경로라 운영 앱 동작은 같다.

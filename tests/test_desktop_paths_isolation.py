@@ -302,6 +302,7 @@ class CoreLoggerDataRootIsolationTestCase(unittest.TestCase):
         from app.core.logger import _resolve_log_dir
 
         paths_mod.is_frozen = lambda: False
+        os.environ.pop("HOMEZ_TEST_LOG_ROOT", None)
 
         self.assertEqual(_resolve_log_dir(), Path("logs"))
 
@@ -327,6 +328,76 @@ class CoreLoggerDataRootIsolationTestCase(unittest.TestCase):
         self.assertEqual(
             _resolve_log_dir(), Path(r"C:\FakeLocalAppData\HOMEZ\logs"),
         )
+
+
+class TestLogRootOverrideTestCase(unittest.TestCase):
+    """2026-11-02 — `HOMEZ_TEST_LOG_ROOT`는 개발 모드의 시험 전용이다.
+    값이 없으면 운영 앱의 두 로그 위치가 그대로여야 하고, 설치본은 값이
+    있어도 읽지 않아야 한다. 파일을 만들지 않고 경로 계산만 검증한다."""
+
+    def setUp(self):
+
+        self._original_is_frozen = paths_mod.is_frozen
+        self._original_environ = dict(os.environ)
+        paths_mod.is_frozen = lambda: False
+
+    def tearDown(self):
+
+        paths_mod.is_frozen = self._original_is_frozen
+        os.environ.clear()
+        os.environ.update(self._original_environ)
+
+    def _assert_operating_dev_paths(self):
+
+        from app.core.logger import _resolve_log_dir
+        from app.desktop.crash_log import get_crash_log_path
+
+        repo_logs = paths_mod.get_repo_root() / "storage" / "logs"
+
+        self.assertIsNone(paths_mod.get_test_logs_override())
+        self.assertEqual(paths_mod.get_logs_dir(), repo_logs)
+        self.assertEqual(get_crash_log_path(), repo_logs / "homez-desktop.log")
+        self.assertEqual(_resolve_log_dir(), Path("logs"))
+
+    def test_without_override_operating_paths_are_unchanged(self):
+
+        os.environ.pop("HOMEZ_TEST_LOG_ROOT", None)
+
+        self._assert_operating_dev_paths()
+
+    def test_blank_override_is_the_same_as_not_set(self):
+
+        os.environ["HOMEZ_TEST_LOG_ROOT"] = "   "
+
+        self._assert_operating_dev_paths()
+
+    def test_override_moves_both_log_locations(self):
+
+        from app.core.logger import _resolve_log_dir
+        from app.desktop.crash_log import get_crash_log_path
+
+        os.environ["HOMEZ_TEST_LOG_ROOT"] = r"C:\IsolatedTestLogs"
+
+        root = Path(r"C:\IsolatedTestLogs")
+
+        self.assertEqual(paths_mod.get_logs_dir(), root)
+        self.assertEqual(get_crash_log_path(), root / "homez-desktop.log")
+        self.assertEqual(_resolve_log_dir(), root)
+
+    def test_frozen_mode_never_reads_override(self):
+
+        from app.core.logger import _resolve_log_dir
+
+        paths_mod.is_frozen = lambda: True
+        os.environ.pop("HOMEZ_DATA_ROOT", None)
+        os.environ["LOCALAPPDATA"] = r"C:\FakeLocalAppData"
+        os.environ["HOMEZ_TEST_LOG_ROOT"] = r"C:\ShouldBeIgnored"
+
+        expected = Path(r"C:\FakeLocalAppData\HOMEZ\logs")
+
+        self.assertIsNone(paths_mod.get_test_logs_override())
+        self.assertEqual(paths_mod.get_logs_dir(), expected)
+        self.assertEqual(_resolve_log_dir(), expected)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,10 @@ File : tests/support/regression_guard/sitecustomize.py
   4. 자식 프로세스 — 보호 경로를 인자에 담은 실행, 가드를 잃는 파이썬 자식(-I/-S/-E 또는
      PYTHONPATH를 지운 env) 실행. 그 외 자식(PowerShell·node 등 비파이썬)은 로그에만 남긴다.
 
+차단과 별개로, 앱 로그를 임시 폴더로 보낸다: `HOMEZ_TEST_LOG_ROOT`가 비어 있으면 새 임시 폴더를 만들어
+설정하고 프로세스가 끝날 때 지운다(자식은 그 값을 물려받는다). 로그를 남겨 보고 싶으면 이 값을 미리 지정한다 —
+미리 지정한 폴더는 지우지 않는다. 가드 없이 실행한 시험은 이 격리를 받지 못한다(`storage\\logs`·`logs`에 쓴다).
+
 경로 비교는 대소문자·슬래시·`\\\\?\\` 접두·8.3 짧은 이름·심볼릭 링크·정션을 `os.path.realpath`로
 풀어 한 뒤 하고, 하드링크는 (st_dev, st_ino) 동일성으로 잡는다.
 
@@ -65,6 +69,7 @@ _LOG = os.environ.get("HOMEZ_GUARD_LOG")
 _MODE = os.environ.get("HOMEZ_GUARD_MODE", "block")  # "block" | "report"
 _GUARD_DIR = os.path.normcase(os.path.realpath(os.path.dirname(os.path.abspath(__file__))))
 _ENV_PROTECTED = "HOMEZ_GUARD_PROTECTED_PATHS"
+_ENV_TEST_LOG_ROOT = "HOMEZ_TEST_LOG_ROOT"
 _tl = threading.local()
 
 _SKIP_EXT = (".py", ".pyc", ".pyd", ".dll", ".pth", ".exe", ".so")
@@ -461,7 +466,32 @@ def _audit(event: str, args) -> None:
         _tl.busy = False
 
 
+def _isolate_test_logs() -> None:
+    """앱 로그를 임시 폴더로 보낸다(app/desktop/paths.py::get_test_logs_override). 설치본 exe는 이 값을 읽지 않으므로 건너뛴다."""
+
+    if os.environ.get(_ENV_TEST_LOG_ROOT, "").strip() or getattr(sys, "frozen", False):
+        return
+    import atexit
+    import shutil
+    import tempfile
+
+    def remove_root() -> None:
+        # Windows는 열린 파일을 못 지운다. logging.shutdown만으로는 부족하다 — uvicorn의 dictConfig가
+        # logging의 핸들러 목록을 비운 뒤 다시 쓰인 파일은 shutdown이 닫지 못한다. 그래서 직접 닫는다.
+        logging_mod = sys.modules.get("logging")
+        if logging_mod is not None:
+            for item in [logging_mod.root, *logging_mod.root.manager.loggerDict.values()]:
+                for handler in getattr(item, "handlers", []):
+                    handler.close()
+        shutil.rmtree(root, ignore_errors=True)
+
+    root = tempfile.mkdtemp(prefix="homez_test_logs_")
+    os.environ[_ENV_TEST_LOG_ROOT] = root
+    atexit.register(remove_root)
+
+
 def _install() -> None:
+    _isolate_test_logs()
     _build_protected()
     sys.addaudithook(_audit)
     _log("GUARD_ACTIVE", f"mode={_MODE} protected_files={len(_P_FILES)} protected_dirs={len(_P_DIRS)} identities={len(_P_IDS)}")

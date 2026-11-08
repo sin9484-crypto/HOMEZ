@@ -30,12 +30,25 @@ def _resolve_log_dir() -> Path:
     개발·테스트 워크플로와 이미 맞물려 있어, 여기서 바꾸지 않는다.
     패키징 모드에서만 `get_logs_dir()`(HOMEZ_DATA_ROOT를 따르는
     동일한 격리 계약)로 옮긴다.
+
+    2026-11-02 — 개발 모드라도 `HOMEZ_TEST_LOG_ROOT`가 있으면 그
+    경로로 간다(시험 기록이 운영 `logs/homez.log`에 섞이지 않게 —
+    `app/desktop/paths.py::get_test_logs_override()`). 이 값이 없으면
+    `logs/` 그대로다.
     """
 
-    from app.desktop.paths import get_logs_dir, is_frozen
+    from app.desktop.paths import (
+        get_logs_dir,
+        get_test_logs_override,
+        is_frozen,
+    )
 
     if is_frozen():
         return get_logs_dir()
+
+    override = get_test_logs_override()
+    if override is not None:
+        return override
 
     return Path("logs")
 
