@@ -509,6 +509,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "sc.wizard.guide_done_checkbox": "발급을 완료했습니다",
   "sc.wizard.guide_done_required": "발급 완료 체크박스를 확인해주세요.",
   "sc.wizard.input_title": "HOMEZ에 연결 정보 입력",
+  "sc.wizard.existing_connection_warning": "이미 {marketplace} 연결이 있습니다: {names}. 같은 판매자 계정의 키를 다시 발급받았다면 새로 만들지 말고, 연결 목록에서 그 연결의 '자격증명 교체'를 누르세요. 새 연결에는 기존 상품의 공급처 연결과 주문 감지 위치가 따라오지 않아, 그 상품의 새 주문이 '연결 없음'으로 멈춥니다.",
   "sc.wizard.input_desc": "이 화면은 {marketplace} 로그인 비밀번호를 입력하는 곳이 아닙니다. 방금 발급받은 공식 API 자격증명만 입력하세요.",
   "sc.wizard.display_name_label": "연결 이름",
   "sc.wizard.seller_identifier_label": "판매자 식별자(내부 구분용)",

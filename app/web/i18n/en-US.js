@@ -509,6 +509,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "sc.wizard.guide_done_checkbox": "I've completed issuing the credential",
   "sc.wizard.guide_done_required": "Please check the completion checkbox.",
   "sc.wizard.input_title": "Enter connection details for HOMEZ",
+  "sc.wizard.existing_connection_warning": "A {marketplace} connection already exists: {names}. If you re-issued keys for the same seller account, don't create a new one — use 'Rotate credential' on that connection in the list. A new connection does not carry over the supplier links of existing products or the order detection position, so new orders for those products stop as 'no link'.",
   "sc.wizard.input_desc": "This screen is not for your {marketplace} login password. Enter only the official API credential you just issued.",
   "sc.wizard.display_name_label": "Connection name",
   "sc.wizard.seller_identifier_label": "Seller identifier (internal use)",

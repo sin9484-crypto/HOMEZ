@@ -18668,6 +18668,7 @@
   };
 
   let scWizard = null;
+  let scConnections = [];
 
   async function loadStoreConnectionView() {
     loadR2HostingStatus();
@@ -18676,6 +18677,7 @@
 
     try {
       const connections = await apiFetch("/store-connections");
+      scConnections = connections || [];
 
       if (!connections || connections.length === 0) {
         renderEmptyState(wrap, HomezI18n.t("sc.connections.empty"), HomezI18n.t("sc.connections.empty_sub"));
@@ -18830,6 +18832,7 @@
       verifyResult: null,
       verifiedSnapshot: null,
       officialDocUrl,
+      existingSameMarket: mode === "create" ? scSameMarketplaceConnections(scConnections, marketplaceCode) : [],
     };
 
     el("sc-wizard-title").textContent = HomezI18n.t(
@@ -18944,6 +18947,23 @@
       el("sc-run-save-btn").addEventListener("click", scRunSave);
       nextBtn.style.display = "none";
     }
+    if (scWizard.stepIndex === 0 || step.type === "save") {
+      body.insertAdjacentHTML("afterbegin", scExistingConnectionWarning(scWizard));
+    }
+  }
+
+  // 2026-11-08 — 키를 다시 발급받고 새 연결(#2)을 만들자 옛 연결(#1)에 묶인 공급처 연결 3건과
+  // 주문 감지 위치가 따라오지 않았다. 같은 마켓 연결이 이미 있으면 새로 만들기 전에 '자격증명 교체'를 권한다.
+  function scSameMarketplaceConnections(connections, marketplaceCode) {
+    return (connections || []).filter((c) => c && c.marketplace_code === marketplaceCode);
+  }
+
+  function scExistingConnectionWarning(wizard) {
+    if (!wizard || wizard.mode !== "create" || !wizard.existingSameMarket || wizard.existingSameMarket.length === 0) return "";
+    const names = wizard.existingSameMarket.map((c) => `'${c.display_name}'`).join(", ");
+    return `<div class="banner banner-warn" role="note" id="sc-existing-connection-warning"><p>${escapeHtml(HomezI18n.t("sc.wizard.existing_connection_warning", {
+      marketplace: HomezI18n.t(SC_MARKETPLACE_LABEL_KEY[wizard.marketplaceCode]), names,
+    }))}</p></div>`;
   }
 
   function scCaptureInputStep() {
