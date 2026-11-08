@@ -13939,3 +13939,11 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 적용 시각 2026-11-08 19:39:21(UTC) = 11-09 04:39(KST). 적용 후 integrity ok.
 - 확인: 적용 후 사본에서 실제 `SupplierOptionLinkService.get_link_by_vendor_item(1, 2, …)`이 옵션 3개(96176998509·96182958738·96197958748) 모두 ACTIVE 연결을 찾았다.
 - 연결 #1에 남은 기록: 주문 1의 발주서 1행(이미 `FINAL_DELIVERY`, 주문 SHIPPED), 옛 주문 감지 위치 6행, 쿠팡 쓰기 요청 이력 4행, 시험 호출 예산 1행 — 모두 지난 기록이라 그대로 둔다.
+
+## 2026-11-09 — 시스템 점검에 '바뀐 판매 연결에 남은 상품 연결' 항목(LINKS) 추가
+
+- 이유: 11-08 연결 #1→#2 때 남은 공급처 연결·SKU 대응을 어느 화면도 알려 주지 않아 DB를 직접 읽고서야 알았다.
+- 규칙(`health_summary.py`): 꺼졌거나(DISABLED) 자격증명이 지워진(NOT_CONFIGURED) 연결에 ACTIVE 공급처 연결 또는 SKU 대응이 남아 있고, 같은 회사·같은 마켓에 CONNECTED 연결이 따로 있으면 `LINKS_ON_REPLACED_CONNECTION`(WARN, 개수). 없으면 통과, 읽지 못하면 unknown. 하나뿐인 연결이 꺼졌거나 오류인 경우·다른 마켓·다른 회사·멈춘 공급처 연결은 세지 않는다.
+- 수집(`health_service.py::_replaced_links`)은 읽기만 한다(시험이 쓰기 호출이 없음을 고정). AI 설명 뜻·쉬운 보기 아침 요약 문구(한·영, 개수 포함)를 더했다.
+- 확인: 이전 전 복원점 사본 → `{links: 3, resolutions: 1}`(경고), 이전 후 실제 DB 사본 → 0(통과). 복원점 sha256 그대로.
+- 시험: 신규 `tests/test_health_replaced_links.py` 15개, `test_health_summary`(정상 스냅샷에 새 항목 추가 — 10-21 반영 A와 같은 방식)·`test_health_detection_checks` 포함 67개 OK, 쉬운 보기·건강 점검 관련 26개 모듈 461개 OK, 가드 차단 0.

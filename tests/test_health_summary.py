@@ -48,6 +48,8 @@ def good(**overrides):
         "latest_rehearsal": {"at": NOW - timedelta(days=2), "ok": True}, "disk_free_bytes": 20 * GB, "estop_active": False,
         # 2026-10-21 반영 A: 자동 감지·읽기 허용도 정상 스냅샷의 일부(없으면 "모름"으로 남는다 — 아래 시험은 tests/test_health_detection_checks.py)
         "detection": {"health_code": "OK", "minutes_since_attempt": 3}, "reads": {"lapsed": [], "never": []},
+        # 2026-11-09: 바뀐 판매 연결에 남은 상품 연결(tests/test_health_replaced_links.py)
+        "replaced_links": {"links": 0, "resolutions": 0},
     }
     snap.update(overrides)
     return snap
@@ -62,7 +64,7 @@ class RuleTests(unittest.TestCase):
     def test_a_healthy_snapshot_is_ok_with_every_item_passed(self):
         r = hs.evaluate(good())
         self.assertEqual((r["overall"], r["checks"], r["unknown"]), ("OK", [], []))
-        self.assertEqual(set(r["passed"]), {"SCHEDULER", "JOBS", "BACKUP", "REHEARSAL", "DISK", "ESTOP", "DETECTION", "READS"})
+        self.assertEqual(set(r["passed"]), {"SCHEDULER", "JOBS", "BACKUP", "REHEARSAL", "DISK", "ESTOP", "DETECTION", "READS", "LINKS"})
 
     def test_scheduler_states(self):
         self.assertEqual(codes(hs.evaluate(good(scheduler=None)), "FAIL"), ["SCHEDULER_NOT_RUNNING"])

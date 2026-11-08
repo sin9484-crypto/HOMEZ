@@ -14,6 +14,7 @@ File : app/domains/diagnostics/health_service.py
   - 신규 주문 자동 감지(2026-10-21 반영 A): `order_auto_collection_states` 가장 최근 행 + 기능 모드 → 운영 화면과 같은 `describe_health` 코드(규칙을 따로 만들지 않는다).
   - 읽기 허용(반영 A): `external_call_allowances`에서 주문·배송 상태·반품/민원/정산·상품 상태 읽기 허용이 **지금 쓸 수 있는지**를 읽기만으로 판정한다 —
     `ExternalCallPolicyService.authorize`는 만료 표시·요청 생성처럼 **쓰기**를 하므로 쓰지 않는다.
+  - 바뀐 판매 연결(2026-11-09): 꺼졌거나 자격증명이 지워진 연결에 남은 공급처 연결(ACTIVE)·SKU 대응 수 — 같은 마켓에 CONNECTED 연결이 따로 있을 때만.
 무거운 점검(DB 무결성 검사·마이그레이션 진단)은 요청마다 돌리지 않는다 — 진단 내보내기(`/diagnostics/export`)와 주간 복구 시험이 맡는다.
 =========================================================
 """
@@ -198,6 +199,34 @@ class HealthService:
             logger.warning("운영 상태 점검: 읽기 허용 상태를 읽지 못했다", exc_info=True)
             return None
 
+    def _replaced_links(self) -> dict | None:
+        """(2026-11-09) 꺼졌거나 자격증명이 지워진 판매 연결에 남은 상품 연결 수. 같은 회사·같은 마켓에 쓰는(CONNECTED) 연결이 따로 있을 때만
+        센다 — 새 주문은 그 연결로 들어오므로 옛 연결의 공급처 연결·SKU 대응을 찾지 못한다. 읽기만 한다."""
+        try:
+            from app.domains.order.collection_model import OrderSkuResolution
+            from app.domains.purchase_task.constants import SupplierOptionLinkStatus
+            from app.domains.purchase_task.model import SupplierOptionLink
+            from app.domains.store_connection.constants import ConnectionStatus
+            from app.domains.store_connection.model import StoreConnection
+
+            connections = self.db.query(StoreConnection.id, StoreConnection.company_id, StoreConnection.marketplace_code, StoreConnection.connection_status).all()
+            live = {(c.company_id, c.marketplace_code) for c in connections if c.connection_status == ConnectionStatus.CONNECTED}
+            replaced = [
+                c.id for c in connections
+                if c.connection_status in (ConnectionStatus.DISABLED, ConnectionStatus.NOT_CONFIGURED) and (c.company_id, c.marketplace_code) in live
+            ]
+            if not replaced:
+                return {"links": 0, "resolutions": 0}
+            links = self.db.query(SupplierOptionLink).filter(
+                SupplierOptionLink.store_connection_id.in_(replaced), SupplierOptionLink.status == SupplierOptionLinkStatus.ACTIVE,
+            ).count()
+            resolutions = self.db.query(OrderSkuResolution).filter(OrderSkuResolution.store_connection_id.in_(replaced)).count()
+            return {"links": int(links), "resolutions": int(resolutions)}
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+            logger.warning("운영 상태 점검: 판매 연결별 상품 연결을 읽지 못했다", exc_info=True)
+            return None
+
     def snapshot(self) -> dict[str, Any]:
         enabled, scheduler = self._scheduler()
         backup_ok, latest_backup = self._latest_backup()
@@ -211,6 +240,7 @@ class HealthService:
         detection, company_id = self._detection()
         snap["detection"] = detection
         snap["reads"] = self._reads(company_id)
+        snap["replaced_links"] = self._replaced_links()
         if backup_ok:
             snap["latest_backup_at"] = latest_backup
         return snap

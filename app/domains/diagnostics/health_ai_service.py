@@ -69,6 +69,8 @@ CODE_MEANING = {
     "DETECTION_ENV_BLOCKED": "실행 환경의 호출 제한이 쿠팡 조회를 막고 있다(앱이나 쿠팡의 문제가 아니다).",
     "DETECTION_STALE": "자동 감지는 켜져 있는데 한동안 확인을 시도한 기록이 없다. 앱이 꺼져 있었거나 자동 작업 엔진이 멈췄을 수 있다.",
     "READS_ALLOWANCE_LAPSED": "주문·배송 상태, 반품·문의·정산, 상품 상태를 쿠팡에서 읽어 오는 자동 확인 중 허용이 끝난(만료·취소·소진) 것이 있어 그 확인이 멈춰 있다. 그 사이 생긴 일은 앱이 모를 수 있다.",
+    # 2026-11-09 — 판매 연결을 새로 만들어 바꾸면 옛 연결의 상품 연결이 따라오지 않는다. 조치(기록 옮기기)는 판매자 승인 아래 개발 담당이 한다.
+    "LINKS_ON_REPLACED_CONNECTION": "쓰지 않는(꺼졌거나 키가 지워진) 판매 연결에 상품의 공급처 연결이 남아 있고, 같은 마켓의 새 연결에는 없다. 그 상품에 새 주문이 오면 공급처를 찾지 못해 멈춘다.",
 }
 # 읽기 허용 목적 코드 → 쉬운 말(AI에 보내는 허용 목록 — 이 밖의 목적 코드는 보내지 않는다)
 READS_PURPOSE_LABEL = {"ORDER_TRACKING": "주문·배송 상태", "AFTER_SALES_CHECK": "반품·문의·정산", "PRODUCT_STATUS_CHECK": "상품 상태"}
@@ -124,6 +126,8 @@ def build_user_prompt(checks: list[dict]) -> str:
             facts["jobs"] = [j for j in params["jobs"] if j in known_jobs]
         if isinstance(params.get("minutes"), int):
             facts["minutes_since_last_attempt"] = params["minutes"]
+        if isinstance(params.get("links"), int):
+            facts["links_left_behind"] = params["links"]
         if isinstance(params.get("purposes"), list):
             facts["purposes"] = [READS_PURPOSE_LABEL[x] for x in params["purposes"] if x in READS_PURPOSE_LABEL]
         items.append({"code": c["code"], "level": c["level"], "meaning": CODE_MEANING[c["code"]], "facts": facts})

@@ -19,6 +19,8 @@ File : app/domains/diagnostics/health_summary.py
                    30분 넘게 지났다(앱이 꺼져 있었거나 엔진이 멈춤) → WARN
   - READS          주문·배송 상태, 반품·문의·정산, 상품 상태를 읽는 자동 확인의 허용(2026-10-21 반영 A) — 전에 허용이 있었는데 만료·취소·소진됐다 → WARN /
                    한 번도 허용한 적이 없다 → INFO. 허용이 없으면 그 확인이 **조용히 멈추므로** 화면이 "일이 없다"와 "감시를 못 한다"를 구분할 수 있어야 한다
+  - LINKS          (2026-11-09) 꺼졌거나 자격증명이 지워진 판매 연결에 공급처 연결·SKU 대응이 남아 있는데 같은 마켓에 쓰는 연결이 따로 있다 → WARN.
+                   새 주문은 쓰는 연결로 들어와 옛 연결의 기록을 찾지 못하고 '연결 없음'으로 멈춘다(11-08 키 재발급 때 새 연결을 만들어 실제로 생겼다)
 값을 읽지 못한 항목(None)은 점검하지 않고 `unknown`에 코드만 남긴다 — 모르는 것을 정상이라고 하지 않는다.
 시각은 모두 UTC naive다. 이 모듈은 원인을 추측하지 않는다(코드와 숫자만) — 원인 설명은 사람이나 이후 AI 단계가 한다.
 =========================================================
@@ -65,7 +67,8 @@ def evaluate(snapshot: dict[str, Any]) -> dict[str, Any]:
 
     스냅샷 키(모두 선택): now(datetime), scheduler_enabled(bool), scheduler(None 또는 {"running": bool, "jobs": [{"id", "next_run"(datetime|None)}]}),
     expected_jobs(list[str]), latest_backup_at, latest_rehearsal({"at", "ok"}|None), rehearsal_known(bool), disk_free_bytes(int|None), estop_active(bool|None),
-    detection(None 또는 {"health_code": str, "minutes_since_attempt": int|None}), reads(None 또는 {"lapsed": [목적], "never": [목적]})."""
+    detection(None 또는 {"health_code": str, "minutes_since_attempt": int|None}), reads(None 또는 {"lapsed": [목적], "never": [목적]}),
+    replaced_links(None 또는 {"links": int, "resolutions": int})."""
 
     now: datetime = snapshot["now"]
     checks: list[dict[str, Any]] = []
@@ -176,6 +179,15 @@ def evaluate(snapshot: dict[str, Any]) -> dict[str, Any]:
             checks.append(_check("READS_NOT_ALLOWED", INFO, purposes=never))
         if not (lapsed or never):
             passed.append("READS")
+    replaced = snapshot.get("replaced_links")
+    if not isinstance(replaced, dict):
+        unknown.append("LINKS")
+    else:
+        links, resolutions = int(replaced.get("links") or 0), int(replaced.get("resolutions") or 0)
+        if links or resolutions:
+            checks.append(_check("LINKS_ON_REPLACED_CONNECTION", WARN, links=links, resolutions=resolutions))
+        else:
+            passed.append("LINKS")
 
     checks.sort(key=lambda c: LEVEL_RANK[c["level"]])
     levels = {c["level"] for c in checks}
