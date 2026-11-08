@@ -13929,5 +13929,13 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 추가: 같은 마켓 연결이 이미 있으면(상태 무관) 새 연결 창의 첫 단계와 저장 단계에 경고를 띄운다. 기존 연결 이름을 적고, 같은 판매자 계정의 키를 다시 받았다면 '자격증명 교체'를 쓰라고, 새 연결에는 공급처 연결과 주문 감지 위치가 따라오지 않는다고 알린다. 교체 모드에서는 띄우지 않는다. 막지는 않는다(다른 판매자 계정 연결은 정상 사용).
 - 변경: `app/web/console.js`(목록 기억 `scConnections`, `scSameMarketplaceConnections`, `scExistingConnectionWarning`), `app/web/i18n/ko-KR.js`·`en-US.js`(`sc.wizard.existing_connection_warning`). 신규 시험 `tests/test_store_connection_replace_warning.py` 8개(실제 함수를 node로 실행, 이름 이스케이프 포함).
 - 검증: 신규 8개 OK, `test_store_connection_ui`·`test_i18n` 75개 OK. 전체 회귀(20조각, 11-08 22:01~11-09 00:37) 8,152개 OK·건너뜀 26·실패 0, 가드가 실제 DB 읽기 시도 8건 차단(기존 제한 모드 진단 경로). 1조각은 수정 전에 시작돼 그 조각의 화면 시험 8개 모듈 141개를 수정 후 다시 돌려 OK.
-- 남은 문제(🟡 승인 대기): 옛 연결 #1에 묶인 `supplier_option_links` 3행·`order_sku_resolutions` 1행이 새 연결 #2로 옮겨지지 않았다. 그 상품에 새 주문이 오면 '연결 없음'으로 멈춘다. 사본 DB에서 4행 이동·제약 충돌 0·integrity ok를 확인했고 실제 DB는 바꾸지 않았다.
+- 남은 문제(→ 아래 이전 항목에서 해결): 옛 연결 #1에 묶인 `supplier_option_links` 3행·`order_sku_resolutions` 1행이 새 연결 #2로 옮겨지지 않았다. 그 상품에 새 주문이 오면 '연결 없음'으로 멈춘다. 사본 DB에서 4행 이동·제약 충돌 0·integrity ok를 확인했고 실제 DB는 바꾸지 않았다.
 - 운영: 11-08 21:45 따라잡기 뒤 자동 감지가 계속 성공(감시 기록 10분 간격), 새 주문 0.
+
+## 2026-11-09 — 옛 연결 #1의 상품 연결 4행을 새 연결 #2로 이전(사용자 승인 "연결 옮기기 승인한다")
+
+- 복원점: `Homez-Backups/relink_20261109/homez_pre_relink.db`(integrity ok, sha256 `9da06767…62fc21`).
+- 실제 DB 변경(한 트랜잭션, `BEGIN IMMEDIATE`): `supplier_option_links` id 1·2·3의 `store_connection_id` 1→2(version 1→2), `order_sku_resolutions` id 1의 `store_connection_id` 1→2. 적용 전 확인 조건: 연결 #1 DISABLED·#2 CONNECTED, #2에 기존 행 0, 반영 행 수 정확히 3·1 — 하나라도 어긋나면 롤백. 다시 실행하면 "#2에 기존 행 있음"으로 막힌다(사본에서 확인).
+- 적용 시각 2026-11-08 19:39:21(UTC) = 11-09 04:39(KST). 적용 후 integrity ok.
+- 확인: 적용 후 사본에서 실제 `SupplierOptionLinkService.get_link_by_vendor_item(1, 2, …)`이 옵션 3개(96176998509·96182958738·96197958748) 모두 ACTIVE 연결을 찾았다.
+- 연결 #1에 남은 기록: 주문 1의 발주서 1행(이미 `FINAL_DELIVERY`, 주문 SHIPPED), 옛 주문 감지 위치 6행, 쿠팡 쓰기 요청 이력 4행, 시험 호출 예산 1행 — 모두 지난 기록이라 그대로 둔다.
