@@ -58,6 +58,11 @@ MAX_LOG_BYTES = 2 * 1024 * 1024  # 2MB — 넘으면 .old로 교체(간단 rotat
 # 26.7초 걸려 기존 25초 제한에서 E1002가 재현됐다. 초기화 실패는 계속
 # 제한하되, 정상적인 첫 실행과 실시간 백신 검사 편차를 수용한다.
 HEALTH_TIMEOUT_SECONDS = 45.0
+# 2026-11-08: PC가 이틀 꺼져 있다 켜진 직후 운영 앱이 45초를 넘겨 E1002로 스스로 꺼졌다(주문 감지 중단).
+# 서버 스레드가 살아 있고 아직 앱을 불러오는 중(uvicorn `started` 전)이면 이 상한까지 더 기다린다.
+# 기다리는 사이 서버가 뜨면 응답할 시간을 처음과 같은 길이로 다시 준다.
+# 서버가 떴는데 응답이 없거나 스레드가 죽었으면 지금처럼 정해진 시간에 실패한다.
+STARTUP_HARD_LIMIT_SECONDS = 180.0
 HEALTH_POLL_INTERVAL_SECONDS = 0.2
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
 
@@ -308,10 +313,25 @@ def start_server(
     thread.start()
 
     base_url = f"http://{host}:{port}"
-    deadline = time.monotonic() + startup_timeout
+    started_at = time.monotonic()
+    deadline = started_at + startup_timeout
+    hard_deadline = started_at + max(startup_timeout, STARTUP_HARD_LIMIT_SECONDS)
     last_error: Exception | None = None
+    extended = False
 
-    while time.monotonic() < deadline:
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            loading = thread.is_alive() and not getattr(server, "started", False)
+            if loading and now < hard_deadline:
+                if not extended:
+                    logger.info("서버가 아직 앱을 불러오는 중 — 최대 %.0f초까지 더 기다립니다 (port=%s).", STARTUP_HARD_LIMIT_SECONDS, port)
+                extended = True
+            elif extended and not loading and thread.is_alive():
+                deadline = now + startup_timeout
+                extended = False
+            else:
+                break
 
         try:
             payload = _check_health(base_url)
@@ -350,9 +370,10 @@ def start_server(
             f"포트 {port}의 서비스가 HOMEZ가 아닙니다(식별자 불일치).",
         )
 
+    waited = time.monotonic() - started_at
     logger.error(
         "서버 준비 타임아웃(%.1f초, port=%s): %s",
-        startup_timeout, port, last_error,
+        waited, port, last_error,
     )
     server.should_exit = True
     thread.join(timeout=5)
@@ -360,7 +381,7 @@ def start_server(
     clear_setup_nonce()
 
     raise HomezHealthCheckFailed(
-        f"HOMEZ 서버가 {startup_timeout:.1f}초 내에 준비되지 않았습니다 "
+        f"HOMEZ 서버가 {waited:.1f}초 내에 준비되지 않았습니다 "
         f"(port={port}).",
     )
 
