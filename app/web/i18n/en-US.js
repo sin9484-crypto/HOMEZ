@@ -1191,7 +1191,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "auth.register.success_toast": "Your sign-up request has been received.",
   "auth.register.error_generic": "An error occurred while submitting the request.",
   "auth.session_expired": "Your session has expired. Please log in again.",
-  "auth.session_idle_timeout": "You were logged out after 3 hours of inactivity. Please log in again.",
+  "auth.session_idle_timeout": "You were logged out after 720 hours (30 days) of inactivity. Please log in again.",
   "auth.logged_out_toast": "You've been logged out.",
   "auth.server_unreachable": "Can't connect to the server. Check that it's running and try again.",
 

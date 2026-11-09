@@ -303,8 +303,12 @@ class Settings(BaseSettings):
     # 에서 이번에 처음 연결). "마지막 사용"은 `auth_sessions.
     # last_seen_at`(app/core/auth.py의 매 인증 요청마다 갱신)을
     # 기준으로 판단한다.
+    # 2026-11-09 사용자 결정 — 로그인 유지 시간을 720시간(30일,
+    # 43200분)으로 늘린다. Refresh Token 수명(REFRESH_TOKEN_EXPIRE_DAYS
+    # =30일)과 같은 길이다. 프로그램 시작 시 이전 세션을 지우는 동작
+    # (app/desktop/main.py)은 바꾸지 않았다.
     SESSION_TIMEOUT_MINUTES: int = Field(
-        default=180,
+        default=43200,
     )
 
     DEVICE_LIMIT: int = Field(

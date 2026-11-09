@@ -1203,7 +1203,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "auth.register.success_toast": "가입 신청이 접수되었습니다.",
   "auth.register.error_generic": "가입 신청 중 오류가 발생했습니다.",
   "auth.session_expired": "세션이 만료되었습니다. 다시 로그인하세요.",
-  "auth.session_idle_timeout": "3시간 동안 사용하지 않아 자동으로 로그아웃되었습니다. 다시 로그인하세요.",
+  "auth.session_idle_timeout": "720시간(30일) 동안 사용하지 않아 자동으로 로그아웃되었습니다. 다시 로그인하세요.",
   "auth.logged_out_toast": "로그아웃되었습니다.",
   "auth.server_unreachable": "서버에 연결할 수 없습니다. 서버 상태를 확인한 뒤 다시 시도해 주세요.",
 
