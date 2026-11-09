@@ -2035,13 +2035,24 @@
     out.innerHTML = loadingHtml();
     try {
       const res = await api("/orders/cs-reply-draft", { method: "POST", body: JSON.stringify({ kind: chosen, inquiry_text: inquiry, facts: parsed.facts }) });
-      if (res.draft && res.draft.draft) textEl.value = String(res.draft.draft).slice(0, INQ_MAX);
+      if (res.draft && res.draft.draft) {
+        textEl.value = String(res.draft.draft).slice(0, INQ_MAX);
+        // 2026-11-09 AI 초안 평가 고리 — 초안 기록 번호를 답변 칸에 붙여 두었다가 보낼 때 함께 보낸다(등록 성공 시 보낸 글을 그 기록에 남김).
+        if (Number.isInteger(res.outcome_record_id) && res.outcome_record_id > 0) textEl.dataset.aiDraftRecord = String(res.outcome_record_id);
+        else delete textEl.dataset.aiDraftRecord;
+      }
       out.innerHTML = csDraftResultHtml(res);
     } catch (err) {
       out.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.cs.failed"))}</div></div>`;
     } finally {
       btn.disabled = false;
     }
+  }
+
+  function aiDraftRecordId(textEl) {
+    // 'AI 답변 초안'으로 채운 답변 칸이면 그 초안 기록 번호, 아니면 null(서버는 null이면 아무것도 기록하지 않는다).
+    const n = Number(textEl && textEl.dataset ? textEl.dataset.aiDraftRecord : NaN);
+    return Number.isInteger(n) && n > 0 ? n : null;
   }
 
   function inquiryResultHtml(result) {
@@ -2103,7 +2114,7 @@
     btn.disabled = true;
     try {
       const result = await api(`/purchase-tasks/coupang-inquiries/${encodeURIComponent(id)}/reply/send`, {
-        method: "POST", body: JSON.stringify({ content, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false }),
+        method: "POST", body: JSON.stringify({ content, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false, ai_draft_record_id: aiDraftRecordId(textEl) }),
       });
       out.innerHTML = inquiryResultHtml(result)
         + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" data-ez-inq-reconcile="${esc(id)}" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");
@@ -2182,7 +2193,7 @@
     btn.disabled = true;
     try {
       const result = await api(`/purchase-tasks/coupang-call-center-inquiries/${encodeURIComponent(id)}/reply/send`, {
-        method: "POST", body: JSON.stringify({ content, expected_parent_answer_id: parent, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false }),
+        method: "POST", body: JSON.stringify({ content, expected_parent_answer_id: parent, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false, ai_draft_record_id: aiDraftRecordId(textEl) }),
       });
       out.innerHTML = inquiryResultHtml(result)
         + (result.outcome === "UNKNOWN" ? `<button type="button" class="ez-btn line sm" data-ez-cc-reconcile="${esc(id)}" style="margin-top:8px">${esc(T("easy.stock.reconcile"))}</button>` : "");

@@ -7,7 +7,8 @@ File : app/domains/order/cs_reply_draft_service.py
 2026-10-23 — 상품 관리 AI P3: 고객 문의 **답변 초안**(사용자가 눌렀을 때만 AI 호출, `AiDraftService.call_llm`의 같은 보호 경로: 설정 → 월 한도 → 승인 센터 허용(AI_DRAFT, 횟수형) → 호출).
 규칙은 `cs_reply_draft.py`가 정한다.
 
-  - **저장하지 않는다**: 문의 글·초안은 DB·감사 기록·파일 어디에도 남기지 않는다(개인정보 최소화). 남는 것은 AI 사용 기록(토큰·비용·성공 여부)뿐이다.
+  - **문의 글은 저장하지 않는다**: 고객 문의 원문은 DB·감사 기록·파일 어디에도 남기지 않는다(개인정보 최소화). 남는 것은 AI 사용 기록(토큰·비용·성공 여부)과,
+    2026-11-09부터(사용자 승인 "1번 진행") **개인정보를 가린 답변 초안**과 실제로 보낸 답변(`ai_learning/draft_outcome_service.py`, Migration 20261109_00 승인 뒤에만)이다.
   - **AI에 보내기 전에 가린다**: 전화번호·이메일·주소·URL·긴 숫자·라벨 뒤 이름. 가린 곳 수를 응답에 담아 사용자가 알 수 있게 한다.
   - 응답은 규칙 검증을 통과해야만 보인다(통째로 버림). 비용은 응답마다 알린다. 한 번 누르면 호출 1회 — 캐시가 없다(문의마다 글이 다르다).
   - 한계: 허용 센터의 목적 이름은 기존 `AI_DRAFT`("등록 도우미 AI 초안")를 쓴다 — 새 목적을 만들면 허용 화면·상수·시험을 함께 바꿔야 해서 이번에는 쓰지 않았다(🔴 별도 목적이 필요하면 추가).
@@ -55,7 +56,16 @@ class CsReplyDraftService:
         draft, rejected = rules.validate_draft(result.text, allowed_text)
         usage = {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "cost_krw": cost, "ok": draft is not None, "purpose": "CS_DRAFT"}
         month = self.ai.record_usage(company_id, user_id, USAGE_REF, result.model, usage)
+        outcome_record_id = None
+        if draft is not None:
+            from app.domains.ai_learning.draft_outcome_service import FEATURE_CS
+            from app.domains.ai_learning.draft_outcome_service import DraftOutcomeService
+
+            outcome_record_id = DraftOutcomeService(self.db).record_draft(
+                company_id, user_id, FEATURE_CS, USAGE_REF, result.model, rules.SYSTEM_PROMPT, {"reply": draft.get("draft")},
+            )
         return {
+            "outcome_record_id": outcome_record_id,
             "draft": draft, "rejected": rejected, "kind": kind, "masked_count": masked.masked_count, "facts_used": len(cleaned_facts),
             "footer": rules.FOOTER_KO,
             "usage": {**usage, "model": result.model, **month, "monthly_limit_krw": meta["limit"]},

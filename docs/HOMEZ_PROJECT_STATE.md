@@ -14018,3 +14018,20 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 유튜브 영상은 직접 보지 않았다(검색 요약만). 2차 자료가 많아 원문 대조가 남았다.
 - 결론: 기본 원칙은 업계 방향과 같다. 부족한 것은 AI 품질을 재는 장치다(Claude 기능 실제 호출 0회). 1순위 제안은 '초안 vs 실제 보낸 글' 기록과 오류 분석 고리(새 표 필요 — Migration 승인 대상). 2순위는 상세 주장 점검기(규칙), 3순위는 이미지 AI 편집 기록·품목 제한.
 - 코드 변경·실제 DB 변경·외부 API 호출 0(웹 검색만).
+
+### 2026-11-09 AI 초안 평가 고리(1번) · 상세 주장 점검기(2번) — 사용자 승인 "1번 2번 진행"
+
+- 근거: `docs/research/20261109_AI_FOUNDATIONS_AND_GROWTH.md` 3-1·3-2.
+- **1번 AI 초안 기록**:
+  - 새 표 `ai_draft_outcome_records`(Model `ai_learning/model.py::AiDraftOutcomeRecord`, Migration `20261109_00` — Model DDL 그대로, 임시 DB 적용·재적용 거절·rollback 확인). **실제 운영 DB에는 미적용**: 앱을 다시 시작하면 Migration 승인 화면에 뜨고, 사용자가 승인해야(백업 후) 생긴다. 승인 전에는 초안을 기록하지 않고 초안 기능은 그대로다.
+  - `ai_learning/draft_outcome_service.py`: 등록 도우미 초안(검증 통과분)·고객 응대 답변 초안을 개인정보를 가려 저장한다. 고객 응대는 쿠팡 등록이 성공(SUCCEEDED)한 답변만 그 기록에 한 번 남긴다(조건부 UPDATE, 회사·기능 범위). 등록 도우미는 위저드의 지금 값과 읽을 때 비교한다. 기록 실패는 본 기능을 막지 않는다. 고객 문의 원문은 저장하지 않는다.
+  - 차이 계산 `ai_learning/draft_outcome_diff.py`(순수): 바뀐 비율·더한/지운 글자·지운/더한 문장. 가리기는 고객 응대 초안의 기존 규칙 재사용.
+  - 연결: `AiDraftService.propose`·`CsReplyDraftService.draft` 응답에 `outcome_record_id`. 상품 문의·고객센터 답변 보내기 요청에 선택 항목 `ai_draft_record_id`(양의 정수)를 받고, 라우터가 보낸 뒤 기록한다(`ai_draft_record_saved`). 쉬운 보기 답변 칸이 번호를 들고 있다가 보낸다.
+  - 화면: 'AI 점검 도구'에 8번째 카드 'AI 초안 기록'(`GET /ai-learning/draft-outcomes`, SuperAdmin) — 기능별 건수, 함께 읽기 시작 기준 30건, 시각은 한국 시각, 판정 없음.
+  - '저장하지 않는다'던 화면·등록부 문구를 실제 동작에 맞게 고쳤다(`at.cs_hint`, `easy.cs.ask_body`, 등록부 설명, 서비스 설명).
+- **2번 주장 점검기**: `marketplace_listing/listing_claim_check.py`(순수, 규칙 목록 `listing_claims.draft-20261109`, `RULES_CONFIRMED=False`)를 사전검사에 연결했다. 상품명·검색어·상세 설명의 의료·효능/절대 표현/인증·시험 표현과, 상세 설명의 근거 없는 숫자(두 자리 이상, 공급처 옵션·SKU·저장된 고시·공급처 고시 근거에 없는 것)를 **경고만** 한다. 상품명의 기존 의료 단어는 기존 경고와 겹쳐 세지 않는다.
+- 함께 고친 기존 결함: 사전검사 화면 두 곳이 문구의 `{words}` 같은 자리에 서버 값(params)을 넣지 않아 자리 표시가 그대로 보였다 → 넣도록 고쳤다(`console.js`).
+- 하지 않은 것: 제한 품목 카테고리의 AI 편집 이미지 경고(위저드 카테고리 값이 대부분 비어 있고 GENERATED 이미지에 단순 분할도 섞여 있어 정확히 가를 수 없음 — 3-3에서 이미지 편집 기록과 함께), 격리 서버 브라우저 확인, 변이 검사.
+
+- 검증: 새 테스트 `tests/test_ai_draft_outcomes.py` 31개·`tests/test_listing_claim_check.py` 13개 OK. 관련 회귀 134개 모듈 6묶음(2,300여 개) 실행 — 4개 실패, 모두 이번 의도적 변경 때문: 보내기 요청 문자열 고정 2개(`test_easy_inquiry_ui`·`test_easy_call_center_ui`, 새 항목 `ai_draft_record_id` 포함으로 갱신), 'AI 초안 Migration 없음' 고정(`test_ai_draft_ui`, 승인된 Migration 1개만·새 표 1개만·기존 표 변경 없음으로 갱신), 쓰지 않는 문구 검사(`test_ai_tools_ui`, 새 화면 함수 2개를 검사 대상 목록에 추가). 고친 뒤 해당 6개 모듈 92개 OK. 테스트를 지우거나 약하게 하지 않았다.
+- 실제 DB·외부 호출 0. 남은 사용자 몫: 앱 재시작 승인 → Migration `20261109_00` 승인(그 전에는 기록 0), 주장 점검 표현 목록 확정, 실제 효과는 Claude 키·한도(D2) 이후.

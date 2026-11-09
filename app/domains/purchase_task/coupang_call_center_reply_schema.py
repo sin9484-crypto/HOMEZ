@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import StrictBool
+from pydantic import StrictInt
 from pydantic import StrictStr
 
 from app.domains.purchase_task.coupang_call_center_reply_provider import MAX_CC_REPLY_CHARS
@@ -20,6 +21,9 @@ class CoupangCallCenterReplyRequest(BaseModel):
     confirm_public: StrictBool = False
     # 이전 요청이 거부(ACTION_REQUIRED)된 뒤 원인을 해결하고 사람이 다시 보낼 때만 true.
     retry_action_required: StrictBool = False
+    # 2026-11-09 AI 초안 평가 고리 — 이 답변이 'AI 답변 초안'에서 시작했으면 그 초안 기록 번호. 등록이 성공했을 때만 보낸 글을 그 기록에 남긴다
+    # (보내기 자체에는 영향 없음, 없어도 된다).
+    ai_draft_record_id: StrictInt | None = Field(default=None, ge=1)
 
     model_config = ConfigDict(extra="forbid")
 

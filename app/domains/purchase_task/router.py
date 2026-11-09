@@ -1363,6 +1363,21 @@ def preview_coupang_inquiry_reply(
     return CoupangInquiryReplyService(db).plan(current_user.company_id, inquiry_id, data.content, live=True).to_dict()
 
 
+def _with_ai_draft_sent(db: Session, company_id: int, record_id: int | None, content: str, final_ref: str, result: dict) -> dict:
+    """2026-11-09 AI 초안 평가 고리 — 'AI 답변 초안'에서 시작한 답변이 쿠팡에 **등록 성공**(SUCCEEDED)했을 때만 보낸 글을 그 초안 기록에 남긴다.
+    기록은 답변 등록이 끝난 뒤의 일이라 결과를 바꾸지 않는다(실패해도 `ai_draft_record_saved: false`만 붙는다). 번호가 없으면 응답 그대로."""
+
+    if record_id is None or not isinstance(result, dict):
+        return result
+    saved = False
+    if result.get("outcome") == "SUCCEEDED":
+        from app.domains.ai_learning.draft_outcome_service import DraftOutcomeService
+        from app.domains.purchase_task.coupang_inquiry_reply_provider import normalize_reply
+
+        saved = DraftOutcomeService(db).record_sent_reply(company_id, record_id, normalize_reply(content), final_ref)
+    return {**result, "ai_draft_record_saved": saved}
+
+
 @router.post("/coupang-inquiries/{inquiry_id}/reply/send")
 def send_coupang_inquiry_reply(
     inquiry_id: str,
@@ -1375,10 +1390,11 @@ def send_coupang_inquiry_reply(
 
     from app.domains.purchase_task.coupang_inquiry_reply_service import CoupangInquiryReplyService
 
-    return CoupangInquiryReplyService(db).send(
+    result = CoupangInquiryReplyService(db).send(
         current_user.company_id, current_user.id, inquiry_id, data.content,
         confirm_public=data.confirm_public, retry_action_required=data.retry_action_required,
     )
+    return _with_ai_draft_sent(db, current_user.company_id, data.ai_draft_record_id, data.content, f"INQ{inquiry_id}", result)
 
 
 @router.post("/coupang-inquiries/{inquiry_id}/reply/reconcile")
@@ -1598,10 +1614,11 @@ def send_coupang_call_center_reply(
 
     from app.domains.purchase_task.coupang_call_center_reply_service import CoupangCallCenterReplyService
 
-    return CoupangCallCenterReplyService(db).send(
+    result = CoupangCallCenterReplyService(db).send(
         current_user.company_id, current_user.id, inquiry_id, data.content, expected_parent_answer_id=data.expected_parent_answer_id,
         confirm_public=data.confirm_public, retry_action_required=data.retry_action_required,
     )
+    return _with_ai_draft_sent(db, current_user.company_id, data.ai_draft_record_id, data.content, f"CC{inquiry_id}", result)
 
 
 @router.post("/coupang-call-center-inquiries/{inquiry_id}/reply/reconcile")

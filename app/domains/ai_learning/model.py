@@ -420,7 +420,90 @@ class MarketingSuggestionRecord(Base):
     )
 
 
+class AiDraftOutcomeRecord(Base):
+    """2026-11-09 AI 초안 평가 고리 — AI가 만든 초안 1건과, 사람이 실제로 쓴 글(있으면).
+    `feature`는 LISTING_DRAFT(등록 도우미 초안)/CS_REPLY(고객 응대 답변 초안) — 서비스가 검사한다(DB 제약 없음, 기존 모델과 같은 방식).
+    글은 개인정보를 가린 뒤 JSON(필드 → 글)으로 저장한다. 문의 원문은 저장하지 않는다.
+    고객 응대는 쿠팡에 보낸 답변을 `final_json`에 남긴다. 등록 도우미는 위저드의 지금 값과 읽을 때 비교한다(저장하지 않음)."""
+
+    __tablename__ = "ai_draft_outcome_records"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    company_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    feature: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    # 어디에서 만든 초안인가(위저드 `WZ{id}` / 고객 응대 `CS`).
+    ref: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+    )
+
+    model: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+    )
+
+    # 시스템 프롬프트의 짧은 지문 — 프롬프트를 바꾸면 값이 바뀌어 전·후를 나눠 볼 수 있다.
+    prompt_version: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+    )
+
+    draft_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    final_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # 최종 글이 어디서 왔나(SENT = 쿠팡에 보낸 답변). 최종이 없으면 None.
+    final_source: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    # 최종 글의 대상(상품 문의 `INQ{id}` / 고객센터 `CC{id}`).
+    final_ref: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+    )
+
+    # 논리 참조 (users.id)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+
 __all__ = [
+    "AiDraftOutcomeRecord",
     "DecisionOutcome",
     "LearningDatasetRecord",
     "ModelCandidate",

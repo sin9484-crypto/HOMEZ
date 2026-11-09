@@ -144,6 +144,53 @@ def entries_missing_brand_uid(channel_selections: list[dict]) -> list[dict]:
     return missing
 
 
+def _claim_source_text(wizard: ListingWizard, db: Session, draft: dict) -> str:
+    """상세 설명 숫자의 근거가 되는 공급처 자료: 옵션 값·SKU 옵션 값·저장된 고시·공급처 고시 근거(읽기만)."""
+
+    parts: list[str] = []
+    for opt in draft.get("options") or []:
+        if isinstance(opt, dict):
+            parts.append(str(opt.get("name") or ""))
+            parts.extend(str(v) for v in (opt.get("values") or []))
+    for sku in draft.get("sku_list") or []:
+        if isinstance(sku, dict):
+            parts.extend(str(v) for v in (sku.get("option_values") or {}).values())
+    try:
+        from app.domains.marketplace_listing.registration_assistant_service import RegistrationAssistantService
+        from app.domains.marketplace_listing.registration_assistant_service import rows_from_saved_selection
+
+        for entry in json.loads(wizard.channel_selections_json or "[]"):
+            if isinstance(entry, dict):
+                parts.extend(f"{a} {b}" for a, b in rows_from_saved_selection(entry))
+        if wizard.product_candidate_id:
+            parts.extend(f"{a} {b}" for a, b in RegistrationAssistantService(db)._onch_rows(wizard.product_candidate_id))
+    except Exception:  # noqa: BLE001 — 근거 자료를 못 읽으면 숫자 경고가 더 나올 뿐이다(차단하지 않는 경고라 검사를 멈추지 않는다)
+        pass
+    return "\n".join(parts)
+
+
+def _listing_claim_issues(wizard: ListingWizard, db: Session, draft: dict) -> list[ValidationIssue]:
+    from app.domains.marketplace_listing.listing_claim_check import check_listing_text
+
+    result = check_listing_text(
+        draft.get("product_name"), draft.get("keywords") or [], draft.get("description"), _claim_source_text(wizard, db, draft),
+    )
+    issues: list[ValidationIssue] = []
+    for category, words in result.words.items():
+        issues.append(_issue(
+            f"LISTING_CLAIM_{category}", WizardStep.DRAFT, False,
+            f"listing_wizard.precheck.listing_claim_{category.lower()}",
+            field=result.fields[category][0], params={"words": ", ".join(words)},
+        ))
+    if result.unsourced_numbers:
+        issues.append(_issue(
+            "DESCRIPTION_UNSOURCED_NUMBERS", WizardStep.DRAFT, False,
+            "listing_wizard.precheck.description_unsourced_numbers",
+            field="description", params={"numbers": ", ".join(result.unsourced_numbers)},
+        ))
+    return issues
+
+
 def run_precheck(
     wizard: ListingWizard, db: Session, company_id: int,
 ) -> WizardValidateResponse:
@@ -217,6 +264,10 @@ def run_precheck(
             "listing_wizard.precheck.product_name_claim_words",
             field="product_name", params={"words": ", ".join(claim_words)},
         ))
+
+    # --- 상품명·검색어·상세 설명의 근거 확인 표현(2026-11-09 주장 점검기, 경고만, 차단하지 않는다) ---
+    if draft is not None:
+        issues.extend(_listing_claim_issues(wizard, db, draft))
 
     # --- 브랜드 상품의 식별번호(UID: GTIN 또는 MPN) ---
     # 쿠팡은 브랜드가 있는 상품의 attributes에서 Global Trade Item Number /

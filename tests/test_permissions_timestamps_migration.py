@@ -405,6 +405,9 @@ class MigrationStaticContractTestCase(unittest.TestCase):
             # 2026-10-23 마케팅 AI M4-full — 채택한 제안 기록 테이블 1개(marketing_suggestion_records, 추가형).
             # 실제 운영 DB에는 미적용이다(앱의 Migration 승인 화면에서 사용자가 승인할 때만 적용).
             "20261023_00_create_marketing_suggestion_record_schema.sql",
+            # 2026-11-09 AI 초안 평가 고리 — AI 초안과 사람이 실제로 쓴 글 기록 테이블 1개(ai_draft_outcome_records, 추가형).
+            # 실제 운영 DB에는 미적용이다(앱의 Migration 승인 화면에서 사용자가 승인할 때만 적용).
+            "20261109_00_create_ai_draft_outcome_record_schema.sql",
         ]
 
         all_files = sorted(

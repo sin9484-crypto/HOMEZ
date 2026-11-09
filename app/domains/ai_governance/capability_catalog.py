@@ -462,6 +462,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "후보 파이프라인 경로에는 실 LLM Provider가 연결돼 있지 않다(위저드 AI 초안 경로에만 있음)",
             "허위 효능/인증/원산지 방지는 run_content_policy_checklist()"
             "가 별도 담당 — 이 capability 자체는 문구 생성만 수행",
+            "2026-11-09 주장 점검기(listing_claim_check, 사전검사 경고만)의 표현 목록은 사용자 확정 전 초안이다(RULES_CONFIRMED=False)",
         ),
         implementation_reference=(
             "app/domains/marketplace_listing/draft_content_provider.py::"
@@ -836,7 +837,10 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "약속·책임 인정·외부 연락 유도·효능 표현이 들어간 초안은 버린다) 아무것도 저장·전송하지 않는다 — 실제 AI 호출은 아직 하지 않았다. "
             "반품 손익 계산은 AI 없는 Decimal 계산(회수·환불 단계별 확인 항목 포함)이다. "
             "같은 날 후속(M4-full 저장소): 채택한 제안을 기록·옵션 연결하고, 사용자가 누를 때만 기존 판매 성과 읽기로 제안일 전·후를 나란히 보인다 — "
-            "제안이 맞았는지는 판정하지 않는다. 읽기가 잘리거나 실패하면 비교하지 않는다. 화면은 'AI 점검 도구'."
+            "제안이 맞았는지는 판정하지 않는다. 읽기가 잘리거나 실패하면 비교하지 않는다. 화면은 'AI 점검 도구'. "
+            "2026-11-09 등록(AI 초안 평가 고리, 사용자 승인): 위의 '아무것도 저장하지 않는다'는 바뀌었다 — 고객 문의 원문은 여전히 저장하지 않지만, "
+            "개인정보를 가린 답변 초안과 쿠팡 등록이 성공한 답변을 ai_draft_outcome_records에 남긴다(등록 도우미 초안도 같은 표, 위저드의 지금 값과 읽을 때 비교). "
+            "바뀐 정도만 보여 주고 판정하지 않는다. 기록이 실패해도 초안·답변 보내기는 그대로다. 실제 AI 호출은 아직 하지 않았다."
         ),
         actual_entry_points=(
             "app/domains/order/cs_reply_draft_service.py::CsReplyDraftService.draft() (POST /orders/cs-reply-draft — 사용자가 누를 때만, 문안 초안만)",
@@ -848,6 +852,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/order/sales_performance_service.py::SalesPerformanceService.read() (POST /orders/sales-performance — 쿠팡 매출내역 읽기, 마케팅 AI M4)",
             "app/domains/ai_learning/marketing_outcomes.py::summarize() (옵션별 판매·반품 집계와 표본 크기 판정)",
             "app/domains/ai_learning/suggestion_record_service.py::SuggestionRecordService.create()/evaluate() (POST /ai-learning/suggestions, /suggestions/evaluate — 채택한 제안 기록·전후 비교, 판정 없음)",
+            "app/domains/ai_learning/draft_outcome_service.py::DraftOutcomeService.record_draft()/record_sent_reply()/list() (GET /ai-learning/draft-outcomes — AI 초안과 사람이 쓴 글, 판정 없음)",
             "GET /orders/exception-analysis, POST /orders/"
             "exception-analysis/review-actions (app/domains/order/"
             "router.py)",
@@ -857,6 +862,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "REQUESTED 상태가 없어 CANCELLED와 구분할 신호 없음)",
             "AI 업무 제안 UI 미연결",
             "제안과 성과를 연결하는 기록 표(marketing_suggestion_records)는 Migration 20261023_00을 앱에서 승인해야 생긴다 — 승인 전에는 기록·비교가 '준비되지 않음'으로 멈춘다(2026-10-23)",
+            "AI 초안 기록 표(ai_draft_outcome_records)는 Migration 20261109_00을 앱에서 승인해야 생긴다 — 승인 전에는 초안을 기록하지 않고(초안 기능은 그대로) 목록은 '준비되지 않음'(2026-11-09)",
             "쿠팡 매출내역의 환불 금액 부호·환불 건 수수료 처리는 문서에 없어 실제 응답 확인 후 다듬어야 한다",
         ),
         implementation_reference=(

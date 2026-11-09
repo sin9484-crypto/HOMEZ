@@ -117,7 +117,13 @@ class SafetyWiringTests(unittest.TestCase):
         requirements = [p for p in (ROOT / "requirements.txt", ROOT / "pyproject.toml") if p.exists()]
         for path in requirements:
             self.assertNotIn("anthropic", path.read_text(encoding="utf-8").lower(), str(path))
-        self.assertFalse(list((ROOT / "migrations").glob("*ai_draft*")) if (ROOT / "migrations").exists() else [])
+        # 2026-11-09 — 사용자 승인("1번 진행")으로 AI 초안 기록 표 Migration 1개만 허용한다. 다른 이름이 생기거나 기존 표를 바꾸면 실패한다.
+        found = sorted(p.name for p in (ROOT / "migrations").glob("*ai_draft*")) if (ROOT / "migrations").exists() else []
+        self.assertEqual(found, ["20261109_00_create_ai_draft_outcome_record_schema.sql"])
+        sql = (ROOT / "migrations" / found[0]).read_text(encoding="utf-8")
+        statements = [line.strip() for line in sql.splitlines() if line.strip() and not line.strip().startswith("--")]
+        self.assertFalse([s for s in statements if s.upper().startswith(("ALTER", "DROP", "UPDATE", "DELETE", "INSERT"))])
+        self.assertEqual(re.findall(r"CREATE TABLE (\w+)", sql), ["ai_draft_outcome_records"])
 
 
 if __name__ == "__main__":

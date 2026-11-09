@@ -266,4 +266,22 @@ def update_suggestion_record(
     )
 
 
+# ---- 2026-11-09 AI 초안 평가 고리: AI 초안과 사람이 실제로 쓴 글 ----
+# 테이블은 Migration 20261109_00이 만든다 — 앱의 Migration 승인 전에는 '준비되지 않음'(503)으로 멈춘다. 읽기만 한다.
+
+
+@router.get("/draft-outcomes")
+def list_draft_outcomes(
+    feature: str | None = Query(default=None, max_length=20),
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(SuperAdminGuard),
+    db: Session = Depends(get_db),
+):
+    """AI 초안 기록을 최근 것부터 — 초안 글·사람이 쓴 글(고객 응대는 보낸 답변, 등록 도우미는 위저드의 지금 값)·바뀐 정도. 판정하지 않는다."""
+
+    from app.domains.ai_learning.draft_outcome_service import DraftOutcomeService
+
+    return DraftOutcomeService(db).list(current_user.company_id, feature, limit)
+
+
 __all__ = ["router"]

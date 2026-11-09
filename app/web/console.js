@@ -7399,6 +7399,53 @@
     </div>`;
   }
 
+  // 2026-11-09 AI 초안 평가 고리 — AI 초안과 사람이 실제로 쓴 글(고객 응대는 보낸 답변, 등록 도우미는 위저드의 지금 값)과 바뀐 정도. 판정하지 않는다.
+  function atKstMinute(iso) {
+    // 서버 시각은 UTC(시간대 표시 없음)다 — 한국 시각(UTC+9)으로 바꿔 'YYYY-MM-DD HH:MM'으로 쓴다. 읽지 못하면 —.
+    const text = String(iso || "");
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return "—";
+    const ms = Date.parse(/[zZ]|[+-]\d{2}:\d{2}$/.test(text) ? text : `${text}Z`);
+    if (!Number.isFinite(ms)) return "—";
+    return new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ");
+  }
+
+  function atDraftOutcomeHtml(result) {
+    const t = (key, params) => HomezI18n.t(`at.${key}`, params);
+    const featureLabel = { LISTING_DRAFT: "do_feature_listing", CS_REPLY: "do_feature_cs" };
+    const stateLabel = { CURRENT_WIZARD: "do_state_current_wizard", WIZARD_MISSING: "do_state_wizard_missing", SENT: "do_state_sent", NOT_SENT: "do_state_not_sent" };
+    const fieldLabel = { product_name: "do_field_product_name", keywords: "do_field_keywords", description: "do_field_description", reply: "do_field_reply" };
+    const records = (result && Array.isArray(result.records)) ? result.records : [];
+    const summary = (result && result.summary) || {};
+    const listing = summary.LISTING_DRAFT || {};
+    const cs = summary.CS_REPLY || {};
+    const num = (v) => (Number.isInteger(v) ? v : "—");
+    const head = `<p class="stat-sub">${escapeHtml(t("do_summary", { listing: num(listing.total), cs: num(cs.total), sent: num(cs.sent), target: num(result && result.review_target) }))}</p>`;
+    if (!records.length) return `${head}<p class="empty-text">${escapeHtml(t("do_empty"))}</p>`;
+    const compared = records.filter((r) => r.comparison && r.comparison.compared && Number.isFinite(r.comparison.changed_percent));
+    const avg = compared.length ? Math.round(compared.reduce((a, r) => a + r.comparison.changed_percent, 0) / compared.length) : null;
+    const listNote = `<p class="stat-sub">${escapeHtml(t("do_list_note", { shown: records.length, compared: compared.length, avg: avg === null ? "—" : avg }))}</p>`;
+    const text = (v) => (Array.isArray(v) ? v.join(", ") : String(v === undefined || v === null ? "" : v));
+    const body = records.map((r) => {
+      const changed = r.comparison && r.comparison.compared ? `${escapeHtml(r.comparison.changed_percent)}%` : "—";
+      const fields = Object.keys(r.draft || {}).map((k) => {
+        const finalText = r.final ? text(r.final[k]) : "";
+        return `<div style="margin-top:6px"><b>${escapeHtml(t(fieldLabel[k] || "do_field_other"))}</b>
+          <div class="stat-sub">${escapeHtml(t("do_draft_label"))}</div><div style="white-space:pre-wrap">${escapeHtml(text(r.draft[k]))}</div>
+          <div class="stat-sub">${escapeHtml(t("do_final_label"))}</div><div style="white-space:pre-wrap">${r.final ? escapeHtml(finalText) : "—"}</div></div>`;
+      }).join("");
+      return `<tr data-do-id="${escapeHtml(r.id)}">
+        <td>${escapeHtml(atKstMinute(r.created_at))}</td>
+        <td>${escapeHtml(t(featureLabel[r.feature] || "do_feature_other"))}</td>
+        <td>${escapeHtml(r.ref || "—")}${r.final_ref ? ` <span class="stat-sub">${escapeHtml(r.final_ref)}</span>` : ""}</td>
+        <td>${escapeHtml(t(stateLabel[r.final_state] || "do_state_other"))}</td>
+        <td>${changed}</td>
+        <td><details><summary>${escapeHtml(t("do_open"))}</summary>${fields}<p class="stat-sub">${escapeHtml(r.model || "—")} · ${escapeHtml(r.prompt_version || "—")}</p></details></td>
+      </tr>`;
+    }).join("");
+    return `${head}${listNote}<div class="table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(t("do_col_at"))}</th><th>${escapeHtml(t("do_col_feature"))}</th><th>${escapeHtml(t("do_col_ref"))}</th><th>${escapeHtml(t("do_col_state"))}</th><th>${escapeHtml(t("do_col_changed"))}</th><th>${escapeHtml(t("do_col_text"))}</th></tr></thead><tbody>${body}</tbody></table></div>
+      <p class="stat-sub">${escapeHtml(t("do_no_judgment"))}</p>`;
+  }
+
   async function loadAiTools() {
     const wrap = el("at-content");
     if (!wrap) return;
@@ -7470,7 +7517,13 @@
         <button type="button" class="btn btn-ghost btn-sm" id="at-sg-list-btn">${escapeHtml(t("sg_list_btn"))}</button>
         <label>${escapeHtml(t("sg_days"))} <select class="input" id="at-sg-days"><option value="30">30</option><option value="14">14</option><option value="7">7</option></select></label>
         <button type="button" class="btn btn-ghost btn-sm" id="at-sg-eval-btn">${escapeHtml(t("sg_eval_btn"))}</button>
-        <p class="field-error" id="at-sg-error"></p><div id="at-sg-list"></div><div id="at-sg-eval"></div></div>`;
+        <p class="field-error" id="at-sg-error"></p><div id="at-sg-list"></div><div id="at-sg-eval"></div></div>
+
+      <div class="dash-card" id="at-do-card"><div class="dash-card-head"><h2>${escapeHtml(t("do_title"))}</h2></div>
+        <p class="stat-sub">${escapeHtml(t("do_hint"))}</p>
+        <label>${escapeHtml(t("do_filter"))} <select class="input" id="at-do-feature"><option value="">${escapeHtml(t("do_filter_all"))}</option><option value="LISTING_DRAFT">${escapeHtml(t("do_feature_listing"))}</option><option value="CS_REPLY">${escapeHtml(t("do_feature_cs"))}</option></select></label>
+        <button type="button" class="btn btn-ghost btn-sm" id="at-do-btn">${escapeHtml(t("do_list_btn"))}</button>
+        <p class="field-error" id="at-do-error"></p><div id="at-do-out"></div></div>`;
 
     const showError = (id, text) => { el(id).textContent = text || ""; };
 
@@ -7627,6 +7680,17 @@
         el("at-sg-value").value = "";
         await sgLoadList();
       } catch (err) { sgError(err.message || HomezI18n.t("common.load_error")); }
+    }));
+    el("at-do-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+      el("at-do-error").textContent = "";
+      const feature = el("at-do-feature").value;
+      const query = ["LISTING_DRAFT", "CS_REPLY"].includes(feature) ? `?feature=${feature}` : "";
+      try {
+        el("at-do-out").innerHTML = atDraftOutcomeHtml(await apiFetch(`/ai-learning/draft-outcomes${query}`));
+      } catch (err) {
+        el("at-do-out").innerHTML = "";
+        el("at-do-error").textContent = err.message || HomezI18n.t("common.load_error");
+      }
     }));
     el("at-sg-eval-btn").addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
       sgError("");
@@ -12179,7 +12243,7 @@
     let body;
     if (issues.length) {
       body = `<ul class="lw-check-list">${issues.map((issue) => {
-        const message = HomezI18n.t(issue.localized_message_key) || HomezI18n.t("lw.precheck_unknown_issue_fallback", { code: issue.code });
+        const message = HomezI18n.t(issue.localized_message_key, issue.params || undefined) || HomezI18n.t("lw.precheck_unknown_issue_fallback", { code: issue.code });
         return `<li class="${issue.blocking ? "is-blocking" : "is-note"}"><span aria-hidden="true">${issue.blocking ? "!" : "i"}</span>${escapeHtml(message)}</li>`;
       }).join("")}</ul><p class="stat-sub">${escapeHtml(HomezI18n.t("lw.check_panel_basis"))}</p>`;
     } else if (result) {
@@ -16361,7 +16425,8 @@
         // 서버가 새 계약 코드를 추가했는데 두 locale 카탈로그에 아직
         // 문구가 없을 수 있다 — 그런 경우에도 빈 문장 대신 코드+기본
         // 안내가 항상 나오게 한다(2026-08-31, i18n 누락 재발 방지).
-        const message = HomezI18n.t(issue.localized_message_key)
+        // 2026-11-09 — 문구의 {words}·{values} 같은 자리에 서버가 보낸 값(params)을 넣는다(이전에는 자리 표시가 그대로 보였다).
+        const message = HomezI18n.t(issue.localized_message_key, issue.params || undefined)
           || HomezI18n.t("lw.precheck_unknown_issue_fallback", { code: issue.code });
         return `
         <div class="lw-issue-item ${issue.blocking ? "lw-issue-blocking" : ""}">

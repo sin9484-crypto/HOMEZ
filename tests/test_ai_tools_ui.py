@@ -51,7 +51,8 @@ console.log(JSON.stringify(__EXPR__));
 """
 
 FUNCTIONS = ("atWon", "atDecisionPill", "atReasonText", "atMarginHtml", "atParseFacts", "atCsProblem", "atCsResultHtml", "atReturnBody", "atReturnHtml",
-             "atOfferRowToInput", "atOfferHtml", "atWatchHtml", "atTermsModels", "atTermsHtml", "atSuggestionBody", "atSuggestionListHtml", "atSuggestionEvalHtml")
+             "atOfferRowToInput", "atOfferHtml", "atWatchHtml", "atTermsModels", "atTermsHtml", "atSuggestionBody", "atSuggestionListHtml", "atSuggestionEvalHtml",
+             "atKstMinute", "atDraftOutcomeHtml")
 
 
 @unittest.skipUnless(NODE, "node가 없어 화면 함수를 실행해 볼 수 없다")
@@ -357,7 +358,9 @@ class SourceTests(unittest.TestCase):
         self.assertIn("법률 자문이 아닙니다", ko["at.tm_disclaimer"])
         self.assertIn("가져오지 않고", ko["at.pw_hint"])
         self.assertIn("고치지 않고", ko["at.mw_hint"])
-        self.assertIn("저장·전송은 없습니다", ko["at.cs_hint"])
+        # 2026-11-09 — 답변 초안은 가린 뒤 기록하므로 "저장·전송은 없습니다"는 더 이상 사실이 아니다. 문의 글 미저장·미전송·가림 기록을 고정한다.
+        self.assertIn("문의 글은 저장하지 않고 쿠팡에 보내지도 않습니다", ko["at.cs_hint"])
+        self.assertIn("개인정보를 가린 뒤", ko["at.cs_hint"])
         self.assertIn("확인하지 못했습니다", ko["at.of_assumption_note"])
         self.assertEqual(ko["nav.ai_tools"], "AI 점검 도구")
 

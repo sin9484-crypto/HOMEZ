@@ -323,8 +323,18 @@ class AiDraftService:
         proposal = validate_response(result.text, data)
         usage = {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "cost_krw": cost, "ok": bool(proposal.fields)}
         month = self.record_usage(company_id, user_id, f"WZ{wizard_id}", result.model, usage)
+        # 2026-11-09 AI 초안 평가 고리 — 검증을 통과한 초안만 기록한다(표가 없거나 실패하면 None, 초안은 그대로 돌려준다).
+        outcome_record_id = None
+        if proposal.fields:
+            from app.domains.ai_learning.draft_outcome_service import FEATURE_LISTING
+            from app.domains.ai_learning.draft_outcome_service import DraftOutcomeService
+
+            outcome_record_id = DraftOutcomeService(self.db).record_draft(
+                company_id, user_id, FEATURE_LISTING, f"WZ{wizard_id}", result.model, SYSTEM_PROMPT, proposal.fields,
+            )
         return {
             **proposal.to_dict(),
+            "outcome_record_id": outcome_record_id,
             "current": {"product_name": data.product_name, "keywords": list(data.keywords), "description": data.description or ""},
             "sent_fields": ["product_name", "brand", "category", "options", "keywords", "current_description", "notice"],
             "usage": {**usage, "model": result.model, **month, "monthly_limit_krw": meta["limit"]},

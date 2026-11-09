@@ -98,7 +98,8 @@ class SourceTests(unittest.TestCase):
         self.assertLess(SEND.index("inquiryReplyProblem(content)"), SEND.index("publicEl && publicEl.checked"))
         self.assertLess(SEND.index("publicEl && publicEl.checked"), SEND.index("B.askConfirm("))
         self.assertLess(SEND.index("B.askConfirm("), SEND.index("/reply/send"))
-        self.assertIn("JSON.stringify({ content, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false })", SEND)
+        self.assertIn("JSON.stringify({ content, confirm_public: !!(publicEl && publicEl.checked), retry_action_required: false, ai_draft_record_id: aiDraftRecordId(textEl) })", SEND)
+        # 2026-11-09 — AI 초안 기록 번호를 함께 보낸다(보낸 답변을 그 초안 기록에 붙이기 위해, 없으면 null).
         self.assertIn("btn.disabled = true", SEND)
         self.assertIn("/reply/reconcile", SEND)
         self.assertIn('if (result.outcome !== "ACTION_REQUIRED") textEl.readOnly = true;', SEND)
