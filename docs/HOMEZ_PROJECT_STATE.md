@@ -14059,3 +14059,16 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 재시작 전 백업과 행 수 비교: 달라진 표는 로그인·감지·기록 계열뿐(audit_logs, auth_sessions, refresh_token*, schema_migrations, backup_records, external_call_logs, external_call_allowances). 업무 데이터 표 변화 없음.
 - 허용 #33(온채널 주문 감지, 상시, 시간당 30회)이 19:35(KST)에 사용자 결정으로 새로 생겼다. 만료 11-11 19:35(KST). 이 허용을 쓰는 코드는 아직 없다.
 - 이제 'AI 초안 기록' 카드는 준비됨 상태여야 한다(실제 기록은 Claude 키·허용 이후).
+
+### 2026-11-10 AI 배경(Cloudflare Workers AI) 구현 — 사용자 결정 "cloudflare로 진행해라"
+
+- 결정 기록: `docs/HOMEZ_DECISIONS.md` "AI 배경은 Cloudflare로". Gemini는 비용 때문에 보류 그대로다.
+- 방식: AI는 **상품이 없는 빈 배경만** 그린다(장면 글 한 줄만 보냄, 상품 사진·상품명·회사 정보는 보내지 않음). 상품은 HOMEZ가 실제 누끼를 PC 안에서 붙인다(`ConceptRunService.compose_and_save`, 상품 보존 검사 그대로). 대표(MAIN)에는 쓰지 않는다(추가·상세 이미지만).
+- 호출 계약(공식 문서 2026-11-10 확인, 실제 응답은 아직 받아 본 적 없음): `POST /client/v4/accounts/{계정}/ai/run/@cf/black-forest-labs/flux-1-schnell`, 본문 `{prompt, steps≤8}`, 응답 `result.image`(Base64). 무료 하루 10,000 뉴런(한국 오전 9시에 다시 채워짐), 다 쓰면 429·3036으로 실패(요금 없음). 1장 추정 57.6 뉴런.
+- 새 파일: `media_asset/cloudflare_image_client.py`(호출·응답 해석, 다른 주소 넘김 안 따름, 토큰은 오류 문구에 안 실음), `ai_background_concepts.py`(L2 컨셉 6종 — 욕실 선반·주방 조리대·거실 원목 테이블·야외 산책로·포근한 침실·대리석 스튜디오, 기존 컨셉 목록과 따로), `ai_background_service.py`(설정·실행), `ai_background_router.py`(`/ai-background/settings` GET·PUT, `/concepts`, `/runs`), `tests/test_ai_background.py`(38개).
+- 고친 파일: `external_call/constants.py`·`service.py`(바깥 시스템 CLOUDFLARE, 목적 AI_BACKGROUND — 쓰기, 횟수 허용 기본 6회), `image_concepts.py`(배경 종류 GENERATED와 장면 글 검사), `concept_inspection.py`(생성 배경은 글자 섞임 검사를 '확인 못 함'으로), `concept_run_service.py`(합성·저장을 `compose_and_save`로 분리, 기존 동작 같음), `main.py`(라우터 연결), 화면 `easy_view.js`·`easy_texts.js`(더보기·설정 → 'AI 배경 설정 (Cloudflare)'), `console.js`·`ko-KR.js`·`en-US.js`(컨셉 패널 아래 'AI 배경' 상자), `tests/test_easy_view_ui.py`(바깥 시스템 이름 목록에 cloudflare 추가 — 의도된 계약 변경).
+- 안전장치: 새 배경을 그릴 때마다 외부 호출 허용(승인 센터 'AI 배경 그리기')을 한 번 쓴다. 비상 정지면 그리지 않는다. 무료 사용량이 끝나면 남은 컨셉을 건너뛴다. 그린 배경은 회사별로 저장해 다음부터 호출 없이 다시 쓴다(`새 배경` 선택 시에만 다시 그림). 계정 ID·토큰 저장은 최고 관리자 + 비밀번호 재확인, 토큰은 HOMEZ 자격증명 저장소에만 두고 화면·응답에 내보내지 않는다. 생성 배경 표기는 이미지 밖(화면·기록)에 둔다. 마켓 정책 적합은 '확인 못 함'으로 알린다.
+- Migration 없음: external_call 표에 system·purpose 제한(CHECK)이 없다.
+- 검증: 새 테스트 38개 OK, 관련 기존 15개 모듈 445개 OK, 변이 검사 11/11 잡힘(파일 원상 복구 확인), `app.main` import OK. 전체 회귀 497개 파일 12묶음 8,266개 — 11묶음 OK, 03묶음 1개 실패(`test_discovery_auto_run_stage6`: 새 바깥 시스템의 승인 센터 이름 `easy.sys.cloudflare` 누락 — 실제 결함). 이름(한·영)을 넣고, 이어서 실패한 `test_easy_view_ui` 쓰지 않는 문구 검사의 동적 목록에 cloudflare를 추가했다. 03묶음 전체 재실행 782개 OK(skipped=6). 전체 8,266개 통과.
+- 실제 DB 변경 0, Cloudflare 실제 호출 0(토큰 확인은 사용자가 직접 함: success true, active). 격리 서버 브라우저 확인은 하지 않았다.
+- 남은 것: 앱 재시작(사용자 승인 "시험 끝나면 재시작 승인") → 사용자가 계정 ID·토큰 입력 → 첫 실제 배경 1장. 누끼를 만들 rembg 모델(u2netp)이 이 PC에 아직 없어 위저드 #15~#20 누끼 생성은 따로 남았다.

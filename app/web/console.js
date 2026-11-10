@@ -13494,7 +13494,7 @@
   const LW_CONCEPT_KNOWN_CHECKS = ["PRODUCT_PRESERVATION", "BACKGROUND_CONTRAST", "MAIN_IMAGE_SPEC", "NO_TEXT_OVERLAY", "POLICY_FLAGS"];
   const LW_CONCEPT_KNOWN_CHECK_STATUSES = ["PASS", "WARN", "FAIL", "BY_CONSTRUCTION", "NOT_CHECKED", "SKIPPED"];
   const LW_CONCEPT_KNOWN_STATUSES = ["CREATED", "REUSED", "CHECK_FAILED", "SKIPPED", "FAILED"];
-  const LW_CONCEPT_KNOWN_REASONS = ["UNKNOWN_CONCEPT", "NOT_USABLE_FOR_PURPOSE", "INSPECTION_FAILED", "COMPOSE_FAILED", "SAVE_FAILED", "EXISTING_ASSET_WITH_SAME_CONTENT"];
+  const LW_CONCEPT_KNOWN_REASONS = ["UNKNOWN_CONCEPT", "NOT_USABLE_FOR_PURPOSE", "INSPECTION_FAILED", "COMPOSE_FAILED", "SAVE_FAILED", "EXISTING_ASSET_WITH_SAME_CONTENT", "ALLOWANCE_REQUIRED", "ESTOP_ACTIVE", "AI_CALL_FAILED", "DAILY_FREE_LIMIT", "BAD_AI_IMAGE"];
   let lwConceptNotice = null;
 
   function lwConceptProblem(state) {
@@ -13538,7 +13538,107 @@
     if (!lwConceptNotice) return "";
     const notice = lwConceptNotice;
     lwConceptNotice = null;
-    return lwConceptSummaryHtml(notice.result, notice.labels);
+    return notice.ai ? lwAiBgSummaryHtml(notice.result, notice.labels) : lwConceptSummaryHtml(notice.result, notice.labels);
+  }
+
+  // 2026-11-10 — AI 배경으로 만들기(Cloudflare, 사용자 결정 "cloudflare로 진행해라"). AI는 상품 없는 배경 장면만 그리고, 상품은 실제 누끼를 PC 안에서 붙인다.
+  // 새 배경을 그릴 때마다 승인 센터 허용 1회, 한 번 그린 배경은 저장해 다시 쓴다(호출 0회). 대표(MAIN)에는 쓰지 않는다. '생성 배경' 표기는 이미지 밖(화면)에 둔다.
+  // 한도(3개)·용도·허용은 서버가 같은 규칙으로 다시 막는다.
+  const LW_AIBG_MAX_PICK = 3;
+
+  function lwAiBgProblem(ai) {
+    // 실행 전에 화면이 먼저 알려 줄 일. 문제가 없으면 null, 있으면 문구 키.
+    if (!ai || !ai.settings || ai.settings.configured !== true) return "aibg_err_settings";
+    if (!Array.isArray(ai.codes) || !ai.codes.length) return "aibg_err_none";
+    if (ai.codes.length > LW_AIBG_MAX_PICK) return "aibg_err_max";
+    return null;
+  }
+
+  function lwAiBgBody(ai, assetId, purpose) {
+    return { cutout_asset_id: Number(assetId), concept_codes: ai.codes.slice(), purpose, new_background: ai.newBg === true };
+  }
+
+  function lwAiBgSummaryHtml(result, labels) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    if (!result) return "";
+    const num = (v) => (Number.isInteger(v) ? v : "…");
+    const rows = (result.results || []).filter((r) => Number.isInteger(r.background_version)).map((r) => {
+      const label = (labels && labels[r.concept_code]) || r.concept_code;
+      const how = t(r.background_reused === true ? "aibg_bg_reused" : "aibg_bg_drawn", { v: r.background_version });
+      const detail = r.detail ? ` — ${escapeHtml(String(r.detail).slice(0, 200))}` : "";
+      return `<li class="stat-sub">${escapeHtml(label)} · ${escapeHtml(how)}${detail}</li>`;
+    }).join("");
+    return `<div class="banner banner-info" role="status" id="lw-aibg-created-banner">
+      <p>${escapeHtml(t("aibg_generated_label"))}</p>
+      <p>${escapeHtml(t("aibg_drawn", { n: num(result.drawn) }))}</p>
+      ${rows ? `<ul>${rows}</ul>` : ""}</div>${lwConceptSummaryHtml(result, labels)}`;
+  }
+
+  async function lwAiBgMount(assetId, content, purpose, ai) {
+    const box = el(`lw-aibg-box-${assetId}`);
+    if (!box) return;
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    if (purpose === "MAIN") { box.innerHTML = `<p class="stat-sub">${escapeHtml(t("aibg_main_note"))}</p>`; return; }
+    if (!ai.loaded) {
+      box.innerHTML = `<p class="loading-text">${escapeHtml(t("aibg_loading"))}</p>`;
+      try {
+        const [list, settings] = await Promise.all([apiFetch("/ai-background/concepts"), apiFetch("/ai-background/settings")]);
+        ai.concepts = Array.isArray(list && list.concepts) ? list.concepts : [];
+        ai.settings = settings || {};
+        ai.loaded = true;
+      } catch (err) {
+        box.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
+        return;
+      }
+    }
+    const known = new Set(ai.concepts.map((c) => c.code));
+    ai.codes = ai.codes.filter((code) => known.has(code));
+
+    function renderBox(errorKey, errorText) {
+      const ready = ai.settings && ai.settings.configured === true;
+      const rows = ai.concepts.map((c) => `<label class="lw-ref-pick lw-concept-pick"><input type="checkbox" data-aibg-code="${escapeHtml(c.code)}" ${ai.codes.includes(c.code) ? "checked" : ""}>
+        <strong>${escapeHtml(c.label_ko)}</strong> <span class="stat-sub">${escapeHtml(c.description || "")}</span>
+        <details><summary class="stat-sub">${escapeHtml(t("aibg_prompt_label"))}</summary><p class="stat-sub">${escapeHtml(c.prompt || "")}</p></details></label>`).join("");
+      const problem = errorKey ? t(errorKey) : (errorText || "");
+      box.innerHTML = `
+        <div class="detail-panel lw-aibg-panel-box">
+          <h3>${escapeHtml(t("aibg_title"))}</h3>
+          <p class="stat-sub">${escapeHtml(t("aibg_note"))}</p>
+          <p class="stat-sub">${escapeHtml(t("aibg_cost_note", { n: Number((ai.settings && ai.settings.estimated_free_images_per_day) || 0) }))}</p>
+          ${ready ? "" : `<p class="field-error">${escapeHtml(t("aibg_not_configured"))}</p>`}
+          <div>${rows || `<p class="empty-text">${escapeHtml(t("aibg_none"))}</p>`}</div>
+          <p><label><input type="checkbox" id="lw-aibg-new-${assetId}" ${ai.newBg ? "checked" : ""}> ${escapeHtml(t("aibg_new_bg"))}</label></p>
+          <p class="stat-sub">${escapeHtml(t("aibg_pick_count", { count: ai.codes.length, max: LW_AIBG_MAX_PICK }))}</p>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="lw-aibg-run-btn-${assetId}" ${ready ? "" : "disabled"}>${escapeHtml(t("aibg_run_btn"))}</button>
+          </div>
+          <p class="field-error" id="lw-aibg-error-${assetId}">${escapeHtml(problem)}</p>
+        </div>`;
+      box.querySelectorAll("[data-aibg-code]").forEach((input) => input.addEventListener("change", () => {
+        const next = lwRefToggle(ai.codes, input.dataset.aibgCode, LW_AIBG_MAX_PICK);
+        const overLimit = input.checked && next.length === ai.codes.length && !ai.codes.includes(input.dataset.aibgCode);
+        ai.codes = next;
+        renderBox(overLimit ? "aibg_err_max" : null);
+      }));
+      const fresh = el(`lw-aibg-new-${assetId}`);
+      if (fresh) fresh.addEventListener("change", () => { ai.newBg = fresh.checked; });
+      el(`lw-aibg-run-btn-${assetId}`).addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwAiBgProblem(ai);
+        if (key) { renderBox(key); return; }
+        try {
+          const result = await apiFetch("/ai-background/runs", { method: "POST", body: JSON.stringify(lwAiBgBody(ai, assetId, purpose)) });
+          const labels = {};
+          ai.concepts.forEach((c) => { labels[c.code] = c.label_ko; });
+          // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 결과·생성 배경 안내를 보여 준다.
+          lwConceptNotice = { result, labels, ai: true };
+          await lwRenderMediaStep(content);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch (err) {
+          renderBox(null, err.message || HomezI18n.t("common.load_error"));
+        }
+      }));
+    }
+    renderBox();
   }
 
   async function lwOpenConceptPanel(assetId, content) {
@@ -13554,7 +13654,7 @@
     panel.dataset.open = "1";
     if (card) card.style.gridColumn = "1 / -1";
     const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
-    const state = { purpose: "ADDITIONAL", category: "", codes: [], recs: null };
+    const state = { purpose: "ADDITIONAL", category: "", codes: [], recs: null, ai: { codes: [], newBg: false, loaded: false, concepts: [], settings: null } };
 
     async function load(errorText) {
       panel.innerHTML = `<p class="loading-text">${escapeHtml(t("concept_loading"))}</p>`;
@@ -13604,8 +13704,10 @@
             <button type="button" class="btn btn-primary btn-sm" id="lw-concept-run-btn-${assetId}">${escapeHtml(t("concept_run_btn"))}</button>
           </div>
           <p class="field-error" id="lw-concept-error-${assetId}">${escapeHtml(problem)}</p>
-        </div>`;
+        </div>
+        <div id="lw-aibg-box-${assetId}"></div>`;
       wire();
+      lwAiBgMount(assetId, content, state.purpose, state.ai);
     }
 
     function wire() {

@@ -119,8 +119,10 @@ def _product_average(cutout_png: bytes) -> tuple[int, int, int] | None:
     return tuple(int(t / count + 0.5) for t in totals)  # type: ignore[return-value]
 
 
-def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, ...], purpose: str) -> list[CheckResult]:
-    """컨셉이 요구한 검사만 돌린다(요구한 순서 그대로). 알 수 없는 검사 코드는 NOT_CHECKED로 남긴다(조용히 빼지 않는다)."""
+def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, ...], purpose: str, *, generated_background: bool = False) -> list[CheckResult]:
+    """컨셉이 요구한 검사만 돌린다(요구한 순서 그대로). 알 수 없는 검사 코드는 NOT_CHECKED로 남긴다(조용히 빼지 않는다).
+
+    `generated_background`(2026-11-10): 배경을 AI가 그렸으면 "글자 없음"을 코드가 보장하지 못한다 — NO_TEXT_OVERLAY를 BY_CONSTRUCTION이 아니라 NOT_CHECKED로 알린다."""
 
     composed = Image.open(io.BytesIO(composed_png)).convert("RGB")
     results: list[CheckResult] = []
@@ -145,6 +147,8 @@ def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, 
             edge = _edge_average(composed)
             ok = width == height and width >= MAIN_MIN_SIDE and min(edge) >= WHITE_MIN_CHANNEL
             results.append(CheckResult(code, PASS if ok else FAIL, {"width": width, "height": height, "edge_min_channel": min(edge), "min_side": MAIN_MIN_SIDE}))
+        elif code == "NO_TEXT_OVERLAY" and generated_background:
+            results.append(CheckResult(code, NOT_CHECKED, {"note": "AI가 그린 배경에 글자·표식이 섞였는지는 자동으로 확인하지 못한다(직접 확인)"}))
         elif code == "NO_TEXT_OVERLAY":
             results.append(CheckResult(code, BY_CONSTRUCTION, {"note": "합성이 글자를 그리지 않는다(사진을 들여다본 검사가 아니다)"}))
         elif code == "POLICY_FLAGS":

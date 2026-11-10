@@ -60,6 +60,11 @@ CHECK_PRODUCT_PRESERVATION, CHECK_BACKGROUND_CONTRAST, CHECK_MAIN_IMAGE_SPEC = "
 CHECK_NO_TEXT_OVERLAY, CHECK_POLICY_FLAGS = "NO_TEXT_OVERLAY", "POLICY_FLAGS"
 CHECK_CODES = (CHECK_PRODUCT_PRESERVATION, CHECK_BACKGROUND_CONTRAST, CHECK_MAIN_IMAGE_SPEC, CHECK_NO_TEXT_OVERLAY, CHECK_POLICY_FLAGS)
 
+# 2026-11-10 — 생성 배경(L2) 전용 배경 종류. 배경 바이트는 AI(ai_background_service)가 그린 뒤에야 생기므로 이 종류의 컨셉은 로컬 합성 경로
+# (컨셉으로 만들기·배경 합성·상세 페이지)에 쓸 수 없다 — `background_spec()`이 막는다. 레지스트리도 따로 둔다(ai_background_concepts.py).
+BACKGROUND_GENERATED = "GENERATED"
+MAX_GENERATION_PROMPT_CHARS = 1000
+
 MAX_SUITABILITY_ITEMS = 8
 MAX_SUITABILITY_CHARS = 20
 MIN_TEXT_CONTRAST, MIN_MUTED_CONTRAST, MIN_ACCENT_CONTRAST = 7.0, 4.5, 3.0
@@ -112,8 +117,12 @@ class ImageConcept:
     l2_approved: bool = False
     # --- I3 추가(기본값 있음): 로컬 장면(L1) 컨셉이 쓰는 장면 코드(scene_backgrounds.SCENE_CODES) ---
     scene_code: str = ""
+    # --- 2026-11-10 추가(기본값 있음): 생성 배경(L2·GENERATED)이 AI에 보낼 장면 글(상품 없는 배경만) ---
+    generation_prompt: str = ""
 
     def background_spec(self) -> BackgroundSpec:
+        if self.background_kind == BACKGROUND_GENERATED:
+            raise BadRequestException("AI 배경 컨셉은 'AI 배경으로 만들기'에서만 쓸 수 있습니다.")
         return BackgroundSpec(kind=self.background_kind, color_hex=self.color_hex, color_hex_end=self.color_hex_end, scene_code=self.scene_code or None)
 
     def to_summary(self) -> dict:
@@ -268,8 +277,8 @@ def validate_spec(concept: ImageConcept) -> list[str]:
         problems.append("장면 종류가 올바르지 않다")
     if c.processing_level == LEVEL_L0 and c.scene_kind not in L0_SCENES:
         problems.append("L0(로컬 합성)은 흰 배경·단색·그라데이션 장면만 만들 수 있다 — 소재·생활 장면·조명·계절은 L1 이상이 필요하다")
-    if c.background_kind not in (BackgroundKind.WHITE, BackgroundKind.SOLID_COLOR, BackgroundKind.GRADIENT, BackgroundKind.SCENE):
-        problems.append("컨셉의 배경 종류는 흰 배경·단색·그라데이션·장면(SCENE)이어야 한다(기존 이미지 배경은 컨셉이 아니다)")
+    if c.background_kind not in (BackgroundKind.WHITE, BackgroundKind.SOLID_COLOR, BackgroundKind.GRADIENT, BackgroundKind.SCENE, BACKGROUND_GENERATED):
+        problems.append("컨셉의 배경 종류는 흰 배경·단색·그라데이션·장면(SCENE)·생성(GENERATED)이어야 한다(기존 이미지 배경은 컨셉이 아니다)")
     elif c.processing_level == LEVEL_L0 and SCENE_BY_BACKGROUND.get(c.background_kind) != c.scene_kind:
         problems.append("장면 종류가 배경 종류와 맞지 않는다")
     if c.background_kind == BackgroundKind.SCENE:
@@ -285,6 +294,18 @@ def validate_spec(concept: ImageConcept) -> list[str]:
             problems.append("조명 장면의 장면 종류는 STUDIO_LIGHT여야 한다")
     elif c.scene_code:
         problems.append("장면 코드는 장면(SCENE) 배경에서만 쓴다")
+    if c.background_kind == BACKGROUND_GENERATED:
+        if c.processing_level != LEVEL_L2:
+            problems.append("생성(GENERATED) 배경은 L2여야 한다")
+        if c.scene_kind in L0_SCENES:
+            problems.append("생성 배경의 장면 종류는 흰 배경·단색·그라데이션이 아니어야 한다")
+        if c.color_hex or c.color_hex_end:
+            problems.append("생성 배경에는 색을 지정하지 않는다")
+        prompt = c.generation_prompt or ""
+        if not prompt.strip() or len(prompt) > MAX_GENERATION_PROMPT_CHARS:
+            problems.append(f"생성 배경은 장면 글(1~{MAX_GENERATION_PROMPT_CHARS}자)이 필요하다")
+    elif c.generation_prompt:
+        problems.append("장면 글(generation_prompt)은 생성(GENERATED) 배경에서만 쓴다")
 
     # 색: 배경 종류별로 필요한 색만 있어야 한다
     start_ok = bool(c.color_hex) and bool(_HEX.match(c.color_hex or ""))

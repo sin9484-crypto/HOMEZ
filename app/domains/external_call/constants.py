@@ -18,8 +18,9 @@ class ExternalSystem:
     GEMINI = "GEMINI"  # 2026-10-25 — AI 이미지 생성·편집(Google Gemini). 상품 사진을 바깥으로 보내고 장마다 사용료가 든다.
     NAVER = "NAVER"  # 2026-10-31 — 네이버 검색어 트렌드(NAVER API HUB). 검색어 하나를 보내 최근 관심도를 읽는다(무료 한도 월 30,000회).
     EMAIL = "EMAIL"  # 2026-11-01 D5 — 사용자가 정한 메일 서버(SMTP)로 아침 브리핑을 보낸다.
-    ALL = (COUPANG, ONCH, LLM, GEMINI, NAVER, EMAIL)
-    LABELS = {COUPANG: "쿠팡", ONCH: "온채널", LLM: "AI 글쓰기(Claude)", GEMINI: "AI 이미지(Gemini)", NAVER: "네이버 검색어 트렌드", EMAIL: "이메일 발송"}
+    CLOUDFLARE = "CLOUDFLARE"  # 2026-11-10 — AI 배경 그리기(Cloudflare Workers AI). 상품 없는 배경 장면 글만 보내고 상품 사진은 보내지 않는다(무료 사용량 안에서는 0원).
+    ALL = (COUPANG, ONCH, LLM, GEMINI, NAVER, EMAIL, CLOUDFLARE)
+    LABELS = {COUPANG: "쿠팡", ONCH: "온채널", LLM: "AI 글쓰기(Claude)", GEMINI: "AI 이미지(Gemini)", NAVER: "네이버 검색어 트렌드", EMAIL: "이메일 발송", CLOUDFLARE: "AI 배경(Cloudflare)"}
 
 
 class CallKind:
@@ -50,10 +51,11 @@ class CallPurpose:
     IMAGE_GENERATION = "IMAGE_GENERATION"          # 2026-10-25 AI 이미지 생성·편집(상품 사진을 Gemini에 보내 새 사진을 받는다 — 장마다 사용료)
     SUPPLIER_RELEASE_DATE = "SUPPLIER_RELEASE_DATE"  # 2026-11-01 D4 — 온채널 상품 목록 한 쪽(등록일을 출시일로 쓰려고 읽는다)
     BRIEF_EMAIL = "BRIEF_EMAIL"                    # 2026-11-01 D5 — 아침 브리핑 이메일 한 통(개수 요약만)
+    AI_BACKGROUND = "AI_BACKGROUND"                # 2026-11-10 AI 배경 한 장 그리기(Cloudflare — 상품 없는 장면 글만 보낸다, 상품은 HOMEZ가 붙인다)
     TREND_LOOKUP = "TREND_LOOKUP"                  # 2026-10-31 네이버 검색어 트렌드 조회(후보 검색어 하나당 1회 — 사람이 누를 때·매일 자동 실행 때)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, AI_BACKGROUND, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
@@ -73,10 +75,11 @@ class CallPurpose:
         TREND_LOOKUP: "검색어 트렌드 조회",
         SUPPLIER_RELEASE_DATE: "온채널 상품 등록일 조회",
         BRIEF_EMAIL: "아침 브리핑 이메일 발송",
+        AI_BACKGROUND: "AI 배경 그리기",
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, AI_BACKGROUND})
 
 
 class AllowanceMode:

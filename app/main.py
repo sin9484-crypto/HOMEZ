@@ -105,6 +105,7 @@ from app.domains.retail_purchase.router import (
 )
 from app.domains.easy_view.router import router as easy_view_router
 from app.domains.marketplace_listing.ai_settings_router import router as ai_settings_router
+from app.domains.media_asset.ai_background_router import router as ai_background_router
 from app.domains.external_call.router import router as external_call_router
 from app.domains.purchase_task.router import (
     router as purchase_task_router,
@@ -666,6 +667,11 @@ app.include_router(
 # 2026-10-31 AI 사용 설정(모델·월 한도·단가·키) — 위저드 밖에서 보고 저장. 새 테이블 없음.
 app.include_router(
     ai_settings_router,
+)
+
+# 2026-11-10 AI 배경(Cloudflare) — 설정·컨셉·만들기. 새 테이블 없음.
+app.include_router(
+    ai_background_router,
 )
 
 app.include_router(

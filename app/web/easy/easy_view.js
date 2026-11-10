@@ -2497,12 +2497,14 @@
       <div class="ez-switch"><div style="flex:1"><b>${esc(T("easy.more.switch_title"))}</b><div class="ez-muted" style="font-size:14px">${esc(T("easy.more.switch_sub"))}</div></div>
         <button type="button" class="ez-btn line" id="ez-more-off">${esc(T("easy.more.switch_off"))}</button></div>
       <div class="ez-block" id="ez-ai-box" style="margin-top:16px">${loadingHtml()}</div>
+      <div class="ez-block" id="ez-aibg-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-block" id="ez-mail-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-groups">${sections.map((s) => `<div class="ez-group"><h3>${esc(T(s.labelKey))}</h3>${s.tabs.map((tab) => `<button type="button" data-ez-go="${esc(tab.view)}">${esc(T(tab.labelKey))}</button>`).join("")}</div>`).join("")}</div>
       <div class="ez-faint" style="margin-top:22px;font-size:13px">${esc(version)}</div>`;
     root.querySelectorAll("[data-ez-go]").forEach((btn) => btn.addEventListener("click", () => B.navigateTo(btn.dataset.ezGo)));
     $("ez-more-off").addEventListener("click", () => setEasyEnabled(false, true));
     aiSettingsLoad();
+    aiBgSettingsLoad();
     mailSettingsLoad();
   }
 
@@ -2581,6 +2583,64 @@
       B.toast((err && err.message) || T("easy.error"), "error");
     }
     aiSettingsLoad();
+  }
+
+  // 2026-11-10 AI 배경 설정(Cloudflare, 사용자 결정 "cloudflare로 진행해라"). 위저드 이미지 단계의 'AI 배경으로 만들기'가 쓰는 계정 ID·API 토큰.
+  // 보기는 바깥 호출이 없다. 저장은 확인 창 → 비밀번호 재확인을 거친다. 토큰은 입력만 하고 화면·응답에 다시 나오지 않는다(계정 ID는 끝 4자리만).
+  function aiBgSettingsHtml(s) {
+    const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+    return `<h3>${esc(T("easy.aibg.title"))} ${s.configured ? chip("ok", T("easy.ai.ready")) : chip("wait", T("easy.ai.not_ready"))}</h3>
+      <p class="ez-muted" style="font-size:14px">${esc(T("easy.aibg.lead"))}</p>
+      ${kv(T("easy.aibg.account"), s.account_id_saved ? T("easy.aibg.account_v", { tail: s.account_id_tail || "" }) : T("easy.ai.key_none"))}
+      ${kv(T("easy.aibg.token"), s.token_saved ? T("easy.ai.key_saved") : T("easy.ai.key_none"))}
+      ${kv(T("easy.aibg.free"), T("easy.aibg.free_v", { n: Number(s.estimated_free_images_per_day || 0).toLocaleString("ko-KR") }))}
+      <p class="ez-faint" style="font-size:13px">${esc(T("easy.aibg.how"))}</p>
+      <button type="button" class="ez-btn line sm" id="ez-aibg-edit" style="margin-top:10px">${esc(T("easy.ai.edit"))}</button>`;
+  }
+
+  async function aiBgSettingsLoad() {
+    const box = $("ez-aibg-box");
+    if (!box) return;
+    let s;
+    try { s = await api("/ai-background/settings"); } catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    box.innerHTML = aiBgSettingsHtml(s);
+    $("ez-aibg-edit").addEventListener("click", () => aiBgSettingsEdit(s));
+  }
+
+  // 화면 쪽 모양 검사(서버가 같은 검사를 다시 한다). 고쳐 쓰지 않고 문제 열쇠만 돌려준다.
+  function aiBgSettingsForm(get, s) {
+    const account = String(get("account_id") || "").trim().toLowerCase();
+    const token = String(get("api_token") || "").trim();
+    if (account && !/^[0-9a-f]{32}$/.test(account)) return { error: "easy.aibg.err_account" };
+    if (token && !/^[A-Za-z0-9_-]{20,200}$/.test(token)) return { error: "easy.aibg.err_token" };
+    if ((!account && !(s && s.account_id_saved)) || (!token && !(s && s.token_saved))) return { error: "easy.aibg.err_both" };
+    if (!account && !token) return { error: "easy.aibg.err_nothing" };
+    const body = {};
+    if (account) body.account_id = account;
+    if (token) body.api_token = token;
+    return { body };
+  }
+
+  async function aiBgSettingsEdit(s) {
+    const field = (name, label, attrs) => `<label style="display:block;margin-top:10px">${esc(T(label))}<br><input name="${name}" value="" style="width:100%" ${attrs || ""}></label>`;
+    const picked = await ezDialog({
+      title: T("easy.aibg.edit"), okLabel: T("easy.ai.save"),
+      bodyHtml: `<div class="ez-faint" style="font-size:13px">${esc(T("easy.aibg.f_hint"))}</div>`
+        + field("account_id", s.account_id_saved ? "easy.aibg.f_account_keep" : "easy.aibg.f_account", `autocomplete="off" spellcheck="false"`)
+        + field("api_token", s.token_saved ? "easy.aibg.f_token_keep" : "easy.aibg.f_token", `type="password" autocomplete="new-password"`),
+    });
+    if (!picked) return;
+    const form = aiBgSettingsForm(picked.get, s);
+    if (form.error) { B.toast(T(form.error), "error"); return; }
+    const token = await B.promptRecentAuthToken();
+    if (token === null) return;
+    try {
+      await api("/ai-background/settings", { method: "PUT", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(form.body) });
+      B.toast(T("easy.aibg.saved"), "success");
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    }
+    aiBgSettingsLoad();
   }
 
   // ---- 아침 브리핑 이메일 (2026-11-01 사용자 결정 D5) ----

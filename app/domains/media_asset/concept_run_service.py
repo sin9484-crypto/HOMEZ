@@ -101,14 +101,22 @@ class ConceptRunService:
             return ConceptRunOutcome(code, SKIPPED, None, reason="UNKNOWN_CONCEPT")
         if purpose not in concept.usable_for:
             return ConceptRunOutcome(code, SKIPPED, None, reason="NOT_USABLE_FOR_PURPOSE")
+        return self.compose_and_save(company_id, requested_by, cutout, cutout_bytes, code, purpose, concept.background_spec(), concept.checks)
+
+    def compose_and_save(self, company_id: int, requested_by: int, cutout: MediaAsset, cutout_bytes: bytes, code: str, purpose: str, spec, checks: tuple[str, ...], *,
+                         operation: str = OPERATION, provider_code: str = "PILLOW_LOCAL", model_name: str | None = None, label: str | None = None,
+                         generated_background: bool = False) -> ConceptRunOutcome:
+        """배경 명세로 합성 → 검사 → (FAIL이 없을 때만) 저장. 2026-11-10 AI 배경(ai_background_service)도 같은 길을 쓴다(배경 바이트만 다르다)."""
 
         job = self.queue._record_processing_job(  # noqa: SLF001 — 같은 패키지의 처리 작업 기록 규칙을 그대로 쓴다
-            operation=OPERATION, provider_code="PILLOW_LOCAL", model_name=code, source_asset_id=cutout.id, requested_by=requested_by, company_id=company_id,
+            operation=operation, provider_code=provider_code, model_name=model_name or code, source_asset_id=cutout.id, requested_by=requested_by, company_id=company_id,
             product_candidate_id=cutout.owner_id if cutout.owner_type == MediaAssetOwnerType.PRODUCT_CANDIDATE else 0,
         )
         try:
-            composed = compose_with_background(cutout_bytes, concept.background_spec())
-            results = concept_inspection.inspect(cutout_bytes, composed, concept.checks, purpose)
+            composed = compose_with_background(cutout_bytes, spec)
+            # 생성 배경일 때만 표시를 넘긴다(기존 로컬 컨셉의 검사 호출 모양은 그대로).
+            results = (concept_inspection.inspect(cutout_bytes, composed, checks, purpose, generated_background=True) if generated_background
+                       else concept_inspection.inspect(cutout_bytes, composed, checks, purpose))
         except Exception as exc:  # noqa: BLE001
             logger.warning("컨셉 합성 실패", exc_info=True)
             self.queue._finish_processing_job(job.id, company_id, success=False, error_reason=f"컨셉 합성 실패: {type(exc).__name__}")  # noqa: SLF001
@@ -128,7 +136,7 @@ class ConceptRunService:
                 company_id=company_id, owner_type=cutout.owner_type, owner_id=cutout.owner_id, purpose=cutout.purpose, display_order=cutout.display_order,
                 image_bytes=composed, self_reported_mime_type="image/png",
             )
-            linked = adopt_derived(asset, cutout, f"concept-{code}-{purpose}.png".lower())
+            linked = adopt_derived(asset, cutout, (label or f"concept-{code}-{purpose}.png").lower())
             self.db.commit()
         except Exception as exc:  # noqa: BLE001
             logger.warning("컨셉 저장 실패", exc_info=True)
