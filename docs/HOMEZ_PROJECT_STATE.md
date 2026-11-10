@@ -14050,3 +14050,12 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 남은 사용자 몫: 앱 창에서 로그인 → Migration 승인 화면에서 비밀번호로 `20261109_00` 승인(AI는 이 승인을 대신하지 않는다). 승인 뒤 표 생성을 읽기 전용으로 확인한다.
 - 출고일 쓰기 허용(#31 쓰기 1·#32 조회 3, 11-09 20:39 승인, 미사용): 사용자 "진행해라". 실제 대상은 쉬운 보기 '출고일 바꾸기'(2일)에 남은 3개 상품(백산수 16411745286, 러닝 무릎보호대 16413434812, 바디워시 16417638496 — 저장된 출고일 없음·성공 기록 없음). 남은 허용은 1개 상품 분량이라, 쿠팡 쓰기는 하지 않고 사용자 화면 조작(허용 늘리기·보내기)을 안내했다. 취소도 하지 않았다.
 - 온채널 연결: 사용자 지시로 최후 순위.
+
+### 2026-11-10 Migration 20261109_00 적용 확인(사용자가 앱 창에서 승인)
+
+- 읽기 전용(`mode=ro`) 확인: `schema_migrations` id 80 `20261109_00_create_ai_draft_outcome_record_schema.sql` APPLIED, 적용 시각 17:34:08(KST), 13ms, 체크섬 `abcde806…c112d5a1e2` = 저장소 파일 SHA-256과 일치.
+- 표 164개(재시작 전 163 + 1), `ai_draft_outcome_records`와 인덱스 2개(`ix_…_company_id`, `ix_…_id`) 존재, 행 0, `PRAGMA integrity_check` ok.
+- 앱이 적용 직전에 자체 백업을 만들었다: `storage/backups/homez_pre_bootstrap_migration_20261110_173408.db`(무결성 ok, backup_records id 12).
+- 재시작 전 백업과 행 수 비교: 달라진 표는 로그인·감지·기록 계열뿐(audit_logs, auth_sessions, refresh_token*, schema_migrations, backup_records, external_call_logs, external_call_allowances). 업무 데이터 표 변화 없음.
+- 허용 #33(온채널 주문 감지, 상시, 시간당 30회)이 19:35(KST)에 사용자 결정으로 새로 생겼다. 만료 11-11 19:35(KST). 이 허용을 쓰는 코드는 아직 없다.
+- 이제 'AI 초안 기록' 카드는 준비됨 상태여야 한다(실제 기록은 Claude 키·허용 이후).
