@@ -517,6 +517,21 @@ def concept_run(
     return {"results": results, "created": count("CREATED"), "reused": count("REUSED"), "check_failed": count("CHECK_FAILED"), "skipped": count("SKIPPED"), "failed": count("FAILED")}
 
 
+@router.get("/concept-previews")
+def concept_previews(
+    asset_id: int,
+    purpose: str = "ADDITIONAL",
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-11-11 샘플 미리보기 — 사진 한 장으로 고를 수 있는 컨셉마다 작은 샘플(실제 누끼를 그 배경에 붙인 축소본)을 돌려준다.
+    읽기 전용(자산·파일·기록 저장 0), 바깥 호출 0 — AI 배경은 이미 그려 둔 배경이 있을 때만 샘플을 만든다. 누끼가 없으면 needs_cutout."""
+
+    from app.domains.media_asset.concept_preview_service import ConceptPreviewService
+
+    return ConceptPreviewService(db).previews(company_id=current_user.company_id, asset_id=asset_id, purpose=purpose)
+
+
 @router.get("/concept-recommendations")
 def concept_recommendations(
     category: str | None = None,

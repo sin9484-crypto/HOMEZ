@@ -607,7 +607,10 @@ class UiSourceTests(unittest.TestCase):
         self.assertIn("withButtonGuard", run)
         self.assertIn('if (purpose === "MAIN")', mount)
         self.assertIn("escapeHtml(c.prompt", mount)
-        self.assertIn("notice.ai ? lwAiBgSummaryHtml(", function_source("lwConceptNoticeHtml"))
+        # 2026-11-11 샘플 고르기: 알림이 여러 묶음(로컬+AI)을 받도록 바뀌었다 — AI 묶음은 여전히 AI 요약으로, 한 묶음 모양도 그대로 처리한다.
+        notice = function_source("lwConceptNoticeHtml")
+        self.assertIn("part.ai ? lwAiBgSummaryHtml(part.result, part.labels) : lwConceptSummaryHtml(part.result, part.labels)", notice)
+        self.assertIn('Array.isArray(notice.parts) ? notice.parts.map(one).join("") : one(notice)', notice)
 
     def test_every_aibg_and_concept_key_exists_in_both_languages(self):
         ko, en = lw_table(KO), lw_table(EN)

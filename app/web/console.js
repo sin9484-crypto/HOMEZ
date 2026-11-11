@@ -13538,7 +13538,9 @@
     if (!lwConceptNotice) return "";
     const notice = lwConceptNotice;
     lwConceptNotice = null;
-    return notice.ai ? lwAiBgSummaryHtml(notice.result, notice.labels) : lwConceptSummaryHtml(notice.result, notice.labels);
+    const one = (part) => (part.error ? `<p class="field-error" role="alert">${escapeHtml(part.error)}</p>`
+      : (part.ai ? lwAiBgSummaryHtml(part.result, part.labels) : lwConceptSummaryHtml(part.result, part.labels)));
+    return Array.isArray(notice.parts) ? notice.parts.map(one).join("") : one(notice);
   }
 
   // 2026-11-10 — AI 배경으로 만들기(Cloudflare, 사용자 결정 "cloudflare로 진행해라"). AI는 상품 없는 배경 장면만 그리고, 상품은 실제 누끼를 PC 안에서 붙인다.
@@ -13743,6 +13745,169 @@
     await load();
   }
 
+  // 2026-11-11 — 샘플 보고 고르기(사용자 요청 "이미지 첨부하면 이미지 샘플 나오고 어떤 형식으로 생성할 것인지 샘플 선택할수있게").
+  // 서버가 컨셉마다 작은 샘플(실제 누끼를 그 배경에 붙인 축소본)을 메모리에서만 만들어 준다 — 저장 0, 바깥 호출 0. 고른 뒤 기존 실행(컨셉 만들기·AI 배경)으로 실제 사진을 만든다.
+  // 사진을 올리면 이 패널이 자동으로 열린다. 누끼가 없으면 '누끼 따고 샘플 보기'(사용자가 누를 때만)를 보여 준다. 한도는 기존과 같다(로컬 6, AI 3).
+  let lwSampleAutoOpenId = null;
+  const LW_SAMPLE_DATA_URI = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
+
+  function lwSampleProblem(state) {
+    // 실행 전에 화면이 먼저 알려 줄 일(서버가 같은 규칙으로 다시 막는다). 문제가 없으면 null, 있으면 문구 키.
+    const local = (state && state.local) || [];
+    const ai = (state && state.ai) || [];
+    if (!local.length && !ai.length) return "sample_err_none";
+    if (local.length > LW_CONCEPT_MAX_PICK) return "sample_err_max_local";
+    if (ai.length > LW_AIBG_MAX_PICK) return "sample_err_max_ai";
+    if (ai.length && (!state.aiSettings || state.aiSettings.configured !== true)) return "sample_err_ai_settings";
+    return null;
+  }
+
+  function lwSampleBodies(state) {
+    const cutoutId = Number(state.data && state.data.cutout_asset_id);
+    return {
+      local: state.local.length ? { cutout_asset_id: cutoutId, concept_codes: state.local.slice(), purpose: state.purpose } : null,
+      ai: state.ai.length ? { cutout_asset_id: cutoutId, concept_codes: state.ai.slice(), purpose: state.purpose, new_background: state.newBg === true } : null,
+    };
+  }
+
+  function lwSampleCardHtml(sample, picked) {
+    const t = (key) => HomezI18n.t(`lw.${key}`);
+    const kind = sample.kind === "AI" ? "AI" : "LOCAL";
+    const image = typeof sample.preview === "string" && LW_SAMPLE_DATA_URI.test(sample.preview)
+      ? `<img src="${sample.preview}" alt="${escapeHtml(sample.label_ko || sample.code)}">`
+      : `<span class="lw-sample-empty">${escapeHtml(t(kind === "AI" && sample.needs_draw ? "sample_not_drawn" : "sample_no_preview"))}</span>`;
+    return `<button type="button" class="lw-sample-card${picked ? " is-picked" : ""}" data-sample-code="${escapeHtml(sample.code)}" data-sample-kind="${kind}" aria-pressed="${picked ? "true" : "false"}" title="${escapeHtml(sample.description || "")}">
+        <span class="lw-sample-thumb">${image}</span>
+        <span class="lw-sample-label">${picked ? "✓ " : ""}${escapeHtml(sample.label_ko || sample.code)}</span>
+      </button>`;
+  }
+
+  async function lwOpenSamplePanel(assetId, content) {
+    const panel = el(`lw-sample-panel-${assetId}`);
+    if (!panel) return;
+    const card = panel.closest(".lw-media-card");
+    if (panel.dataset.open === "1") {
+      panel.innerHTML = "";
+      panel.dataset.open = "";
+      if (card) card.style.gridColumn = "";
+      return;
+    }
+    panel.dataset.open = "1";
+    if (card) card.style.gridColumn = "1 / -1";
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const state = { purpose: "ADDITIONAL", data: null, local: [], ai: [], newBg: false, aiSettings: null };
+
+    async function load(errorText) {
+      panel.innerHTML = `<p class="loading-text">${escapeHtml(t("sample_loading"))}</p>`;
+      try {
+        state.data = await apiFetch(`/media-assets/concept-previews?asset_id=${encodeURIComponent(Number(assetId))}&purpose=${encodeURIComponent(state.purpose)}`);
+      } catch (err) {
+        panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
+        return;
+      }
+      if (state.purpose !== "MAIN" && state.aiSettings === null) {
+        try { state.aiSettings = await apiFetch("/ai-background/settings"); } catch (err) { state.aiSettings = { configured: false }; }
+      }
+      const known = new Set(((state.data && state.data.samples) || []).map((s) => `${s.kind}:${s.code}`));
+      state.local = state.local.filter((code) => known.has(`LOCAL:${code}`));
+      state.ai = state.ai.filter((code) => known.has(`AI:${code}`));
+      render(null, errorText);
+    }
+
+    function render(errorKey, errorText) {
+      const data = state.data || { samples: [] };
+      const purposes = [["ADDITIONAL", "sample_purpose_additional"], ["DETAIL", "sample_purpose_detail"], ["MAIN", "sample_purpose_main"]]
+        .map(([value, key]) => `<label><input type="radio" name="lw-sample-purpose-${assetId}" value="${value}" ${state.purpose === value ? "checked" : ""}> ${escapeHtml(t(key))}</label>`).join(" ");
+      const problem = errorKey ? t(errorKey) : (errorText || "");
+      let body;
+      if (data.needs_cutout) {
+        body = `<p class="stat-sub">${escapeHtml(t("sample_needs_cutout"))}</p>
+          <div class="dialog-actions"><button type="button" class="btn btn-primary btn-sm" id="lw-sample-cutout-btn-${assetId}">${escapeHtml(t("sample_cutout_btn"))}</button></div>`;
+      } else {
+        const local = (data.samples || []).filter((s) => s.kind === "LOCAL");
+        const ai = (data.samples || []).filter((s) => s.kind === "AI");
+        const aiReady = state.aiSettings && state.aiSettings.configured === true;
+        const usedCutout = Number.isInteger(data.cutout_asset_id) && Number(data.cutout_asset_id) !== Number(assetId)
+          ? `<p class="stat-sub">${escapeHtml(t("sample_from_cutout", { id: data.cutout_asset_id }))}</p>` : "";
+        const aiBlock = ai.length ? `<h4>${escapeHtml(t("sample_ai_title"))}</h4>
+          <p class="stat-sub">${escapeHtml(t("sample_ai_note"))}</p>
+          ${aiReady ? "" : `<p class="field-error">${escapeHtml(t("sample_ai_not_configured"))}</p>`}
+          <div class="lw-sample-grid">${ai.map((s) => lwSampleCardHtml(s, state.ai.includes(s.code))).join("")}</div>
+          <p class="stat-sub">${escapeHtml(t("sample_pick_count", { count: state.ai.length, max: LW_AIBG_MAX_PICK }))}</p>
+          ${state.ai.length ? `<label class="lw-ref-pick"><input type="checkbox" id="lw-sample-newbg-${assetId}" ${state.newBg ? "checked" : ""}> ${escapeHtml(t("sample_new_bg"))}</label>` : ""}` : "";
+        body = `${usedCutout}
+          <h4>${escapeHtml(t("sample_local_title"))}</h4>
+          <p class="stat-sub">${escapeHtml(t("sample_local_note"))}</p>
+          <div class="lw-sample-grid">${local.map((s) => lwSampleCardHtml(s, state.local.includes(s.code))).join("") || `<p class="empty-text">${escapeHtml(t("sample_none"))}</p>`}</div>
+          <p class="stat-sub">${escapeHtml(t("sample_pick_count", { count: state.local.length, max: LW_CONCEPT_MAX_PICK }))}</p>
+          ${aiBlock}
+          <p class="stat-sub">${escapeHtml(t("sample_policy_note"))}</p>
+          <div class="dialog-actions"><button type="button" class="btn btn-primary btn-sm" id="lw-sample-run-btn-${assetId}">${escapeHtml(t("sample_run_btn"))}</button></div>`;
+      }
+      panel.innerHTML = `
+        <div class="detail-panel lw-sample-panel-box">
+          <h3>${escapeHtml(t("sample_panel_title"))}</h3>
+          <p class="stat-sub">${escapeHtml(t("sample_panel_hint"))}</p>
+          <div class="lw-bg-controls">${purposes}</div>
+          ${body}
+          <p class="field-error" id="lw-sample-error-${assetId}">${escapeHtml(problem)}</p>
+        </div>`;
+      wire();
+    }
+
+    function wire() {
+      panel.querySelectorAll(`input[name="lw-sample-purpose-${assetId}"]`).forEach((radio) => {
+        radio.addEventListener("change", () => { state.purpose = radio.value; state.local = []; state.ai = []; load(); });
+      });
+      panel.querySelectorAll("[data-sample-code]").forEach((btn) => btn.addEventListener("click", () => {
+        const isAi = btn.dataset.sampleKind === "AI";
+        const list = isAi ? state.ai : state.local;
+        const limit = isAi ? LW_AIBG_MAX_PICK : LW_CONCEPT_MAX_PICK;
+        const next = lwRefToggle(list, btn.dataset.sampleCode, limit);
+        const overLimit = next.length === list.length && !list.includes(btn.dataset.sampleCode);
+        if (isAi) state.ai = next; else state.local = next;
+        render(overLimit ? (isAi ? "sample_err_max_ai" : "sample_err_max_local") : null);
+      }));
+      const newBg = el(`lw-sample-newbg-${assetId}`);
+      if (newBg) newBg.addEventListener("change", () => { state.newBg = newBg.checked; });
+      const cutoutBtn = el(`lw-sample-cutout-btn-${assetId}`);
+      if (cutoutBtn) cutoutBtn.addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        try {
+          await apiFetch("/media-assets/background-removal", { method: "POST", body: JSON.stringify({ source_asset_id: Number(assetId), provider_code: "REMBG" }) });
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+          return;
+        }
+        await load();
+      }));
+      const runBtn = el(`lw-sample-run-btn-${assetId}`);
+      if (runBtn) runBtn.addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwSampleProblem(state);
+        if (key) { render(key); return; }
+        const bodies = lwSampleBodies(state);
+        const labels = {};
+        ((state.data && state.data.samples) || []).forEach((s) => { labels[s.code] = s.label_ko; });
+        const parts = [];
+        if (bodies.local) {
+          try {
+            parts.push({ result: await apiFetch("/media-assets/concept-runs", { method: "POST", body: JSON.stringify(bodies.local) }), labels });
+          } catch (err) { parts.push({ error: err.message || HomezI18n.t("common.load_error") }); }
+        }
+        if (bodies.ai) {
+          try {
+            parts.push({ result: await apiFetch("/ai-background/runs", { method: "POST", body: JSON.stringify(bodies.ai) }), labels, ai: true });
+          } catch (err) { parts.push({ error: err.message || HomezI18n.t("common.load_error") }); }
+        }
+        // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 결과(로컬·AI 각각)를 보여 준다.
+        lwConceptNotice = { parts };
+        await lwRenderMediaStep(content);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }));
+    }
+
+    await load();
+  }
+
   // 2026-10-23 — 일괄 보정(R2). 고른 사진 여러 장에 같은 밝기·색온도를 한 번에 적용해 새 사진으로 저장한다(로컬 처리, 원본 유지).
   // 이미지에는 글자·워터마크를 넣지 않는다. 범위(−50~+50)와 한도(20장)는 서버도 같은 규칙으로 다시 막는다.
   const LW_ADJ_MAX_PHOTOS = 20;
@@ -13931,6 +14096,7 @@
           <label class="lw-adj-pick"><input type="checkbox" class="lw-adj-check" value="${a.id}"> ${HomezI18n.t("lw.adj_pick")}</label>
           ${isVerified ? "" : `<p class="lw-media-thumb-note">${HomezI18n.t("lw.rights_unverified_selection_blocked")}</p>`}
           <div class="lw-media-card-actions">
+            <button type="button" class="btn btn-secondary btn-sm lw-sample-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.sample_btn")}</button>
             ${a.asset_role === "ORIGINAL" ? `<button type="button" class="btn btn-ghost btn-sm lw-cutout-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.media_cutout_btn")}</button>` : ""}
             ${a.asset_role === "GENERATED" ? `<button type="button" class="btn btn-ghost btn-sm lw-compose-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.media_compose_btn")}</button>` : ""}
             ${a.asset_role === "GENERATED" ? `<button type="button" class="btn btn-ghost btn-sm lw-concept-btn" data-asset-id="${a.id}">${HomezI18n.t("lw.concept_btn")}</button>` : ""}
@@ -13946,6 +14112,7 @@
           <div class="lw-bg-panel" id="lw-bg-panel-${a.id}"></div>
           <div class="lw-bg-panel" id="lw-ref-panel-${a.id}"></div>
           <div class="lw-bg-panel" id="lw-concept-panel-${a.id}"></div>
+          <div class="lw-bg-panel" id="lw-sample-panel-${a.id}"></div>
         </div>`;
       }).join("")}</div>`}
       <p class="field-error" id="lw-media-error"></p>`;
@@ -13971,7 +14138,7 @@
       for (const file of files) {
         try {
           const base64 = await fileToBase64(file);
-          await apiFetch("/media-assets/upload", {
+          const uploaded = await apiFetch("/media-assets/upload", {
             method: "POST",
             body: JSON.stringify({
               owner_type: "PRODUCT_CANDIDATE",
@@ -13982,6 +14149,7 @@
               original_filename: file.name,
             }),
           });
+          if (uploaded && Number.isInteger(uploaded.id)) lwSampleAutoOpenId = uploaded.id;
         } catch (err) {
           errEl.textContent = escapeHtml(err.message || HomezI18n.t("common.load_error"));
         }
@@ -14107,6 +14275,20 @@
     content.querySelectorAll(".lw-concept-btn").forEach((btn) => {
       btn.addEventListener("click", () => lwOpenConceptPanel(btn.dataset.assetId, content));
     });
+
+    content.querySelectorAll(".lw-sample-btn").forEach((btn) => {
+      btn.addEventListener("click", () => lwOpenSamplePanel(btn.dataset.assetId, content));
+    });
+    if (lwSampleAutoOpenId !== null) {
+      // 방금 올린 사진: 샘플 패널을 한 번만 자동으로 연다.
+      const openId = lwSampleAutoOpenId;
+      lwSampleAutoOpenId = null;
+      const target = el(`lw-sample-panel-${openId}`);
+      if (target) {
+        lwOpenSamplePanel(openId, content);
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
 
     content.querySelectorAll(".lw-ref-btn").forEach((btn) => {
       btn.addEventListener("click", () => lwOpenReferencePanel(btn.dataset.assetId, btn.dataset.rights, content));
