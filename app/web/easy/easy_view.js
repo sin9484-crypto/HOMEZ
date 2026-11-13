@@ -3427,6 +3427,25 @@
     return T("easy.kw.change", { first, last, pct: `${pct > 0 ? "+" : ""}${pct}` });
   }
 
+  // 2026-11-13 계절 보정(조사 문서 3-4) — 서버 판정 코드 → 표시. 모르는 코드는 '비교 불가'로(서버 글을 그대로 보이지 않는다).
+  const KW_SEASON = {
+    SEASONAL: ["wait", "easy.kw.season_seasonal"], EMERGING: ["ok", "easy.kw.season_emerging"], ABOVE_LAST_YEAR: ["ok", "easy.kw.season_above"],
+    BELOW_LAST_YEAR: ["gray", "easy.kw.season_below"], STEADY: ["gray", "easy.kw.season_steady"], NOT_ENOUGH: ["gray", "easy.kw.season_none"],
+  };
+
+  function kwSeasonCell(r) {
+    if (!r || r.season === null || r.season === undefined) return '<span class="ez-faint">—</span>';
+    const [tone, key] = KW_SEASON[r.season] || KW_SEASON.NOT_ENOUGH;
+    const yoy = Number(r.yoy), lyRise = Number(r.last_year_rise);
+    const parts = [];
+    if (r.yoy !== null && r.yoy !== undefined && Number.isFinite(yoy)) parts.push(T("easy.kw.season_yoy", { x: Math.round(yoy * 10) / 10 }));
+    if (r.last_year_rise !== null && r.last_year_rise !== undefined && Number.isFinite(lyRise)) {
+      const pct = Math.round(lyRise * 100);
+      parts.push(T("easy.kw.season_ly_rise", { pct: `${pct > 0 ? "+" : ""}${pct}` }));
+    }
+    return `${chip(tone, T(key))}${parts.length ? `<small class="ez-faint" style="display:block">${esc(parts.join(" · "))}</small>` : ""}`;
+  }
+
   function kwStateCell(r) {
     if (r.state === "OK") return chip("ok", T("easy.kw.st_ok"));
     if (r.state === "NO_DATA") return chip("wait", T("easy.kw.st_no_data"));
@@ -3446,9 +3465,9 @@
   }
 
   function kwRowsHtml(rows) {
-    return `<div style="overflow-x:auto"><table class="ez-table ez-kw"><thead><tr>${["easy.kw.col_kw", "easy.an.col_trend", "easy.kw.col_change", "easy.kw.col_at", "easy.kw.col_state", "easy.disc.col_next"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows.map((r, i) => {
+    return `<div style="overflow-x:auto"><table class="ez-table ez-kw"><thead><tr>${["easy.kw.col_kw", "easy.an.col_trend", "easy.kw.col_change", "easy.kw.col_season", "easy.kw.col_at", "easy.kw.col_state", "easy.disc.col_next"].map((k) => `<th>${esc(T(k))}</th>`).join("")}</tr></thead><tbody>${rows.map((r, i) => {
       const old = r.state !== "OK" && r.score_at ? `<small class="ez-faint" style="display:block">${esc(T("easy.kw.old_score", { at: String(r.score_at).replace("T", " ") }))}</small>` : "";
-      return `<tr><td><b>${esc(r.keyword)}</b></td><td>${scoreCell(r.score)}${old}</td><td class="ez-num">${esc(kwChangeText(r))}</td>
+      return `<tr><td><b>${esc(r.keyword)}</b></td><td>${scoreCell(r.score)}${old}</td><td class="ez-num">${esc(kwChangeText(r))}</td><td>${kwSeasonCell(r)}</td>
         <td class="ez-num">${r.at ? esc(String(r.at).replace("T", " ")) : '<span class="ez-faint">—</span>'}</td><td>${kwStateCell(r)}</td>
         <td style="white-space:nowrap"><button type="button" class="ez-btn line sm" data-ez-kw-look="${i}">${esc(T("easy.kw.look"))}</button> <button type="button" class="ez-btn line sm" data-ez-kw-del="${i}">${esc(T("easy.kw.del"))}</button></td></tr>`;
     }).join("")}</tbody></table></div>`;
@@ -3466,7 +3485,7 @@
     const rows = data.rows || [];
     const n = kwState.note;
     const full = rows.length >= (data.max || 30);
-    host.innerHTML = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.kw.lead"))}</div></div>
+    host.innerHTML = `<div class="ez-note info" style="margin-top:12px"><span class="ez-dot info" aria-hidden="true">i</span><div>${esc(T("easy.kw.lead"))}<br><small>${esc(T("easy.kw.season_note"))}</small></div></div>
       ${data.naver_key_registered ? "" : `<div class="ez-note warn" style="margin-top:8px"><span class="ez-dot warn" aria-hidden="true">!</span><div>${esc(T("easy.disc.no_naver"))}</div></div>`}
       ${n ? `<div class="ez-note ${n.tone}" style="margin-top:8px"><div>${esc(n.text)}</div></div>` : ""}
       <form class="ez-ask-form" data-ez-kw-form style="margin-top:12px">

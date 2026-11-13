@@ -15,11 +15,15 @@ File : app/domains/trend_discovery/keyword_watch_service.py
   - 받지 못한 경우(자격증명 없음·검색량 없음·네트워크 오류는 Adapter가 구분하지 않는다)는 0점으로 꾸미지 않고 NO_DATA로 둔다.
     이전에 받은 점수는 지우지 않는다.
   - 판매 판단·후보 등록·상품 등록을 하지 않는다. 사람이 보고 상품을 찾는다.
+  - 2026-11-13 계절 보정(조사 문서 3-4): 같은 호출 1회로 **2년**을 받아(기간만 늘림, 호출 수 그대로) `seasonality.judge`로 작년 같은 때와 비교한
+    판정(계절·새 움직임·작년보다 높음/낮음·비슷·비교 불가)을 함께 저장한다. 기존 점수·첫 주/마지막 주는 지금처럼 **최근 90일**만으로 계산한다
+    (네이버 값은 받은 기간 최대값=100이라 숫자 크기는 달라질 수 있지만, 점수는 비율이라 같다). 기간을 바꿀 수 없는 Adapter는 예전처럼 받고 '비교 불가'.
 =========================================================
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from datetime import datetime
@@ -30,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import ConflictException
+from app.domains.trend_discovery import seasonality
 from app.domains.trend_discovery.keyword_rule import normalize_user_keyword
 from app.domains.trend_discovery.service import TrendDiscoveryService
 from app.domains.user_settings.repository import UserSettingRepository
@@ -112,6 +117,7 @@ class TrendKeywordService:
         rows = [{
             "keyword": i["k"], "state": i.get("state") or STATE_NEVER, "at": i.get("at"), "score": i.get("score"), "confidence": i.get("conf"),
             "first": i.get("first"), "last": i.get("last"), "points": i.get("n"), "score_at": i.get("ok_at"),
+            "season": i.get("season"), "yoy": i.get("yoy"), "rise": i.get("rise"), "last_year_rise": i.get("ly_rise"),
             "due": str(i.get("at") or "")[:10] != today,
         } for i in items]
         # 점수 높은 순, 점수 없는 것은 뒤로(같으면 적은 순서)
@@ -163,18 +169,25 @@ class TrendKeywordService:
         """한 키워드 조회·저장. 돌려주는 값은 저장한 상태. 허용이 없으면 `ExternalCallNotAllowed`가 그대로 나간다(아무것도 저장하지 않는다)."""
 
         at = (self._now() + _KST).strftime("%Y-%m-%dT%H:%M")
-        signal = adapter.fetch(keyword)
+        long_fetch = getattr(adapter, "fetch_with_lookback", None)
+        signal = long_fetch(keyword, seasonality.SEASON_LOOKBACK_DAYS) if callable(long_fetch) else adapter.fetch(keyword)
         if signal is None:
             self._store_result(user_id, company_id, keyword, {"state": STATE_NO_DATA, "at": at})
             return STATE_NO_DATA
+        season = seasonality.judge(signal.search_volume_series, signal.periods)
+        # 기존 점수는 최근 90일만으로(날짜를 모르면 받은 그대로 — 기존 동작).
+        recent, recent_periods = seasonality.recent_slice(signal.search_volume_series, signal.periods)
+        signal = dataclasses.replace(signal, search_volume_series=recent, periods=recent_periods)
         series = signal.search_volume_series
         result = TrendDiscoveryService().evaluate(signal)
         if len(series) < TrendDiscoveryService.MIN_DATA_POINTS:
             self._store_result(user_id, company_id, keyword, {"state": STATE_FEW_DATA, "at": at, "n": len(series)})
             return STATE_FEW_DATA
+        season_fields = season.as_dict()
         self._store_result(user_id, company_id, keyword, {
             "state": STATE_OK, "at": at, "ok_at": at, "score": result.trend_score, "conf": result.confidence,
             "first": round(float(series[0]), 2), "last": round(float(series[-1]), 2), "n": len(series),
+            "season": season_fields["label"], "yoy": season_fields["yoy"], "rise": season_fields["rise"], "ly_rise": season_fields["last_year_rise"],
         })
         return STATE_OK
 

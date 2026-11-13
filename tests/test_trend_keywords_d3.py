@@ -559,7 +559,9 @@ class ScreenFunctionTests(unittest.TestCase):
 
     def run_js(self, expression):
         consts = re.search(r"^  const KW_BLOCKED = [^\n]+$", JS, re.M).group(0)
-        sources = "\n".join([consts, 'const chip = (tone, text) => `<i class="${tone}">${text}</i>`;'] + [function_source(n) for n in ("scoreCell", "kwChangeText", "kwStateCell", "kwNote", "kwRowsHtml")])
+        # 2026-11-13 계절 보정: 표가 '작년 이맘때와 비교' 칸(kwSeasonCell·KW_SEASON)을 함께 쓴다.
+        season = re.search(r"^  const KW_SEASON = \{.*?^  \};$", JS, re.M | re.S).group(0)
+        sources = "\n".join([consts, season, 'const chip = (tone, text) => `<i class="${tone}">${text}</i>`;'] + [function_source(n) for n in ("scoreCell", "kwChangeText", "kwSeasonCell", "kwStateCell", "kwNote", "kwRowsHtml")])
         script = HARNESS.replace("__SOURCES__", sources).replace("__NOW__", str(NOW)).replace("__EXPR__", expression)
         proc = subprocess.run([NODE, "-e", script], env={**os.environ, "TABLE_JSON": json.dumps(kw_texts())}, capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr)

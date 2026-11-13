@@ -56,6 +56,8 @@ class TrendSignal:
     observed_at: str = ""  # ISO 8601 문자열
     source: str = "fixture"
     is_banned_category: bool = False
+    # 2026-11-13 계절 보정 — 각 점의 기간 시작일(YYYY-MM-DD, 네이버 응답 data[].period). 모르면 빈 목록(날짜 비교를 하지 않는다).
+    periods: list[str] = field(default_factory=list)
 
 
 class TrendSourceAdapter:
@@ -166,7 +168,12 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
             )
 
     def fetch(self, keyword: str) -> TrendSignal | None:
+        return self.fetch_with_lookback(keyword, self.lookback_days)
+
+    def fetch_with_lookback(self, keyword: str, lookback_days: int) -> TrendSignal | None:
         """
+        2026-11-13 — 기간만 바꿔 같은 호출 1회로 받는다(관심 키워드 계절 보정은 2년을 받는다). 그 밖의 규칙은 fetch와 같다.
+
         Audit(2026-08-21, CTO 후속 지시)와 동일한 이유로 AI Capability
         Registry를 여기서도 강제한다(FixtureTrendAdapter.fetch()와
         동일 원칙 계승). 무료 할당량(월 30,000회)을 넘기면 호출
@@ -198,7 +205,7 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
             return None
 
         end_date = date.today()
-        start_date = end_date - timedelta(days=self.lookback_days)
+        start_date = end_date - timedelta(days=int(lookback_days))
 
         ticket = self.call_gate.open(target=f"kw:{keyword}"[:120]) if self.call_gate is not None else None
 
@@ -240,8 +247,11 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
                 return None
             data_points = results[0].get("data") or []
             series = [float(point["ratio"]) for point in data_points]
+            periods = [str(point.get("period") or "") for point in data_points]
         except (ValueError, KeyError, TypeError, AttributeError):
             return None
+        if not all(periods):
+            periods = []          # 기간이 빠진 점이 있으면 날짜를 쓰지 않는다(계절 비교는 '비교 불가'가 된다)
 
         if not series:
             return None
@@ -252,6 +262,7 @@ class NaverDataLabTrendAdapter(TrendSourceAdapter):
             search_volume_series=series,
             observed_at=datetime.utcnow().isoformat() + "Z",
             source="naver_api_hub_search_trend",
+            periods=periods,
         )
 
     def _close_gate(self, ticket, succeeded: bool, http_status: int | None) -> None:
