@@ -13908,6 +13908,21 @@
     await load();
   }
 
+  // 2026-11-13 — 이미지 AI 편집 기록(조사 문서 3-3). 서버가 처리 기록에서 이끌어 낸 '무엇을 했는지'를 사진 카드에 한 줄로 보여 준다(읽기 전용).
+  // 모르는 단계 코드는 서버 글을 그대로 보이지 않고 일반 문구로. AI 생성이 섞이면 표시를 붙인다(쿠팡 규정 원문 미확인 — 경고는 사전검사가 한다).
+  const LW_EDIT_KINDS = ["ORIGINAL", "SPLIT", "CUTOUT", "MANUAL_EDIT", "ADJUST", "BACKGROUND_SWAP", "SCENE", "BACKGROUND_PHOTO", "AI_BACKGROUND", "AI_GENERATED", "DETAIL_PAGE", "UNKNOWN"];
+
+  function lwEditRecordHtml(record) {
+    if (!record || !Array.isArray(record.steps) || !record.steps.length) return "";
+    const t = (key) => HomezI18n.t(`lw.${key}`);
+    const names = record.steps.map((step) => t(LW_EDIT_KINDS.includes(step && step.kind) ? `edit_kind_${String(step.kind).toLowerCase()}` : "edit_kind_other"));
+    const badges = [];
+    if (record.generative === true) badges.push(`<span class="lw-edit-badge is-ai">${escapeHtml(t("edit_badge_ai"))}</span>`);
+    else if (record.staged === true) badges.push(`<span class="lw-edit-badge">${escapeHtml(t("edit_badge_staged"))}</span>`);
+    if (record.unknown === true) badges.push(`<span class="lw-edit-badge">${escapeHtml(t("edit_badge_unknown"))}</span>`);
+    return `<span class="lw-edit-label">${escapeHtml(t("edit_label"))}:</span> ${names.map(escapeHtml).join(" → ")}${badges.length ? ` ${badges.join(" ")}` : ""}`;
+  }
+
   // 2026-10-23 — 일괄 보정(R2). 고른 사진 여러 장에 같은 밝기·색온도를 한 번에 적용해 새 사진으로 저장한다(로컬 처리, 원본 유지).
   // 이미지에는 글자·워터마크를 넣지 않는다. 범위(−50~+50)와 한도(20장)는 서버도 같은 규칙으로 다시 막는다.
   const LW_ADJ_MAX_PHOTOS = 20;
@@ -14093,6 +14108,7 @@
             <span>#${a.id} · ${escapeHtml(a.purpose)} · ${escapeHtml(a.asset_role)}${a.asset_role === "GENERATED" && a.source_asset_id ? ` (from #${a.source_asset_id})` : ""}</span>
           </label>
           ${lwRightsBadge(a.rights_status)}
+          <p class="lw-edit-record" id="lw-edit-${a.id}"></p>
           <label class="lw-adj-pick"><input type="checkbox" class="lw-adj-check" value="${a.id}"> ${HomezI18n.t("lw.adj_pick")}</label>
           ${isVerified ? "" : `<p class="lw-media-thumb-note">${HomezI18n.t("lw.rights_unverified_selection_blocked")}</p>`}
           <div class="lw-media-card-actions">
@@ -14123,6 +14139,16 @@
         if (thumbEl) thumbEl.innerHTML = `<img src="${url}" alt="">`;
       }).catch(() => {});
     });
+    if (assets.length) {
+      // 편집 기록은 보조 정보라 못 읽어도 화면을 막지 않는다(줄을 비워 둔다).
+      apiFetch(`/media-assets/owners/PRODUCT_CANDIDATE/${encodeURIComponent(w.product_candidate_id)}/edit-records`).then((data) => {
+        const records = (data && data.records) || {};
+        assets.forEach((a) => {
+          const line = el(`lw-edit-${a.id}`);
+          if (line) line.innerHTML = lwEditRecordHtml(records[String(a.id)]);
+        });
+      }).catch(() => {});
+    }
 
     const fileToBase64 = (file) => new Promise((resolve, reject) => {
       const reader = new FileReader();

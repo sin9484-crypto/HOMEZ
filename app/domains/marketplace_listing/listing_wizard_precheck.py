@@ -191,6 +191,39 @@ def _listing_claim_issues(wizard: ListingWizard, db: Session, draft: dict) -> li
     return issues
 
 
+def _media_edit_issues(db: Session, company_id: int, media_ids: list) -> list[ValidationIssue]:
+    """2026-11-13 이미지 AI 편집 기록(조사 문서 3-3) — 고른 사진에 AI가 그린 배경·AI 생성 이미지가 있는지, 첫 사진(쿠팡 대표 이미지)이 흰 배경·상품만이 아닌
+    연출 사진인지, 편집 기록을 알 수 없는 사진이 있는지 **경고만** 한다(차단하지 않는다 — 쿠팡의 AI 이미지 규정 원문을 찾지 못했고, 과기정통부 지침상
+    AI를 도구로 쓰는 판매자는 표시 의무 대상이 아니다). 기록을 읽지 못하면 경고를 내지 않고 검사를 계속한다."""
+
+    try:
+        from app.domains.media_asset.image_edit_record import ImageEditRecordService
+
+        ordered = list(dict.fromkeys(i for i in media_ids if isinstance(i, int) and not isinstance(i, bool)))
+        records = ImageEditRecordService(db).records(company_id, ordered)
+    except Exception:  # noqa: BLE001 — 경고용 보조 검사라 실패가 사전검사를 막지 않는다
+        return []
+    issues: list[ValidationIssue] = []
+    generative = [i for i in ordered if i in records and records[i].generative]
+    if generative:
+        issues.append(_issue(
+            "MEDIA_AI_GENERATED", WizardStep.MEDIA, False, "listing_wizard.precheck.media_ai_generated",
+            params={"count": len(generative), "ids": ", ".join(f"#{i}" for i in generative)},
+        ))
+    if ordered and ordered[0] in records and records[ordered[0]].staged:
+        issues.append(_issue(
+            "MEDIA_MAIN_STAGED", WizardStep.MEDIA, False, "listing_wizard.precheck.media_main_staged",
+            params={"id": f"#{ordered[0]}"},
+        ))
+    unknown = [i for i in ordered if i in records and records[i].unknown]
+    if unknown:
+        issues.append(_issue(
+            "MEDIA_EDIT_UNKNOWN", WizardStep.MEDIA, False, "listing_wizard.precheck.media_edit_unknown",
+            params={"ids": ", ".join(f"#{i}" for i in unknown)},
+        ))
+    return issues
+
+
 def run_precheck(
     wizard: ListingWizard, db: Session, company_id: int,
 ) -> WizardValidateResponse:
@@ -302,6 +335,7 @@ def run_precheck(
                 "MEDIA_ASSET_NOT_FOUND", WizardStep.MEDIA, True,
                 "listing_wizard.precheck.media_asset_not_found",
             ))
+        issues.extend(_media_edit_issues(db, company_id, media_ids))
 
     # --- 4/5단계: 판매채널·판매 방식 ---
     channel_selections = json.loads(wizard.channel_selections_json or "[]")

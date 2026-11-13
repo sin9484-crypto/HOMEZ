@@ -663,6 +663,22 @@ def list_assets_for_owner(
     )
 
 
+@router.get("/owners/{owner_type}/{owner_id}/edit-records")
+def list_edit_records_for_owner(
+    owner_type: str,
+    owner_id: int,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_VIEW)),
+    db: Session = Depends(get_db),
+):
+    """2026-11-13 이미지 AI 편집 기록 — 위 목록과 같은 사진들에 '무엇을 했는지'(원본까지 단계별)를 돌려준다. 읽기 전용, 이미 남은 처리 기록만 읽는다."""
+
+    from app.domains.media_asset.image_edit_record import ImageEditRecordService
+
+    assets = ImageGenerationJobQueueService(db).list_active_assets(current_user.company_id, owner_type, owner_id)
+    records = ImageEditRecordService(db).records(current_user.company_id, [a.id for a in assets])
+    return {"records": {str(asset_id): record.to_dict() for asset_id, record in records.items()}}
+
+
 @router.post(
     "/rights-evidence",
     response_model=schema.ImageRightsEvidenceResponse,

@@ -1346,6 +1346,13 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .lw-sample-empty { font-size: 12px; padding: 8px; text-align: center; color: var(--text-muted, #6b7280); }
 .lw-sample-label { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 
+/* 2026-11-13 이미지 AI 편집 기록 — 사진 카드의 한 줄 기록과 표시 */
+.lw-edit-record { font-size: 12px; margin: 0; color: var(--text-muted, #6b7280); overflow-wrap: anywhere; }
+.lw-edit-record:empty { display: none; }
+.lw-edit-label { font-weight: 600; }
+.lw-edit-badge { display: inline-block; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); font-size: 11px; }
+.lw-edit-badge.is-ai { border-color: var(--warning, #b45309); color: var(--warning, #b45309); }
+
 /* 2026-08-29 Phase 5 — Fabric.js 수동 편집기(자르기/회전/밝기·대비/
    도형·화살표/되돌리기) MVP 모달 */
 .lw-edit-modal-overlay {
