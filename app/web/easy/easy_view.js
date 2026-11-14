@@ -1496,6 +1496,8 @@
             <div class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.exch.where"))}</div>
             <div id="ez-exch-box" style="margin-top:10px"></div>
           </div>
+          <div class="ez-sec" id="ez-auto-anchor">${esc(T("easy.auto.title"))}<small>${esc(T("easy.auto.sub"))}</small></div>
+          <div id="ez-auto-box" style="margin-top:10px">${loadingHtml()}</div>
           <div class="ez-note info"><span class="ez-dot info">i</span><div><b>${esc(T("easy.ap.block_title"))}</b> ${esc(T("easy.ap.block_body"))}</div></div>
         </div>
         <aside class="ez-panel">
@@ -1540,6 +1542,7 @@
     $("ez-ret-check").addEventListener("click", () => returnPreview($("ez-ret-id").value, $("ez-ret-action").value));
     $("ez-pick-check").addEventListener("click", () => pickupPreview($("ez-pick-id").value, $("ez-pick-courier").value, $("ez-pick-invoice").value, $("ez-pick-reg").value));
     $("ez-exch-load").addEventListener("click", () => exchangeList());
+    autonomyLoad();
     $("ez-ap-stop").addEventListener("click", () => toggleEstop(estop));
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
@@ -1588,14 +1591,76 @@
   }
 
   // 만료 임박·만료 상시 조회 허용을 같은 한도로 24시간 일괄 연장한다. 확인창 → 비밀번호 재확인 순서이고, 변경(쓰기) 허용은 연장하지 않는다.
+  // 2026-11-14 승인 피로 줄이기(조사 문서 3-5): 기간을 고르지 않으면 항목마다 지난번과 같은 기간으로 연장한다(30일 허용이 하루짜리로 줄지 않게).
+  const RENEW_PERIODS = [24, 168, 720];
+
+  function periodText(hours) {
+    const h = Math.round(Number(hours));
+    if (!Number.isFinite(h) || h <= 0) return "—";
+    return h % 24 === 0 ? T("easy.ap.period_days", { d: h / 24 }) : T("easy.ap.period_hours", { h });
+  }
+
+  function renewRequestBody(choice) {
+    const h = Number(choice);
+    return RENEW_PERIODS.includes(h) ? { hours: h } : {};
+  }
+
+  // 2026-11-14 기능별 자율 단계 표(조사 문서 3-5) — 서버 판정 코드를 그대로 보이지 않고 정해진 글로만 보여 준다(모르는 코드는 보기/빈칸).
+  const AUTO_STAGE = { AUTO: ["ok", "easy.auto.st_auto"], PREPARE: ["blue", "easy.auto.st_prepare"], SUGGEST: ["gray", "easy.auto.st_suggest"], VIEW: ["gray", "easy.auto.st_view"] };
+  const AUTO_HOW = { SCHEDULED: "easy.auto.how_scheduled", ON_PRESS: "easy.auto.how_on_press" };
+  const AUTO_RAISE = { NEVER: "easy.auto.raise_never", AI_ONLY: "easy.auto.raise_ai", AT_TOP: "easy.auto.raise_top" };
+
+  function autonomyCount(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  }
+
+  function autonomyAllowText(a) {
+    const sys = String(a.system_label || a.system || "");
+    const kind = String(a.kind_label || "");
+    if (a.mode === "STANDING") return T("easy.auto.allow_standing", { sys, kind, until: a.expires_at ? B.fmtDate(a.expires_at) : "—" });
+    return T("easy.auto.allow_counted", { sys, kind, n: autonomyCount(a.remaining_count) });
+  }
+
+  function autonomyNextHtml(r) {
+    const parts = [];
+    if (r.lower === "REVIEW") parts.push(`${chip("red", T("easy.auto.lower_review"))}<small class="ez-faint" style="display:block">${esc(T("easy.auto.lower_why", { f: autonomyCount(r.failed_7d), c: autonomyCount(r.fail_streak) }))}</small>`);
+    if (r.raise === "CANDIDATE") parts.push(`${chip("ok", T("easy.auto.raise_candidate"))}<small class="ez-faint" style="display:block">${esc(T("easy.auto.raise_candidate_s", { n: autonomyCount(r.success_streak) }))}</small>`);
+    else if (r.raise === "NOT_YET") parts.push(`<small class="ez-faint" style="display:block">${esc(T("easy.auto.raise_not_yet", { n: autonomyCount(r.success_streak), need: autonomyCount(r.raise_needed), f: autonomyCount(r.failed_30d) }))}</small>`);
+    else if (AUTO_RAISE[r.raise]) parts.push(`<small class="ez-faint" style="display:block">${esc(T(AUTO_RAISE[r.raise]))}</small>`);
+    return parts.join("") || '<span class="ez-faint">—</span>';
+  }
+
+  function autonomyTableHtml(data) {
+    const rows = data && Array.isArray(data.rows) ? data.rows : [];
+    if (!rows.length) return `<p class="ez-faint">${esc(T("easy.auto.error"))}</p>`;
+    const head = ["easy.auto.col_feature", "easy.auto.col_stage", "easy.auto.col_how", "easy.auto.col_allow", "easy.auto.col_record", "easy.auto.col_next"].map((k) => `<th>${esc(T(k))}</th>`).join("");
+    const body = rows.map((r) => {
+      const [tone, key] = AUTO_STAGE[r.stage] || AUTO_STAGE.VIEW;
+      const allows = Array.isArray(r.allowances) && r.allowances.length ? r.allowances.map((a) => `<small style="display:block">${esc(autonomyAllowText(a))}</small>`).join("") : `<span class="ez-faint">${esc(T("easy.auto.allow_none"))}</span>`;
+      return `<tr style="cursor:default"><td><b>${esc(r.purpose_label || r.purpose || "")}</b></td><td>${chip(tone, T(key))}</td><td>${esc(AUTO_HOW[r.how] ? T(AUTO_HOW[r.how]) : "—")}</td>
+        <td>${allows}</td><td class="ez-num">${esc(T("easy.auto.record", { s: autonomyCount(r.succeeded_30d), f: autonomyCount(r.failed_30d) }))}</td><td>${autonomyNextHtml(r)}</td></tr>`;
+    }).join("");
+    return `<div style="overflow-x:auto"><table class="ez-table ez-auto"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div><p class="ez-faint" style="font-size:13px;margin-top:6px">${esc(T("easy.auto.note"))}</p>`;
+  }
+
+  async function autonomyLoad() {
+    const box = $("ez-auto-box");
+    if (!box) return;
+    try { box.innerHTML = autonomyTableHtml(await api("/external-calls/autonomy")); }
+    catch (_) { box.innerHTML = `<p class="ez-faint">${esc(T("easy.auto.error"))}</p>`; }
+  }
+
   async function renewAllDialog(items) {
-    const list = `<ul style="margin:8px 0 0 18px">${items.map((r) => `<li>${esc(r.purpose_label)} · ${esc(T("easy.ap.l_hour"))} ${r.per_hour_limit}${esc(T("easy.times_short"))}</li>`).join("")}</ul>`;
-    const result = await ezDialog({ title: T("easy.ap.renew_confirm_title"), bodyHtml: `<p>${esc(T("easy.ap.renew_confirm_body"))}</p>${list}`, okLabel: T("easy.ap.renew_btn") });
+    const list = `<ul style="margin:8px 0 0 18px">${items.map((r) => `<li>${esc(r.purpose_label)} · ${esc(T("easy.ap.l_hour"))} ${r.per_hour_limit}${esc(T("easy.times_short"))} · ${esc(T("easy.ap.renew_last", { p: periodText(r.granted_hours) }))}</li>`).join("")}</ul>`;
+    const period = `<label>${esc(T("easy.ap.renew_period"))}</label><select name="period"><option value="">${esc(T("easy.ap.renew_same"))}</option>${RENEW_PERIODS.map((h) => `<option value="${h}">${esc(periodText(h))}</option>`).join("")}</select>`;
+    const result = await ezDialog({ title: T("easy.ap.renew_confirm_title"), bodyHtml: `<p>${esc(T("easy.ap.renew_confirm_body"))}</p>${list}${period}`, okLabel: T("easy.ap.renew_btn") });
     if (!result) return;
+    const body = renewRequestBody(result.get("period"));
     const token = await B.promptRecentAuthToken();
     if (token === null) return;
     try {
-      const r = await api("/external-calls/renew-expiring", { method: "POST", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify({}) });
+      const r = await api("/external-calls/renew-expiring", { method: "POST", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(body) });
       B.toast(T("easy.ap.renew_done", { n: (r.renewed || []).length }), "success");
       loadApprovals();
     } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }

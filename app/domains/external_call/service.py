@@ -55,6 +55,10 @@ logger = logging.getLogger("homez")
 # 일괄 연장 대상: 만료까지 이 시간 이하로 남았거나 이미 만료됐고(최근 이 일수 안에), 사용자가 취소·거절하지 않은 상시 조회 허용.
 DEFAULT_RENEW_WITHIN_HOURS = 12
 RENEW_LOOKBACK_DAYS = 7
+# 2026-11-14 승인 피로 줄이기(조사 문서 3-5): 미리 알리는 시점을 허용 기간에 비례시킨다 — 기간의 10%, 최소 12시간·최대 72시간.
+# 24시간 허용은 예전처럼 12시간 전, 30일 허용은 3일 전에 '연장' 묶음에 들어온다. 연장 기간은 따로 고르지 않으면 지난번과 같은 기간이다.
+RENEW_LEAD_RATIO = 0.10
+RENEW_LEAD_MAX_HOURS = 72
 
 _DEFAULT_REQUEST = {
     (CallPurpose.ORDER_DETECTION, CallKind.READ): (AllowanceMode.STANDING, None, DEFAULT_ORDER_DETECTION_PER_HOUR),
@@ -393,7 +397,22 @@ class ExternalCallPolicyService:
     # 사용자가 직접 취소·거절한 것과 변경(쓰기) 허용은 건드리지 않는다.
     # ------------------------------------------------------------
 
-    def renewable(self, company_id: int, *, within_hours: int = DEFAULT_RENEW_WITHIN_HOURS) -> list[dict]:
+    @staticmethod
+    def granted_hours(row: ExternalCallAllowance) -> int:
+        """그 허용을 줄 때 정한 기간(시간). 기록이 없거나 이상하면 기본 24시간."""
+
+        if row.expires_at is None or row.decided_at is None or row.expires_at <= row.decided_at:
+            return DEFAULT_STANDING_HOURS
+        hours = round((row.expires_at - row.decided_at).total_seconds() / 3600)
+        return max(1, min(MAX_STANDING_HOURS, int(hours)))
+
+    @staticmethod
+    def lead_hours(granted: int) -> float:
+        return max(float(DEFAULT_RENEW_WITHIN_HOURS), min(float(RENEW_LEAD_MAX_HOURS), granted * RENEW_LEAD_RATIO))
+
+    def renewable(self, company_id: int, *, within_hours: int | None = None) -> list[dict]:
+        """within_hours를 주지 않으면 허용마다 기간에 비례한 시점(lead_hours)부터 알린다."""
+
         now = self._now()
         rows = (
             self.db.query(ExternalCallAllowance)
@@ -419,7 +438,9 @@ class ExternalCallPolicyService:
             hours_left = (row.expires_at - now).total_seconds() / 3600
             if row.expires_at < now - timedelta(days=RENEW_LOOKBACK_DAYS):
                 continue  # 오래전에 끝난 허용은 되살리지 않는다(상태가 아직 ACTIVE로 남아 있어도 같다)
-            if row.status == AllowanceStatus.ACTIVE and hours_left > within_hours:
+            granted = self.granted_hours(row)
+            lead = self.lead_hours(granted) if within_hours is None else float(within_hours)
+            if row.status == AllowanceStatus.ACTIVE and hours_left > lead:
                 continue
             state = "EXPIRING" if hours_left > 0 else "EXPIRED"
             items.append({
@@ -427,19 +448,21 @@ class ExternalCallPolicyService:
                 "purpose_label": CallPurpose.LABELS.get(row.purpose, row.purpose),
                 "system_label": ExternalSystem.LABELS.get(row.system, row.system),
                 "per_hour_limit": int(row.per_hour_limit), "expires_at": row.expires_at.isoformat(),
-                "hours_left": round(hours_left, 1), "state": state,
+                "hours_left": round(hours_left, 1), "state": state, "granted_hours": granted, "lead_hours": round(lead, 1),
             })
         return items
 
     def renew_expiring(
-        self, company_id: int, *, user_id: int | None, within_hours: int = DEFAULT_RENEW_WITHIN_HOURS,
-        hours: int = DEFAULT_STANDING_HOURS,
+        self, company_id: int, *, user_id: int | None, within_hours: int | None = None, hours: int | None = None,
     ) -> list[ExternalCallAllowance]:
+        """hours를 주지 않으면 항목마다 지난번과 같은 기간으로 연장한다(30일로 허용했으면 다시 30일 — 하루짜리로 줄지 않는다)."""
+
         created: list[ExternalCallAllowance] = []
         for item in self.renewable(company_id, within_hours=within_hours):
             created.append(self.grant(
                 company_id, system=item["system"], kind=item["kind"], purpose=item["purpose"], mode=AllowanceMode.STANDING,
-                per_hour_limit=item["per_hour_limit"], hours=hours, reason="만료 임박·만료 허용 일괄 연장", user_id=user_id,
+                per_hour_limit=item["per_hour_limit"], hours=item["granted_hours"] if hours is None else hours,
+                reason="만료 임박·만료 허용 일괄 연장", user_id=user_id,
             ))
         return created
 

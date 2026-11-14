@@ -23,6 +23,7 @@ from app.core.dependency import get_db
 from app.core.exceptions import UnauthorizedException
 from app.core.guard import AdminGuard
 from app.core.recent_auth import consume_recent_auth_token
+from app.domains.external_call.constants import MAX_STANDING_HOURS
 from app.domains.external_call.schema import ApproveRequest
 from app.domains.external_call.schema import GrantRequest
 from app.domains.external_call.service import ExternalCallPolicyService
@@ -54,6 +55,17 @@ def get_summary(current_user: User = Depends(AdminGuard), db: Session = Depends(
     return ExternalCallPolicyService(db).summary(current_user.company_id)
 
 
+@router.get("/autonomy")
+def get_autonomy(current_user: User = Depends(AdminGuard), db: Session = Depends(get_db)):
+    """기능별 자율 단계 표(읽기 전용). 단계를 바꾸지 않는다 — '올리기 후보'도 제안일 뿐이다."""
+
+    from app.domains.external_call.autonomy import AutonomyTableService
+
+    if not ExternalCallPolicyService.installed(db):
+        return {"installed": False, "rows": []}
+    return AutonomyTableService(db).table(current_user.company_id)
+
+
 @router.post("/allowances")
 def grant_allowance(
     data: GrantRequest, current_user: User = Depends(AdminGuard), db: Session = Depends(get_db),
@@ -73,10 +85,13 @@ def grant_allowance(
 
 
 class RenewRequest(BaseModel):
-    """만료 임박·만료 상시 조회 허용을 같은 한도로 일괄 연장한다."""
+    """만료 임박·만료 상시 조회 허용을 같은 한도로 일괄 연장한다.
 
-    within_hours: int = Field(default=12, ge=1, le=168)
-    hours: int = Field(default=24, ge=1, le=72)
+    2026-11-14: 둘 다 비우면 항목마다 기간에 비례한 시점부터 대상이 되고 지난번과 같은 기간으로 연장한다. 기간을 고르면 그 기간(최대 30일 —
+    상시 허용 최대와 같다, 조회만 대상이라 권한이 넓어지지 않는다)."""
+
+    within_hours: int | None = Field(default=None, ge=1, le=168)
+    hours: int | None = Field(default=None, ge=1, le=MAX_STANDING_HOURS)
 
     model_config = ConfigDict(extra="forbid")
 
