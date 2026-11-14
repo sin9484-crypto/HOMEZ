@@ -3,7 +3,8 @@
 
 고정하는 약속
   - 사용자가 확인했을 때만, 월 한도·승인 센터 허용(`AI_ADVICE`)을 거쳐 한 번 호출한다. 허용·한도·설정이 없으면 호출하지 않는다.
-  - 보내는 것은 가린 질문과 질문 9개의 규칙 답(질문 번호·질문 문구·사실 이름·숫자·못 읽음)뿐이다. 상품 이름·화면 주소·키는 가지 않는다.
+  - 보내는 것은 가린 질문과 정해진 질문들의 규칙 답(질문 번호·질문 문구·사실 이름·숫자·못 읽음)뿐이다. 상품 이름·화면 주소·키는 가지 않는다.
+    2026-11-14: 정산 금액(`NOT_SENT_FACTS`)과 지급 예정일도 가지 않는다 — 정산은 건수·남은 날·마지막으로 읽은 뒤 지난 시간만.
   - 숫자는 AI가 만들지 않는다: 답의 숫자가 고른 질문의 규칙 답에 없으면 답 전체를 버린다. 못 읽은 답을 근거로 쓰면 버린다.
   - 답할 수 없다고 하면 AI 글을 쓰지 않고 정해진 안내만. 질문 글과 답은 저장하지 않는다(사용 기록에는 숫자만).
   - 화면: 목록에 없는 문장일 때만 'Claude에게 묻기'가 나오고, 확인 창에 가린 질문을 보여 준 뒤 그 글만 POST로 보낸다.
@@ -32,6 +33,7 @@ from app.domains.external_call.service import ExternalCallPolicyService
 from app.domains.marketplace_listing.ai_draft_service import AiDraftService
 from app.domains.orchestration import assistant_ask_ai_service as ask_mod
 from app.domains.orchestration.assistant_ask_ai_service import FACT_LABEL
+from app.domains.orchestration.assistant_ask_ai_service import NOT_SENT_FACTS
 from app.domains.orchestration.assistant_ask_ai_service import QUESTION_TEXT
 from app.domains.orchestration.assistant_ask_ai_service import AssistantAskAiService
 from app.domains.orchestration.assistant_ask_ai_service import clean_question
@@ -51,7 +53,7 @@ from tests.test_url_analysis_service import FakeClient
 
 
 def rule_answers():
-    """질문 9개의 규칙 답(가짜). 반품은 못 읽은 것으로 둔다."""
+    """정해진 질문들의 규칙 답(가짜). 반품은 못 읽은 것으로 둔다."""
 
     facts = {
         "TODO_FIRST": [{"key": "inquiries_old", "n": 1}, {"key": "invoice", "n": 2}],
@@ -62,6 +64,9 @@ def rule_answers():
         "PRODUCT_DENIED": [{"key": "product_denied", "n": 1}],
         "AI_COST_MONTH": [{"key": "ai_calls", "n": 0}, {"key": "ai_used_krw", "n": 0}, {"key": "ai_limit_none", "n": 0}],
         "DISCOVERY": [{"key": "discovery_review", "n": 2}, {"key": "discovery_evaluate", "n": 0}, {"key": "discovery_new_product", "n": 0}, {"key": "discovery_trend", "n": 0}],
+        "SETTLEMENT": [{"key": "settlement_upcoming", "n": 2}, {"key": "settlement_upcoming_krw", "n": 98765}, {"key": "settlement_next_days", "n": 17},
+                       {"key": "settlement_paid_month", "n": 1}, {"key": "settlement_paid_month_krw", "n": 45678}, {"key": "settlement_checked_hours", "n": 5}],
+        "ORDER_FLOW": [{"key": "new_orders", "n": 0}, {"key": "invoice", "n": 2}, {"key": "shipping", "n": 3}, {"key": "delivered_waiting", "n": 0}, {"key": "returning", "n": 1}],
     }
     out = {}
     for qid, link in QUESTIONS.items():
@@ -73,6 +78,7 @@ def rule_answers():
         out[qid] = res
     out["PRODUCT_DENIED"]["names"] = ["비밀상품 A"]
     out["ORDERS_TODAY"]["since"] = "2026-11-04"
+    out["SETTLEMENT"]["next_date"] = "2026-12-01"
     out["TODO_FIRST"]["unknown_sources"] = ["상품 발굴", "승인 센터", "시스템 점검", "주문·문의"]
     return out
 
@@ -147,8 +153,10 @@ class AskTests(AskBase):
             for fact in record.get("facts", []):
                 self.assertLessEqual(set(fact), {"what", "n"})
         user = self.client.calls[0][1]
-        for word in ("비밀상품", "easy-", "2026-11-04", KEY, "link", "as_of", "names"):
+        for word in ("비밀상품", "easy-", "2026-11-04", KEY, "link", "as_of", "names", "98765", "45678", "2026-12-01", "next_date", "_krw"):
             self.assertNotIn(word, user)
+        settlement = next(r for r in records if r["id"] == "SETTLEMENT")
+        self.assertEqual([f["n"] for f in settlement["facts"]], [2, 17, 1, 5])     # 금액 두 줄은 빠지고 건수·남은 날·지난 시간만
         returns = next(r for r in records if r["id"] == "RETURNS_WEEK")
         self.assertEqual(returns, {"id": "RETURNS_WEEK", "question": QUESTION_TEXT["RETURNS_WEEK"], "unknown": True})
         todo = next(r for r in records if r["id"] == "TODO_FIRST")
@@ -323,7 +331,10 @@ class ValidationTests(unittest.TestCase):
 class CatalogTests(unittest.TestCase):
 
     def test_every_server_fact_and_question_has_a_name_for_the_ai(self):
-        self.assertEqual(set(FACT_LABEL), server_fact_keys())
+        # 서버 사실은 AI 이름이 있거나(보냄) 보내지 않는 목록에 있다 — 둘 다이거나 둘 다 아닌 것은 없다.
+        self.assertEqual(set(FACT_LABEL) | NOT_SENT_FACTS, server_fact_keys())
+        self.assertFalse(set(FACT_LABEL) & NOT_SENT_FACTS)
+        self.assertEqual(NOT_SENT_FACTS, {"settlement_upcoming_krw", "settlement_paid_month_krw"})
         self.assertEqual(list(QUESTION_TEXT), list(QUESTIONS))
         ko = ask_texts("ko-KR")
         for qid, question in QUESTION_TEXT.items():

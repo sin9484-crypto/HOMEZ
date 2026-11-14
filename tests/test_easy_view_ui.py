@@ -56,11 +56,15 @@ DYNAMIC = {
     # 2026-10-27 쿠팡 교환 상태 이름 — 키는 easy.exch.st. + 쿠팡 교환 상태 코드 소문자로 만든다.
     "easy.exch.st.": ["receipt", "progress", "success", "reject", "cancel"],
     # 2026-11-01 비서에게 묻기 — 키는 질문 번호 소문자, 서버 답의 사실 키로 만든다. 서버 목록과의 일치는 test_assistant_qa_stage5가 고정한다.
-    "easy.ask.q_": ["todo_first", "orders_today", "orders_week", "returns_week", "inquiries_open", "approvals", "product_denied", "ai_cost_month", "discovery"],
+    "easy.ask.q_": ["todo_first", "orders_today", "orders_week", "returns_week", "inquiries_open", "approvals", "product_denied", "ai_cost_month", "discovery",
+                    "settlement", "order_flow"],
     "easy.ask.f_": ["inquiries_old", "inquiries", "product_denied", "new_orders", "invoice", "returns", "supplier_returns", "outbound_days", "approvals",
                     "allowances_expired", "allowances_soon", "discovery_review", "discovery_evaluate", "discovery_new_product", "discovery_trend", "system",
                     "orders_today", "orders_week", "returns_week", "returns_open", "returns_no_time", "inquiries_open", "inquiries_oldest_hours",
-                    "inquiries_no_time", "ai_calls", "ai_used_krw", "ai_limit_krw", "ai_limit_none"],
+                    "inquiries_no_time", "ai_calls", "ai_used_krw", "ai_limit_krw", "ai_limit_none",
+                    # 2026-11-14 정산·주문 진행(조사 문서 3-7)
+                    "settlement_upcoming", "settlement_upcoming_krw", "settlement_next_days", "settlement_overdue", "settlement_paid_month",
+                    "settlement_paid_month_krw", "settlement_amount_unknown", "settlement_checked_hours", "shipping", "delivered_waiting", "returning"],
 }
 
 

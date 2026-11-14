@@ -6,6 +6,8 @@
   - '오늘'은 한국 시각 0시부터, '이번 주'는 한국 시각 월요일 0시부터. 시각을 읽을 수 없는 기록은 '시각 모름'으로 따로 센다.
   - 못 읽은 답은 0으로 꾸미지 않고 unknown으로 돌려준다.
   - 화면: 적은 문장은 화면 안에서만 질문 목록과 맞추고, 서버에는 질문 번호만 GET으로 보낸다. 서버 글·이름은 이스케이프한다.
+  - 2026-11-14(조사 문서 3-7 읽기 도구 묶음): 정산(쿠팡 정산 기록의 항목별 최신 상태 — 지급 예정·가장 가까운 지급일·지급일 지났는데 완료
+    아님·이번 달 지급 완료·마지막으로 읽은 뒤 지난 시간, 한 번도 안 읽었으면 못 읽음)과 주문 진행('오늘 할 일' 단계 숫자 그대로).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import subprocess
 import tempfile
 import unittest
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -254,6 +257,86 @@ class CountTests(DbCase):
         return u.id
 
 
+class SettlementAndFlowTests(DbCase):
+    """2026-11-14 — 정산·주문 진행(조사 문서 3-7). 지금 = 2026-11-04(수) 한국 시각 12:00."""
+
+    def settlement(self, key, status, pay_day, fin):
+        self.audit(EVENT_ACTION, f"SETTLEMENT:{key}:{pay_day}", {"k": "SETTLEMENT", "id": key, "st": status, "ty": "WEEKLY", "d": pay_day, "fin": fin})
+
+    def checked(self, hours_ago, outcome="SUCCEEDED", target="settlement"):
+        self.db.add(ExternalCallLog(company_id=A, system="COUPANG", kind="READ", purpose="AFTER_SALES_CHECK", target=target, outcome=outcome,
+                                    created_at=self.now - timedelta(hours=hours_ago, minutes=10)))
+        self.db.commit()
+
+    def test_never_read_settlement_is_unknown_not_zero(self):
+        self.checked(1, outcome="FAILED")
+        self.checked(1, target="returns")
+        result = self.ask("SETTLEMENT")
+        self.assertEqual((result["unknown"], result["facts"]), (True, []))
+        self.assertNotIn("next_date", result)
+
+    def test_settlement_counts_use_the_latest_state_per_item(self):
+        self.checked(9)
+        self.checked(3)
+        self.settlement("2026-10:A", "SUBJECT", "2026-11-02", 7452.4)
+        self.settlement("2026-10:A", "DONE", "2026-11-02", 7452.4)            # 같은 항목은 마지막 상태(지급 완료)만
+        self.settlement("2026-10:B", "SUBJECT", "2026-12-01", 3193)
+        self.settlement("2026-10:C", "SUBJECT", "2026-11-09", None)           # 금액 못 읽음 — 0으로 더하지 않고 따로 센다
+        self.settlement("2026-09:D", "SUBJECT", "2026-11-01", 100)            # 지급일 지났는데 완료로 읽히지 않음
+        self.settlement("2026-09:E", "DONE", "2026-10-20", 999)               # 지난달 지급 — 이번 달에 넣지 않는다
+        self.settlement("2026-09:F", "DONE", "날짜없음", 555)                  # 지급일 못 읽음 — 이번 달에 넣지 않는다
+        self.audit(EVENT_ACTION, "RETURN:1", {"k": "RETURN", "s": "RETURNS_UNCHECKED", "t": "2026-11-03T08:00:00"})
+        result = self.ask("SETTLEMENT")
+        self.assertEqual([f["key"] for f in result["facts"]], [
+            "settlement_upcoming", "settlement_upcoming_krw", "settlement_next_days", "settlement_overdue",
+            "settlement_paid_month", "settlement_paid_month_krw", "settlement_amount_unknown", "settlement_checked_hours"])
+        self.assertEqual(facts(result), {
+            "settlement_upcoming": 3, "settlement_upcoming_krw": 3293, "settlement_next_days": 5, "settlement_overdue": 1,
+            "settlement_paid_month": 1, "settlement_paid_month_krw": 7452, "settlement_amount_unknown": 1, "settlement_checked_hours": 3,
+        })
+        self.assertEqual((result["next_date"], result["link"], result["unknown"]), ("2026-11-09", "easy-money", False))
+
+    def test_a_payout_today_is_zero_days_away_not_overdue_and_quiet_lines_are_left_out(self):
+        self.checked(0)
+        self.settlement("2026-10:A", "SUBJECT", "2026-11-04", 10)
+        self.assertEqual(facts(self.ask("SETTLEMENT")), {
+            "settlement_upcoming": 1, "settlement_upcoming_krw": 10, "settlement_next_days": 0,
+            "settlement_paid_month": 0, "settlement_paid_month_krw": 0, "settlement_checked_hours": 0,
+        })
+
+    def test_any_status_other_than_paid_is_still_waiting_and_an_unreadable_amount_is_not_added(self):
+        self.checked(1)
+        self.settlement("2026-10:A", "PENDING", "2026-11-20", float("nan"))   # 처음 보는 상태도 '지급 완료'가 아니면 지급 전
+        self.settlement("2026-10:B", None, "2026-11-21", "12,000")            # 상태 없음·숫자 아닌 금액
+        self.assertEqual(facts(self.ask("SETTLEMENT")), {
+            "settlement_upcoming": 2, "settlement_upcoming_krw": 0, "settlement_next_days": 16,
+            "settlement_paid_month": 0, "settlement_paid_month_krw": 0, "settlement_amount_unknown": 2, "settlement_checked_hours": 1,
+        })
+
+    def test_records_without_a_read_log_are_still_counted_without_the_age_line(self):
+        self.settlement("2026-10:A", "SUBJECT", "2026-11-20", 10)
+        self.assertNotIn("settlement_checked_hours", facts(self.ask("SETTLEMENT")))
+
+    def test_order_flow_uses_the_today_screen_stage_numbers(self):
+        today = {"pipeline": {"new_orders": 2, "shipping": 4, "settlement": 5, "returning": 1, "prepare": 9}, "invoice_todo": [{"task_id": 1}, {"task_id": 2}, {"task_id": 3}]}
+        with mock.patch.object(EasyViewService, "build_today", return_value=today) as build:
+            result = self.ask("ORDER_FLOW")
+        build.assert_called_once_with(A)
+        self.assertEqual(result["facts"], [
+            {"key": "new_orders", "n": 2}, {"key": "invoice", "n": 3}, {"key": "shipping", "n": 4},
+            {"key": "delivered_waiting", "n": 5}, {"key": "returning", "n": 1}])
+        self.assertEqual(result["link"], "easy-orders")
+
+    def test_order_flow_on_an_empty_shop_is_all_zero(self):
+        self.assertEqual(facts(self.ask("ORDER_FLOW")), {"new_orders": 0, "invoice": 0, "shipping": 0, "delivered_waiting": 0, "returning": 0})
+
+    def test_pay_dates_are_read_or_none(self):
+        self.assertEqual(qa_mod.pay_date("2026-12-01"), datetime(2026, 12, 1).date())
+        self.assertEqual(qa_mod.pay_date("2026-12-01T00:00:00"), datetime(2026, 12, 1).date())
+        for bad in (None, "", "2026-13-01", "12/01"):
+            self.assertIsNone(qa_mod.pay_date(bad))
+
+
 # ---------------------------------------------------------------------------
 # 모름·읽기 전용
 # ---------------------------------------------------------------------------
@@ -362,6 +445,8 @@ class ScreenFunctionTests(unittest.TestCase):
             "이번 주 반품 몇 건?": "RETURNS_WEEK", "오늘 주문 몇개 들어왔어": "ORDERS_TODAY", "이번주 주문은?": "ORDERS_WEEK",
             "오늘 할 일 뭐야": "TODO_FIRST", "승인 대기 있어?": "APPROVALS", "쿠팡 승인 반려된 거": "PRODUCT_DENIED",
             "이번 달 AI 얼마 썼어": "AI_COST_MONTH", "상품 발굴 어디까지": "DISCOVERY", "How many returns this week?": "RETURNS_WEEK",
+            "정산 언제 들어와?": "SETTLEMENT", "다음 지급일": "SETTLEMENT", "배송 어디까지 갔어": "ORDER_FLOW", "송장 넣을 거 있어?": "ORDER_FLOW",
+            "When is the next payout?": "SETTLEMENT",
         }
         for sentence, question_id in cases.items():
             self.assertEqual(self.match(sentence)["exact"], [question_id], sentence)
@@ -386,6 +471,17 @@ class ScreenFunctionTests(unittest.TestCase):
         self.assertIn("const pick = askPick(askMatch(", bind)
         self.assertIn("if (pick.run) { askRun(pick.run, out); return; }", bind)
         self.assertIn("const ids = pick.choose;", bind)
+
+    def test_a_settlement_answer_shows_amounts_the_nearest_payout_date_and_its_age(self):
+        res = {"question_id": "SETTLEMENT", "link": "easy-money", "as_of": "2026-11-04T03:00:00", "unknown": False, "next_date": "<2026-11-09>",
+               "facts": [{"key": "settlement_upcoming_krw", "n": 3293}, {"key": "settlement_checked_hours", "n": 3}]}
+        html = self.run_js(f"askAnswerHtml('SETTLEMENT', {json.dumps(res)})")
+        self.assertIn("정산 지급은 언제?", html)
+        self.assertIn("지급 예정 금액 3,293원", html)
+        self.assertIn("가장 가까운 지급 예정일: &lt;2026-11-09&gt;", html)
+        self.assertIn("3시간 전에 마지막으로 읽었어요", html)
+        self.assertIn('data-ez-ask-go="easy-money"', html)
+        self.assertNotIn("지급 예정일:", self.run_js("askAnswerHtml('ORDER_FLOW', {unknown: false, facts: [{key: 'shipping', n: 1}], as_of: '2026-11-04T03:00:00'})"))
 
     def test_the_answer_lists_each_fact_with_names_period_and_basis_escaped(self):
         res = {"question_id": "PRODUCT_DENIED", "link": "easy-products", "as_of": "2026-11-04T03:00:00", "unknown": False,

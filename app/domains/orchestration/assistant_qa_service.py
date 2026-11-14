@@ -13,6 +13,14 @@ File : app/domains/orchestration/assistant_qa_service.py
   - 못 읽은 답은 0으로 꾸미지 않고 `unknown`으로 돌려준다. 시각을 읽을 수 없는 기록은 '시각 모름'으로 따로 센다.
   - 시각: 주문 시각(`Order.ordered_at`)은 쿠팡이 준 한국 시각 그대로 저장돼 있다. 쿠팡 반품 접수 시각(`t`)도 한국 시각 글자다.
     '오늘'은 한국 시각 0시부터, '이번 주'는 한국 시각 월요일 0시부터.
+
+2026-11-14 — 조사 문서 `docs/research/20261109_AI_FOUNDATIONS_AND_GROWTH.md` 3-7 '운영 비서 2단계는 읽기 도구 묶음부터'(사용자 지시
+"다음 작업 진행해라"). 질문 하나가 겹치지 않는 읽기 도구 하나다. 빠져 있던 **정산**과 **주문 진행(배송)**을 더했다.
+  - 정산(`SETTLEMENT`): 배송 이후 감시가 6시간마다 쿠팡에서 읽어 남긴 정산 기록(`COUPANG_AFTER_SALES_EVENT`, 항목별 최신 상태)만 센다.
+    지급 예정(완료가 아닌 것)·가장 가까운 지급일·지급일이 지났는데 완료로 읽히지 않은 것·이번 달 지급 완료, 그리고 **마지막으로 읽은 뒤
+    지난 시간**을 함께 준다(오래된 기록을 지금 값처럼 보이지 않게). 한 번도 읽은 적이 없으면 0이 아니라 '못 읽음'이다.
+  - 주문 진행(`ORDER_FLOW`): '오늘 할 일'의 단계 숫자(공급처에 넣을 주문·송장 등록·배송 중·배송 끝나 정산 기다림·반품 진행)를 그대로 쓴다.
+  - 재고는 넣지 않았다: 무재고 중개라 우리 재고 수량(`inventory_skus`)은 모두 0이고, 공급처 재고는 저장돼 있지 않다 — 세면 '품절'로 잘못 읽힌다.
 =========================================================
 """
 
@@ -48,6 +56,8 @@ QUESTIONS = {
     "PRODUCT_DENIED": "easy-products",
     "AI_COST_MONTH": "easy-more",
     "DISCOVERY": "easy-analysis",
+    "SETTLEMENT": "easy-money",
+    "ORDER_FLOW": "easy-orders",
 }
 
 
@@ -61,6 +71,39 @@ def kst_wall(value) -> datetime | None:
         return datetime(*(int(x) for x in match.groups()))
     except ValueError:
         return None
+
+
+SETTLEMENT_DONE = "DONE"   # 쿠팡 정산 상태 — 지급 완료. 그 밖(SUBJECT 등)은 아직 지급 전으로 본다.
+
+
+def pay_date(value):
+    """정산 지급일 글자('YYYY-MM-DD…')를 날짜로. 못 읽으면 None."""
+
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(value or ""))
+    if not match:
+        return None
+    try:
+        return datetime(*(int(x) for x in match.groups())).date()
+    except ValueError:
+        return None
+
+
+def _same_month(day, today) -> bool:
+    return day is not None and (day.year, day.month) == (today.year, today.month)
+
+
+def _amount(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None   # NaN은 못 읽은 것
+
+
+def _won(events: list[dict]) -> int:
+    """읽은 금액만 더한다(못 읽은 금액은 0으로 꾸미지 않고 따로 센다)."""
+
+    return int(round(sum(a for a in (_amount(e.get("fin")) for e in events) if a is not None)))
 
 
 class AssistantQaService:
@@ -170,6 +213,56 @@ class AssistantQaService:
         return {"facts": [{"key": f"discovery_{step.lower()}", "n": int(counts.get(step, 0))}
                           for step in (NEXT_REVIEW, NEXT_EVALUATE, NEXT_NEW_PRODUCT, NEXT_TREND)]}
 
+    def _settlement(self, company_id: int, user_id: int) -> dict:
+        from app.domains.easy_view.service import EasyViewService
+        from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+
+        checked = EasyViewService(self.db)._settlement_checked_at(company_id)
+        events = [e for e in AfterSalesMonitorService.latest_events(self.db) if e.get("k") == "SETTLEMENT"]
+        if checked is None and not events:
+            raise LookupError("쿠팡 정산 내역을 아직 읽은 적이 없다")
+        today = self._today_start().date()
+        upcoming = [e for e in events if e.get("st") != SETTLEMENT_DONE]
+        paid_month = [e for e in events if e.get("st") == SETTLEMENT_DONE and _same_month(pay_date(e.get("d")), today)]
+        dates = [d for d in (pay_date(e.get("d")) for e in upcoming) if d is not None]
+        ahead = sorted(d for d in dates if d >= today)
+        facts = [
+            {"key": "settlement_upcoming", "n": len(upcoming)},
+            {"key": "settlement_upcoming_krw", "n": _won(upcoming)},
+        ]
+        if ahead:
+            facts.append({"key": "settlement_next_days", "n": (ahead[0] - today).days})
+        overdue = sum(1 for d in dates if d < today)
+        if overdue:
+            facts.append({"key": "settlement_overdue", "n": overdue})
+        facts += [
+            {"key": "settlement_paid_month", "n": len(paid_month)},
+            {"key": "settlement_paid_month_krw", "n": _won(paid_month)},
+        ]
+        no_amount = sum(1 for e in upcoming + paid_month if _amount(e.get("fin")) is None)
+        if no_amount:
+            facts.append({"key": "settlement_amount_unknown", "n": no_amount})
+        if checked is not None:
+            at = datetime.fromisoformat(str(checked).replace("Z", "+00:00")).replace(tzinfo=None)
+            facts.append({"key": "settlement_checked_hours", "n": max(0, int((self._now() - at).total_seconds() // 3600))})
+        out: dict = {"facts": facts}
+        if ahead:
+            out["next_date"] = ahead[0].isoformat()
+        return out
+
+    def _order_flow(self, company_id: int, user_id: int) -> dict:
+        from app.domains.easy_view.service import EasyViewService
+
+        today = EasyViewService(self.db).build_today(company_id)
+        pipeline = today.get("pipeline") or {}
+        return {"facts": [
+            {"key": "new_orders", "n": int(pipeline.get("new_orders") or 0)},
+            {"key": "invoice", "n": len(today.get("invoice_todo") or [])},
+            {"key": "shipping", "n": int(pipeline.get("shipping") or 0)},
+            {"key": "delivered_waiting", "n": int(pipeline.get("settlement") or 0)},
+            {"key": "returning", "n": int(pipeline.get("returning") or 0)},
+        ]}
+
     # ---------------- 묻기 ----------------
     def answer(self, company_id: int, user_id: int, question_id: str) -> dict:
         """{"question_id", "link", "as_of", "unknown", "facts": [{"key", "n"}], ...} — 쓰지 않는다. 모르는 질문 번호는 KeyError."""
@@ -188,4 +281,4 @@ class AssistantQaService:
         return result
 
 
-__all__ = ["AssistantQaService", "QUESTIONS", "kst_wall"]
+__all__ = ["AssistantQaService", "QUESTIONS", "SETTLEMENT_DONE", "kst_wall", "pay_date"]

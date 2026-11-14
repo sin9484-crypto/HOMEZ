@@ -417,6 +417,8 @@
     { id: "PRODUCT_DENIED", words: [["반려", "거절", "denied", "reject"]] },
     { id: "AI_COST_MONTH", words: [["ai", "claude", "클로드", "인공지능"], ["비용", "금액", "얼마", "사용", "썼", "cost", "spen", "usage"]] },
     { id: "DISCOVERY", words: [["발굴", "후보", "트렌드", "신제품", "discover", "candidate", "trend"]] },
+    { id: "SETTLEMENT", words: [["정산", "지급", "입금", "settle", "payout"]] },
+    { id: "ORDER_FLOW", words: [["배송", "송장", "출고", "진행", "ship", "deliver", "invoice"]] },
   ];
   const ASK_MAX_CHARS = 100;
 
@@ -463,11 +465,12 @@
     (res.names || []).forEach((name) => lines.push(`<li class="ez-muted">${esc(name)}</li>`));
     const body = lines.length ? `<ul>${lines.join("")}</ul>` : `<p style="margin:6px 0 0">${esc(T("easy.ask.nothing"))}</p>`;
     const since = res.since ? `<div class="ez-muted" style="font-size:12.5px;margin-top:4px">${esc(T("easy.ask.since", { d: res.since }))}</div>` : "";
+    const next = res.next_date ? `<div class="ez-muted" style="font-size:12.5px;margin-top:4px">${esc(T("easy.ask.next_date", { d: res.next_date }))}</div>` : "";
     const unread = (res.unknown_sources || []).length ? `<div class="ez-c-orange" style="font-size:12.5px;margin-top:4px">${esc(T("easy.ask.unread", { what: res.unknown_sources.join(", ") }))}</div>` : "";
     const at = parseUtcMs(res.as_of);
     const basis = `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.ask.basis", { at: at === null ? "—" : new Date(at).toLocaleString() }))}</div>`;
     const go = res.link ? `<div style="margin-top:8px"><button type="button" class="ez-btn line sm" data-ez-ask-go="${esc(res.link)}">${esc(T("easy.ask.open"))}</button></div>` : "";
-    return `<div class="ez-card" style="margin-top:12px">${head}${body}${since}${unread}${basis}${go}</div>`;
+    return `<div class="ez-card" style="margin-top:12px">${head}${body}${since}${next}${unread}${basis}${go}</div>`;
   }
 
   async function askRun(id, out) {

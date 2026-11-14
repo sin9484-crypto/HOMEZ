@@ -5,12 +5,13 @@ Homez OS
 File : app/domains/orchestration/assistant_ask_ai_service.py
 
 2026-11-01 — AI 통합 계획 5단계(Claude 부분, 코드만): **비서에게 자유롭게 묻기**. 정해진 질문 목록에 맞지 않는 문장을 사용자가
-"Claude에게 묻기"로 확인했을 때만 AI(Claude)가 답한다. **숫자는 AI가 만들지 않는다** — 서버가 정해진 질문 9개의 답(`AssistantQaService`,
+"Claude에게 묻기"로 확인했을 때만 AI(Claude)가 답한다. **숫자는 AI가 만들지 않는다** — 서버가 정해진 질문들의 답(`AssistantQaService`,
 실제 기록을 규칙으로 센 값)을 먼저 만들고, AI는 그 근거 안에서 어느 답을 쓸지 고르고 문장으로 옮기기만 한다.
 
 보내는 것(허용 목록 — 여기 없는 것은 보낼 길이 없다):
   - 사용자가 적은 질문(100자 이하). 전화번호·이메일·주소·인터넷 주소·긴 번호·라벨 뒤 이름은 보내기 전에 가린다(`mask_personal_info`, 고객 문의 초안과 같은 규칙).
-  - 질문 9개의 규칙 답: 질문 번호·질문 문구·사실 이름·숫자·'못 읽음' 여부. 상품 이름·주문 번호·고객 정보·문의 글은 보내지 않는다.
+  - 질문들의 규칙 답: 질문 번호·질문 문구·사실 이름·숫자·'못 읽음' 여부. 상품 이름·주문 번호·고객 정보·문의 글은 보내지 않는다.
+    2026-11-14: 정산 금액(`NOT_SENT_FACTS`)과 지급 예정일도 보내지 않는다(조사 문서 3-7 — 매출에 해당하는 돈은 사용자 결정 전까지 밖으로 내지 않는다).
 
 호출은 `call_llm` 한 경로(설정 → 월 한도 → 승인 센터 허용 `AI_ADVICE`(횟수형) → 호출 → 사용 기록)로만 나간다.
   - 한계: 승인 센터 목적은 기존 `AI_ADVICE`('AI 설명')를 함께 쓴다(시스템 점검 설명과 같은 선택 — 새 목적은 허용 화면·상수·시험을 함께 바꿔야 한다).
@@ -55,6 +56,8 @@ QUESTION_TEXT = {
     "PRODUCT_DENIED": "쿠팡 승인반려 상품은?",
     "AI_COST_MONTH": "이번 달 AI 사용 금액은?",
     "DISCOVERY": "상품 발굴은 어디까지?",
+    "SETTLEMENT": "정산 지급은 언제?",
+    "ORDER_FLOW": "주문은 어디까지 진행됐나?",
 }
 
 # 사실 키 → 이름(AI에 주는 글 — 화면 `easy.ask.f_*`에서 숫자 자리를 뺀 것). 여기 없는 사실은 보내지 않는다.
@@ -87,7 +90,20 @@ FACT_LABEL = {
     "ai_used_krw": "이번 달 AI 사용 금액(원, 기록된 단가로 계산)",
     "ai_limit_krw": "AI 월 한도(원)",
     "ai_limit_none": "AI 월 한도가 정해지지 않음(숫자 없음)",
+    "settlement_upcoming": "지급 예정인 쿠팡 정산(건)",
+    "settlement_next_days": "가장 가까운 지급 예정일까지 남은 날(일, 0이면 오늘)",
+    "settlement_overdue": "지급일이 지났는데 지급 완료로 읽히지 않은 정산(건)",
+    "settlement_paid_month": "이번 달 지급 완료된 정산(건)",
+    "settlement_amount_unknown": "금액을 읽지 못한 정산(건)",
+    "settlement_checked_hours": "쿠팡 정산 내역을 마지막으로 읽은 뒤 지난 시간(시간)",
+    "shipping": "배송 중인 주문(건)",
+    "delivered_waiting": "배송이 끝나 정산을 기다리는 주문(건)",
+    "returning": "반품이 진행 중인 주문(건)",
 }
+
+# 2026-11-14 — 화면에는 보이지만 AI(Claude)에는 보내지 않는 사실: 정산 금액(매출에 해당하는 돈). 건수·남은 날만 보낸다.
+# 보내려면 사용자 결정이 필요하다(조사 문서 3-7 작업 기록).
+NOT_SENT_FACTS = frozenset({"settlement_upcoming_krw", "settlement_paid_month_krw"})
 
 SYSTEM_PROMPT = (
     "당신은 HOMEZ 앱을 쓰는 한국 판매자(개발자가 아님)의 운영 비서입니다. 판매자가 <question>에 적은 질문에 <records>의 기록만으로 짧게 답합니다.\n"
@@ -240,4 +256,4 @@ class AssistantAskAiService:
         return out
 
 
-__all__ = ["AssistantAskAiService", "build_user_prompt", "clean_question", "records_for_prompt", "validate_answer"]
+__all__ = ["AssistantAskAiService", "NOT_SENT_FACTS", "build_user_prompt", "clean_question", "records_for_prompt", "validate_answer"]
