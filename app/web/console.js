@@ -16091,6 +16091,87 @@
     });
   }
 
+  // 2026-11-14 상세 글에서 속성 뽑기(조사 문서 3-6) — 서버가 돌려준 제안·근거를 표로 그린다. 상태·출처는 정해진 글로만 보인다.
+  const LW_ATTR_STATE = { SAME: ["ok", "lw.attr_state_same"], DIFFERENT: ["warn", "lw.attr_state_different"], EMPTY: ["neutral", "lw.attr_state_empty"], CONFLICT: ["warn", "lw.attr_state_conflict"] };
+  const LW_ATTR_SOURCE = { PASTED: "lw.attr_src_pasted", SUPPLIER_NOTICE: "lw.attr_src_supplier_notice", TITLE: "lw.attr_src_title", OPTIONS: "lw.attr_src_options", DESCRIPTION: "lw.attr_src_description", AI: "lw.attr_src_ai" };
+
+  function lwAttrCount(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  }
+
+  function lwAttrResultHtml(result) {
+    const rows = result && Array.isArray(result.rows) ? result.rows : [];
+    const parts = [];
+    const qc = result && result.quantity_check;
+    if (qc && Array.isArray(qc.text_quantities) && Array.isArray(qc.unit_counts)) {
+      parts.push(`<p class="field-error">${escapeHtml(HomezI18n.t("lw.attr_qty_warn", { text: qc.text_quantities.map(lwAttrCount).join(", "), units: qc.unit_counts.map(lwAttrCount).join(", ") }))}</p>`);
+    }
+    const ai = result && result.ai;
+    if (ai && ai.used) parts.push(`<p class="stat-sub">${escapeHtml(HomezI18n.t("lw.attr_ai_result", { kept: lwAttrCount(ai.kept), refused: Array.isArray(ai.refused) ? ai.refused.length : 0 }))}</p>`);
+    if (!rows.length) {
+      parts.push(`<p class="stat-sub">${escapeHtml(HomezI18n.t("lw.attr_none"))}</p>`);
+      return parts.join("");
+    }
+    const body = rows.map((r) => {
+      const [tone, key] = LW_ATTR_STATE[r.state] || LW_ATTR_STATE.CONFLICT;
+      const suggestions = (Array.isArray(r.suggestions) ? r.suggestions : []).map((s) => {
+        const sources = (Array.isArray(s.sources) ? s.sources : []).filter((x) => LW_ATTR_SOURCE[x]).map((x) => HomezI18n.t(LW_ATTR_SOURCE[x])).join(", ");
+        return `<div class="lw-attr-suggest-row"><span><b>${escapeHtml(String(s.value || ""))}</b>${sources ? ` <small class="stat-sub">(${escapeHtml(sources)})</small>` : ""}<span class="lw-attr-evidence">“${escapeHtml(String(s.evidence || ""))}”</span></span>
+          <button type="button" class="btn btn-ghost btn-sm" data-lw-attr-put="${escapeHtml(String(r.label || ""))}" data-lw-attr-value="${escapeHtml(String(s.value || ""))}">${escapeHtml(HomezI18n.t("lw.attr_put"))}</button></div>`;
+      }).join("");
+      return `<tr><td>${escapeHtml(String(r.label || ""))}</td><td>${r.current ? escapeHtml(String(r.current)) : "—"}</td><td>${suggestions}</td><td><span class="pill ${tone}">${escapeHtml(HomezI18n.t(key))}</span></td></tr>`;
+    }).join("");
+    parts.push(`<div class="lw-attr-table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(HomezI18n.t("lw.attr_col_label"))}</th><th>${escapeHtml(HomezI18n.t("lw.attr_col_now"))}</th><th>${escapeHtml(HomezI18n.t("lw.attr_col_suggest"))}</th><th>${escapeHtml(HomezI18n.t("lw.attr_col_state"))}</th></tr></thead><tbody>${body}</tbody></table></div>`);
+    return parts.join("");
+  }
+
+  function lwAttachAttributeSuggest(host, grid) {
+    host.querySelector("[data-lw-attr-suggest]")?.remove();
+    const wizardId = lwState.wizard && lwState.wizard.id;
+    if (!wizardId) return;
+    const box = document.createElement("details");
+    box.className = "lw-attr-suggest";
+    box.setAttribute("data-lw-attr-suggest", "");
+    box.innerHTML = `<summary>${escapeHtml(HomezI18n.t("lw.attr_title"))}</summary>
+      <p class="stat-sub">${escapeHtml(HomezI18n.t("lw.attr_hint"))}</p>
+      <textarea data-lw-attr-text maxlength="20000" placeholder="${escapeHtml(HomezI18n.t("lw.attr_placeholder"))}"></textarea>
+      <div><button type="button" class="btn btn-ghost btn-sm" data-lw-attr-run>${escapeHtml(HomezI18n.t("lw.attr_run"))}</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-lw-attr-ai>${escapeHtml(HomezI18n.t("lw.attr_ai"))}</button>
+        <small class="stat-sub" data-lw-attr-status></small></div>
+      <div data-lw-attr-result></div>`;
+    grid.before(box);
+    const status = box.querySelector("[data-lw-attr-status]");
+    const resultEl = box.querySelector("[data-lw-attr-result]");
+    const run = async (useAi) => {
+      const inputs = Array.from(grid.querySelectorAll("[data-lw-notice-key]"));
+      if (!inputs.length) { status.textContent = HomezI18n.t("lw.attr_no_fields"); return; }
+      if (useAi && !(await askConfirm(HomezI18n.t("lw.attr_ai_confirm_body"), { title: HomezI18n.t("lw.attr_ai_confirm_title") }))) return;
+      const current = {};
+      inputs.forEach((input) => { current[input.dataset.lwNoticeLabel] = input.value; });
+      status.textContent = HomezI18n.t("common.loading");
+      try {
+        const result = await apiFetch(`/listing-wizards/${wizardId}/attribute-suggestions`, {
+          method: "POST",
+          body: JSON.stringify({ pasted: box.querySelector("[data-lw-attr-text]").value || "", current, use_ai: Boolean(useAi) }),
+        });
+        status.textContent = "";
+        resultEl.innerHTML = lwAttrResultHtml(result);
+        resultEl.querySelectorAll("[data-lw-attr-put]").forEach((btn) => btn.addEventListener("click", () => {
+          const target = inputs.find((input) => input.dataset.lwNoticeLabel === btn.dataset.lwAttrPut);
+          if (!target) return;
+          target.value = btn.dataset.lwAttrValue;
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+          status.textContent = HomezI18n.t("lw.attr_put_done", { label: btn.dataset.lwAttrPut });
+        }));
+      } catch (err) {
+        status.textContent = (err && err.message) || HomezI18n.t("lw.attr_failed");
+      }
+    };
+    box.querySelector("[data-lw-attr-run]").addEventListener("click", () => run(false));
+    box.querySelector("[data-lw-attr-ai]").addEventListener("click", () => run(true));
+  }
+
   function lwRenderNoticeFields(block, definitions, values) {
     const host = block.querySelector("[data-lw-notice-fields]");
     const checkbox = block.querySelector(".lw-policy-notice-confirmed");
@@ -16140,6 +16221,7 @@
       if (lwState.wizard) lwRestoreFulfillmentDraftOptionsAndNotice(block, lwState.wizard.id);
       refresh();
       lwAttachNoticeFillButton(host, grid);
+      lwAttachAttributeSuggest(host, grid);
     };
     host.querySelector("[data-lw-notice-category]")?.addEventListener("change", () => {
       renderGroup();

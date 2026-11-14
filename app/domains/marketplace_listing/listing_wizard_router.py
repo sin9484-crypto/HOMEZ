@@ -717,6 +717,34 @@ def ai_draft_apply(
     )
 
 
+class AttributeSuggestRequest(BaseModel):
+    """2026-11-14 상세 글에서 속성 뽑기(조사 문서 3-6). current = 화면의 고시 칸(라벨 → 지금 값, 저장 전 값 포함)."""
+
+    pasted: str = Field(default="", max_length=20000)
+    current: dict[str, str] = Field(default_factory=dict)
+    use_ai: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.post("/{wizard_id}/attribute-suggestions")
+def attribute_suggestions(
+    wizard_id: int,
+    data: AttributeSuggestRequest,
+    current_user: User = Depends(ListingWizardPermissionGuard(LISTING_WIZARD_EDIT)),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_r2_credential_store),
+):
+    """공급처 글·온채널 고시·상품명·옵션에서 고시 속성 제안과 근거를 돌려준다 — 위저드는 바꾸지 않는다.
+    use_ai=false면 바깥 호출 0. use_ai=true일 때만 월 한도·승인 센터 허용(AI 분석)을 거쳐 AI에 붙여 넣은 글을 보낸다."""
+
+    from app.domains.marketplace_listing.attribute_suggest_service import AttributeSuggestService
+
+    return AttributeSuggestService(db, credential_store).suggest(
+        wizard_id, current_user.company_id, current_user.id, pasted=data.pasted, current=data.current, use_ai=data.use_ai,
+    )
+
+
 class MarketingNamesApplyRequest(BaseModel):
     expected_version: int
     product_name: str | None = None
