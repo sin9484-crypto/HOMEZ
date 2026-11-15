@@ -74,7 +74,7 @@ class EntryPointTests(unittest.TestCase):
         }
         for code, kind in expected.items():
             self.assertEqual(BY_CODE[code].capability_type, kind, code)
-        self.assertEqual(catalog.CAPABILITY_CATALOG_VERSION, "2.4.0")
+        self.assertEqual(catalog.CAPABILITY_CATALOG_VERSION, "2.5.0")
         self.assertTrue(all(c.active for c in AI_CAPABILITY_CATALOG))
 
 
@@ -144,7 +144,11 @@ class HonestRegistrationTests(unittest.TestCase):
         self.assertIn("실제 공급처 호출은 하지 않았다", self.status("SUPPLIER_RECOMMENDATION"))
         self.assertIn("고치지 않고", self.status("PRICING_INVENTORY"))
         image_gaps = " ".join(BY_CODE["IMAGE_PROCESSING"].unimplemented_dependencies)
-        self.assertIn("실제 이미지 생성 API 없음", image_gaps)
+        # 2026-11-15(v2.5.0): '실제 이미지 생성 API 없음'은 Cloudflare·Gemini 연결 코드가 생겨 틀린 문장이 됐다 —
+        # 같은 엄격함으로 지금 사실('호출 검증 없음 … 실제 호출 0회')을 고정한다.
+        self.assertIn("실제 이미지 생성 API 호출 검증 없음", image_gaps)
+        self.assertIn("실제 호출 0회", image_gaps)
+        self.assertNotIn("실제 이미지 생성 API 없음", image_gaps)
         self.assertIn("정책 적합", image_gaps)
 
     def test_unimplemented_parts_are_stated(self):
@@ -152,6 +156,77 @@ class HonestRegistrationTests(unittest.TestCase):
         self.assertIn("제안과 성과를 연결", returns)
         pricing = " ".join(BY_CODE["PRICING_INVENTORY"].unimplemented_dependencies)
         self.assertIn("가격 변경 요청을 만들지 않는다", pricing)
+
+
+class Version250RegistrationTests(unittest.TestCase):
+    """2026-11-15(v2.5.0, 작업 계획서 I6·S5·T6) — 10-23 이후 기능이 제자리에 정직하게 올라갔는지."""
+
+    def entries(self, code):
+        return " | ".join(BY_CODE[code].actual_entry_points)
+
+    def status(self, code):
+        return BY_CODE[code].provider_status
+
+    def gaps(self, code):
+        return " ".join(BY_CODE[code].unimplemented_dependencies)
+
+    def test_new_features_are_registered_where_they_belong(self):
+        expected = {
+            "IMAGE_PROCESSING": ("ai_background_service.py::AiBackgroundService", "cloudflare_image_client.py::CloudflareImageClient",
+                                 "image_ai_service.py::GeminiImageProvider", "concept_preview_service.py::ConceptPreviewService",
+                                 "image_edit_record.py::ImageEditRecordService"),
+            "PRODUCT_DISCOVERY": ("keyword_rule.py::extract_search_keyword", "jobs.py::run_discovery_auto_run_job", "seasonality.py::judge"),
+            "PRODUCT_SELECTION": ("DecisionService.criteria_overview", "confirm_criteria", "preview_candidate", "input_suggestion.py::suggest_inputs"),
+            "CONTENT_GENERATION": ("listing_claim_check.py::check_listing_text", "attribute_extract.py::extract",
+                                   "attribute_suggest_service.py::AttributeSuggestService", "ai_draft_service.py::budget_stage"),
+            "OPERATIONS_COORDINATION": ("morning_brief_service.py::MorningBriefService", "autonomy.py::AutonomyTableService"),
+        }
+        for code, names in expected.items():
+            for name in names:
+                self.assertIn(name, self.entries(code), code)
+
+    def test_no_new_real_call_is_claimed(self):
+        image = self.status("IMAGE_PROCESSING")
+        self.assertIn("둘 다 실제 호출은 0회다", image)
+        self.assertIn("비용 때문에 보류", image)
+        self.assertIn("상품을 다시 그리지 않음", image)
+        self.assertIn("대표(MAIN)에는 쓰지 않고", image)
+        self.assertIn("실제로 그린 배경은 0장", self.gaps("IMAGE_PROCESSING"))
+        self.assertIn("실제 Claude 호출은 아직 0회", self.status("CONTENT_GENERATION"))
+        self.assertIn("관심 키워드 경로는 실제 호출이 아직 0회", self.status("PRODUCT_DISCOVERY"))
+        self.assertIn("8회", self.status("PRODUCT_DISCOVERY"))
+        for code in BY_CODE:
+            for claim in ("Cloudflare 실제 호출 성공", "Gemini 실제 호출 성공", "Claude 실제 호출 성공"):
+                self.assertNotIn(claim, self.status(code), code)
+
+    def test_new_rules_only_warn_or_suggest_and_change_nothing(self):
+        content = self.status("CONTENT_GENERATION")
+        self.assertIn("**경고만**", content)
+        self.assertIn("위저드 필수값을 저절로 채우지 않는다", content)
+        ops = self.status("OPERATIONS_COORDINATION")
+        self.assertIn("**제안만**", ops)
+        self.assertIn("올리는 장치는 없고", ops)
+        self.assertIn("금액은 보내지 않는다", ops)
+        self.assertIn("올리는 장치는 없다", self.gaps("OPERATIONS_COORDINATION"))
+        self.assertIn("평가를 하지 않는다(fail-closed)", self.status("PRODUCT_SELECTION"))
+
+    def test_coupang_writes_are_kept_outside_the_pricing_capability(self):
+        pricing = self.status("PRICING_INVENTORY")
+        self.assertIn("이 역량 밖의 사람 실행 경로", pricing)
+        self.assertIn("저절로 이어지지 않는다", pricing)
+        self.assertIn("판매가 변경은 0회", pricing)
+
+    def test_stale_sentences_were_corrected_not_left_contradicting_the_status(self):
+        self.assertNotIn("아직 등록되지 않음)", self.gaps("PRODUCT_DISCOVERY"))
+        self.assertIn("[해소됨 2026-09-07]", self.gaps("PRODUCT_DISCOVERY"))
+        self.assertIn("③ 실제 호출 검증 완료: TRUE", self.status("PRODUCT_DISCOVERY"))
+        self.assertNotIn("생성형(L2) 컨셉은 아직 없다", self.gaps("IMAGE_PROCESSING"))
+
+    def test_types_still_follow_the_verified_call_rule(self):
+        # 연결 코드만 있고 실제 호출이 검증되지 않은 역량은 유형을 올리지 않는다(PRODUCT_DISCOVERY는 2026-09-07 검증 뒤에 바꿨다).
+        for code in ("IMAGE_PROCESSING", "CONTENT_GENERATION"):
+            self.assertEqual(BY_CODE[code].capability_type, "FAKE_PROVIDER", code)
+            self.assertIsNone(BY_CODE[code].external_provider, code)
 
 
 if __name__ == "__main__":

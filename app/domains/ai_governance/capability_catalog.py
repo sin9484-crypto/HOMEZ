@@ -49,7 +49,7 @@ from app.domains.ai_governance.constants import AutomationLevel
 from app.domains.ai_governance.constants import CapabilityCode
 from app.domains.ai_governance.constants import CapabilityType
 
-CAPABILITY_CATALOG_VERSION = "2.4.0"
+CAPABILITY_CATALOG_VERSION = "2.5.0"
 # 2.1.0(2026-09-07): PRODUCT_DISCOVERY의 forbidden_operations에서
 # "실제 외부 트렌드 API 호출"을 해제(NaverDataLabTrendAdapter 정식
 # 승인, CapabilityType.EXTERNAL_DATA_PROVIDER 신규 추가).
@@ -68,6 +68,12 @@ CAPABILITY_CATALOG_VERSION = "2.4.0"
 # 2.4.0(2026-10-23, 자율 제작 라운드): 이번 라운드에 만든 기능을 기존 역량에 **기록만** 했다 — 새 역량 코드·새 호출 문턱·유형 변경 없음(13개 그대로).
 # IMAGE_PROCESSING(참고 사진 생성 R1·R3a, 일괄 보정 R2, 컨셉별 독립 작업·장면 배경·추천 I2·I3), SUPPLIER_RECOMMENDATION(공급 조건 평가 S3),
 # PRICING_INVENTORY(주문 마진 점검 P2), ORDER_SHIPMENT_RETURN(고객 응대 답변 초안 P3·반품 손익 계산). 실제 AI·실제 이미지 생성 API 호출은 한 번도 하지 않았다.
+# 2.5.0(2026-11-15, 작업 계획서 I6·S5·T6): 10-23 이후에 만든 기능을 기존 역량에 **기록만** 했다 — 새 역량 코드·새 호출 문턱·유형 변경 없음(13개 그대로).
+# IMAGE_PROCESSING(Gemini 연결 코드 — 비용 때문에 보류, Cloudflare AI 배경, 샘플 보고 고르기, 이미지 편집 기록), PRODUCT_DISCOVERY(상품 발굴 자동 실행·검색어 규칙·계절 보정),
+# PRODUCT_SELECTION(판매 판단 평가 기준·미리 보기·평가 입력 제안), CONTENT_GENERATION(상세 글 속성 뽑기·주장 점검기), OPERATIONS_COORDINATION(아침 브리핑·기능별 자율 단계 표·AI 월 한도 알림),
+# PRICING_INVENTORY(쿠팡 재고·판매가 쓰기는 이 역량 밖의 사람 실행 경로라는 구분). 시간이 지나 틀린 문장이 된 두 곳을 사실대로 고쳤다:
+# IMAGE_PROCESSING의 '실제 이미지 생성 API 없음'(이제 연결 코드는 있고 실제 호출이 0회다), PRODUCT_DISCOVERY의 '키 아직 등록 안 됨'(2026-09-07에 첫 실제 호출 성공).
+# 유형은 실제 호출이 검증되고 사용자가 승인할 때 바꾼다(PRODUCT_DISCOVERY가 2026-09-07에 바꾼 방식) — 2026-11-15 운영 DB 기준 Claude·Gemini·Cloudflare 호출 0회.
 
 
 @dataclass(frozen=True)
@@ -191,7 +197,14 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "쪽에 실제 검색 데이터가 없어 그 특정 호출은 NO_SIGNAL — "
             "이는 결함이 아니라 fail-closed가 의도대로 동작한 것, "
             "동일 키워드로 raw HTTP 호출도 data:[]로 동일하게 재현해 "
-            "원인 확정). 사용량 카운터도 실제 호출마다 정상 증가 확인."
+            "원인 확정). 사용량 카운터도 실제 호출마다 정상 증가 확인. "
+            "2026-11-15 등록(v2.5.0): 앱 경로(승인 센터 허용 '검색어 트렌드 조회')의 실제 호출은 2026-11-02~11-15에 8회, 모두 HTTP 200이다 — "
+            "사용자가 화면에서 누른 1회와 상품 발굴 자동 실행(하루 한 번, 기본 꺼짐) 7회이고, 검색어는 모두 후보 상품명에서 나온 것이다. "
+            "검색어 규칙(keyword_rule)은 상품명에서 괄호·상품코드·용량·수량·판촉 문구·색상(적혀 있으면 브랜드)만 지우고 핵심 단어는 고르지 않는다 — "
+            "단어가 많으면 줄여 달라고 알리고, 자동 실행은 긴 이름을 건너뛴다(AI 없음). "
+            "자료가 3개 미만이면 점수를 저장하지 않고 '모름'으로 둔다(0점으로 저장하던 결함은 2026-11-02에 고침). "
+            "계절 보정(seasonality)은 사람이 넣은 관심 키워드의 2년 추이를 작년 같은 때와 날짜로 맞춰 비교해 '계절'·'새 움직임'·'작년과 비슷' 등으로 가르는 AI 없는 계산이다 — "
+            "관심 키워드 경로는 실제 호출이 아직 0회라 계절 판정은 실제 자료로 한 번도 돌지 않았다."
         ),
         actual_entry_points=(
             "app/domains/trend_discovery/adapter.py::"
@@ -202,13 +215,15 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "(ProductCandidate 연결 지점)",
             "app/domains/trend_discovery/adapter.py::"
             "FixtureTrendAdapter.fetch() (테스트 전용)",
+            "app/domains/trend_discovery/keyword_rule.py::extract_search_keyword() (상품명 → 검색어 규칙, AI 없음)",
+            "app/domains/scheduler/jobs.py::run_discovery_auto_run_job() (상품 발굴 자동 실행 — 하루 한 번, 기본 꺼짐, 허용 안에서만)",
+            "app/domains/trend_discovery/seasonality.py::judge() (계절 보정 — 작년 같은 때와 비교, 순수 계산)",
         ),
         unimplemented_dependencies=(
-            "사용자의 NAVER Cloud Platform API HUB 콘솔 발급 Client "
-            "ID/Secret 실등록 및 최소 1회 실 호출 검증(등록 화면은 "
-            "구현 완료: POST /product-candidates/system/"
-            "naver-datalab-credential — Client ID/Secret은 이미 "
-            "발급 완료됐으나 2026-09-07 현재 아직 등록되지 않음)",
+            "[해소됨 2026-09-07] Client ID/Secret 등록과 첫 실제 호출(위 ③) — 2026-11-15에 '아직 등록되지 않음'이던 옛 문장을 고침",
+            "관심 키워드(D3) 경로와 계절 보정의 2년 기간 조회는 실제 호출 검증이 없다(2026-11-15 기준 0회)",
+            "계절 판정 기준 숫자(오름 30%·작년의 1.5배·0.67배)는 사용자 확정 전 초안이다",
+            "후보 상품명이 길거나 자료가 적으면 검색어 추이를 얻지 못한다 — 그 후보는 '모름'으로 남는다",
         ),
         implementation_reference=(
             "2026-09-07 후속 갱신 — 사용자가 실제로 발급받은 키가 "
@@ -335,7 +350,10 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "NO_REAL_PROVIDER — evaluator_kind=deterministic만 구현, "
             "DecisionEvaluatorProtocol(실 LLM용)은 정의만 되어 있고 미연결. "
             "2026-10-19 등록: 후보 화면의 같은 상품 판별·중복 알림(S1)과 사전 평가(S2: 후보 가능/보류/제외 권고)는 AI 없는 규칙(RULE_ENGINE)이며 "
-            "읽기 전용 권고일 뿐 후보의 상태·점수를 바꾸지 않는다. 마진 분석 스냅샷이 없으면 '후보 가능'이 될 수 없다."
+            "읽기 전용 권고일 뿐 후보의 상태·점수를 바꾸지 않는다. 마진 분석 스냅샷이 없으면 '후보 가능'이 될 수 없다. "
+            "2026-11-15 등록(v2.5.0, 10-29~10-30에 만든 것): 판매 판단 '평가 기준' 화면(보기·고치기·확정)과 '평가하기'(저장 없는 미리 보기 → 확인 후 기록), "
+            "평가 입력 자동 제안(후보 사전 평가 결과와 등록 위저드의 마진 계산을 정해진 표로 입력 숫자로 옮겨 보여 주기만 함 — 저장하지 않고, 근거가 없는 칸은 비워 둠)이 있다 — 모두 AI 없는 규칙이다. "
+            "평가 기준(D1) 숫자는 사용자 확정 전 초안이고 운영 DB에는 평가 기준·평가 기록이 0건이라 지금은 평가를 하지 않는다(fail-closed)."
         ),
         actual_entry_points=(
             "app/domains/decision/service.py::"
@@ -345,8 +363,11 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/product_candidate/candidate_evaluation.py::evaluate() (후보 사전 평가 규칙 — 상품 서칭 AI S2)",
             "app/domains/product_candidate/candidate_evaluation_service.py::CandidateEvaluationService.evaluate_all() (GET /product-candidates/evaluations)",
             "app/domains/product_candidate/candidate_similarity_service.py::CandidateSimilarityService.similar_to() / families() (같은 상품 판별 — S1)",
+            "app/domains/decision/service.py::DecisionService.criteria_overview() / confirm_criteria() / preview_candidate() (평가 기준 보기·확정, 저장 없는 미리 보기)",
+            "app/domains/decision/input_suggestion.py::suggest_inputs() / wizard_margin() (평가 입력 자동 제안, 규칙)",
         ),
         unimplemented_dependencies=(
+            "평가 기준(D1) 확정은 사용자 몫 — 확정 전에는 평가하지 않는다(2026-11-15 운영 DB 0건)",
             "DecisionEvaluatorProtocol 실 LLM 연동 미구현",
             "재판매 권리 도메인 자체가 아직 없음(product_selection이 "
             "항상 DATA_REQUIRED로 정직하게 표시)",
@@ -448,11 +469,22 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "(월 한도·승인 센터 허용 AI_DRAFT·사용 기록), 상품명 후보 3개·새 검색어 10개를 항목별로 검증(입력에 없던 숫자·효능·홍보·원산지 표현, "
             "옵션 값 반복, 단어 도배, 금지 품목)해 통과한 것만 보여 주고 사용자가 고른 것만 3단계 초안에 저장한다(서버가 적용 때 다시 검증). "
             "시장 신호는 후보에 이미 저장된 네이버 검색 관심도 점수(상대값, 쿠팡 검색량 아님)뿐이다. "
-            "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만)."
+            "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). "
+            "2026-11-15 등록(v2.5.0): 상세 주장 점검기(2026-11-09)는 AI 초안과 사람이 쓴 글을 같은 규칙으로 보고 의료·효능, 절대 표현, 인증·시험 표현, "
+            "공급처 근거에 없는 숫자를 사전검사에 **경고만** 한다(차단 없음, 표현 목록은 초안). "
+            "상세 글 속성 뽑기(2026-11-14)는 공급처 글·온채널 고시·상품명·옵션에서 제조국·소재·치수·용량·제조자·색상·구성 수량을 근거 문장과 함께 규칙으로 뽑아 "
+            "지금 값과 나란히 보여 준다 — '넣기'는 사람이 누를 때만이고 위저드 필수값을 저절로 채우지 않는다. 'AI로 더 뽑기'는 사용자가 고를 때만 같은 LLM 경로"
+            "(월 한도·승인 센터 허용 AI_ANALYSIS·사용 기록)를 타고, AI가 낸 값은 붙여 넣은 글에 그대로 있는 것만 남긴다. 이것도 실제 Claude 호출은 아직 0회다. "
+            "2026-11-15부터 AI 결과의 사용량 줄에 이번 달 월 한도의 50·80·100% 알림이 붙는다(막는 규칙은 그대로). "
+            "첫 실제 호출 전 점검(2026-11-02): 5세대 모델의 생각 몫·응답 잘림·거절을 처리하고, 요금이 든 호출을 사용 기록에 넣는다."
         ),
         actual_entry_points=(
             "app/domains/marketplace_listing/candidate_pipeline_service.py::"
             "CandidatePipelineService.start_pipeline()",
+            "app/domains/marketplace_listing/listing_claim_check.py::check_listing_text() (상세 주장 점검기 — 사전검사 경고만, 규칙)",
+            "app/domains/marketplace_listing/attribute_extract.py::extract() / compare() / quantity_check() (상세 글 속성 뽑기 — 규칙)",
+            "app/domains/marketplace_listing/attribute_suggest_service.py::AttributeSuggestService.suggest() (위저드 속성 제안 — 'AI로 더 뽑기'는 사용자가 고를 때만)",
+            "app/domains/marketplace_listing/ai_draft_service.py::budget_stage() (월 한도 50·80·100% 단계, 계산)",
             "app/domains/marketplace_listing/ai_draft_service.py::"
             "AiDraftService.propose()/apply() (위저드 /ai-draft/* 엔드포인트)",
             "app/domains/marketplace_listing/marketing_name_service.py::"
@@ -463,6 +495,8 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "허위 효능/인증/원산지 방지는 run_content_policy_checklist()"
             "가 별도 담당 — 이 capability 자체는 문구 생성만 수행",
             "2026-11-09 주장 점검기(listing_claim_check, 사전검사 경고만)의 표현 목록은 사용자 확정 전 초안이다(RULES_CONFIRMED=False)",
+            "상세 이미지 속 글자는 읽지 못한다 — 속성 뽑기는 사람이 옮겨 붙인 글만 본다(2026-11-14)",
+            "속성 비교(product_attribute_match)의 공급처 값은 뽑은 속성으로 자동 채우지 않는다 — 근거 확인 절차를 바꾸는 일이라 보류",
         ),
         implementation_reference=(
             "app/domains/marketplace_listing/draft_content_provider.py::"
@@ -486,6 +520,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "Fake 이미지 생성", "배경 제거 시연",
             "로컬 Pillow 합성(컨셉 배경·장면 질감·조명, 제품 픽셀 그대로)", "일괄 밝기·색온도 보정(새 파생 자산)",
             "참고 사진 기반 생성 계획·요청 변환(Fake 제공자까지만)",
+            "AI 배경 그리기 요청(Cloudflare 무료 범위, 상품 없는 장면만, 새 배경마다 허용 1회 — 2026-11-10 사용자 결정)",
         ),
         forbidden_operations=(
             "실제 유료 이미지 생성 API 호출",
@@ -533,7 +568,15 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "②일괄 밝기·색온도 보정은 AI 없는 Pillow 계산이며 원본은 그대로 두고 새 파생 자산을 만든다. "
             "③컨셉별 독립 작업은 로컬 합성(배경 단색·그라데이션·질감·조명)으로 제품 픽셀을 다시 그리지 않고, 컨셉마다 검사(제품 보존·배경 대비·대표 규격)를 숫자로 돌려 "
             "FAIL이면 저장하지 않는다. 정책 적합 검사(POLICY_FLAGS)는 하지 못하므로 NOT_CHECKED로 그대로 보인다. "
-            "쿠팡의 AI 생성 이미지·대표 이미지 정책 확인은 아직 못 했다(🔴 미확인)."
+            "쿠팡의 AI 생성 이미지·대표 이미지 정책 확인은 아직 못 했다(🔴 미확인). "
+            "2026-11-15 등록(v2.5.0) — 실제 이미지 생성 API 연결 코드가 두 개 생겼지만 둘 다 실제 호출은 0회다(운영 DB 바깥 호출 기록에 GEMINI·CLOUDFLARE 없음): "
+            "④Gemini(2026-10-25) 참고 사진 이미지 생성 연결 코드는 비용 때문에 보류다 — 요청하면 거절하고 화면에 연결하지 않았다(사용자 결정). "
+            "⑤Cloudflare Workers AI 'AI 배경'(2026-11-10, 사용자 결정)은 상품 없는 배경 장면만 그리게 하고 실제 누끼는 PC에서 붙인다(상품을 다시 그리지 않음). "
+            "보내는 것은 코드가 정한 장면 글뿐이고 상품 사진·상품명·회사 정보는 보내지 않는다. 새 배경 한 장마다 승인 센터 허용(CLOUDFLARE/AI_BACKGROUND, 횟수형) 1회, "
+            "긴급 중지·무료 한도(하루 10,000 뉴런)면 멈추고, 그린 배경은 회사별로 다시 쓴다(호출 0). 대표(MAIN)에는 쓰지 않고 글자 섞임·정책 적합은 NOT_CHECKED로 보인다. "
+            "⑥샘플 보고 고르기(2026-11-11)는 PC 안 합성 축소본만 메모리에서 만든다(저장·바깥 호출 0, 그린 배경이 없으면 '아직 그린 배경 없음'). "
+            "⑦이미지 편집 기록(2026-11-13)은 이미 남은 처리 기록만 읽어 사진마다 원본까지의 단계(나눈 조각·배경 지움·배경 교체·장면 합성·AI 배경 등)를 보여 주고, "
+            "사전검사에 경고 3종(AI 생성 포함·대표가 연출 사진·기록 없음)을 낸다 — 막지 않는다. 운영 DB 사진 136장 모두 분류됐고 AI 생성은 0장이다(2026-11-13)."
         ),
         actual_entry_points=(
             "app/domains/media_asset/job_queue_service.py::"
@@ -542,15 +585,22 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/media_asset/batch_adjust_service.py::BatchAdjustService.adjust() (POST /media-assets/batch-adjust — AI 없음)",
             "app/domains/media_asset/concept_run_service.py::ConceptRunService.run() (POST /media-assets/concept-runs — 로컬 합성·검사, AI 없음)",
             "app/domains/media_asset/concept_recommendation.py::recommend() (GET /media-assets/concept-recommendations — 규칙, AI 없음)",
+            "app/domains/media_asset/ai_background_service.py::AiBackgroundService.run() (/ai-background — Cloudflare 배경만, 허용 1회씩, 실제 호출 0회)",
+            "app/domains/media_asset/cloudflare_image_client.py::CloudflareImageClient (Cloudflare Workers AI 호출 계약)",
+            "app/domains/media_asset/image_ai_service.py::GeminiImageProvider (Gemini 연결 코드 — 비용 때문에 보류, 요청 거절)",
+            "app/domains/media_asset/concept_preview_service.py::ConceptPreviewService.previews() (샘플 보고 고르기 — PC 합성, 저장 없음)",
+            "app/domains/media_asset/image_edit_record.py::ImageEditRecordService.records() (GET /media-assets/owners/{type}/{id}/edit-records — 편집 기록, 읽기 전용)",
         ),
         unimplemented_dependencies=(
-            "실제 이미지 생성 API 없음",
-            "생성형(L2) 컨셉은 아직 없다 — 로컬 합성(L0·L1)만 있다",
+            "실제 이미지 생성 API 호출 검증 없음 — Cloudflare(AI 배경)·Gemini(비용 보류) 연결 코드는 있으나 2026-11-15 기준 실제 호출 0회",
+            "생성형(L2) 컨셉 6종(AI 배경)은 코드만 있고 실제로 그린 배경은 0장이다 — 결과 크기·형식·오류 코드는 첫 실제 호출 때 처음 확인한다",
             "정책 적합(쿠팡 이미지 규정) 자동 검사 불가 — 사람이 확인해야 한다",
         ),
         implementation_reference=(
             "app/domains/media_asset/providers.py::FakeImageGenerationProvider / "
-            "DisabledImageGenerationProvider(실제 Provider 미연결 시 fail-closed)"
+            "DisabledImageGenerationProvider(실제 Provider 미연결 시 fail-closed); "
+            "app/domains/media_asset/ai_background_service.py + cloudflare_image_client.py(AI 배경, 실제 호출 0회); "
+            "app/domains/media_asset/image_ai_service.py + gemini_image_client.py(비용 보류 — reference_generation.HELD_PROVIDER_CODES)"
         ),
     ),
     CapabilityContract(
@@ -731,7 +781,10 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "모르는 값이 있으면 가격을 만들지 않는다. 가격은 바꾸지 않는다 — 변경은 기존 가격 변경 요청→승인 경로로만. "
             "실제 API 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). "
             "2026-10-23 등록(상품 관리 AI P2): 주문 마진 점검은 진행 중 매입 작업의 판매가·매입가로 마진을 다시 계산해 하한 아래 건을 보여 준다 — AI 없는 읽기 전용 계산이며 "
-            "저장된 마진과 다르면 고치지 않고 '불일치'로만 알린다. 가격은 바꾸지 않는다."
+            "저장된 마진과 다르면 고치지 않고 '불일치'로만 알린다. 가격은 바꾸지 않는다. "
+            "2026-11-15 등록(v2.5.0, 구분만): 쿠팡 재고 수량·옵션 판매가 변경(2026-10-24~25, 쿠팡 쓰기 1·2번)은 이 역량 밖의 사람 실행 경로다 — "
+            "사람이 미리보기를 보고 누르고 승인 센터 횟수 허용을 줄 때만 나가며, 이 역량의 제안(가격 전략·재고 제안)이 그쪽으로 저절로 이어지지 않는다. "
+            "운영 DB 기준 실제 쿠팡 쓰기는 재고 수량 변경 2회(2026-10-29, 사용자 승인)뿐이고 판매가 변경은 0회다."
         ),
         actual_entry_points=(
             "app/domains/pricing/price_advisory_service.py::"
@@ -1030,7 +1083,13 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "실제 Claude 호출은 아직 하지 않았다(가짜 전송 시험과 격리 서버 화면 시험만). "
             "2026-11-01 등록: '비서에게 묻기'는 정해진 질문(2026-11-14부터 11개 — 정산·주문 진행을 더함, 정산 금액은 AI에 보내지 않음)에 실제 기록을 규칙으로 센 답(AI 없음)이고, 목록에 없는 문장은 사용자가 확인할 때만 "
             "AI(Claude)에 질문(개인정보로 보이는 것은 가림)과 그 규칙 답(질문·항목 이름·숫자만)을 보내 문장으로 답하게 한다(월 한도·승인 센터 허용 AI_ADVICE·사용 기록, "
-            "답에 규칙 답에 없는 숫자가 있거나 대신 해 준다는 약속이 있으면 버림, 질문·답 저장 없음). 이것도 실제 Claude 호출은 아직 0회다. 단순 Dashboard 조회(orchestration."
+            "답에 규칙 답에 없는 숫자가 있거나 대신 해 준다는 약속이 있으면 버림, 질문·답 저장 없음). 이것도 실제 Claude 호출은 아직 0회다. "
+            "2026-11-15 등록(v2.5.0): 아침 브리핑(2026-11-01)은 정해진 시간에 오늘 할 일·이상을 규칙으로 묶어 앱 안 알림으로 보낸다(하루 한 번, 같은 날 두 번 보내지 않음). "
+            "이메일로도 보낼 수 있지만(사용자 결정 D5) 메일 설정이 갖춰져야 나간다 — 2026-11-15 운영 DB에는 보낸 기록이 없고 건너뜀 기록만 있다. "
+            "기능별 자율 단계 표(2026-11-14)는 바깥 서비스를 부르는 기능마다 지금 단계(보기·제안·준비·정해진 범위 자동)와 최근 기록을 보여 주고 올리기·내리기를 **제안만** 한다 — "
+            "올리는 장치는 없고, 돈·고객 글·쿠팡 재심사는 후보로도 올리지 않으며 AI는 제안 단계에 머문다. "
+            "운영 상태 점검에 AI 월 한도 항목(AI_BUDGET, 2026-11-15)이 있다 — 점검하는 사람의 한도 기준 50·80·100% 단계, 사람을 모르는 곳(아침 브리핑·AI 원인 설명)에서는 '모름', "
+            "AI 원인 설명에는 비율만 보내고 금액은 보내지 않는다. 단순 Dashboard 조회(orchestration."
             "dashboard_service.get_summary)는 여전히 사람이 언제든 볼 "
             "수 있는 화면으로, 이 capability와 연결되어 있지 않다"
             "(AG-0에서 되돌린 상태 유지 — 완전히 별개의 화면·경로)."
@@ -1049,9 +1108,12 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/orchestration/assistant_ask_ai_service.py::AssistantAskAiService.ask() (POST /orchestration/assistant/ask-ai — 자유 질문, 사용자가 확인할 때만)",
             "app/domains/product_candidate/release_date_fill_service.py::ReleaseDateFillService.run() (POST /product-candidates/fill-release-dates — 사용자 결정 D4, 온채널 등록일을 출시일로, AI 없음)",
             "app/domains/trend_discovery/keyword_watch_service.py::TrendKeywordService.lookup() (POST /product-candidates/trend-keywords/lookup — 사용자 결정 D3, 사람이 입력한 키워드의 검색어 추이, AI 없음)",
+            "app/domains/orchestration/morning_brief_service.py::MorningBriefService.build() / run() (아침 브리핑 — 앱 안 알림·이메일, 규칙)",
+            "app/domains/external_call/autonomy.py::AutonomyTableService.table() (기능별 자율 단계 표 — 제안만, 아무것도 바꾸지 않음)",
         ),
         unimplemented_dependencies=(
             "AI 업무 제안 UI 미연결",
+            "자율 단계 '올리기'는 제안뿐이고 실제로 올리는 장치는 없다(사용자가 정한다 — 2026-11-14)",
             "상품 선별(product discovery)·수익성 계산 관련 지표는 "
             "아직 이 집계에 포함되지 않음",
         ),
