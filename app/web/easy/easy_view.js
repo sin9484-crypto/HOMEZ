@@ -295,7 +295,7 @@
   // 자동 확인이 멈춘 건 아닌지"를 한 장에 모은다. 서버 시각 값은 UTC라 시간대 표기가 없으면 UTC로 읽는다.
   const BRIEF_DETECT_MIN_MINUTES = 30;       // 주문 자동 감지(5분 주기) — 이보다 오래 성공 기록이 없으면 점검 대상(주기의 3배와 비교해 큰 쪽)
   const BRIEF_PSTATUS_STALE_MINUTES = 90;    // 쿠팡 상품 상태 확인(30분 주기) — 아직 승인되지 않은 상품이 있을 때만
-  const BRIEF_SYS_KEYS = { SCHEDULER_NOT_RUNNING: "easy.brief.sys_scheduler", JOBS_MISSING: "easy.brief.sys_jobs_missing", JOBS_PAUSED: "easy.brief.sys_jobs_paused", JOBS_OVERDUE: "easy.brief.sys_jobs_overdue", BACKUP_NONE: "easy.brief.sys_backup_none", BACKUP_STALE: "easy.brief.sys_backup_stale", BACKUP_OLD: "easy.brief.sys_backup_old", REHEARSAL_FAILED: "easy.brief.sys_rehearsal_failed", REHEARSAL_STALE: "easy.brief.sys_rehearsal_stale", DISK_LOW: "easy.brief.sys_disk_low", DISK_CRITICAL: "easy.brief.sys_disk_critical", ESTOP_ACTIVE: "easy.brief.sys_estop", DETECTION_NEEDS_ALLOWANCE: "easy.brief.sys_det_allowance", DETECTION_ERROR: "easy.brief.sys_det_error", DETECTION_PAUSED: "easy.brief.sys_det_paused", DETECTION_FAILING: "easy.brief.sys_det_failing", DETECTION_BLOCKED: "easy.brief.sys_det_blocked", DETECTION_ENV_BLOCKED: "easy.brief.sys_det_env", DETECTION_STALE: "easy.brief.sys_det_stale", READS_ALLOWANCE_LAPSED: "easy.brief.sys_reads_lapsed", LINKS_ON_REPLACED_CONNECTION: "easy.brief.sys_links_replaced" };
+  const BRIEF_SYS_KEYS = { SCHEDULER_NOT_RUNNING: "easy.brief.sys_scheduler", JOBS_MISSING: "easy.brief.sys_jobs_missing", JOBS_PAUSED: "easy.brief.sys_jobs_paused", JOBS_OVERDUE: "easy.brief.sys_jobs_overdue", BACKUP_NONE: "easy.brief.sys_backup_none", BACKUP_STALE: "easy.brief.sys_backup_stale", BACKUP_OLD: "easy.brief.sys_backup_old", REHEARSAL_FAILED: "easy.brief.sys_rehearsal_failed", REHEARSAL_STALE: "easy.brief.sys_rehearsal_stale", DISK_LOW: "easy.brief.sys_disk_low", DISK_CRITICAL: "easy.brief.sys_disk_critical", ESTOP_ACTIVE: "easy.brief.sys_estop", DETECTION_NEEDS_ALLOWANCE: "easy.brief.sys_det_allowance", DETECTION_ERROR: "easy.brief.sys_det_error", DETECTION_PAUSED: "easy.brief.sys_det_paused", DETECTION_FAILING: "easy.brief.sys_det_failing", DETECTION_BLOCKED: "easy.brief.sys_det_blocked", DETECTION_ENV_BLOCKED: "easy.brief.sys_det_env", DETECTION_STALE: "easy.brief.sys_det_stale", READS_ALLOWANCE_LAPSED: "easy.brief.sys_reads_lapsed", LINKS_ON_REPLACED_CONNECTION: "easy.brief.sys_links_replaced", AI_BUDGET_HIGH: "easy.brief.sys_ai_budget_high", AI_BUDGET_REACHED: "easy.brief.sys_ai_budget_reached" };
   const BRIEF_STALL_KEYS = { detect: "easy.brief.st_detect", pstatus: "easy.brief.st_pstatus", settle: "easy.brief.st_settle" };  // 문구 키를 글자 그대로 둔다(쓰지 않는 문구 점검이 찾을 수 있게)
   // 2026-10-31 운영 비서 1단계(AI 통합 계획 4단계): 24시간은 문의 화면의 INQ_OLD_HOURS와 같은 HOMEZ의 '오래됨' 기준일 뿐 쿠팡 기한이 아니다.
   const BRIEF_OLD_INQUIRY_HOURS = 24;
@@ -372,7 +372,7 @@
   function briefSysText(c) {
     const p = (c && c.params) || {};
     const val = (v) => (v === undefined || v === null ? "…" : v);  // 값이 없으면 "undefined" 대신 "…"
-    return T(BRIEF_SYS_KEYS[c.code], { jobs: Array.isArray(p.jobs) ? p.jobs.length : "…", days: val(p.days), mb: val(p.free_mb), m: val(p.minutes), n: val(p.links), what: Array.isArray(p.purposes) ? p.purposes.map((x) => T(`easy.brief.reads_${String(x).toLowerCase()}`)).join(", ") : "…" });
+    return T(BRIEF_SYS_KEYS[c.code], { jobs: Array.isArray(p.jobs) ? p.jobs.length : "…", days: val(p.days), mb: val(p.free_mb), m: val(p.minutes), n: val(p.links), pct: val(p.pct), what: Array.isArray(p.purposes) ? p.purposes.map((x) => T(`easy.brief.reads_${String(x).toLowerCase()}`)).join(", ") : "…" });
   }
 
   function briefingHtml(b) {
@@ -504,8 +504,14 @@
     return value.slice(0, ASK_MAX_CHARS);
   }
 
+  // 2026-11-15 조사 문서 3-8: 이번 달 AI 사용액이 월 한도의 50·80·100%를 넘었으면 사용량 줄 아래에 한 줄(서버의 month_alert_pct — 알 수 없는 값이면 없음).
+  function aiBudgetNote(info) {
+    const key = info && { 50: "easy.ai.budget_50", 80: "easy.ai.budget_80", 100: "easy.ai.budget_100" }[info.month_alert_pct];
+    return key ? `<div class="ez-c-orange" style="font-size:12.5px;margin-top:4px">${esc(T(key))}</div>` : "";
+  }
+
   function askAiHtml(res) {
-    const usage = res.usage ? `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.ask.ai_usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</div>` : "";
+    const usage = res.usage ? `<div class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.ask.ai_usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</div>${aiBudgetNote(res.usage)}` : "";
     const masked = res.masked_count ? `<div class="ez-muted" style="font-size:12px;margin-top:4px">${esc(T("easy.ask.ai_masked", { n: res.masked_count }))}</div>` : "";
     if (res.answerable === null || res.answerable === undefined) {
       const why = Object.values(res.rejected || {}).map((w) => `<div class="ez-muted" style="font-size:12.5px">${esc(w)}</div>`).join("");
@@ -2072,7 +2078,7 @@
   }
 
   function csDraftResultHtml(res) {
-    const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.cs.usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>` : "";
+    const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:6px">${esc(T("easy.cs.usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>${aiBudgetNote(res.usage)}` : "";
     const masked = res.masked_count ? `<div class="ez-muted" style="font-size:12px;margin-top:4px">${esc(T("easy.cs.masked", { n: res.masked_count }))}</div>` : "";
     if (!res.draft) {
       return `<div class="ez-note warn"><span class="ez-dot warn">!</span><div>${esc(T("easy.cs.rejected"))}${Object.values(res.rejected || {}).map((w) => `<div>${esc(w)}</div>`).join("")}${masked}${usage}</div></div>`;
@@ -2598,7 +2604,7 @@
       ${kv(T("easy.ai.model"), s.model || "—")}
       ${kv(T("easy.ai.limit"), s.monthly_limit_krw ? won0(s.monthly_limit_krw) : "—")}
       ${kv(T("easy.ai.price"), s.in_price && s.out_price ? T("easy.ai.price_v", { in: Number(s.in_price).toLocaleString("ko-KR"), out: Number(s.out_price).toLocaleString("ko-KR") }) : "—")}
-      ${kv(T("easy.ai.used"), T("easy.ai.used_v", { used: won0(s.month_used_krw), calls: s.month_calls || 0 }))}
+      ${kv(T("easy.ai.used"), T("easy.ai.used_v", { used: won0(s.month_used_krw), calls: s.month_calls || 0 }))}${aiBudgetNote(s)}
       <button type="button" class="ez-btn line sm" id="ez-ai-edit" style="margin-top:10px">${esc(T("easy.ai.edit"))}</button>
       <div class="ez-sec" style="margin-top:16px">${esc(T("easy.ai.records"))}</div>${table}`;
   }
@@ -2851,7 +2857,7 @@
       const res = await api("/orders/product-rejection-advice", { method: "POST", body: JSON.stringify({ seller_product_id: p.seller_product_id }) });
       const body = res.explanation ? productAdviceHtml(res.explanation)
         : `<div class="ez-note warn" style="margin-top:10px"><span class="ez-dot warn">!</span><div>${esc(T("easy.advice.ai_none"))}${Object.values(res.rejected || {}).map((w) => `<div>${esc(w)}</div>`).join("")}</div></div>`;
-      const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.advice.ai_usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>` : "";
+      const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.advice.ai_usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>${aiBudgetNote(res.usage)}` : "";
       await ezDialog({ title: T("easy.advice.ai_title"), bodyHtml: body + usage, okLabel: T("easy.advice.close") });
       if (res.explanation) loadToday();
     } catch (err) {
@@ -2881,7 +2887,7 @@
         : `<div class="ez-note warn" style="margin-top:10px"><span class="ez-dot warn">!</span><div>${esc(T("easy.sysadv.none"))}${Object.values(res.rejected || {}).map((w) => `<div>${esc(w)}</div>`).join("")}</div></div>`;
       const at = res.cached && res.at ? parseUtcMs(res.at) : null;
       const cached = at === null ? "" : `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.sysadv.cached", { at: new Date(at).toLocaleString() }))}</p>`;
-      const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.sysadv.usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>` : "";
+      const usage = res.usage ? `<p class="ez-muted" style="font-size:12px;margin-top:8px">${esc(T("easy.sysadv.usage", { cost: res.usage.cost_krw, used: Math.round(res.usage.month_used_krw || 0), limit: res.usage.monthly_limit_krw }))}</p>${aiBudgetNote(res.usage)}` : "";
       await ezDialog({ title: T("easy.sysadv.title"), bodyHtml: body + cached + usage, okLabel: T("easy.sysadv.close") });
     } catch (err) {
       B.toast((err && err.message) || T("easy.sysadv.failed"), "error");

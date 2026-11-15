@@ -12,6 +12,8 @@ File : app/domains/marketplace_listing/ai_draft_service.py
   1. 사용자가 정한 **월 한도**(원). 설정이 없거나 0이면 쓸 수 없다. 이번 달 사용액 + 이번 호출의 최악 추정액이 한도를 넘으면 호출하지 않는다.
   2. 승인 센터 허용(`LLM`/`AI_DRAFT`, 횟수형). 허용이 없으면 호출하지 않고 허용 요청이 올라간다.
   3. 호출마다 사용 기록(`AI_DRAFT_USAGE` 감사 기록: 모델·입력/출력 토큰·추정 비용). 실패·검증 탈락이어도 호출했으면 기록한다.
+  (2026-11-15 조사 문서 3-8) 이번 달 사용액이 월 한도의 50·80·100%를 넘으면 그 단계를 알려 준다(`budget_stage`). 막는 일은 위 1번이 그대로 한다 —
+  알림은 사용자가 한도가 차 가는 것을 미리 보게 할 뿐 호출을 새로 막지 않는다.
 
 보내는 것은 상품 정보(상품명·브랜드·카테고리·옵션·검색어·고시)뿐이다. API 키는 Windows 자격증명 저장소에만 둔다(DB·감사 기록·응답에 남기지 않는다).
 =========================================================
@@ -77,6 +79,18 @@ def estimate_cost_krw(input_tokens: float, output_tokens: float, in_price: float
     return (input_tokens * in_price + output_tokens * out_price) / 1_000_000
 
 
+BUDGET_STAGES = (100, 80, 50)  # 월 한도 알림 단계(%) — 큰 것부터 본다
+
+
+def budget_stage(used_krw: float, limit_krw: int) -> int | None:
+    """이번 달 사용액이 월 한도의 몇 % 단계를 넘었는지(100·80·50). 한도가 없거나(0 이하) 50% 미만이면 None."""
+
+    if not limit_krw or limit_krw <= 0:
+        return None
+    used = float(used_krw or 0)
+    return next((stage for stage in BUDGET_STAGES if used * 100 >= stage * limit_krw), None)
+
+
 class AiDraftService:
 
     def __init__(
@@ -132,7 +146,15 @@ class AiDraftService:
             "monthly_limit_krw": limit, "in_price": s.get("in_price"), "out_price": s.get("out_price"),
             "month_used_krw": round(used, 2), "month_calls": calls,
             "month_remaining_krw": round(max(limit - used, 0), 2) if limit > 0 else 0,
+            "month_alert_pct": budget_stage(used, limit),
         }
+
+    def month_budget(self, user_id: int, company_id: int) -> dict:
+        """운영 상태 점검용: 이번 달 한도·사용액·알림 단계. 읽기만 한다(API 키 저장소는 보지 않는다)."""
+
+        limit = int(self._settings(user_id, company_id).get("monthly_limit_krw") or 0)
+        used, calls = self._month_usage()
+        return {"limit_krw": limit, "used_krw": round(used, 2), "calls": calls, "stage": budget_stage(used, limit)}
 
     def save_settings(
         self, user_id: int, company_id: int, *, model: str, monthly_limit_krw: int, in_price: float, out_price: float,
@@ -312,7 +334,8 @@ class AiDraftService:
 
         self._record_usage(company_id, user_id, ref, model, usage)
         used_after, calls_after = self._month_usage()
-        return {"month_used_krw": round(used_after, 2), "month_calls": calls_after}
+        limit = int(self._settings(user_id, company_id).get("monthly_limit_krw") or 0)
+        return {"month_used_krw": round(used_after, 2), "month_calls": calls_after, "month_alert_pct": budget_stage(used_after, limit)}
 
     def propose(self, wizard_id: int, company_id: int, user_id: int) -> dict:
         data = self.build_input(wizard_id, company_id)

@@ -52,7 +52,7 @@ __BODY__
 })().then((out) => console.log(JSON.stringify(out))).catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """
 
-SOURCE_NAMES = ("parseUtcMs", "briefSysText", "briefingHtml", "systemAdviceHtml", "systemAdviceAsk")
+SOURCE_NAMES = ("parseUtcMs", "briefSysText", "briefingHtml", "aiBudgetNote", "systemAdviceHtml", "systemAdviceAsk")
 SYSTEM = [
     {"code": "BACKUP_STALE", "level": "WARN", "params": {"days": 9}},
     {"code": "DISK_LOW", "level": "WARN", "params": {"free_mb": 512}},

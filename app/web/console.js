@@ -7200,6 +7200,16 @@
     return null;
   }
 
+  // 2026-11-15 조사 문서 3-8: 이번 달 AI 사용액이 월 한도의 50·80·100%를 넘었으면 사용량 줄 아래 한 줄(서버의 month_alert_pct — 모르는 값이면 없음).
+  function aiBudgetNoteText(info) {
+    const key = info && { 50: "ai.budget_50", 80: "ai.budget_80", 100: "ai.budget_100" }[info.month_alert_pct];
+    return key ? HomezI18n.t(key) : "";
+  }
+  function aiBudgetNoteHtml(info) {
+    const text = aiBudgetNoteText(info);
+    return text ? `<p class="stat-sub" role="status"><strong>${escapeHtml(text)}</strong></p>` : "";
+  }
+
   function atCsResultHtml(result) {
     const t = (key, params) => HomezI18n.t(`at.${key}`, params);
     if (!result) return "";
@@ -7208,7 +7218,7 @@
     const masked = Number.isInteger(result.masked_count) ? result.masked_count : 0;
     if (!result.draft) {
       const why = Object.values(result.rejected || {}).map((v) => `<li>${escapeHtml(v)}</li>`).join("");
-      return `<div class="banner banner-warning" role="status" id="at-cs-result"><p>${escapeHtml(t("cs_rejected"))}</p>${why ? `<ul>${why}</ul>` : ""}<p class="stat-sub">${escapeHtml(t("cs_usage", { cost }))}</p></div>`;
+      return `<div class="banner banner-warning" role="status" id="at-cs-result"><p>${escapeHtml(t("cs_rejected"))}</p>${why ? `<ul>${why}</ul>` : ""}<p class="stat-sub">${escapeHtml(t("cs_usage", { cost }))}</p>${aiBudgetNoteHtml(usage)}</div>`;
     }
     const needs = (result.draft.needs_check || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
     return `<div class="detail-panel" id="at-cs-result">
@@ -11915,7 +11925,7 @@
       ${(data.conflicts || []).length ? `<ul class="lw-ui-warnings">${data.conflicts.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : ""}
       ${a.rationale ? `<p>${escapeHtml(a.rationale)}</p>` : ""}
       ${rejected ? `<details><summary>${aiaT("a_rejected")}</summary><ul>${rejected}</ul></details>` : ""}
-      <p class="stat-sub">${escapeHtml(aiaT("a_usage", { cost: usage.cost_krw, used: Math.round(usage.month_used_krw || 0), limit: usage.monthly_limit_krw }))}</p>`;
+      <p class="stat-sub">${escapeHtml(aiaT("a_usage", { cost: usage.cost_krw, used: Math.round(usage.month_used_krw || 0), limit: usage.monthly_limit_krw }))}</p>${aiBudgetNoteHtml(usage)}`;
   }
 
   function lwAiaAttach(host, searchData) {
@@ -12948,7 +12958,7 @@
         field("in").value = st.in_price ?? "";
         field("out").value = st.out_price ?? "";
         statusEl.textContent = st.configured
-          ? HomezI18n.t("lw.ai_status_ready", { used: Math.round(st.month_used_krw), limit: st.monthly_limit_krw, calls: st.month_calls })
+          ? [HomezI18n.t("lw.ai_status_ready", { used: Math.round(st.month_used_krw), limit: st.monthly_limit_krw, calls: st.month_calls }), aiBudgetNoteText(st)].filter(Boolean).join(" ")
           : HomezI18n.t("lw.ai_status_not_ready");
         panel.querySelector("[data-lw-ai-settings]").open = !st.configured;
         field("key").placeholder = st.key_saved ? HomezI18n.t("lw.ai_key_saved") : HomezI18n.t("lw.ai_key_placeholder");
@@ -12994,7 +13004,7 @@
       result.innerHTML = `
         ${rows || `<p class="field-error">${HomezI18n.t("lw.ai_none_passed")}</p>`}
         ${rejected ? `<p class="stat-sub">${HomezI18n.t("lw.ai_rejected")}</p><ul>${rejected}</ul>` : ""}
-        <p class="stat-sub">${escapeHtml(HomezI18n.t("lw.ai_usage", { cost: usage.cost_krw, used: Math.round(usage.month_used_krw || 0), limit: usage.monthly_limit_krw }))}</p>
+        <p class="stat-sub">${escapeHtml(HomezI18n.t("lw.ai_usage", { cost: usage.cost_krw, used: Math.round(usage.month_used_krw || 0), limit: usage.monthly_limit_krw }))}</p>${aiBudgetNoteHtml(usage)}
         <p class="stat-sub">${HomezI18n.t("lw.ai_next")}</p>`;
       applyBtn.disabled = !rows;
       loadStatus();
@@ -13103,7 +13113,7 @@
         <label class="lw-checklist-item" style="display:inline-block;margin:0 12px 6px 0;"><input type="checkbox" data-lw-mkt-kw="${index}" checked>
           <span>${escapeHtml(word)}</span></label>`).join("");
       const rejected = Object.values(data.rejected || {}).map((why) => `<li>${escapeHtml(why)}</li>`).join("");
-      const usage = data.usage ? `<p class="stat-sub">${escapeHtml(t("mkt_usage", { cost: data.usage.cost_krw, used: Math.round(data.usage.month_used_krw || 0), limit: data.usage.monthly_limit_krw }))}</p>` : "";
+      const usage = data.usage ? `<p class="stat-sub">${escapeHtml(t("mkt_usage", { cost: data.usage.cost_krw, used: Math.round(data.usage.month_used_krw || 0), limit: data.usage.monthly_limit_krw }))}</p>${aiBudgetNoteHtml(data.usage)}` : "";
       result.innerHTML = `
         <p class="stat-sub">${escapeHtml(signal)}</p>${cached}
         ${names.length ? `<div><strong>${t("mkt_names")}</strong>

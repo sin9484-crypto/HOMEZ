@@ -101,14 +101,14 @@ __all__ = ["router"]
 
 @router.get("/health-summary")
 def get_health_summary(
-    _: User = Depends(admin_guard),
+    current_user: User = Depends(admin_guard),
     db: Session = Depends(get_db),
 ):
     """2026-10-18 서버 관리 AI T1 — 운영 상태 진단 요약(자동 작업·백업·복구 시험·디스크·긴급 중지). 읽기 전용, 재시작·복구·설정 변경을 하지 않는다."""
 
     from app.domains.diagnostics.health_service import HealthService
 
-    return HealthService(db).summary()
+    return HealthService(db).summary(ai_owner=(current_user.id, current_user.company_id))
 
 
 def get_health_advice_credential_store():

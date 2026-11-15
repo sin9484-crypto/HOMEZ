@@ -227,7 +227,20 @@ class HealthService:
             logger.warning("운영 상태 점검: 판매 연결별 상품 연결을 읽지 못했다", exc_info=True)
             return None
 
-    def snapshot(self) -> dict[str, Any]:
+    def _ai_budget(self, owner: tuple[int, int] | None) -> dict | None:
+        """(2026-11-15) 점검하는 사람(owner = 사용자·회사 번호)의 AI 월 한도와 이번 달 사용액. 사람을 모르면 None(모름). 읽기만 한다."""
+        if owner is None:
+            return None
+        try:
+            from app.domains.marketplace_listing.ai_draft_service import AiDraftService
+
+            return AiDraftService(self.db, None, now_factory=self._now).month_budget(*owner)
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+            logger.warning("운영 상태 점검: AI 월 한도 사용액을 읽지 못했다", exc_info=True)
+            return None
+
+    def snapshot(self, ai_owner: tuple[int, int] | None = None) -> dict[str, Any]:
         enabled, scheduler = self._scheduler()
         backup_ok, latest_backup = self._latest_backup()
         rehearsal_ok, latest_rehearsal = self._latest_rehearsal()
@@ -241,11 +254,12 @@ class HealthService:
         snap["detection"] = detection
         snap["reads"] = self._reads(company_id)
         snap["replaced_links"] = self._replaced_links()
+        snap["ai_budget"] = self._ai_budget(ai_owner)
         if backup_ok:
             snap["latest_backup_at"] = latest_backup
         return snap
 
-    def summary(self) -> dict[str, Any]:
-        snap = self.snapshot()
+    def summary(self, ai_owner: tuple[int, int] | None = None) -> dict[str, Any]:
+        snap = self.snapshot(ai_owner)
         result = health_summary.evaluate(snap)
         return {**result, "checked_at": snap["now"].isoformat(timespec="seconds")}

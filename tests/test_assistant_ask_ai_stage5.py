@@ -379,7 +379,7 @@ def ask_ai_constants():
 class ScreenFunctionTests(unittest.TestCase):
 
     def run_js(self, expression):
-        sources = "\n".join([ask_ai_constants()] + [function_source(n) for n in ("parseUtcMs", "askChipsHtml", "askAnswerHtml", "askMask", "askAiHtml")])
+        sources = "\n".join([ask_ai_constants()] + [function_source(n) for n in ("parseUtcMs", "askChipsHtml", "askAnswerHtml", "askMask", "aiBudgetNote", "askAiHtml")])
         script = HARNESS.replace("__SOURCES__", sources).replace("__NOW__", str(NOW)).replace("__EXPR__", expression)
         proc = subprocess.run([NODE, "-e", script], env={**os.environ, "TABLE_JSON": json.dumps(ask_texts())}, capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr)

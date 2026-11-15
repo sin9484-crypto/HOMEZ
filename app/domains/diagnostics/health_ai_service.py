@@ -71,6 +71,9 @@ CODE_MEANING = {
     "READS_ALLOWANCE_LAPSED": "주문·배송 상태, 반품·문의·정산, 상품 상태를 쿠팡에서 읽어 오는 자동 확인 중 허용이 끝난(만료·취소·소진) 것이 있어 그 확인이 멈춰 있다. 그 사이 생긴 일은 앱이 모를 수 있다.",
     # 2026-11-09 — 판매 연결을 새로 만들어 바꾸면 옛 연결의 상품 연결이 따라오지 않는다. 조치(기록 옮기기)는 판매자 승인 아래 개발 담당이 한다.
     "LINKS_ON_REPLACED_CONNECTION": "쓰지 않는(꺼졌거나 키가 지워진) 판매 연결에 상품의 공급처 연결이 남아 있고, 같은 마켓의 새 연결에는 없다. 그 상품에 새 주문이 오면 공급처를 찾지 못해 멈춘다.",
+    # 2026-11-15 조사 문서 3-8 — 월 한도는 판매자가 AI 사용 설정에서 정한 값이다. 조치는 한도를 올리거나 다음 달까지 AI 기능을 쓰지 않는 것이다.
+    "AI_BUDGET_HIGH": "이번 달 AI 사용액이 판매자가 정한 월 한도의 80%를 넘었다. 남은 한도를 넘을 수 있는 AI 호출은 앱이 하지 않는다.",
+    "AI_BUDGET_REACHED": "이번 달 AI 사용액이 판매자가 정한 월 한도에 이르러, 다음 달이 되거나 한도를 올리기 전까지 AI 기능이 동작하지 않는다.",
 }
 # 읽기 허용 목적 코드 → 쉬운 말(AI에 보내는 허용 목록 — 이 밖의 목적 코드는 보내지 않는다)
 READS_PURPOSE_LABEL = {"ORDER_TRACKING": "주문·배송 상태", "AFTER_SALES_CHECK": "반품·문의·정산", "PRODUCT_STATUS_CHECK": "상품 상태"}
@@ -126,6 +129,8 @@ def build_user_prompt(checks: list[dict]) -> str:
             facts["jobs"] = [j for j in params["jobs"] if j in known_jobs]
         if isinstance(params.get("minutes"), int):
             facts["minutes_since_last_attempt"] = params["minutes"]
+        if isinstance(params.get("pct"), int):
+            facts["budget_used_pct"] = params["pct"]
         if isinstance(params.get("links"), int):
             facts["links_left_behind"] = params["links"]
         if isinstance(params.get("purposes"), list):

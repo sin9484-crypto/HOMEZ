@@ -52,7 +52,7 @@ console.log(JSON.stringify(__EXPR__));
 
 FUNCTIONS = ("atWon", "atDecisionPill", "atReasonText", "atMarginHtml", "atParseFacts", "atCsProblem", "atCsResultHtml", "atReturnBody", "atReturnHtml",
              "atOfferRowToInput", "atOfferHtml", "atWatchHtml", "atTermsModels", "atTermsHtml", "atSuggestionBody", "atSuggestionListHtml", "atSuggestionEvalHtml",
-             "atKstMinute", "atDraftOutcomeHtml")
+             "atKstMinute", "atDraftOutcomeHtml", "aiBudgetNoteText", "aiBudgetNoteHtml")
 
 
 @unittest.skipUnless(NODE, "node가 없어 화면 함수를 실행해 볼 수 없다")

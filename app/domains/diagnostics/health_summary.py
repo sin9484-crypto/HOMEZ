@@ -21,6 +21,8 @@ File : app/domains/diagnostics/health_summary.py
                    한 번도 허용한 적이 없다 → INFO. 허용이 없으면 그 확인이 **조용히 멈추므로** 화면이 "일이 없다"와 "감시를 못 한다"를 구분할 수 있어야 한다
   - LINKS          (2026-11-09) 꺼졌거나 자격증명이 지워진 판매 연결에 공급처 연결·SKU 대응이 남아 있는데 같은 마켓에 쓰는 연결이 따로 있다 → WARN.
                    새 주문은 쓰는 연결로 들어와 옛 연결의 기록을 찾지 못하고 '연결 없음'으로 멈춘다(11-08 키 재발급 때 새 연결을 만들어 실제로 생겼다)
+  - AI_BUDGET      (2026-11-15) 이번 달 AI(Claude) 사용액이 월 한도의 100%를 넘었다 → WARN(AI 기능이 이달 멈춤) / 80% → WARN / 50% → INFO(오늘 화면에는 안 띄움).
+                   한도를 정하지 않았으면(AI를 쓸 수 없음) 통과. 점검하는 사람의 설정 기준이라 사용자를 모르는 곳(아침 브리핑 등)에서는 unknown
 값을 읽지 못한 항목(None)은 점검하지 않고 `unknown`에 코드만 남긴다 — 모르는 것을 정상이라고 하지 않는다.
 시각은 모두 UTC naive다. 이 모듈은 원인을 추측하지 않는다(코드와 숫자만) — 원인 설명은 사람이나 이후 AI 단계가 한다.
 =========================================================
@@ -68,7 +70,7 @@ def evaluate(snapshot: dict[str, Any]) -> dict[str, Any]:
     스냅샷 키(모두 선택): now(datetime), scheduler_enabled(bool), scheduler(None 또는 {"running": bool, "jobs": [{"id", "next_run"(datetime|None)}]}),
     expected_jobs(list[str]), latest_backup_at, latest_rehearsal({"at", "ok"}|None), rehearsal_known(bool), disk_free_bytes(int|None), estop_active(bool|None),
     detection(None 또는 {"health_code": str, "minutes_since_attempt": int|None}), reads(None 또는 {"lapsed": [목적], "never": [목적]}),
-    replaced_links(None 또는 {"links": int, "resolutions": int})."""
+    replaced_links(None 또는 {"links": int, "resolutions": int}), ai_budget(None 또는 {"limit_krw": int, "used_krw": float, "stage": 100|80|50|None})."""
 
     now: datetime = snapshot["now"]
     checks: list[dict[str, Any]] = []
@@ -188,6 +190,22 @@ def evaluate(snapshot: dict[str, Any]) -> dict[str, Any]:
             checks.append(_check("LINKS_ON_REPLACED_CONNECTION", WARN, links=links, resolutions=resolutions))
         else:
             passed.append("LINKS")
+
+    budget = snapshot.get("ai_budget")
+    if not isinstance(budget, dict):
+        unknown.append("AI_BUDGET")
+    else:
+        # 단계(100·80·50)는 `ai_draft_service.budget_stage`가 정한다. 비율은 버림한 정수(%)만 남긴다.
+        stage, limit = budget.get("stage"), int(budget.get("limit_krw") or 0)
+        pct = int(float(budget.get("used_krw") or 0) * 100 // limit) if limit > 0 else 0
+        if limit > 0 and stage == 100:
+            checks.append(_check("AI_BUDGET_REACHED", WARN, pct=pct))
+        elif limit > 0 and stage == 80:
+            checks.append(_check("AI_BUDGET_HIGH", WARN, pct=pct))
+        elif limit > 0 and stage == 50:
+            checks.append(_check("AI_BUDGET_HALF", INFO, pct=pct))
+        else:
+            passed.append("AI_BUDGET")
 
     checks.sort(key=lambda c: LEVEL_RANK[c["level"]])
     levels = {c["level"] for c in checks}
