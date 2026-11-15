@@ -117,3 +117,39 @@ DEFAULT_ORDER_TRACKING_PER_HOUR = 30    # 10분마다 진행 중 주문 수만�
 DEFAULT_AFTER_SALES_PER_HOUR = 30        # 10분마다 반품·상품 문의·콜센터 문의 3종(문의 쪽수만큼 더) + 하루 몇 번의 정산
 DEFAULT_PRODUCT_STATUS_PER_HOUR = 12     # 30분마다 한 번에 최대 5개 상품(상태 조회 + 반려 사유 이력 조회) — 평소에는 훨씬 적다
 DEFAULT_STANDING_HOURS = 24
+
+
+# 2026-11-15 — 목적마다 실제로 부르는 곳·종류(코드가 authorize하는 조합). '직접 허용 만들기'는 이 조합만 만들 수 있다 —
+# 예전에는 아무 조합이나 저장돼(예: 쿠팡 + AI 배경 그리기) 쓸모없는 허용이 생길 수 있었고, 화면은 쿠팡·온채널만 고를 수 있었다.
+# '모든 목적(ANY)'은 어느 곳에나 줄 수 있다. 기능이 올리는 허용 요청과 그 승인은 이 표와 무관하다(기능이 이미 맞는 조합으로 올린다).
+_BOTH = (CallKind.READ, CallKind.WRITE)
+PURPOSE_TARGETS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    CallPurpose.ORDER_DETECTION: ((ExternalSystem.COUPANG, ExternalSystem.ONCH), (CallKind.READ,)),
+    CallPurpose.ORDER_TRACKING: ((ExternalSystem.COUPANG,), (CallKind.READ,)),
+    CallPurpose.AFTER_SALES_CHECK: ((ExternalSystem.COUPANG,), (CallKind.READ,)),
+    CallPurpose.PRODUCT_STATUS_CHECK: ((ExternalSystem.COUPANG,), (CallKind.READ,)),
+    CallPurpose.INVOICE_UPLOAD: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.PRODUCT_OUTBOUND_DAYS: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.STOCK_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.PRICE_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.PRODUCT_NAME_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.INQUIRY_REPLY: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.RETURN_PROCESS: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.SUPPLIER_RELEASE_DATE: ((ExternalSystem.ONCH,), (CallKind.READ,)),
+    CallPurpose.AI_DRAFT: ((ExternalSystem.LLM,), (CallKind.WRITE,)),
+    CallPurpose.AI_ANALYSIS: ((ExternalSystem.LLM,), (CallKind.WRITE,)),
+    CallPurpose.AI_ADVICE: ((ExternalSystem.LLM,), (CallKind.WRITE,)),
+    CallPurpose.IMAGE_GENERATION: ((ExternalSystem.GEMINI,), (CallKind.WRITE,)),
+    CallPurpose.TREND_LOOKUP: ((ExternalSystem.NAVER,), (CallKind.READ,)),
+    CallPurpose.BRIEF_EMAIL: ((ExternalSystem.EMAIL,), (CallKind.WRITE,)),
+    CallPurpose.AI_BACKGROUND: ((ExternalSystem.CLOUDFLARE,), (CallKind.WRITE,)),
+}
+
+
+def valid_target(system: str, kind: str, purpose: str) -> bool:
+    """직접 허용으로 만들 수 있는 조합인가. ANY는 어느 곳·종류에나 된다."""
+
+    if purpose == CallPurpose.ANY:
+        return system in ExternalSystem.ALL and kind in CallKind.ALL
+    target = PURPOSE_TARGETS.get(purpose)
+    return target is not None and system in target[0] and kind in target[1]

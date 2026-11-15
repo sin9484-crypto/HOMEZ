@@ -35,6 +35,7 @@ from app.core.exceptions import BadRequestException
 from app.core.exceptions import NotFoundException
 from app.domains.media_asset import concept_inspection
 from app.domains.media_asset.composition import compose_with_background
+from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.constants import MediaAssetOwnerType
 from app.domains.media_asset.derived_assets import adopt_derived
 from app.domains.media_asset.image_concepts import PURPOSES
@@ -105,18 +106,23 @@ class ConceptRunService:
 
     def compose_and_save(self, company_id: int, requested_by: int, cutout: MediaAsset, cutout_bytes: bytes, code: str, purpose: str, spec, checks: tuple[str, ...], *,
                          operation: str = OPERATION, provider_code: str = "PILLOW_LOCAL", model_name: str | None = None, label: str | None = None,
-                         generated_background: bool = False) -> ConceptRunOutcome:
-        """배경 명세로 합성 → 검사 → (FAIL이 없을 때만) 저장. 2026-11-10 AI 배경(ai_background_service)도 같은 길을 쓴다(배경 바이트만 다르다)."""
+                         generated_background: bool = False, placement: str = Placement.CENTER) -> ConceptRunOutcome:
+        """배경 명세로 합성 → 검사 → (FAIL이 없을 때만) 저장. 2026-11-10 AI 배경(ai_background_service)도 같은 길을 쓴다(배경 바이트만 다르다).
+
+        2026-11-15: `placement`(GROUNDED = 제품을 바닥선에 세우고 바닥 그림자)는 합성과 검사에 함께 넘긴다. AI 배경 사진은 새 사진의 용도를
+        누끼의 용도가 아니라 **요청한 용도**(추가·상세)로 저장한다 — AI 배경은 대표에 쓰지 않으므로 누끼가 대표 사진이어도 대표로 저장하지 않는다.
+        로컬 컨셉은 지금처럼 누끼의 용도를 따른다."""
 
         job = self.queue._record_processing_job(  # noqa: SLF001 — 같은 패키지의 처리 작업 기록 규칙을 그대로 쓴다
             operation=operation, provider_code=provider_code, model_name=model_name or code, source_asset_id=cutout.id, requested_by=requested_by, company_id=company_id,
             product_candidate_id=cutout.owner_id if cutout.owner_type == MediaAssetOwnerType.PRODUCT_CANDIDATE else 0,
         )
         try:
-            composed = compose_with_background(cutout_bytes, spec)
-            # 생성 배경일 때만 표시를 넘긴다(기존 로컬 컨셉의 검사 호출 모양은 그대로).
-            results = (concept_inspection.inspect(cutout_bytes, composed, checks, purpose, generated_background=True) if generated_background
-                       else concept_inspection.inspect(cutout_bytes, composed, checks, purpose))
+            # 생성 배경·바닥 세우기일 때만 그 값을 넘긴다(기존 로컬 컨셉의 합성·검사 호출 모양은 그대로).
+            extra = {"placement": placement} if placement != Placement.CENTER else {}
+            composed = compose_with_background(cutout_bytes, spec, **extra)
+            results = (concept_inspection.inspect(cutout_bytes, composed, checks, purpose, generated_background=True, **extra) if generated_background
+                       else concept_inspection.inspect(cutout_bytes, composed, checks, purpose, **extra))
         except Exception as exc:  # noqa: BLE001
             logger.warning("컨셉 합성 실패", exc_info=True)
             self.queue._finish_processing_job(job.id, company_id, success=False, error_reason=f"컨셉 합성 실패: {type(exc).__name__}")  # noqa: SLF001
@@ -133,7 +139,8 @@ class ConceptRunService:
                 company_id, build_storage_path(company_id, hashlib.sha256(composed).hexdigest(), validated.mime_type),
             )
             asset = self.queue._persist_generated_asset(  # noqa: SLF001
-                company_id=company_id, owner_type=cutout.owner_type, owner_id=cutout.owner_id, purpose=cutout.purpose, display_order=cutout.display_order,
+                company_id=company_id, owner_type=cutout.owner_type, owner_id=cutout.owner_id,
+                purpose=purpose if generated_background else cutout.purpose, display_order=cutout.display_order,
                 image_bytes=composed, self_reported_mime_type="image/png",
             )
             linked = adopt_derived(asset, cutout, (label or f"concept-{code}-{purpose}.png").lower())

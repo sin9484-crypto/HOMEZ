@@ -46,6 +46,7 @@ from app.domains.external_call.constants import DEFAULT_PRODUCT_STATUS_PER_HOUR
 from app.domains.external_call.constants import DEFAULT_STANDING_HOURS
 from app.domains.external_call.constants import ExternalSystem
 from app.domains.external_call.constants import LogOutcome
+from app.domains.external_call.constants import valid_target
 from app.domains.external_call.model import ExternalCallAllowance
 from app.domains.external_call.model import ExternalCallLog
 
@@ -294,8 +295,10 @@ class ExternalCallPolicyService:
         count: int | None = None, per_hour_limit: int | None = None, hours: int | None = None,
         reason: str | None = None, user_id: int | None = None,
     ) -> ExternalCallAllowance:
-        """사용자가 직접 허용을 만든다(요청 없이)."""
+        """사용자가 직접 허용을 만든다(요청 없이). 2026-11-15: 목적과 맞지 않는 곳·종류는 만들지 않는다(`valid_target`)."""
 
+        if not valid_target(system, kind, purpose):
+            raise BadRequestException("이 목적에는 고른 보내는 곳·종류로 허용을 만들 수 없습니다 — 목적에 맞는 곳과 조회/변경을 골라 주세요.")
         allowance = ExternalCallAllowance(
             company_id=company_id, system=system, kind=kind, purpose=purpose, mode=mode,
             status=AllowanceStatus.PENDING, reason=(reason or "")[:300] or None, requested_by=user_id,

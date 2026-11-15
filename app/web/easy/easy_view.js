@@ -1556,7 +1556,35 @@
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
 
-  const GRANT_PURPOSES = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"], ["ANY", "easy.purpose.any"]];
+  const GRANT_PURPOSES = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"],
+    ["SUPPLIER_RELEASE_DATE", "easy.purpose.release"], ["TREND_LOOKUP", "easy.purpose.trend"], ["AI_DRAFT", "easy.purpose.ai_draft"], ["AI_ANALYSIS", "easy.purpose.ai_analysis"], ["AI_ADVICE", "easy.purpose.ai_advice"], ["AI_BACKGROUND", "easy.purpose.ai_bg"], ["IMAGE_GENERATION", "easy.purpose.image"], ["BRIEF_EMAIL", "easy.purpose.brief_email"], ["ANY", "easy.purpose.any"]];
+  // 2026-11-15: 보내는 곳 7개 모두(예전에는 쿠팡·온채널만 있어 Cloudflare·네이버·Claude 등의 허용을 직접 만들 수 없었다).
+  const GRANT_SYSTEMS = [["COUPANG", "easy.sys.coupang"], ["ONCH", "easy.sys.onch"], ["LLM", "easy.sys.llm"], ["NAVER", "easy.sys.naver"], ["CLOUDFLARE", "easy.sys.cloudflare"], ["GEMINI", "easy.sys.gemini"], ["EMAIL", "easy.sys.email"]];
+
+  // 목적마다 실제로 부르는 곳·종류 — 서버 `external_call.constants.PURPOSE_TARGETS`와 같아야 한다(시험이 대조한다). 맞지 않는 조합은 보내지 않는다.
+  function grantTargets() {
+    const both = ["READ", "WRITE"];
+    return {
+      ORDER_DETECTION: [["COUPANG", "ONCH"], ["READ"]], ORDER_TRACKING: [["COUPANG"], ["READ"]], AFTER_SALES_CHECK: [["COUPANG"], ["READ"]], PRODUCT_STATUS_CHECK: [["COUPANG"], ["READ"]],
+      INVOICE_UPLOAD: [["COUPANG"], both], PRODUCT_OUTBOUND_DAYS: [["COUPANG"], both], STOCK_UPDATE: [["COUPANG"], both], PRICE_UPDATE: [["COUPANG"], both],
+      PRODUCT_NAME_UPDATE: [["COUPANG"], both], INQUIRY_REPLY: [["COUPANG"], both], RETURN_PROCESS: [["COUPANG"], both],
+      SUPPLIER_RELEASE_DATE: [["ONCH"], ["READ"]], AI_DRAFT: [["LLM"], ["WRITE"]], AI_ANALYSIS: [["LLM"], ["WRITE"]], AI_ADVICE: [["LLM"], ["WRITE"]],
+      IMAGE_GENERATION: [["GEMINI"], ["WRITE"]], TREND_LOOKUP: [["NAVER"], ["READ"]], BRIEF_EMAIL: [["EMAIL"], ["WRITE"]], AI_BACKGROUND: [["CLOUDFLARE"], ["WRITE"]],
+    };
+  }
+
+  function grantTargetOk(system, kind, purpose) {
+    if (purpose === "ANY") return ["COUPANG", "ONCH", "LLM", "NAVER", "CLOUDFLARE", "GEMINI", "EMAIL"].includes(system) && (kind === "READ" || kind === "WRITE");
+    const target = grantTargets()[purpose];
+    return Boolean(target) && target[0].includes(system) && target[1].includes(kind);
+  }
+
+  // 미리 고른 곳이 없으면 그 목적의 첫 곳을 고른다(목적도 없으면 쿠팡).
+  function grantDefaultSystem(preset) {
+    if (preset && preset.system) return preset.system;
+    const target = preset && preset.purpose ? grantTargets()[preset.purpose] : null;
+    return target ? target[0][0] : "COUPANG";
+  }
 
   // 비밀번호 재확인 창에 다시 보여 줄 "무엇을 허용하는지" 요약(2026-10-29). 목적·종류·보내는 곳·범위를 사람이 읽는 말로 만든다.
   // 변경(쓰기)과 '모든 목적'은 눈에 띄게 표시한다. 상시형은 시간당 상한이 있을 때, 아니면 횟수형이다.
@@ -1680,7 +1708,7 @@
     const picked = preset && preset.purpose;
     const body = `<label>${esc(T("easy.ap.d_purpose"))}</label><select name="purpose" required><option value="" ${picked ? "" : "selected"}>${esc(T("easy.ap.d_pick"))}</option>${GRANT_PURPOSES.map(([v, k]) => `<option value="${v}" ${picked === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_kind"))}</label><select name="kind"><option value="READ" ${!preset || preset.kind === "READ" ? "selected" : ""}>${esc(T("easy.kind.read"))}</option><option value="WRITE" ${preset && preset.kind === "WRITE" ? "selected" : ""}>${esc(T("easy.kind.write"))}</option></select>
-      <label>${esc(T("easy.ap.d_system"))}</label><select name="system"><option value="COUPANG">${esc(T("easy.sys.coupang"))}</option><option value="ONCH">${esc(T("easy.sys.onch"))}</option></select>
+      <label>${esc(T("easy.ap.d_system"))}</label><select name="system">${GRANT_SYSTEMS.map(([v, k]) => `<option value="${v}" ${grantDefaultSystem(preset) === v ? "selected" : ""}>${esc(T(k))}</option>`).join("")}</select>
       <label>${esc(T("easy.ap.d_count"))} <span class="ez-faint" style="font-weight:400">${esc(T("easy.ap.d_count_hint"))}</span></label><input name="count" type="number" min="1" max="50" value="${preset && preset.mode === "STANDING" ? "" : (preset && Number(preset.count)) || 1}">
       <label>${esc(T("easy.ap.d_per_hour"))} <span class="ez-faint" style="font-weight:400">${esc(T("easy.ap.d_standing_hint"))}</span></label><input name="per_hour" type="number" min="1" max="120" value="${preset && preset.per_hour_limit ? preset.per_hour_limit : ""}">
       <label>${esc(T("easy.ap.d_hours"))}</label><input name="hours" type="number" min="1" max="720" value="${preset && preset.hours ? preset.hours : ""}">`;
@@ -1693,6 +1721,10 @@
     if (!result.get("purpose")) {
       B.toast(T("easy.ap.d_pick_needed"), "error");
       return grantDialog({ purpose: "", kind: result.get("kind"), mode: standing ? "STANDING" : "COUNTED", count, per_hour_limit: perHour, hours });
+    }
+    if (!grantTargetOk(result.get("system"), result.get("kind"), result.get("purpose"))) {
+      B.toast(T("easy.ap.d_bad_target"), "error");
+      return grantDialog({ purpose: result.get("purpose"), kind: result.get("kind"), system: result.get("system"), mode: standing ? "STANDING" : "COUNTED", count, per_hour_limit: perHour, hours });
     }
     const summary = allowanceSummaryRows({ purpose: result.get("purpose"), kind: result.get("kind"), system: result.get("system"), count, per_hour_limit: perHour, hours });
     const token = await B.promptRecentAuthToken({ summary });

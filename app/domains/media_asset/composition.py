@@ -18,11 +18,99 @@ GRADIENT/WHITE) 이미 검증된 기존 MediaAsset을 그대로 재사용하는
 from dataclasses import dataclass
 
 from PIL import Image
+from PIL import ImageChops
 from PIL import ImageDraw
+from PIL import ImageFilter
 
 from app.core.exceptions import BadRequestException
 
 CANVAS_SIZE = (1200, 1200)
+
+
+class Placement:
+    """누끼를 캔버스 어디에 어떻게 놓는가(2026-11-15 추가). 합성(`compose_with_background`)과 검사(`concept_inspection`)가
+    같은 `plan_placement()`를 쓰므로, 제품 보존 검사가 언제나 실제로 붙인 자리를 잰다.
+
+      - CENTER    기존 동작 그대로: 누끼 전체(투명 여백 포함)를 확대 없이 맞춰 가운데에 놓는다. 단색·그라데이션·질감 배경용.
+      - GROUNDED  장면 배경(AI가 그린 배경)용: 누끼의 투명 여백을 잘라 낸 제품을 가운데에 세우고, 제품 밑면을 화면 아래쪽 바닥선에
+                  맞춘다. 그 아래에 부드러운 바닥 그림자를 먼저 그린 뒤 제품을 붙인다 — 제품 픽셀은 그대로다(다시 그리지 않음).
+                  확대는 여전히 하지 않는다(원본보다 크게 부풀리지 않는다)."""
+
+    CENTER = "CENTER"
+    GROUNDED = "GROUNDED"
+    ALL = (CENTER, GROUNDED)
+
+
+GROUND_LINE = 0.86          # GROUNDED: 제품 밑면이 놓이는 높이(캔버스 높이 대비) — AI 배경 장면 글이 아래쪽 30%를 빈 바닥으로 그리게 한다
+GROUNDED_MAX_HEIGHT = 0.62  # GROUNDED: 제품 높이 상한(캔버스 높이 대비)
+GROUNDED_MAX_WIDTH = 0.80   # GROUNDED: 제품 너비 상한(캔버스 너비 대비)
+SHADOW_CONTACT_ALPHA = 120  # 바닥에 닿는 짙은 그림자(0~255)
+SHADOW_SOFT_ALPHA = 46      # 제품 모양을 따라 뒤로 퍼지는 옅은 그림자(0~255)
+SOLID_ALPHA_MIN = 250       # GROUNDED: 이 이상 불투명한 누끼 픽셀은 완전 불투명으로 본다(배경 지우기 결과는 제품 안쪽이 250~254로 남아 배경이 비친다)
+
+
+def prepare_cutout(cutout: Image.Image, placement: str = Placement.CENTER) -> Image.Image:
+    """놓기 전에 누끼를 다듬는다(합성과 검사가 함께 쓴다). CENTER는 그대로. GROUNDED는 거의 불투명한 픽셀의 알파만 255로 올린다 —
+    제품 색(RGB)은 바꾸지 않으므로 '다시 그리지 않음' 원칙 그대로이고, 제품 보존 검사가 재는 픽셀도 그만큼 많아진다."""
+
+    rgba = cutout.convert("RGBA")
+    if placement != Placement.GROUNDED:
+        return rgba
+    red, green, blue, alpha = rgba.split()
+    alpha = alpha.point(lambda a: 255 if a >= SOLID_ALPHA_MIN else a)
+    return Image.merge("RGBA", (red, green, blue, alpha))
+
+
+@dataclass(frozen=True)
+class PlacementPlan:
+    crop_box: tuple[int, int, int, int]   # 누끼에서 쓸 부분(투명 여백을 자른 상자 — CENTER는 전체)
+    size: tuple[int, int]                 # 캔버스에 놓을 크기
+    offset: tuple[int, int]               # 캔버스에서 왼쪽 위 자리
+
+
+def plan_placement(cutout: Image.Image, canvas_size: tuple[int, int], placement: str = Placement.CENTER) -> PlacementPlan:
+    """합성과 검사가 함께 쓰는 놓는 자리 계산(순수 계산)."""
+
+    if placement not in Placement.ALL:
+        raise BadRequestException(f"알 수 없는 놓는 방식입니다: {placement}")
+    canvas_w, canvas_h = canvas_size
+    if placement == Placement.CENTER:
+        scale = min(canvas_w / cutout.width, canvas_h / cutout.height, 1.0)
+        size = (max(1, int(cutout.width * scale)), max(1, int(cutout.height * scale)))
+        offset = ((canvas_w - size[0]) // 2, (canvas_h - size[1]) // 2)
+        return PlacementPlan((0, 0, cutout.width, cutout.height), size, offset)
+
+    alpha = cutout.convert("RGBA").getchannel("A")
+    box = alpha.getbbox() or (0, 0, cutout.width, cutout.height)
+    trimmed_w, trimmed_h = box[2] - box[0], box[3] - box[1]
+    scale = min(GROUNDED_MAX_WIDTH * canvas_w / trimmed_w, GROUNDED_MAX_HEIGHT * canvas_h / trimmed_h, 1.0)
+    size = (max(1, int(trimmed_w * scale)), max(1, int(trimmed_h * scale)))
+    base_y = int(canvas_h * GROUND_LINE)
+    offset = ((canvas_w - size[0]) // 2, max(0, base_y - size[1]))
+    return PlacementPlan(box, size, offset)
+
+
+def _ground_shadow(canvas_size: tuple[int, int], product: Image.Image, offset: tuple[int, int]) -> Image.Image:
+    """제품 아래 바닥 그림자(RGBA 층). 제품이 놓일 자리 밑에만 그린다 — 제품 위에는 제품이 덮는다."""
+
+    width, height = product.size
+    layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    base_y = offset[1] + height
+    # 1) 바닥에 닿는 짙고 납작한 타원
+    contact = Image.new("L", canvas_size, 0)
+    rx, ry = max(2, int(width * 0.47)), max(2, int(height * 0.035))
+    cx = offset[0] + width // 2
+    ImageDraw.Draw(contact).ellipse((cx - rx, base_y - ry, cx + rx, base_y + ry), fill=SHADOW_CONTACT_ALPHA)
+    contact = contact.filter(ImageFilter.GaussianBlur(max(2, int(height * 0.02))))
+    # 2) 제품 모양을 납작하게 눌러 뒤쪽으로 눕힌 옅은 그림자
+    silhouette = product.getchannel("A").point(lambda a: SHADOW_SOFT_ALPHA if a > 0 else 0)
+    flat_h = max(2, int(height * 0.22))
+    flat = silhouette.resize((width, flat_h), Image.LANCZOS)
+    soft = Image.new("L", canvas_size, 0)
+    soft.paste(flat, (offset[0] + int(width * 0.04), base_y - flat_h))
+    soft = soft.filter(ImageFilter.GaussianBlur(max(3, int(height * 0.05))))
+    layer.putalpha(ImageChops.lighter(contact, soft))   # 두 그림자 중 짙은 쪽
+    return layer
 
 
 class BackgroundKind:
@@ -112,35 +200,29 @@ def _build_background(spec: BackgroundSpec, size: tuple[int, int]) -> Image.Imag
 def compose_with_background(
     cutout_png_bytes: bytes, spec: BackgroundSpec,
     canvas_size: tuple[int, int] = CANVAS_SIZE,
+    *, placement: str = Placement.CENTER,
 ) -> bytes:
     """
     투명 PNG(제품 누끼) + 배경 → 합성된 PNG 바이트.
 
     누끼 이미지는 원본 비율을 유지한 채 캔버스 안에 맞춰 축소만
     한다(확대하지 않음 — 원본보다 큰 합성 이미지를 만들어 화질을
-    거짓으로 부풀리지 않기 위함). 항상 중앙 정렬.
+    거짓으로 부풀리지 않기 위함). 기본(CENTER)은 중앙 정렬.
+    GROUNDED(장면 배경용, 2026-11-15)는 투명 여백을 자른 제품을 바닥선에 세우고
+    제품을 붙이기 **전에** 바닥 그림자를 그린다 — 제품 픽셀은 바뀌지 않는다.
     """
 
     import io
 
-    cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
+    cutout = prepare_cutout(Image.open(io.BytesIO(cutout_png_bytes)), placement)
 
     background = _build_background(spec, canvas_size).convert("RGBA")
 
-    scale = min(
-        canvas_size[0] / cutout.width, canvas_size[1] / cutout.height, 1.0,
-    )
-    new_size = (
-        max(1, int(cutout.width * scale)),
-        max(1, int(cutout.height * scale)),
-    )
-    resized = cutout.resize(new_size, Image.LANCZOS)
-
-    offset = (
-        (canvas_size[0] - new_size[0]) // 2,
-        (canvas_size[1] - new_size[1]) // 2,
-    )
-    background.alpha_composite(resized, dest=offset)
+    plan = plan_placement(cutout, canvas_size, placement)
+    resized = cutout.crop(plan.crop_box).resize(plan.size, Image.LANCZOS)
+    if placement == Placement.GROUNDED:
+        background.alpha_composite(_ground_shadow(canvas_size, resized, plan.offset))
+    background.alpha_composite(resized, dest=plan.offset)
 
     out = io.BytesIO()
     background.convert("RGB").save(out, format="PNG")
@@ -153,4 +235,10 @@ __all__ = [
     "BackgroundSpec",
     "compose_with_background",
     "CANVAS_SIZE",
+    "Placement",
+    "PlacementPlan",
+    "plan_placement",
+    "prepare_cutout",
+    "GROUND_LINE",
+    "SOLID_ALPHA_MIN",
 ]

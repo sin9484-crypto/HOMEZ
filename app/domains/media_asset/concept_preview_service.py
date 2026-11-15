@@ -35,6 +35,8 @@ from app.domains.media_asset.ai_background_service import _background_path
 from app.domains.media_asset.ai_background_service import MAX_VARIATIONS
 from app.domains.media_asset.composition import BackgroundKind
 from app.domains.media_asset.composition import BackgroundSpec
+from app.domains.media_asset.composition import CANVAS_SIZE
+from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.composition import compose_with_background
 from app.domains.media_asset.image_concepts import PURPOSES
 from app.domains.media_asset.image_concepts import list_concepts
@@ -126,6 +128,21 @@ class ConceptPreviewService:
             latest = version
         return latest
 
+    def _ai_sample(self, cutout_bytes: bytes, background: bytes) -> str | None:
+        """AI 배경 샘플(2026-11-15): 실제 실행과 같은 크기·같은 놓는 방식(GROUNDED, 바닥 그림자)으로 합성한 뒤 줄인다 —
+        작은 누끼를 작은 캔버스에 꽉 채우던 방식은 실제 결과보다 제품이 훨씬 크게 보여 샘플과 결과가 달랐다."""
+        try:
+            composed = compose_with_background(cutout_bytes, BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=background),
+                                               CANVAS_SIZE, placement=Placement.GROUNDED)
+            image = Image.open(io.BytesIO(composed)).convert("RGB")
+            image.thumbnail((PREVIEW_SIDE, PREVIEW_SIDE), Image.LANCZOS)
+            out = io.BytesIO()
+            image.save(out, format="PNG")
+            return _to_data_uri(out.getvalue())
+        except Exception:  # noqa: BLE001 — 한 샘플의 실패가 나머지를 막지 않는다
+            logger.warning("AI 배경 샘플 합성 실패", exc_info=True)
+            return None
+
     def _sample(self, cutout_small: bytes, spec: BackgroundSpec) -> str | None:
         try:
             composed = compose_with_background(cutout_small, spec, canvas_size=(PREVIEW_SIDE, PREVIEW_SIDE))
@@ -167,7 +184,7 @@ class ConceptPreviewService:
                 if version:
                     try:
                         background = read_media_file(self.queue.media_root, _background_path(company_id, concept.code, version))
-                        preview = self._sample(small, BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=background))
+                        preview = self._ai_sample(cutout_bytes, background)
                     except Exception:  # noqa: BLE001
                         logger.warning("저장된 AI 배경을 읽지 못함", exc_info=True)
                 samples.append({

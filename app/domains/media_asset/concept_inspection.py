@@ -14,7 +14,7 @@ File : app/domains/media_asset/concept_inspection.py
 
 검사 항목(I1 `CHECK_*` 코드):
   - PRODUCT_PRESERVATION  합성 결과에서 제품 불투명 픽셀(알파 255)이 **원본 누끼와 같은 값 그대로**인 비율 ≥ 0.99 — 제품을 다시 그리지 않는다는 원칙을 숫자로 확인한다.
-                          합성 규칙(`composition.compose_with_background`: 확대 없이 축소만, 중앙 정렬)을 그대로 따라가며, 그림자가 제품 위에 얹히지 않는다는 가정이 깨지면 FAIL로 드러난다.
+                          합성 규칙(`composition.plan_placement`: 확대 없이 축소만, 중앙 정렬 또는 바닥선에 세우기)을 그대로 따라가며, 그림자가 제품 위에 얹히지 않는다는 가정이 깨지면 FAIL로 드러난다.
   - BACKGROUND_CONTRAST   제품 평균 색과 배경(가장자리 띠) 평균 색의 밝기 대비 ≥ 1.3(PASS), 그 미만은 WARN("제품이 배경에 묻힐 수 있어요" — 사람이 보고 판단).
   - MAIN_IMAGE_SPEC       용도가 대표(MAIN)일 때만: 정사각형·한 변 1,000px 이상·배경 가장자리가 흰색(각 채널 ≥ 250). 아니면 FAIL. 대표가 아니면 SKIPPED(상태 PASS가 아님 — 해당 없음).
   - NO_TEXT_OVERLAY       BY_CONSTRUCTION(합성이 글자를 그리지 않는다) — 컨셉이 요구한 경우에만 표시.
@@ -29,6 +29,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from PIL import Image
+
+from app.domains.media_asset.composition import Placement
+from app.domains.media_asset.composition import plan_placement
+from app.domains.media_asset.composition import prepare_cutout
 
 PRESERVATION_MIN = 0.99
 CONTRAST_MIN = 1.3
@@ -65,21 +69,16 @@ def contrast_between(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-def _placement(cutout: Image.Image, canvas: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
-    """`composition.compose_with_background`와 같은 규칙: 확대 없이 축소만, 중앙 정렬."""
-    scale = min(canvas[0] / cutout.width, canvas[1] / cutout.height, 1.0)
-    size = (max(1, int(cutout.width * scale)), max(1, int(cutout.height * scale)))
-    offset = ((canvas[0] - size[0]) // 2, (canvas[1] - size[1]) // 2)
-    return size, offset
+def product_preservation(cutout_png: bytes, composed_png: bytes, *, placement: str = Placement.CENTER) -> dict[str, Any]:
+    """제품의 불투명 픽셀이 합성 결과에서 같은 값으로 남은 비율. 반환: {"ratio": 0~1, "pixels": 불투명 픽셀 수}.
 
+    놓는 자리는 합성과 같은 `composition.plan_placement()`로 계산한다(2026-11-15 — GROUNDED도 실제로 붙인 자리를 잰다)."""
 
-def product_preservation(cutout_png: bytes, composed_png: bytes) -> dict[str, Any]:
-    """제품의 불투명 픽셀이 합성 결과에서 같은 값으로 남은 비율. 반환: {"ratio": 0~1, "pixels": 불투명 픽셀 수}."""
-
-    cutout = Image.open(io.BytesIO(cutout_png)).convert("RGBA")
+    cutout = prepare_cutout(Image.open(io.BytesIO(cutout_png)), placement)
     composed = Image.open(io.BytesIO(composed_png)).convert("RGB")
-    size, offset = _placement(cutout, composed.size)
-    resized = cutout.resize(size, Image.LANCZOS)
+    plan = plan_placement(cutout, composed.size, placement)
+    size, offset = plan.size, plan.offset
+    resized = cutout.crop(plan.crop_box).resize(size, Image.LANCZOS)
     region = composed.crop((offset[0], offset[1], offset[0] + size[0], offset[1] + size[1]))
     original_pixels, composed_pixels, alpha_pixels = resized.convert("RGB").getdata(), region.getdata(), resized.getchannel("A").getdata()
     same = total = 0
@@ -105,8 +104,8 @@ def _edge_average(image: Image.Image) -> tuple[int, int, int]:
     return tuple(int(t / count + 0.5) for t in totals)  # type: ignore[return-value]
 
 
-def _product_average(cutout_png: bytes) -> tuple[int, int, int] | None:
-    cutout = Image.open(io.BytesIO(cutout_png)).convert("RGBA")
+def _product_average(cutout_png: bytes, placement: str = Placement.CENTER) -> tuple[int, int, int] | None:
+    cutout = prepare_cutout(Image.open(io.BytesIO(cutout_png)), placement)
     totals, count = [0, 0, 0], 0
     for r, g, b, a in cutout.getdata():
         if a == 255:
@@ -119,7 +118,8 @@ def _product_average(cutout_png: bytes) -> tuple[int, int, int] | None:
     return tuple(int(t / count + 0.5) for t in totals)  # type: ignore[return-value]
 
 
-def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, ...], purpose: str, *, generated_background: bool = False) -> list[CheckResult]:
+def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, ...], purpose: str, *, generated_background: bool = False,
+            placement: str = Placement.CENTER) -> list[CheckResult]:
     """컨셉이 요구한 검사만 돌린다(요구한 순서 그대로). 알 수 없는 검사 코드는 NOT_CHECKED로 남긴다(조용히 빼지 않는다).
 
     `generated_background`(2026-11-10): 배경을 AI가 그렸으면 "글자 없음"을 코드가 보장하지 못한다 — NO_TEXT_OVERLAY를 BY_CONSTRUCTION이 아니라 NOT_CHECKED로 알린다."""
@@ -128,11 +128,11 @@ def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, 
     results: list[CheckResult] = []
     for code in required_checks:
         if code == "PRODUCT_PRESERVATION":
-            measured = product_preservation(cutout_png, composed_png)
+            measured = product_preservation(cutout_png, composed_png, placement=placement)
             ok = measured["pixels"] > 0 and measured["ratio"] >= PRESERVATION_MIN
             results.append(CheckResult(code, PASS if ok else FAIL, {"ratio": round(measured["ratio"], 4), "pixels": measured["pixels"], "min": PRESERVATION_MIN}))
         elif code == "BACKGROUND_CONTRAST":
-            product = _product_average(cutout_png)
+            product = _product_average(cutout_png, placement)
             if product is None:
                 results.append(CheckResult(code, FAIL, {"reason": "NO_OPAQUE_PIXELS"}))
                 continue

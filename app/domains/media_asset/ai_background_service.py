@@ -46,6 +46,7 @@ from app.domains.media_asset import ai_background_concepts as abc
 from app.domains.media_asset import cloudflare_image_client as cfc
 from app.domains.media_asset.composition import BackgroundKind
 from app.domains.media_asset.composition import BackgroundSpec
+from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.composition import CANVAS_SIZE
 from app.domains.media_asset.concept_run_service import ConceptRunOutcome
 from app.domains.media_asset.concept_run_service import ConceptRunService
@@ -237,6 +238,7 @@ class AiBackgroundService:
             result = runner.compose_and_save(
                 company_id, requested_by, cutout, cutout_bytes, code, purpose, spec, concept.checks, operation=OPERATION, provider_code=PROVIDER_CODE,
                 model_name=f"{code}-v{version}", label=f"ai-bg-{code}-v{version}-{purpose}.png", generated_background=True,
+                placement=Placement.GROUNDED,   # 2026-11-15: 제품을 바닥선에 세우고 바닥 그림자(가운데 떠 보이던 문제)
             )
             outcomes.append(AiBackgroundOutcome(code, result.status, result, version, reused, result.reason))
         return outcomes
