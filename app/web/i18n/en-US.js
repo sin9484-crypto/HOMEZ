@@ -1705,6 +1705,8 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.rights_verified_badge": "Rights verified",
   "lw.rights_unverified_badge": "Rights unverified",
   "lw.rights_unverified_selection_blocked": "Cannot be selected — usage rights not verified.",
+  "lw.media_file_missing": "File missing — the image file is gone and cannot be opened. Please upload it again.",
+  "lw.media_missing_notice": "{count} of this product's images have lost their files (only the record remains). They are marked 'File missing' — upload them again to use them.",
   "lw.rights_confirm_btn": "Verify rights",
   "lw.rights_revoke_btn": "Undo verification",
   "lw.rights_confirm_title": "Select the basis for rights verification",

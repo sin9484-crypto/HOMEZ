@@ -1349,6 +1349,8 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 /* 2026-11-13 이미지 AI 편집 기록 — 사진 카드의 한 줄 기록과 표시 */
 .lw-edit-record { font-size: 12px; margin: 0; color: var(--text-muted, #6b7280); overflow-wrap: anywhere; }
 .lw-edit-record:empty { display: none; }
+.lw-media-missing { font-size: 12px; font-weight: 600; color: var(--danger); margin: 0; }
+.lw-media-card.is-missing .lw-media-thumb { outline: 2px dashed var(--danger); outline-offset: -2px; }
 /* 2026-11-14 상세 글에서 속성 뽑기(조사 문서 3-6) */
 .lw-attr-suggest { margin: 8px 0 12px; }
 .lw-attr-suggest textarea { width: 100%; box-sizing: border-box; min-height: 96px; margin: 6px 0; }

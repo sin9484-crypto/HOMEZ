@@ -657,10 +657,15 @@ def list_assets_for_owner(
     이미지 생성 Job 제출/취소/재시도(쓰기)는 그대로 admin_guard."""
 
     service = ImageGenerationJobQueueService(db)
-
-    return service.list_active_assets(
+    assets = service.list_active_assets(
         current_user.company_id, owner_type, owner_id,
     )
+    # 2026-11-18 — 파일이 사라진 사진을 화면에서 알아볼 수 있게 표시만 한다(읽기 전용, 기록은 그대로).
+    missing = service.missing_file_ids(assets)
+    return [
+        MediaAssetResponse.model_validate(asset).model_copy(update={"file_missing": asset.id in missing})
+        for asset in assets
+    ]
 
 
 @router.get("/owners/{owner_type}/{owner_id}/edit-records")

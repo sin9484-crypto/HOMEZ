@@ -328,6 +328,8 @@ class MediaAssetResponse(BaseModel):
     source_domain: str | None = None
     source_classification: str = "UNKNOWN"
     created_at: datetime
+    # 2026-11-18 — 소유자별 사진 목록만 채운다: 기록은 있는데 저장소에 파일이 없으면 True(화면에 '파일 없음' 표시).
+    file_missing: bool = False
 
 
 class ImageGenerationResultResponse(BaseModel):

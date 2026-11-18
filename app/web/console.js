@@ -13922,6 +13922,18 @@
   // 모르는 단계 코드는 서버 글을 그대로 보이지 않고 일반 문구로. AI 생성이 섞이면 표시를 붙인다(쿠팡 규정 원문 미확인 — 경고는 사전검사가 한다).
   const LW_EDIT_KINDS = ["ORIGINAL", "SPLIT", "CUTOUT", "MANUAL_EDIT", "ADJUST", "BACKGROUND_SWAP", "SCENE", "BACKGROUND_PHOTO", "AI_BACKGROUND", "AI_GENERATED", "DETAIL_PAGE", "UNKNOWN"];
 
+  // 2026-11-18 — 기록은 있는데 파일이 사라진 사진(서버 목록의 file_missing === true)을 알아보게 표시만 한다. 고르기·버튼은 그대로.
+  function lwMissingFileHtml(asset) {
+    if (!asset || asset.file_missing !== true) return "";
+    return `<p class="lw-media-missing">${escapeHtml(HomezI18n.t("lw.media_file_missing"))}</p>`;
+  }
+
+  function lwMissingNoticeHtml(assets) {
+    const count = (Array.isArray(assets) ? assets : []).filter((a) => a && a.file_missing === true).length;
+    if (!count) return "";
+    return `<div class="banner banner-warn">${escapeHtml(HomezI18n.t("lw.media_missing_notice", { count }))}</div>`;
+  }
+
   function lwEditRecordHtml(record) {
     if (!record || !Array.isArray(record.steps) || !record.steps.length) return "";
     const t = (key) => HomezI18n.t(`lw.${key}`);
@@ -14071,6 +14083,7 @@
       ${lwRefNoticeHtml()}
       ${lwAdjNoticeHtml()}
       ${lwConceptNoticeHtml()}
+      ${lwMissingNoticeHtml(assets)}
       <p class="stat-sub">${HomezI18n.t("lw.media_add_hint")}</p>
 
       <div class="lw-media-search-panel">
@@ -14111,8 +14124,9 @@
       <div class="lw-checklist lw-media-grid">${assets.map((a) => {
         const isVerified = a.rights_status === "VERIFIED";
         return `
-        <div class="lw-media-card" data-asset-id="${a.id}">
+        <div class="lw-media-card${a.file_missing === true ? " is-missing" : ""}" data-asset-id="${a.id}">
           <div class="lw-media-thumb" id="lw-thumb-${a.id}"></div>
+          ${lwMissingFileHtml(a)}
           <label class="lw-checklist-item">
             <input type="checkbox" value="${a.id}" ${selected.has(a.id) ? "checked" : ""} ${isVerified ? "" : "disabled"}>
             <span>#${a.id} · ${escapeHtml(a.purpose)} · ${escapeHtml(a.asset_role)}${a.asset_role === "GENERATED" && a.source_asset_id ? ` (from #${a.source_asset_id})` : ""}</span>
@@ -14144,6 +14158,7 @@
       <p class="field-error" id="lw-media-error"></p>`;
 
     assets.forEach((a) => {
+      if (a.file_missing === true) return;   // 파일이 없으면 미리보기를 부르지 않는다(빈 칸 대신 '파일 없음' 표시)
       lwLoadThumbUrl(a.id).then((url) => {
         const thumbEl = el(`lw-thumb-${a.id}`);
         if (thumbEl) thumbEl.innerHTML = `<img src="${url}" alt="">`;
@@ -18991,7 +19006,7 @@
           const card = document.createElement("div");
           card.className = "lp-image-card";
           card.innerHTML = `
-            <div class="lp-image-caption">${asset.purpose} · ${asset.width || "?"}×${asset.height || "?"}</div>
+            <div class="lp-image-caption">${asset.purpose} · ${asset.width || "?"}×${asset.height || "?"}${asset.file_missing === true ? ` · ${escapeHtml(HomezI18n.t("lw.media_file_missing"))}` : ""}</div>
           `;
           gallery.appendChild(card);
         });

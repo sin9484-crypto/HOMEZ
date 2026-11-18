@@ -109,6 +109,7 @@ from app.domains.media_asset.providers import ImageGenerationRequestItem
 from app.domains.media_asset.providers import get_provider
 from app.domains.media_asset.repository import MediaAssetRepository
 from app.domains.media_asset.schema import ImageGenerationJobSubmitRequest
+from app.domains.media_asset.storage import media_file_exists
 from app.domains.media_asset.storage import read_media_file
 from app.domains.media_asset.storage import write_media_file
 
@@ -1578,6 +1579,19 @@ class ImageGenerationJobQueueService:
         return self.repository.list_active_media_assets_for_owner(
             company_id, owner_type, owner_id,
         )
+
+    def missing_file_ids(self, assets: list[MediaAsset]) -> set[int]:
+        """2026-11-18 — 기록은 있는데 저장소에 파일이 없는 사진의 id(10-14 임시 폴더 저장으로 파일만 사라진 사진들).
+        읽기 전용: 파일이 있는지만 본다(기록·파일을 고치거나 지우지 않는다). 경로가 저장소를 벗어나는 등 잘못된 기록도 '없음'으로 본다."""
+
+        missing: set[int] = set()
+        for asset in assets:
+            try:
+                if not media_file_exists(self.media_root, asset.storage_path):
+                    missing.add(asset.id)
+            except (BadRequestException, OSError, ValueError):
+                missing.add(asset.id)
+        return missing
 
     def mark_orphaned_assets(
         self, company_id: int, active_owner_ids: dict,

@@ -1716,6 +1716,8 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.rights_verified_badge": "사용권 확인됨",
   "lw.rights_unverified_badge": "사용권 미확인",
   "lw.rights_unverified_selection_blocked": "사용권이 확인되지 않아 선택할 수 없습니다.",
+  "lw.media_file_missing": "파일 없음 — 사진 파일이 사라져 열 수 없습니다. 다시 올려 주세요.",
+  "lw.media_missing_notice": "이 상품 사진 중 {count}장은 파일이 사라져 열 수 없습니다(기록만 남음). 해당 사진은 '파일 없음'으로 표시됩니다 — 쓰려면 다시 올려 주세요.",
   "lw.rights_confirm_btn": "사용권 확인",
   "lw.rights_revoke_btn": "확인 취소",
   "lw.rights_confirm_title": "사용권 확인 근거를 선택하세요",
