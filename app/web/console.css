@@ -2932,3 +2932,9 @@ tr.lw-row-selected { background: #EAF6F0; }
 .odo-health-waiting { background: #E7F1FB; border-left-color: #2F6DB5; }
 .odo-health-off, .odo-health-paused { background: #FFF3D6; border-left-color: #B8860B; }
 .odo-health-failing, .odo-health-error, .odo-health-blocked { background: #FDEAEE; border-left-color: #E0435A; }
+
+/* 2026-11-21 — 주문 감지 공백 알림 */
+.odo-gap { display: grid; gap: 8px; margin: 12px 0; }
+.odo-gap-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.odo-gap-list li { display: grid; gap: 6px; justify-items: start; }
+.odo-gap-list p { margin: 0; }

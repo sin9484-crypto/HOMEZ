@@ -6849,6 +6849,28 @@
   // 상태·수동 확인·주기 변경·일시중지/재개. 구매자·수취인 개인정보를
   // 전혀 다루지 않는다(회사 단위 집계값만 — 백엔드
   // OrderCollectionOpsStatusResponse도 동일 원칙).
+  // 2026-11-21 — 연결을 바꿔 주문 감지가 읽지 않은 구간 알림(사용자 결정 "2-B"). 자동으로 이어 읽지 않고 알리기만 한다.
+  function odoGapNoticeHtml(gaps) {
+    const list = (Array.isArray(gaps) ? gaps : []).filter((g) => g && Number.isInteger(g.cursor_id));
+    if (!list.length) return "";
+    const items = list.map((g) => `
+        <li>
+          <p>${escapeHtml(HomezI18n.t("odo.gap_item", {
+            old: g.old_display_name || `#${g.old_store_connection_id}`,
+            from: fmtDate(g.gap_from),
+            new: g.new_display_name || `#${g.new_store_connection_id}`,
+            created: fmtDate(g.new_connection_created_at),
+          }))}</p>
+          <button type="button" class="btn btn-secondary btn-sm" data-gap-ack="${g.cursor_id}">${escapeHtml(HomezI18n.t("odo.gap_ack_btn"))}</button>
+        </li>`).join("");
+    return `
+      <div class="banner banner-warn odo-gap" role="alert">
+        <strong>${escapeHtml(HomezI18n.t("odo.gap_title"))}</strong>
+        <ul class="odo-gap-list">${items}</ul>
+        <p class="hint-text">${escapeHtml(HomezI18n.t("odo.gap_hint"))}</p>
+      </div>`;
+  }
+
   async function loadOrderCollectionOps() {
     const wrap = el("odo-wrap");
     wrap.innerHTML = `<p class="loading-text">${HomezI18n.t("common.loading")}</p>`;
@@ -6876,6 +6898,7 @@
           <strong>${escapeHtml(HomezI18n.t(`odo.health.${healthCode}`))}</strong>
           <span>${escapeHtml(data.health_message || "")}</span>
         </div>
+        ${odoGapNoticeHtml(data.collection_gaps)}
         <h3>${escapeHtml(HomezI18n.t("odo.status_heading"))}</h3>
         <dl class="kv-list">
           <dt>${escapeHtml(HomezI18n.t("odo.function_mode_label"))}</dt>
@@ -6924,6 +6947,25 @@
         <div id="odo-test-budget-result"></div>
       </div>
     `;
+
+    wrap.querySelectorAll("[data-gap-ack]").forEach((btn) => {
+      btn.addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
+        const cursorId = Number(btn.getAttribute("data-gap-ack"));
+        if (!Number.isInteger(cursorId)) return;
+        const { confirmed } = await confirmDialog({
+          title: HomezI18n.t("odo.gap_ack_confirm_title"),
+          body: HomezI18n.t("odo.gap_ack_confirm_body"),
+        });
+        if (!confirmed) return;
+        try {
+          await apiFetch(`/orders/collection-ops/gaps/${cursorId}/acknowledge`, { method: "POST" });
+          toast(HomezI18n.t("odo.gap_ack_success"), "success");
+          loadOrderCollectionOps();
+        } catch (err) {
+          toast((err && err.message) || HomezI18n.t("odo.gap_ack_error"), "error");
+        }
+      }));
+    });
 
     el("odo-trigger-btn").addEventListener("click", (event) => withButtonGuard(event.currentTarget, async () => {
       // 2026-09-17 Phase 7A 사후 감사(요구사항 5/6) — 실제로 누르기

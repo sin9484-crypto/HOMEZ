@@ -155,6 +155,23 @@ class OrderCollectionPositionResponse(BaseModel):
 # 않는다(회사 단위 집계값만). `app/domains/order/auto_collection_
 # scheduler.py`가 채우는 `OrderAutoCollectionState` 그대로 반영한다.
 
+class OrderCollectionGapResponse(BaseModel):
+    """2026-11-21 — 연결을 바꿔 주문 감지가 읽지 않은 구간(`collection_gap.find_collection_gaps`). 시각은 UTC."""
+    cursor_id: int
+    channel_status: str
+    old_store_connection_id: int
+    old_display_name: str
+    gap_from: datetime
+    new_store_connection_id: int
+    new_display_name: str
+    new_connection_created_at: datetime
+
+
+class OrderCollectionGapAckResponse(BaseModel):
+    cursor_id: int
+    acknowledged: bool
+
+
 class OrderCollectionOpsStatusResponse(BaseModel):
     company_id: int
     function_mode: str
@@ -175,6 +192,8 @@ class OrderCollectionOpsStatusResponse(BaseModel):
     health_message: str = ""
     # 주기는 5분으로 고정이라 화면에서 바꿀 수 없다.
     interval_fixed: bool = True
+    # 2026-11-21 — 연결을 바꿔 읽지 않은 구간(운영자가 '확인함'을 누르기 전까지 알린다).
+    collection_gaps: list[OrderCollectionGapResponse] = []
 
 
 class OrderCollectionOpsTriggerResponse(BaseModel):

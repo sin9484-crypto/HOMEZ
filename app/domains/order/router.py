@@ -49,6 +49,8 @@ from app.domains.order.schema import OrderExceptionResponse
 from app.domains.order.schema import OrderIngestionEventResponse
 from app.domains.order.schema import OrderCollectionPositionResponse
 from app.domains.order.schema import OrderCollectionOpsStatusResponse
+from app.domains.order.schema import OrderCollectionGapAckResponse
+from app.domains.order.schema import OrderCollectionGapResponse
 from app.domains.order.schema import OrderCollectionOpsTriggerResponse
 from app.domains.order.schema import OrderCollectionOpsIntervalUpdateRequest
 from app.domains.order.schema import OrderCollectionOpsResumeResponse
@@ -149,7 +151,49 @@ def get_collection_ops_status(
         last_unresolved_item_count=state.last_unresolved_item_count,
         last_failed_order_count=state.last_failed_order_count,
         health=health, health_message=health_message, interval_fixed=True,
+        collection_gaps=_collection_gap_responses(db, company_id),
     )
+
+
+def _collection_gap_responses(db: Session, company_id: int) -> list[OrderCollectionGapResponse]:
+    from app.domains.order.auto_collection_scheduler import NEW_ORDER_DETECTION_STATUSES
+    from app.domains.order.collection_gap import find_collection_gaps
+
+    return [
+        OrderCollectionGapResponse(**gap.__dict__)
+        for gap in find_collection_gaps(db, company_id, NEW_ORDER_DETECTION_STATUSES)
+    ]
+
+
+@router.post(
+    "/collection-ops/gaps/{cursor_id}/acknowledge",
+    response_model=OrderCollectionGapAckResponse,
+)
+def acknowledge_collection_gap(
+    cursor_id: int,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-11-21 — 운영자가 WING에서 그 구간 주문을 확인했다고 표시한다. 감사 기록 한 건만 남기고 커서·연결·주문은 바꾸지 않는다.
+    지금 알리고 있는 구간이 아니면(다른 회사·이미 확인함·구간 없음) 거절한다."""
+
+    from app.domains.order.collection_gap import GAP_ACK_ACTION
+    from app.domains.order.collection_gap import GAP_ACK_ENTITY
+
+    company_id = current_user.company_id
+    gap = next((g for g in _collection_gap_responses(db, company_id) if g.cursor_id == cursor_id), None)
+    if gap is None:
+        raise NotFoundException("ORDER_COLLECTION_GAP_NOT_FOUND: 지금 알리고 있는 주문 감지 공백이 아닙니다.")
+    write_audit_log(
+        db, user_id=current_user.id, company_id=company_id,
+        action=GAP_ACK_ACTION, entity=GAP_ACK_ENTITY, entity_id=str(cursor_id),
+        description=(
+            f"주문 감지 공백 확인함: 연결 {gap.old_store_connection_id}→{gap.new_store_connection_id}, "
+            f"{gap.channel_status}, {gap.gap_from.isoformat()}(UTC)부터"
+        ),
+    )
+    db.commit()
+    return OrderCollectionGapAckResponse(cursor_id=cursor_id, acknowledged=True)
 
 
 @router.get(
