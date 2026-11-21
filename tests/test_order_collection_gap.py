@@ -48,6 +48,7 @@ CSS = (ROOT / "app/web/console.css").read_text(encoding="utf-8")
 NODE = shutil.which("node")
 EASY = (ROOT / "app/web/easy/easy_view.js").read_text(encoding="utf-8")
 EASY_TEXTS = (ROOT / "app/web/easy/easy_texts.js").read_text(encoding="utf-8")
+I18N_JS = (ROOT / "app/web/i18n/i18n.js").read_text(encoding="utf-8")
 
 OLD_LAST = datetime(2026, 11, 3, 2, 43, 36)      # 옛 연결이 마지막으로 읽은 끝(UTC)
 NEW_CREATED = datetime(2026, 11, 8, 5, 5, 4)     # 새 연결을 만든 때(UTC)
@@ -250,7 +251,7 @@ def table(source):
 
 HARNESS = r"""
 const TABLE = JSON.parse(process.env.TABLE_JSON);
-const HomezI18n = { t(key, params) { let s = TABLE[key] !== undefined ? TABLE[key] : key; for (const [k, v] of Object.entries(params || {})) s = s.split("{" + k + "}").join(String(v)); return s; } };
+const HomezI18n = { t(key, params) { let s = TABLE[key] !== undefined ? TABLE[key] : key; for (const [k, v] of Object.entries(params || {})) s = s.replace("{" + k + "}", String(v)); return s; } };  // i18n.js t()와 같이 첫 번째만 바꾼다
 const escapeHtml = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const fmtDate = (v) => "D[" + v + "]";
 __SOURCES__
@@ -310,6 +311,16 @@ class UiSourceTests(unittest.TestCase):
             self.assertEqual(set(re.findall(r"\{\w+\}", ko[key])), set(re.findall(r"\{\w+\}", en[key])), key)
         self.assertEqual(set(re.findall(r"\{\w+\}", ko["odo.gap_item"])), {"{old}", "{from}", "{new}", "{created}"})
         self.assertIn(".odo-gap-list {", CSS)
+
+    def test_each_placeholder_appears_once_because_i18n_replaces_only_the_first(self):
+        # 2026-11-21 실제 화면에서 두 번째 {from}이 그대로 보였다 — i18n.js t()는 자리마다 첫 번째만 바꾼다.
+        self.assertIn("acc.replace(`{${paramKey}}`", I18N_JS)
+        texts = list(table(KO).items()) + list(table(EN).items())
+        texts += [(k, json.loads(v)) for k, v in re.findall(r'"(easy\.today\.gap_[a-z_]+)": ("(?:[^"\\]|\\.)*")', EASY_TEXTS)]
+        self.assertEqual(len(texts), 30)
+        for key, value in texts:
+            for name in set(re.findall(r"\{\w+\}", value)):
+                self.assertEqual(value.count(name), 1, (key, name))
 
 
 class EasyViewTests(unittest.TestCase):

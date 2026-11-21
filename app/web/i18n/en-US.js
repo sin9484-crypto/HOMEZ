@@ -3759,7 +3759,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "odo.enable_btn": "Turn on auto detection",
   "odo.enable_confirm_body": "When on, new orders are checked from Coupang every 5 minutes and recorded in the HOMEZ order and purchase queues. You must re-enter your current password to turn it on.",
   "odo.gap_title": "There is a period when orders were not read automatically",
-  "odo.gap_item": "Connection '{old}' stopped after reading up to {from}. The new connection '{new}' (created {created}) did not continue from there; it started reading one hour before its first check. Paid orders placed from {from} until the new connection's first check may not have been read by HOMEZ.",
+  "odo.gap_item": "Connection '{old}' stopped after reading up to {from}. The new connection '{new}' (created {created}) did not continue from there; it started reading one hour before its first check. Paid orders placed in between may not have been read by HOMEZ.",
   "odo.gap_hint": "Check this period's orders in Coupang WING → Order/Delivery management, then press 'Checked'. This only hides the notice; orders and connections are not changed.",
   "odo.gap_ack_btn": "Checked in WING",
   "odo.gap_ack_confirm_title": "Did you check this period's orders?",
