@@ -14369,3 +14369,4 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 수정(커밋 29a801c): 쉬운 보기 '오늘 할 일'의 '주문을 읽지 않은 기간 확인' 줄 버튼이 화면 이동 없이 바로 'WING에서 확인함'(확인창 → `POST /orders/collection-ops/gaps/{id}/acknowledge` → 목록 다시 읽기). 운영 화면 버튼은 진한 기본 버튼. 시험 25개 OK, 쉬운 보기 관련 34개 모듈 661개 OK, 변이 5개 모두 잡힘.
 - 재시작: 백업 `Homez-Backups/pre_restart_gap_rowbtn_20261121_165406/homez.db`(무결성 ok, 165표 행 수 동일, sha256 앞 12자리 7409a289b6e4) 뒤 정상 종료·`HOMEZ.lnk`로 다시 켬(16:55:21, 포트 58256). 새 화면 코드·고친 `{from}` 문구 반영 확인.
 - 사용자 "확인함 누름 완료" 뒤 확인: '확인함' 기록(`ORDER_COLLECTION_GAP_ACKNOWLEDGED`)은 **0건**, 공백 알림 그대로 1건. 16:53(KST)에 눌린 것은 운영 화면의 **'지금 확인'**(`ORDER_COLLECTION_OPS_MANUAL_TRIGGER`)이었다 — 쿠팡 주문 조회 1회 성공, 새 주문 0건. '확인함' 요청은 서버에 온 적이 없다(쓰기 차단 모드 아님 — 같은 시각 다른 쓰기 요청은 성공).
+- 17:04:46(KST) 사용자가 '오늘 할 일' 줄의 'WING에서 확인함'을 눌러 감사 기록 #319 `ORDER_COLLECTION_GAP_ACKNOWLEDGED`(사용자 1, 커서 1, 연결 1→2, ACCEPT, 11-03 02:43 UTC부터) 1건이 남았다. 공백 알림 0건. 커서 1(FAILED)·커서 7(IDLE)·연결은 그대로. 이로써 주문 감지 1번 조사·공백 확인(WING 주문 없음)·알림 처리가 끝났다.
