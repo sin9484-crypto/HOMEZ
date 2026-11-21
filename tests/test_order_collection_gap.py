@@ -46,6 +46,8 @@ KO = (ROOT / "app/web/i18n/ko-KR.js").read_text(encoding="utf-8")
 EN = (ROOT / "app/web/i18n/en-US.js").read_text(encoding="utf-8")
 CSS = (ROOT / "app/web/console.css").read_text(encoding="utf-8")
 NODE = shutil.which("node")
+EASY = (ROOT / "app/web/easy/easy_view.js").read_text(encoding="utf-8")
+EASY_TEXTS = (ROOT / "app/web/easy/easy_texts.js").read_text(encoding="utf-8")
 
 OLD_LAST = datetime(2026, 11, 3, 2, 43, 36)      # 옛 연결이 마지막으로 읽은 끝(UTC)
 NEW_CREATED = datetime(2026, 11, 8, 5, 5, 4)     # 새 연결을 만든 때(UTC)
@@ -308,6 +310,38 @@ class UiSourceTests(unittest.TestCase):
             self.assertEqual(set(re.findall(r"\{\w+\}", ko[key])), set(re.findall(r"\{\w+\}", en[key])), key)
         self.assertEqual(set(re.findall(r"\{\w+\}", ko["odo.gap_item"])), {"{old}", "{from}", "{new}", "{created}"})
         self.assertIn(".odo-gap-list {", CSS)
+
+
+class EasyViewTests(unittest.TestCase):
+    """2026-11-21 — 쉬운 보기에는 '주문 자동 감지' 메뉴가 없어 알림을 찾을 수 없었다(사용자 "확인함 어디서 확인하는것이지").
+    '오늘 할 일'에 확인 필요 줄을 올리고 그 화면으로 보낸다."""
+
+    def block(self):
+        start = EASY.index("// 3-1) 2026-11-21")
+        return EASY[start:EASY.index("// 4) 허용 요청", start)]
+
+    def test_today_list_shows_the_gap_and_links_to_the_screen(self):
+        block = self.block()
+        self.assertIn("collect.collection_gaps", block)
+        self.assertIn('group: "CHECK"', block)
+        self.assertIn('action: { label: T("easy.today.gap_action"), run: () => B.navigateTo("order-collection-ops") }', block)
+        self.assertIn("if (gaps.length) {", block)
+        load = EASY[EASY.index("async function loadToday()"):]
+        self.assertLess(load.index('api("/orders/collection-ops/status")'), load.index("// 3-1) 2026-11-21"))
+        self.assertLess(EASY.index("// 3-1) 2026-11-21"), EASY.index("// 4) 허용 요청"))
+
+    def test_easy_texts_exist_in_both_languages_with_the_same_placeholders(self):
+        found = re.findall(r'"(easy\.today\.gap_[a-z_]+)": ("(?:[^"\\]|\\.)*")', EASY_TEXTS)
+        keys = [k for k, _ in found]
+        self.assertEqual(len(keys), 14)
+        ko = {k: json.loads(v) for k, v in found[:7]}
+        en = {k: json.loads(v) for k, v in found[7:]}
+        self.assertEqual(set(ko), set(en))
+        for key in ko:
+            self.assertEqual(set(re.findall(r"\{\w+\}", ko[key])), set(re.findall(r"\{\w+\}", en[key])), key)
+        self.assertIn("WING에서 확인함", ko["easy.today.gap_detail"])
+        self.assertIn("{from}", ko["easy.today.gap_sub"])
+        self.assertLess(EASY_TEXTS.index('"easy.today.gap_title": "주문을'), EASY_TEXTS.index('"easy.today.gap_title": "Check'))
 
 
 if __name__ == "__main__":

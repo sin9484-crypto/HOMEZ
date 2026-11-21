@@ -707,6 +707,21 @@
       });
     }
 
+    // 3-1) 2026-11-21 — 연결을 바꿔 주문 감지가 읽지 않은 기간. 쉬운 보기에는 '주문 자동 감지' 메뉴가 없어 알림을 찾을 수 없었다
+    // (사용자 "확인함 어디서 확인하는것이지") — 운영자가 'WING에서 확인함'을 누르기 전까지 여기에도 올린다.
+    const gaps = (collect && Array.isArray(collect.collection_gaps)) ? collect.collection_gaps.filter((g) => g && g.gap_from) : [];
+    if (gaps.length) {
+      rows.push({
+        key: "detect-gap", group: "CHECK", title: T("easy.today.gap_title"),
+        sub: T("easy.today.gap_sub", { from: B.fmtDate(gaps[0].gap_from), n: gaps.length }),
+        product: { name: T("easy.today.detect_name"), sub: T("easy.today.detect_sub"), thumb: null, icon: "bag" },
+        chip: chip("red", T("easy.today.gap_chip")),
+        action: { label: T("easy.today.gap_action"), run: () => B.navigateTo("order-collection-ops") },
+        facts: gaps.map((g) => [T("easy.today.gap_fact"), T("easy.today.gap_from", { from: B.fmtDate(g.gap_from), name: g.new_display_name || "" })]),
+        detail: T("easy.today.gap_detail"),
+      });
+    }
+
     // 4) 허용 요청
     const pendingAllowances = (ext && Array.isArray(ext.pending)) ? ext.pending : [];
     if (pendingAllowances.length) {
