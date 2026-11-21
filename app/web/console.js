@@ -6861,7 +6861,7 @@
             new: g.new_display_name || `#${g.new_store_connection_id}`,
             created: fmtDate(g.new_connection_created_at),
           }))}</p>
-          <button type="button" class="btn btn-secondary btn-sm" data-gap-ack="${g.cursor_id}">${escapeHtml(HomezI18n.t("odo.gap_ack_btn"))}</button>
+          <button type="button" class="btn btn-primary" data-gap-ack="${g.cursor_id}">${escapeHtml(HomezI18n.t("odo.gap_ack_btn"))}</button>
         </li>`).join("");
     return `
       <div class="banner banner-warn odo-gap" role="alert">

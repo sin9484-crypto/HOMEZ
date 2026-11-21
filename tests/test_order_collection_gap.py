@@ -323,6 +323,28 @@ class UiSourceTests(unittest.TestCase):
                 self.assertEqual(value.count(name), 1, (key, name))
 
 
+def easy_function_source(name):
+    start = EASY.index(f"async function {name}(")
+    i = EASY.index("{", EASY.index(")", start))
+    depth = 0
+    for j in range(i, len(EASY)):
+        depth += {"{": 1, "}": -1}.get(EASY[j], 0)
+        if depth == 0:
+            return EASY[start:j + 1]
+    raise AssertionError(name)
+
+
+EASY_HARNESS = r"""
+const calls = [], toasts = []; let confirms = 0, reloads = 0;
+const T = (k) => k;
+const api = async (path, opts) => { calls.push([path, opts && opts.method]); if (process.env.FAIL) throw new Error("거절"); return {}; };
+const B = { confirmDialog: async () => { confirms += 1; return { confirmed: Boolean(process.env.CONFIRMED) }; }, toast: (m, t) => toasts.push([m, t]) };
+const loadToday = () => { reloads += 1; };
+__SOURCE__
+ackCollectionGaps(JSON.parse(process.env.GAPS)).then(() => console.log(JSON.stringify({ calls, toasts, confirms, reloads })));
+"""
+
+
 class EasyViewTests(unittest.TestCase):
     """2026-11-21 — 쉬운 보기에는 '주문 자동 감지' 메뉴가 없어 알림을 찾을 수 없었다(사용자 "확인함 어디서 확인하는것이지").
     '오늘 할 일'에 확인 필요 줄을 올리고 그 화면으로 보낸다."""
@@ -331,15 +353,40 @@ class EasyViewTests(unittest.TestCase):
         start = EASY.index("// 3-1) 2026-11-21")
         return EASY[start:EASY.index("// 4) 허용 요청", start)]
 
-    def test_today_list_shows_the_gap_and_links_to_the_screen(self):
+    def test_today_list_shows_the_gap_with_the_button_on_the_row(self):
         block = self.block()
         self.assertIn("collect.collection_gaps", block)
         self.assertIn('group: "CHECK"', block)
-        self.assertIn('action: { label: T("easy.today.gap_action"), run: () => B.navigateTo("order-collection-ops") }', block)
+        # 2026-11-21 — 사용자 "어디에도 확인함 버튼이 있지 않음": 화면을 옮기지 않고 이 줄의 버튼이 바로 '확인함'을 보낸다.
+        self.assertIn('action: { label: T("easy.today.gap_action"), run: () => ackCollectionGaps(gaps) }', block)
         self.assertIn("if (gaps.length) {", block)
         load = EASY[EASY.index("async function loadToday()"):]
         self.assertLess(load.index('api("/orders/collection-ops/status")'), load.index("// 3-1) 2026-11-21"))
         self.assertLess(EASY.index("// 3-1) 2026-11-21"), EASY.index("// 4) 허용 요청"))
+
+    def test_ack_on_the_row_confirms_first_then_posts_then_reloads(self):
+        fn = easy_function_source("ackCollectionGaps")
+        self.assertLess(fn.index("B.confirmDialog"), fn.index("api(`/orders/collection-ops/gaps/${id}/acknowledge`, { method: \"POST\" })"))
+        self.assertIn("if (!confirmed) return;", fn)
+        self.assertLess(fn.index("api(`/orders"), fn.rindex("loadToday();"))
+
+    @unittest.skipUnless(NODE, "node가 없어 화면 함수를 실행해 볼 수 없다")
+    def test_ack_on_the_row_behaviour(self):
+        script = EASY_HARNESS.replace("__SOURCE__", easy_function_source("ackCollectionGaps"))
+        def run(confirmed, gaps, fail=False):
+            proc = subprocess.run([NODE, "-e", script], env={**os.environ, "CONFIRMED": "1" if confirmed else "", "FAIL": "1" if fail else "", "GAPS": json.dumps(gaps)},
+                                  capture_output=True, text=True, encoding="utf-8", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return json.loads(proc.stdout.strip().splitlines()[-1])
+        out = run(False, [{"cursor_id": 1}])
+        self.assertEqual((out["calls"], out["confirms"], out["reloads"]), ([], 1, 0))
+        out = run(True, [{"cursor_id": 1}, {"cursor_id": "2"}, None, {"cursor_id": 3}])
+        self.assertEqual(out["calls"], [["/orders/collection-ops/gaps/1/acknowledge", "POST"], ["/orders/collection-ops/gaps/3/acknowledge", "POST"]])
+        self.assertEqual((out["toasts"], out["reloads"]), ([["odo.gap_ack_success", "success"]], 1))
+        out = run(True, [{"cursor_id": 1}], fail=True)
+        self.assertEqual((out["toasts"], out["reloads"]), ([["거절", "error"]], 1))
+        out = run(True, [])
+        self.assertEqual((out["calls"], out["confirms"], out["reloads"]), ([], 0, 0))
 
     def test_easy_texts_exist_in_both_languages_with_the_same_placeholders(self):
         found = re.findall(r'"(easy\.today\.gap_[a-z_]+)": ("(?:[^"\\]|\\.)*")', EASY_TEXTS)

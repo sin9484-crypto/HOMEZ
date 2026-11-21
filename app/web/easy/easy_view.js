@@ -568,6 +568,21 @@
     });
   }
 
+  // 2026-11-21 — 주문 감지 공백 '확인함'(운영 화면 버튼과 같은 서버 경로). 확인창 뒤에만 보내고, 끝나면 목록을 다시 읽는다.
+  async function ackCollectionGaps(gaps) {
+    const ids = (Array.isArray(gaps) ? gaps : []).map((g) => g && g.cursor_id).filter((id) => Number.isInteger(id));
+    if (!ids.length) return;
+    const { confirmed } = await B.confirmDialog({ title: T("odo.gap_ack_confirm_title"), body: T("odo.gap_ack_confirm_body") });
+    if (!confirmed) return;
+    try {
+      for (const id of ids) await api(`/orders/collection-ops/gaps/${id}/acknowledge`, { method: "POST" });
+      B.toast(T("odo.gap_ack_success"), "success");
+    } catch (err) {
+      B.toast((err && err.message) || T("odo.gap_ack_error"), "error");
+    }
+    loadToday();
+  }
+
   async function loadToday() {
     const root = $("ez-root-easy-today");
     root.innerHTML = loadingHtml();
@@ -716,7 +731,8 @@
         sub: T("easy.today.gap_sub", { from: B.fmtDate(gaps[0].gap_from), n: gaps.length }),
         product: { name: T("easy.today.detect_name"), sub: T("easy.today.detect_sub"), thumb: null, icon: "bag" },
         chip: chip("red", T("easy.today.gap_chip")),
-        action: { label: T("easy.today.gap_action"), run: () => B.navigateTo("order-collection-ops") },
+        // 2026-11-21 — 화면을 옮겨 다니지 않고 이 줄에서 바로 '확인함'을 누른다(사용자 "어디에도 확인함 버튼이 있지 않음").
+        action: { label: T("easy.today.gap_action"), run: () => ackCollectionGaps(gaps) },
         facts: gaps.map((g) => [T("easy.today.gap_fact"), T("easy.today.gap_from", { from: B.fmtDate(g.gap_from), name: g.new_display_name || "" })]),
         detail: T("easy.today.gap_detail"),
       });
