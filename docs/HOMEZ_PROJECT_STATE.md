@@ -14376,3 +14376,4 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 원인: '오늘 할 일'의 "주문·배송 상태 자동 확인이 멈춰 있어요"는 쿠팡 읽기 `ORDER_TRACKING` 허용이 없어서다 — 마지막 허용 #7이 10-18 15:44(KST)에 만료된 뒤 새 허용이 없었다. 만료 7일(`RENEW_LOOKBACK_DAYS`)이 지나 승인 센터 '모두 연장' 목록에는 나오지 않는다.
 - 조치: 백업 `Homez-Backups/pre_tracking_request_20261121_172101/homez.db`(무결성 ok, sha256 앞 12자리 e52c3158c008) 뒤 `ExternalCallPolicyService.ensure_pending_request`로 허용 요청 #41(COUPANG·READ·ORDER_TRACKING·STANDING·시간당 30, PENDING)을 올렸다. 허용(비밀번호 재확인)은 사용자 몫.
 - 지금 추적할 주문: 0건(`tracked_task_ids` 빈 목록 — 유일한 주문은 10-14 배송완료). 허용해도 새 주문이 배송 중이 되기 전에는 쿠팡 호출이 생기지 않는다.
+- 사용자 "허용 완료": #41 `ACTIVE`, 시간당 30, 기간 **24시간**(기본값 그대로 — 11-22 17:24 KST 만료). 대기 중 허용 요청 0건. 쿠팡 읽기 감시 3종(주문·배송 상태 #41, 반품·문의 #26, 상품 상태 #28)이 모두 쓸 수 있는 상태라 '허용이 끝나 멈춘 확인' 알림 조건이 풀렸다(`health_service` 읽기 허용 판정).
