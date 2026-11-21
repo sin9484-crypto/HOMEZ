@@ -14370,3 +14370,9 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 재시작: 백업 `Homez-Backups/pre_restart_gap_rowbtn_20261121_165406/homez.db`(무결성 ok, 165표 행 수 동일, sha256 앞 12자리 7409a289b6e4) 뒤 정상 종료·`HOMEZ.lnk`로 다시 켬(16:55:21, 포트 58256). 새 화면 코드·고친 `{from}` 문구 반영 확인.
 - 사용자 "확인함 누름 완료" 뒤 확인: '확인함' 기록(`ORDER_COLLECTION_GAP_ACKNOWLEDGED`)은 **0건**, 공백 알림 그대로 1건. 16:53(KST)에 눌린 것은 운영 화면의 **'지금 확인'**(`ORDER_COLLECTION_OPS_MANUAL_TRIGGER`)이었다 — 쿠팡 주문 조회 1회 성공, 새 주문 0건. '확인함' 요청은 서버에 온 적이 없다(쓰기 차단 모드 아님 — 같은 시각 다른 쓰기 요청은 성공).
 - 17:04:46(KST) 사용자가 '오늘 할 일' 줄의 'WING에서 확인함'을 눌러 감사 기록 #319 `ORDER_COLLECTION_GAP_ACKNOWLEDGED`(사용자 1, 커서 1, 연결 1→2, ACCEPT, 11-03 02:43 UTC부터) 1건이 남았다. 공백 알림 0건. 커서 1(FAILED)·커서 7(IDLE)·연결은 그대로. 이로써 주문 감지 1번 조사·공백 확인(WING 주문 없음)·알림 처리가 끝났다.
+
+### 2026-11-21 주문·배송 상태 확인 허용 요청 #41(사용자 지시 "배송 상태 확인 허용 연장 진행해라")
+
+- 원인: '오늘 할 일'의 "주문·배송 상태 자동 확인이 멈춰 있어요"는 쿠팡 읽기 `ORDER_TRACKING` 허용이 없어서다 — 마지막 허용 #7이 10-18 15:44(KST)에 만료된 뒤 새 허용이 없었다. 만료 7일(`RENEW_LOOKBACK_DAYS`)이 지나 승인 센터 '모두 연장' 목록에는 나오지 않는다.
+- 조치: 백업 `Homez-Backups/pre_tracking_request_20261121_172101/homez.db`(무결성 ok, sha256 앞 12자리 e52c3158c008) 뒤 `ExternalCallPolicyService.ensure_pending_request`로 허용 요청 #41(COUPANG·READ·ORDER_TRACKING·STANDING·시간당 30, PENDING)을 올렸다. 허용(비밀번호 재확인)은 사용자 몫.
+- 지금 추적할 주문: 0건(`tracked_task_ids` 빈 목록 — 유일한 주문은 10-14 배송완료). 허용해도 새 주문이 배송 중이 되기 전에는 쿠팡 호출이 생기지 않는다.
