@@ -11,9 +11,12 @@ URL 상품 가져오기(2026-10-14) 서비스 검증 — 검색 → 수익 계�
 
 import io
 import os
+import shutil
 import tempfile
 import unittest
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from PIL import Image
@@ -261,6 +264,12 @@ class CreateDraftTests(unittest.TestCase):
         self.db.add(self.account)
         self.db.commit()
         self.transport = FakeTransport()
+        # 2026-11-21 — 이미지 가져오기가 실제 사진 폴더(storage/media)에 시험 그림을 쓰지 않게 임시 폴더로 돌린다.
+        self.media_dir = tempfile.mkdtemp(prefix="homez-import-media-")
+        env = mock.patch.dict(os.environ, {"HOMEZ_TEST_MEDIA_ROOT": self.media_dir})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(shutil.rmtree, self.media_dir, True)
 
     def tearDown(self):
         self.db.close()
@@ -388,6 +397,43 @@ class CreateDraftTests(unittest.TestCase):
         asset = self.db.get(MediaAsset, by_url[good].asset_id)
         self.assertEqual(asset.rights_status, "RIGHTS_UNVERIFIED")  # 사용권은 사용자가 직접 확인한다
         self.assertEqual(asset.source_classification, "SUPPLIER")
+        self.assertEqual(asset.source_url, good)
+        self.assertTrue((Path(self.media_dir) / asset.storage_path).exists())   # 임시 폴더에 썼다
+
+    def test_detail_original_keeps_where_it_came_from(self):
+        # 2026-11-21 — 상세 원본도 출처 주소를 남긴다(예전에는 대표 이미지만 남아 유실 때 다시 받을 주소가 없었다).
+        url = "https://onimg.onch3.co.kr/products/detail-long.png"
+        self.transport.pages[url] = FetchedResponse(200, {"Content-Type": "image/png"}, _png(780, 2600))
+        result = self._service().create_draft(self._request(image_urls_detail=[url]), self.company_id, user_id=1)
+        detail = [i for i in result.images if i.purpose == "DETAIL"]
+        self.assertEqual(len(detail), 1)
+        self.assertTrue(detail[0].success, detail[0].error_message)
+        original = self.db.get(MediaAsset, detail[0].asset_id)
+        self.assertEqual(original.asset_role, "ORIGINAL")
+        self.assertEqual(original.purpose, "DETAIL_SOURCE")
+        self.assertEqual(original.original_filename, "detail-1")
+        self.assertEqual(original.source_url, url)
+        self.assertEqual(original.source_domain, "onimg.onch3.co.kr")
+        self.assertEqual(original.source_classification, "SUPPLIER")
+        pieces = self.db.query(MediaAsset).filter(MediaAsset.source_asset_id == original.id).all()
+        self.assertGreaterEqual(len(pieces), 2)                     # 자르기는 그대로 한다
+        self.assertTrue((Path(self.media_dir) / original.storage_path).exists())
+
+    def test_a_recorded_source_is_never_overwritten(self):
+        service = self._service()
+        kept = SimpleNamespace(source_url="https://first.example/a.png", source_domain="first.example", source_classification="MANUFACTURER")
+        service._record_detail_source(kept, "https://second.example/b.png", "second.example", "SUPPLIER")
+        self.assertEqual((kept.source_url, kept.source_domain, kept.source_classification),
+                         ("https://first.example/a.png", "first.example", "MANUFACTURER"))
+        known = SimpleNamespace(source_url=None, source_domain=None, source_classification="MANUFACTURER")
+        service._record_detail_source(known, "https://x.example/" + "a" * 3000, "x.example", "SUPPLIER")
+        self.assertEqual(len(known.source_url), 2000)                # 열 길이를 넘지 않는다
+        self.assertEqual(known.source_classification, "MANUFACTURER")  # 이미 아는 구분은 바꾸지 않는다
+        unknown = SimpleNamespace(source_url=None, source_domain=None, source_classification="UNKNOWN")
+        service._record_detail_source(unknown, "https://y.example/c.png", "", "SUPPLIER")
+        self.assertEqual((unknown.source_url, unknown.source_domain, unknown.source_classification),
+                         ("https://y.example/c.png", None, "SUPPLIER"))
+        service._record_detail_source(None, "https://z.example/d.png", "z.example", "SUPPLIER")   # 없으면 아무것도 안 한다
 
 
 if __name__ == "__main__":

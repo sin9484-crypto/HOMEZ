@@ -14392,3 +14392,11 @@ fix_defects.py`의 mock 기반 부팅 실패 경로 검증)가 의도적으로
 - 백업 `Homez-Backups/pre_media_restore2_20261121_181838/homez.db`(무결성 ok, sha256 앞 12자리 c7aa61b5c67a) 뒤 감사 기록 `MEDIA_FILE_RESTORE`(batch-2026-11-21) 1건.
 - 남은 과제(제품 결함): 상품 가져오기가 상세 원본의 출처 주소를 기록하지 않는다 — 다음 유실 때 다시 찾기 어렵다.
 - 추가(같은 날): 남은 2장 #7·#14는 10-13 작업 때의 로컬 임시 폴더(`…/scratchpad/ch5306792_images/orig_4.png·orig_5.png`)에 같은 파일이 남아 있어 sha256 일치를 확인한 뒤 되살렸다(감사 기록 `MEDIA_FILE_RESTORE` 7,14 1건). **사용 중 사진 155장 모두 파일 있음·sha256 일치 — 유실 0장.** (백업은 위 `pre_media_restore2_20261121_181838`.)
+
+### 2026-11-21 상품 가져오기 — 상세 원본 출처 주소 저장(사용자 지시 "상세 원본 주소 저장 하도록 고쳐라")
+
+- 결함: `ProductImportService._import_images`가 대표 이미지는 출처 주소(`source_url`·`source_domain`·출처 구분)를 남기지만, 상세 원본(ORIGINAL·DETAIL_SOURCE)은 남기지 않았다 — 11-21 유실 복구 때 온채널 상품 페이지를 다시 분석해야 했던 원인.
+- 수정: 상세 원본을 받아 자른 뒤 `_record_detail_source`가 요청한 주소(최대 2000자)·실제 받은 곳의 도메인·출처 구분(온채널이면 SUPPLIER)을 원본 사진에 남긴다. 대표 이미지 가져오기와 같은 값. 이미 출처가 적힌 사진(같은 파일을 먼저 다른 곳에서 가져온 경우)은 덮어쓰지 않고, 이미 아는 출처 구분(UNKNOWN이 아닌 값)도 바꾸지 않는다. 조각(GENERATED)은 `source_asset_id`로 원본을 가리키므로 그대로.
+- 함께 고친 시험 문제: `tests/test_product_import_service.py`의 `CreateDraftTests`가 사진 폴더를 격리하지 않아 시험 그림을 실제 `storage/media`에 쓸 수 있었다 — `HOMEZ_TEST_MEDIA_ROOT`를 임시 폴더로 돌리고, 대표 이미지 시험에 임시 폴더에 썼는지 확인을 더했다(기존 검사는 그대로).
+- 시험: 해당 모듈 28개 OK(새 시험 2개 + 대표 이미지 시험 보강). 관련 24개 모듈 466개 OK(건너뜀 2). 변이 5개 모두 잡힘, 원본 복원. 시험 중 실제 `storage/media` 변경 0건.
+- 기존 사진은 바꾸지 않았다(DB 갱신 없음). 서버 코드라 앱 재시작 후부터 새로 가져오는 상세 원본에 적용된다.

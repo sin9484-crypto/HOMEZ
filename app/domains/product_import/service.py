@@ -550,6 +550,7 @@ class ProductImportService:
                         segment_height=_LONG_SEGMENT_HEIGHT, requested_by=user_id, company_id=company_id,
                         mode="SECTION",  # 섹션 경계에서 자른다(글자·표가 중간에서 잘리지 않게)
                     )
+                    self._record_detail_source(original, url, fetched.source_domain, classification)
                     results.append(schema.ImageImportResult(
                         source_url=url, purpose="DETAIL", success=True, asset_id=original.id,
                     ))
@@ -561,6 +562,24 @@ class ProductImportService:
                         source_url=url, purpose="DETAIL", success=False, error_message=message,
                     ))
         return results
+
+    def _record_detail_source(self, original, url: str, source_domain: str | None, classification: str) -> None:
+        """2026-11-21 — 상세 원본을 어디서 받았는지 남긴다(사용자 지시 "상세 원본 주소 저장 하도록 고쳐라").
+        예전에는 대표 이미지만 출처 주소가 남아, 파일을 잃었을 때 상세 원본을 다시 받을 주소를 찾을 수 없었다.
+        대표 이미지 가져오기(`UrlImageImportService`)와 같이 요청한 주소·실제 받은 곳의 도메인·출처 구분을 쓴다.
+        이미 출처가 적힌 사진(같은 파일을 다른 곳에서 먼저 가져온 경우)은 덮어쓰지 않는다."""
+
+        if original is None or original.source_url:
+            return
+        original.source_url = url[:2000]
+        original.source_domain = (source_domain or "")[:255] or None
+        if (original.source_classification or "UNKNOWN") == MediaAssetSourceClassification.UNKNOWN:
+            original.source_classification = classification
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
 
 __all__ = ["ProductImportError", "ProductImportService"]
