@@ -638,7 +638,9 @@
       key: `return:${r.id}`, group: "CHECK", title: T("easy.today.return_title"), sub: T("easy.today.return_sub"),
       product: { name: r.o || "—", sub: T("easy.today.return_receipt", { id: r.id }), thumb: null, icon: "bag" },
       chip: chip("red", tryT(`easy.rs.${String(r.s).toLowerCase()}`, String(r.s || ""))),
-      action: { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") },
+      action: afterSalesStale(r.t)
+        ? { label: T("easy.today.close_action"), run: () => closeAfterSales(r.entity_id) }
+        : { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") },
       facts: [[T("easy.fact.order"), r.o || "—"], [T("easy.today.return_state"), tryT(`easy.rs.${String(r.s).toLowerCase()}`, String(r.s || ""))],
         [T("easy.today.return_reason"), r.rc || "—"], [T("easy.today.return_fault"), tryT(`easy.fault.${String(r.f).toLowerCase()}`, String(r.f || "—"))],
         [T("easy.today.return_pickup"), returnPickupText(r)]],
@@ -651,7 +653,9 @@
         key: `inq:${q.entity_id}`, group: "CHECK", title: T("easy.today.inq_title"), sub: T("easy.today.inq_sub"), ageHours: h,
         product: { name: q.o || "—", sub: T(q.k === "INQ_CALL" ? "easy.today.inq_call" : "easy.today.inq_online", { id: q.id }), thumb: null, icon: "bag" },
         chip: h !== null && h >= INQ_OLD_HOURS ? chip("red", T("easy.cs.age_old", { h })) : chip("wait", T("easy.today.inq_unanswered")),
-        action: { label: T("easy.today.inq_action"), run: () => B.navigateTo("easy-orders") },
+        action: afterSalesStale(q.t)
+          ? { label: T("easy.today.close_action"), run: () => closeAfterSales(q.entity_id) }
+          : { label: T("easy.today.inq_action"), run: () => B.navigateTo("easy-orders") },
         facts: [[T("easy.fact.order"), q.o || "—"], [T("easy.brief.f_age"), h === null ? T("easy.brief.age_unknown") : T("easy.cs.age", { h })]], detail: T("easy.today.inq_detail"),
       }));
 
@@ -659,16 +663,19 @@
     ((today && today.supplier_returns) || []).forEach((c) => {
       const state = c.supplier_state;
       const done = state === "CONFIRMED" || state === "REFUNDED";
+      const refunded = state === "REFUNDED";
       rows.push({
         key: `supret:${c.receipt_id}`, group: state === "NOT_REQUESTED" ? "CHECK" : "PROGRESS", title: T("easy.sr.title"),
-        sub: T(state === "NOT_REQUESTED" ? "easy.sr.sub_todo" : (done ? "easy.sr.sub_done" : "easy.sr.sub_wait")),
+        sub: T(state === "NOT_REQUESTED" ? "easy.sr.sub_todo" : (refunded ? "easy.sr.sub_refunded" : (done ? "easy.sr.sub_done" : "easy.sr.sub_wait"))),
         product: { name: c.product_title || c.channel_order_id, sub: T("easy.sr.order_code", { code: c.supplier_order_code || "—" }), thumb: null, icon: "bag" },
-        chip: state === "NOT_REQUESTED" ? chip("red", T("easy.sr.chip_todo")) : (done ? chip("ok", T("easy.sr.chip_done")) : chip("wait", T("easy.sr.chip_wait"))),
+        chip: state === "NOT_REQUESTED" ? chip("red", T("easy.sr.chip_todo"))
+          : (refunded ? chip("ok", T("easy.sr.chip_refunded")) : (done ? chip("ok", T("easy.sr.chip_done")) : chip("wait", T("easy.sr.chip_wait")))),
+        // 2026-11-22(다) — '확인됨' 뒤에도 '온채널 상태 확인'을 남겨 환불 완료까지 읽을 수 있게 한다. 환불 완료면 주문 보기.
         action: state === "NOT_REQUESTED"
           ? { label: T("easy.sr.action_todo"), run: () => supplierReturnDialog(c) }
-          : (done ? { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") } : { label: T("easy.sr.action_check"), run: () => supplierReturnCheck(c) }),
+          : (refunded ? { label: T("easy.today.return_action"), run: () => B.navigateTo("easy-orders") } : { label: T("easy.sr.action_check"), run: () => supplierReturnCheck(c) }),
         facts: [[T("easy.fact.order"), c.channel_order_id], [T("easy.sr.f_receipt"), c.receipt_id], [T("easy.sr.f_code"), c.supplier_order_code || "—"],
-          [T("easy.sr.f_state"), T(done ? "easy.sr.chip_done" : (state === "NOT_REQUESTED" ? "easy.sr.chip_todo" : "easy.sr.chip_wait"))]],
+          [T("easy.sr.f_state"), T(refunded ? "easy.sr.chip_refunded" : (done ? "easy.sr.chip_done" : (state === "NOT_REQUESTED" ? "easy.sr.chip_todo" : "easy.sr.chip_wait")))]],
         detail: T("easy.sr.detail"),
       });
     });
@@ -1247,9 +1254,30 @@
     if (!ok) return;
     try {
       const r = await api(`/purchase-tasks/supplier-returns/${encodeURIComponent(c.receipt_id)}/check`, { method: "POST" });
-      B.toast(T(r.supplier_state === "REQUESTED" ? "easy.sr.check_not_yet" : "easy.sr.check_ok", { status: r.supplier_status_text || "—" }), r.supplier_state === "REQUESTED" ? "info" : "success");
+      B.toast(T(r.supplier_state === "REQUESTED" ? "easy.sr.check_not_yet" : (r.supplier_state === "REFUNDED" ? "easy.sr.check_refunded" : "easy.sr.check_ok"), { status: r.supplier_status_text || "—" }), r.supplier_state === "REQUESTED" ? "info" : "success");
       loadToday();
     } catch (err) { B.toast((err && err.message) || T("easy.error"), "error"); }
+  }
+
+  // 2026-11-22(나) — 7일이 지나 HOMEZ가 10분 읽기로 더는 따라가지 않는 반품·문의. 하루 한 번 다시 확인하지만(가), 쿠팡 조회로 찾지 못하면
+  // WING에서 처리한 뒤 여기서 닫는다. 받은 시각을 모르면 닫기 버튼을 보이지 않는다(지어내지 않는다).
+  const AFTER_SALES_STALE_HOURS = 7 * 24;
+  function afterSalesStale(value, nowMs) {
+    const h = inquiryAgeHours(value, nowMs === undefined ? Date.now() : nowMs);
+    return h !== null && h >= AFTER_SALES_STALE_HOURS;
+  }
+
+  async function closeAfterSales(entityId) {
+    if (!entityId) return;
+    const ok = await B.askConfirm(T("easy.today.close_body"), { title: T("easy.today.close_title"), okLabel: T("easy.today.close_action") });
+    if (!ok) return;
+    try {
+      await api(`/orders/after-sales/${encodeURIComponent(entityId)}/close`, { method: "POST" });
+      B.toast(T("easy.today.close_done"), "success");
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.today.close_error"), "error");
+    }
+    loadToday();
   }
 
   // 반품 회수 택배: 고객이 보낸 송장이 아직 없으면 그렇게 알려 준다.

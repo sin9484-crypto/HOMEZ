@@ -288,6 +288,20 @@ def refresh_after_sales_now(
     }
 
 
+@router.post("/after-sales/{entity_id}/close")
+def close_after_sales_manually(
+    entity_id: str,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-11-22(사용자 결정 '나') — 쿠팡 WING에서 이미 끝낸 반품·문의를 HOMEZ에서 닫는다. 쿠팡에는 아무것도 보내지 않고,
+    닫았다는 기록(누가·언제·그때의 마지막 쿠팡 기록)만 남긴다. 지금 열려 있는 항목만 받는다."""
+
+    from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+
+    return AfterSalesMonitorService(db).close_manually(current_user.company_id, entity_id, current_user.id)
+
+
 @router.post("/return-economics")
 def calculate_return_economics(
     data: ReturnEconomicsRequest,

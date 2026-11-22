@@ -114,12 +114,27 @@ class _AfterSalesMixin:
 
     # ---- 반품·취소 요청 ----
 
-    def read_return_requests(self, *, days: int = 7, cancel_type: str = "RETURN") -> AfterSalesRead:
-        """최근 `days`일(최대 31)에 접수된 반품(또는 취소) 요청 목록. 1회 호출."""
+    def _window_end(self, end_at) -> datetime | None:
+        """2026-11-22 — 조회 기간의 끝. 주지 않으면 지금. 주면 그 시각(KST로 바꿔 씀) — 지난 기간을 다시 읽을 때만 쓴다(미래는 None).
+        요청 서명 시각은 따로 `self._now()`를 그대로 쓴다(이 값과 섞지 않는다)."""
+
+        now = self._now().astimezone(KST)
+        if end_at is None:
+            return now
+        if not isinstance(end_at, datetime) or end_at.tzinfo is None:
+            return None
+        end = end_at.astimezone(KST)
+        return None if end > now else end
+
+    def read_return_requests(self, *, days: int = 7, cancel_type: str = "RETURN", end_at: datetime | None = None) -> AfterSalesRead:
+        """최근 `days`일(최대 31)에 접수된 반품(또는 취소) 요청 목록. 1회 호출. `end_at`을 주면 그 시각까지의 `days`일(지난 기간 다시 읽기)."""
 
         if cancel_type not in ("RETURN", "CANCEL") or not 1 <= int(days) <= MAX_RETURN_RANGE_DAYS:
             return AfterSalesRead(False, detail="조회 조건 오류")
-        end = self._now().astimezone(KST).replace(second=0, microsecond=0)
+        window_end = self._window_end(end_at)
+        if window_end is None:
+            return AfterSalesRead(False, detail="조회 기간 오류(끝 시각)")
+        end = window_end.replace(second=0, microsecond=0)
         start = end - timedelta(days=int(days))
         query = urlencode({
             "searchType": "timeFrame", "createdAtFrom": start.strftime("%Y-%m-%dT%H:%M"),
@@ -155,20 +170,24 @@ class _AfterSalesMixin:
 
     # ---- 문의(상품 문의·콜센터 문의) ----
 
-    def read_online_inquiries(self, *, days: int = 7) -> AfterSalesRead:
+    def read_online_inquiries(self, *, days: int = 7, end_at: datetime | None = None) -> AfterSalesRead:
         return self._read_inquiries(
-            ONLINE_INQUIRIES_PATH, {"answeredType": "ALL"}, page_size=50, days=days, parse=self._parse_online_inquiry,
+            ONLINE_INQUIRIES_PATH, {"answeredType": "ALL"}, page_size=50, days=days, parse=self._parse_online_inquiry, end_at=end_at,
         )
 
-    def read_call_center_inquiries(self, *, days: int = 7) -> AfterSalesRead:
+    def read_call_center_inquiries(self, *, days: int = 7, end_at: datetime | None = None) -> AfterSalesRead:
         return self._read_inquiries(
             CALL_CENTER_INQUIRIES_PATH, {"partnerCounselingStatus": "NONE"}, page_size=30, days=days, parse=self._parse_call_inquiry,
+            end_at=end_at,
         )
 
-    def _read_inquiries(self, path_template: str, fixed: dict, *, page_size: int, days: int, parse) -> AfterSalesRead:
+    def _read_inquiries(self, path_template: str, fixed: dict, *, page_size: int, days: int, parse, end_at: datetime | None = None) -> AfterSalesRead:
         if not 1 <= int(days) <= MAX_INQUIRY_RANGE_DAYS:
             return AfterSalesRead(False, detail="조회 기간 오류(최대 7일)")
-        end = self._now().astimezone(KST).date()
+        window_end = self._window_end(end_at)
+        if window_end is None:
+            return AfterSalesRead(False, detail="조회 기간 오류(끝 시각)")
+        end = window_end.date()
         start = end - timedelta(days=int(days) - 1)
         path = path_template.format(vendor_id=quote(self.vendor_id, safe=""))
         rows: list[dict] = []

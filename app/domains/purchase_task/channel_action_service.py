@@ -596,6 +596,8 @@ class CoupangChannelActions:
     _AFTER_SALES_READS = {
         "returns": "read_return_requests", "online": "read_online_inquiries", "call": "read_call_center_inquiries",
         "settlement": "read_settlement_histories", "revenue": "read_revenue_history",
+        # 2026-11-22 — 7일이 지나 열린 채 남은 반품·문의를 그 건이 들어온 주로 다시 읽는다(같은 읽기, 호출 기록 이름만 따로).
+        "returns_window": "read_return_requests", "online_window": "read_online_inquiries", "call_window": "read_call_center_inquiries",
     }
 
     def read_after_sales(self, *, company_id: int, store_connection_id: int, what: str, **params):

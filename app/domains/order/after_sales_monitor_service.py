@@ -21,12 +21,15 @@ import logging
 import re
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from typing import Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.audit_db import write_audit_log
+from app.core.exceptions import BadRequestException
+from app.core.exceptions import NotFoundException
 from app.domains.external_call.model import ExternalCallLog
 from app.domains.purchase_task.channel_action_service import CoupangChannelActions
 from app.domains.purchase_task.coupang_after_sales_provider import KST
@@ -37,6 +40,37 @@ logger = logging.getLogger("homez")
 EVENT_ACTION = "COUPANG_AFTER_SALES_EVENT"
 SETTLEMENT_EVERY = timedelta(hours=6)
 RETURN_STATUS_DONE = "RETURNS_COMPLETED"
+INQUIRY_ANSWERED = "ANSWERED"
+
+# 2026-11-22(사용자 결정 "가 나 다") — 10분 읽기는 오늘부터 7일 전까지만 본다. 그보다 오래 열린 채 남은 반품·문의는
+# 하루 한 번, 그 건이 들어온 주를 다시 읽어 끝났는지 본다(가). 쿠팡 조회로 찾지 못하는 건은 사람이 'WING에서 처리 완료'로 닫는다(나).
+RECENT_DAYS = 7
+RECHECK_EVERY = timedelta(hours=24)
+MAX_RECHECK_WINDOWS = 3
+WINDOW_BY_KIND = {"RETURN": "returns_window", "INQ_ONLINE": "online_window", "INQ_CALL": "call_window"}
+CLOSE_ACTION = "COUPANG_AFTER_SALES_MANUAL_CLOSE"
+_CLOSABLE_ID = re.compile(r"(RETURN|INQ_ONLINE|INQ_CALL):\d{1,20}")
+
+
+def is_open_event(event: dict) -> bool:
+    """끝나지 않은 반품(반품완료 전)·답하지 않은 문의인가."""
+
+    kind = event.get("k")
+    if kind == "RETURN":
+        return event.get("s") != RETURN_STATUS_DONE
+    if kind in ("INQ_ONLINE", "INQ_CALL"):
+        return event.get("s") == "UNANSWERED"
+    return False
+
+
+def _kst_time(value) -> datetime | None:
+    """쿠팡 시각 문자열(`2026-10-16T15:10:44+09:00` 또는 시간대 없는 한국 시각)을 KST 시각으로."""
+
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone(KST) if parsed.tzinfo else parsed.replace(tzinfo=KST)
 
 
 _MASKED_ID = re.compile(r'("id":)\*+\d*')
@@ -113,6 +147,75 @@ class AfterSalesMonitorService:
         )
         return row[0] if row else None
 
+    def _record_returns(self, company_id: int, rows, new_events: list[dict]) -> None:
+        for r in rows:
+            self._record(company_id, f"RETURN:{r['receipt_id']}", {
+                "k": "RETURN", "o": pack_order_id(r["order_id"]), "s": r["status"] or "UNKNOWN", "ty": r["receipt_type"],
+                "t": r["created_at"], "m": r["modified_at"], "rc": r["reason_category"], "f": r["fault_by"], "n": r["count"],
+                # 회수 택배: 송장번호는 긴 숫자라 중앙 가림 규칙을 피해 4자리씩 밑줄로 저장한다. 상태가 같아도 송장이 생기면 새 이벤트(g).
+                "dc": r.get("return_courier"), "di": pack_order_id(r.get("return_invoice")), "dt": r.get("return_delivery_type"),
+                "g": f"{r['status'] or 'UNKNOWN'}|{r.get('return_courier') or ''}|{pack_order_id(r.get('return_invoice')) or ''}",
+            }, new_events)
+
+    def _record_inquiries(self, company_id: int, rows, tag: str, new_events: list[dict]) -> None:
+        for r in rows:
+            self._record(company_id, f"{tag}:{r['inquiry_id']}", {
+                "k": tag, "o": pack_order_id((r["order_ids"] or [None])[0]), "s": INQUIRY_ANSWERED if r["answered"] else "UNANSWERED",
+                "t": r["inquiry_at"], "p": r.get("seller_product_id"),
+            }, new_events)
+
+    def _recheck_due(self, company_id: int) -> bool:
+        last = (
+            self.db.query(ExternalCallLog.created_at)
+            .filter(ExternalCallLog.company_id == company_id, ExternalCallLog.purpose == "AFTER_SALES_CHECK",
+                    ExternalCallLog.target.in_(tuple(WINDOW_BY_KIND.values())), ExternalCallLog.outcome == "SUCCEEDED")
+            .order_by(ExternalCallLog.id.desc())
+            .first()
+        )
+        return last is None or self._now() - last[0] >= RECHECK_EVERY
+
+    def _old_open_windows(self) -> list[tuple[str, datetime]]:
+        """7일보다 오래 열린 채 남은 항목마다 (읽기 종류, 기간 끝)을 만든다. 기간 끝 = 들어온 때 + 6일이라 그 건이 기간 안에 든다.
+        같은 종류·같은 날로 끝나는 기간은 한 번만, 한 번에 최대 `MAX_RECHECK_WINDOWS`개(오래된 것부터)."""
+
+        now_kst = self._now().replace(tzinfo=timezone.utc).astimezone(KST)
+        cutoff = now_kst - timedelta(days=RECENT_DAYS)
+        windows: dict[tuple[str, object], datetime] = {}
+        for event in self.latest_events(self.db):
+            what = WINDOW_BY_KIND.get(event.get("k"))
+            created = _kst_time(event.get("t"))
+            if what is None or created is None or created >= cutoff or not is_open_event(event):
+                continue
+            end = created + timedelta(days=RECENT_DAYS - 1)
+            windows.setdefault((what, end.date()), end)
+        ordered = sorted(windows.items(), key=lambda item: item[1])
+        return [(key[0], end) for key, end in ordered[:MAX_RECHECK_WINDOWS]]
+
+    # ------------------------------------------------------------
+    # 나) 'WING에서 처리 완료' — 사람이 닫는다(쿠팡에는 아무것도 보내지 않는다)
+    # ------------------------------------------------------------
+
+    def close_manually(self, company_id: int, entity_id: str, user_id: int | None) -> dict:
+        """지금 열려 있는 반품·문의 하나를 사람이 닫았다고 기록한다. 기록은 그때의 마지막 쿠팡 이벤트를 가리키므로,
+        그 뒤 쿠팡에서 새 상태가 오면(다시 열림 등) 그 상태를 따른다. 쿠팡 상태 기록 자체는 바꾸지 않는다."""
+
+        entity_id = str(entity_id or "")
+        if not _CLOSABLE_ID.fullmatch(entity_id):
+            raise BadRequestException("닫을 수 있는 반품·문의 번호가 아닙니다.")
+        row = self.db.execute(
+            text("SELECT id FROM audit_logs WHERE action = :a AND entity_id = :e AND company_id = :c ORDER BY id DESC LIMIT 1"),
+            {"a": EVENT_ACTION, "e": entity_id, "c": company_id},
+        ).first()
+        current = next((e for e in self.latest_events(self.db, limit=5000) if e.get("entity_id") == entity_id), None)
+        if row is None or current is None or not is_open_event(current):
+            raise NotFoundException("지금 열려 있는 반품·문의가 아닙니다.")
+        write_audit_log(
+            self.db, user_id=user_id, action=CLOSE_ACTION, entity="after_sales", entity_id=entity_id,
+            description=json.dumps({"ref": int(row[0]), "u": user_id}, separators=(",", ":")), company_id=company_id,
+        )
+        self.db.commit()
+        return {"entity_id": entity_id, "closed": True}
+
     def _settlement_due(self, company_id: int) -> bool:
         last = (
             self.db.query(ExternalCallLog.created_at)
@@ -149,31 +252,35 @@ class AfterSalesMonitorService:
                 return None
             return result
 
-        returns = read("returns", days=7)
+        returns = read("returns", days=RECENT_DAYS)
         if returns is not None:
-            for r in returns.rows:
-                self._record(company_id, f"RETURN:{r['receipt_id']}", {
-                    "k": "RETURN", "o": pack_order_id(r["order_id"]), "s": r["status"] or "UNKNOWN", "ty": r["receipt_type"],
-                    "t": r["created_at"], "m": r["modified_at"], "rc": r["reason_category"], "f": r["fault_by"], "n": r["count"],
-                    # 회수 택배: 송장번호는 긴 숫자라 중앙 가림 규칙을 피해 4자리씩 밑줄로 저장한다. 상태가 같아도 송장이 생기면 새 이벤트(g).
-                    "dc": r.get("return_courier"), "di": pack_order_id(r.get("return_invoice")), "dt": r.get("return_delivery_type"),
-                    "g": f"{r['status'] or 'UNKNOWN'}|{r.get('return_courier') or ''}|{pack_order_id(r.get('return_invoice')) or ''}",
-                }, summary["new_events"])
+            self._record_returns(company_id, returns.rows, summary["new_events"])
         if summary["blocked"]:
             self.db.commit()
             return summary
 
         for what, tag in (("online", "INQ_ONLINE"), ("call", "INQ_CALL")):
-            result = read(what, days=7)
+            result = read(what, days=RECENT_DAYS)
             if summary["blocked"]:
                 break
             if result is None:
                 continue
-            for r in result.rows:
-                self._record(company_id, f"{tag}:{r['inquiry_id']}", {
-                    "k": tag, "o": pack_order_id((r["order_ids"] or [None])[0]), "s": "ANSWERED" if r["answered"] else "UNANSWERED",
-                    "t": r["inquiry_at"], "p": r.get("seller_product_id"),
-                }, summary["new_events"])
+            self._record_inquiries(company_id, result.rows, tag, summary["new_events"])
+
+        # 가) 7일이 지나 열린 채 남은 반품·문의 — 하루 한 번, 그 건이 들어온 주를 다시 읽는다(같은 허용·같은 기록 규칙).
+        summary["rechecked_windows"] = 0
+        if not summary["blocked"] and self._recheck_due(company_id):
+            for what, end in self._old_open_windows():
+                result = read(what, days=RECENT_DAYS, end_at=end)
+                if summary["blocked"]:
+                    break
+                if result is None:
+                    continue
+                summary["rechecked_windows"] += 1
+                if what == "returns_window":
+                    self._record_returns(company_id, result.rows, summary["new_events"])
+                else:
+                    self._record_inquiries(company_id, result.rows, "INQ_ONLINE" if what == "online_window" else "INQ_CALL", summary["new_events"])
 
         if not summary["blocked"] and (settlement if settlement is not None else self._settlement_due(company_id)):
             now = self._now().replace(tzinfo=None) + timedelta(hours=9)
@@ -201,11 +308,21 @@ class AfterSalesMonitorService:
     @staticmethod
     def latest_events(db: Session, limit: int = 400) -> list[dict]:
         rows = db.execute(
-            text("SELECT entity_id, description FROM audit_logs WHERE action = :a ORDER BY id DESC LIMIT :n"),
+            text("SELECT id, entity_id, description FROM audit_logs WHERE action = :a ORDER BY id DESC LIMIT :n"),
             {"a": EVENT_ACTION, "n": limit},
         ).fetchall()
+        closes: dict[str, int] = {}
+        for entity_id, description in db.execute(
+            text("SELECT entity_id, description FROM audit_logs WHERE action = :a ORDER BY id DESC"), {"a": CLOSE_ACTION},
+        ).fetchall():
+            try:
+                ref = int(json.loads(description).get("ref"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            closes.setdefault(entity_id, ref)
         seen: dict[str, dict] = {}
-        for entity_id, description in rows:
+        event_ids: dict[str, int] = {}
+        for aid, entity_id, description in rows:
             if entity_id in seen:
                 continue
             payload = parse_event(description)
@@ -219,7 +336,16 @@ class AfterSalesMonitorService:
             if payload.get("k") in ("RETURN", "INQ_ONLINE", "INQ_CALL") and ":" in entity_id:
                 payload["id"] = entity_id.split(":", 1)[1]
             seen[entity_id] = {"entity_id": entity_id, **payload}
+            event_ids[entity_id] = int(aid)
+        # 나) 사람이 닫은 항목: 닫을 때의 마지막 쿠팡 이벤트가 지금도 마지막이면 끝난 것으로 보여 준다(mc=1). 그 뒤 새 이벤트가 오면 쿠팡 상태를 따른다.
+        for entity_id, event in seen.items():
+            if entity_id in closes and closes[entity_id] >= event_ids[entity_id] and is_open_event(event):
+                event["s"] = RETURN_STATUS_DONE if event.get("k") == "RETURN" else INQUIRY_ANSWERED
+                event["mc"] = 1
         return list(seen.values())
 
 
-__all__ = ["AfterSalesMonitorService", "EVENT_ACTION", "RETURN_STATUS_DONE", "pack_order_id", "parse_event", "unpack_order_id"]
+__all__ = [
+    "AfterSalesMonitorService", "CLOSE_ACTION", "EVENT_ACTION", "RETURN_STATUS_DONE", "is_open_event", "pack_order_id", "parse_event",
+    "unpack_order_id",
+]

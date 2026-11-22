@@ -364,7 +364,7 @@ class EasyViewService:
 
     @staticmethod
     def _public_event(event: dict) -> dict:
-        return {k: event.get(k) for k in ("entity_id", "k", "id", "o", "s", "ty", "t", "m", "rc", "f", "n", "d", "st", "sale", "fee", "fin", "p", "dc", "di", "dt") if k in event}
+        return {k: event.get(k) for k in ("entity_id", "k", "id", "o", "s", "ty", "t", "m", "rc", "f", "n", "d", "st", "sale", "fee", "fin", "p", "dc", "di", "dt", "mc") if k in event}
 
     def build_after_sales(self) -> dict:
         events = self._after_sales_events()
