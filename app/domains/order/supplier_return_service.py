@@ -26,6 +26,7 @@ from app.core.audit_db import write_audit_log
 from app.core.exceptions import BadRequestException
 from app.core.exceptions import NotFoundException
 from app.domains.order.after_sales_monitor_service import AfterSalesMonitorService
+from app.domains.order.after_sales_monitor_service import is_open_event
 from app.domains.order.after_sales_monitor_service import parse_event
 from app.domains.order.model import Order
 from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
@@ -70,10 +71,18 @@ class SupplierReturnService:
             events = AfterSalesMonitorService.latest_events(self.db)
         except Exception:  # noqa: BLE001
             return []
-        open_returns = [e for e in events if e.get("k") == "RETURN" and e.get("s") != "RETURNS_COMPLETED" and e.get("o")]
+        # 2026-11-22(사용자 지시 "온채널 줄 남기도록 고쳐라") — 쿠팡 반품이 끝나거나 사람이 닫아도, 온채널에 반품을 요청해 두고
+        # 환불 완료를 아직 기록하지 않은 건(REQUESTED·CONFIRMED)은 남긴다. 그래야 '온채널 상태 확인'으로 환불 완료까지 기록할 수 있다.
+        # 온채널에 요청한 적 없는 건은 예전처럼 쿠팡 반품이 열려 있을 때만 보인다.
+        returns = [e for e in events if e.get("k") == "RETURN" and e.get("o")]
         result = []
-        for event in open_returns:
+        for event in returns:
             receipt_id = str(event.get("id") or event["entity_id"].split(":", 1)[1])
+            latest = self._latest(receipt_id) or {}
+            supplier_state = latest.get("s") or NOT_REQUESTED
+            coupang_open = is_open_event(event)
+            if not coupang_open and supplier_state not in (REQUESTED, CONFIRMED):
+                continue
             order = self.db.query(Order).filter(Order.company_id == company_id, Order.channel_order_id == str(event["o"])).first()
             task = (
                 self.db.query(PurchaseTask).filter(PurchaseTask.company_id == company_id, PurchaseTask.source_order_id == order.id)
@@ -85,15 +94,14 @@ class SupplierReturnService:
                         PurchaseOrderSubmissionAttempt.status == "SUCCEEDED")
                 .order_by(PurchaseOrderSubmissionAttempt.id.desc()).first() if task else None
             )
-            latest = self._latest(receipt_id) or {}
             result.append({
-                "receipt_id": receipt_id, "channel_order_id": str(event["o"]), "coupang_status": event.get("s"),
+                "receipt_id": receipt_id, "channel_order_id": str(event["o"]), "coupang_status": event.get("s"), "coupang_open": coupang_open,
                 "reason_category": event.get("rc"), "fault_by": event.get("f"), "quantity_returned": event.get("n"),
                 "task_id": task.id if task else None, "product_title": task.product_title if task else None,
                 "task_quantity": task.quantity if task else None,
                 "supplier_order_code": getattr(attempt, "external_order_code", None) if attempt else None,
                 "supplier": "ONCH" if attempt else None,
-                "supplier_state": latest.get("s") or NOT_REQUESTED, "supplier_updated_at": latest.get("t"),
+                "supplier_state": supplier_state, "supplier_updated_at": latest.get("t"),
                 "supplier_status_text": latest.get("x"),
             })
         return result
@@ -139,12 +147,18 @@ class SupplierReturnService:
             new_state = REFUNDED
         elif any(w in text_value for w in RETURN_WORDS):
             new_state = CONFIRMED if state in (REQUESTED, CONFIRMED) else state
+        written_at = None
         if new_state != state:
+            written_at = datetime.utcnow().isoformat(timespec="seconds")
             self._write(company_id, c["receipt_id"], {
-                "s": new_state, "x": text_value[:30], "t": datetime.utcnow().isoformat(timespec="seconds"), "u": user_id,
+                "s": new_state, "x": text_value[:30], "t": written_at, "u": user_id,
             }, user_id)
             self.db.commit()
-        return {**self._candidate(company_id, receipt_id), "supplier_status_text": text_value}
+        # 2026-11-22 — 쿠팡 반품이 이미 끝난 건은 환불 완료를 기록하면 목록에서 빠진다. 그때도 방금 기록한 결과를 돌려준다(오류로 보이지 않게).
+        current = next((x for x in self.candidates(company_id) if x["receipt_id"] == str(receipt_id)), None)
+        if current is None:
+            current = {**c, "supplier_state": new_state, "supplier_updated_at": written_at or c.get("supplier_updated_at")}
+        return {**current, "supplier_status_text": text_value}
 
 
 __all__ = ["SupplierReturnService", "EVENT_ACTION", "NOT_REQUESTED", "REQUESTED", "CONFIRMED", "REFUNDED"]

@@ -280,6 +280,72 @@ class ManualCloseTests(StaleBase):
         self.assertEqual([c["receipt_id"] for c in SupplierReturnService(self.db).candidates(1)], [])
 
 
+class SupplierRowStaysTests(StaleBase):
+    """2026-11-22(사용자 지시 "온채널 줄 남기도록 고쳐라") — 쿠팡 반품이 끝나거나 닫혀도, 온채널에 요청해 두고 환불 완료를 기록하지
+    않은 건은 온채널 줄이 남아 '온채널 상태 확인'으로 환불 완료까지 기록할 수 있다."""
+
+    def setUp(self):
+        super().setUp()
+        from app.database.base import Base
+        from app.domains.order.model import Order
+        from app.domains.order.supplier_return_service import SupplierReturnService
+        from app.domains.purchase_task.model import PurchaseOrderSubmissionAttempt
+        Base.metadata.create_all(self.db.get_bind(), tables=[Order.__table__, PurchaseOrderSubmissionAttempt.__table__])
+        self.seed_old_items()
+        self.service = SupplierReturnService(self.db)
+
+    def supplier(self, state, text_value=None):
+        payload = {"s": state, "t": "2026-10-16T15:05:07", "u": 1}
+        if text_value:
+            payload["x"] = text_value
+        self.service._write(1, "900", payload, 1)
+        self.db.commit()
+
+    def rows(self):
+        self.db.expire_all()
+        return {c["receipt_id"]: c for c in self.service.candidates(1)}
+
+    def test_open_coupang_returns_are_listed_as_before(self):
+        row = self.rows()["900"]
+        self.assertEqual((row["supplier_state"], row["coupang_open"]), ("NOT_REQUESTED", True))
+
+    def test_requested_rows_stay_after_a_manual_close(self):
+        self.supplier("REQUESTED")
+        AfterSalesMonitorService(self.db).close_manually(1, "RETURN:900", user_id=1)
+        row = self.rows()["900"]
+        self.assertEqual((row["supplier_state"], row["coupang_open"], row["coupang_status"]), ("REQUESTED", False, "RETURNS_COMPLETED"))
+
+    def test_confirmed_rows_stay_after_a_manual_close(self):
+        self.supplier("CONFIRMED", "반품/교환 처리중(클레임 접수)")
+        AfterSalesMonitorService(self.db).close_manually(1, "RETURN:900", user_id=1)
+        row = self.rows()["900"]
+        self.assertEqual((row["supplier_state"], row["coupang_open"]), ("CONFIRMED", False))
+
+    def test_rows_stay_after_coupang_completes_and_leave_once_refunded(self):
+        self.supplier("CONFIRMED", "반품/교환 처리중(클레임 접수)")
+        self.seed("RETURN:900", {"k": "RETURN", "o": "8103_6025_0419_8", "s": "RETURNS_COMPLETED", "t": "2026-10-16T15:10:44+09:00", "g": "done"})
+        self.assertIn("900", self.rows())
+        result = self.service.apply_supplier_status(1, "900", "반품/환불 완료(전체환불)", user_id=1)
+        self.assertEqual((result["receipt_id"], result["supplier_state"]), ("900", "REFUNDED"))   # 목록에서 빠져도 결과는 돌려준다(오류 아님)
+        self.assertEqual(result["supplier_status_text"], "반품/환불 완료(전체환불)")
+        self.assertNotIn("900", self.rows())                                     # 환불까지 끝나면 사라진다
+        self.db.expire_all()
+        last = json.loads(self.db.execute(text("SELECT description FROM audit_logs WHERE entity_id='SUPRET:900' ORDER BY id DESC LIMIT 1")).first()[0])
+        self.assertEqual(last["s"], "REFUNDED")
+
+    def test_a_still_open_return_keeps_returning_its_listed_row(self):
+        self.supplier("REQUESTED")
+        result = self.service.apply_supplier_status(1, "900", "반품/교환 처리중(클레임 접수)", user_id=1)
+        self.assertEqual((result["supplier_state"], result["coupang_open"]), ("CONFIRMED", True))
+        self.assertEqual(self.rows()["900"]["supplier_state"], "CONFIRMED")
+
+    def test_never_requested_rows_still_leave_when_coupang_is_done(self):
+        AfterSalesMonitorService(self.db).close_manually(1, "RETURN:900", user_id=1)
+        self.assertNotIn("900", self.rows())
+        with self.assertRaises(NotFoundException):
+            self.service.mark_requested(1, "900", 1)                             # 닫힌 뒤에는 새로 요청 기록을 만들지 않는다
+
+
 class RouteSourceTests(unittest.TestCase):
 
     def test_close_route_is_admin_only_and_before_dynamic_routes(self):
