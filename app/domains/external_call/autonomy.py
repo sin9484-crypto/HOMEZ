@@ -53,6 +53,8 @@ ALWAYS_CONFIRM = "ALWAYS_CONFIRM"  # 돈·고객 글·재심사 — 매번 확�
 AI_SUGGEST_ONLY = "AI_SUGGEST_ONLY"  # AI는 제안에 머문다
 TOP = "TOP"                      # 이미 정해진 범위 자동(더 올릴 단계 없음)
 
+# 2026-11-22 사용자 확정(권장안 그대로): 올리기 후보 = 연속 성공 30회·30일 실패 0 / 내리기 검토 = 최근 7일 실패(쓰기 1회·그 밖 3회),
+# 실패율 5%, 지금 연속 실패 3회. (허용 연장 알림 시점 '기간의 10%·최대 72시간 전'은 external_call/service.py의 RENEW_* 값이다.)
 RAISE_STREAK = 30
 RAISE_WINDOW_DAYS = 30
 LOWER_WINDOW_DAYS = 7

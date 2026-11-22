@@ -5,7 +5,7 @@ Homez OS
 File : tests/test_listing_claim_check.py
 
 2026-11-09 — 상세·상품명 '주장 점검기'(사용자 승인 "2번 진행"): 순수 함수 규칙과 사전검사 경고 연결을 고정한다.
-  - 경고만 한다(차단 없음). 표현 목록은 사용자 확정 전 초안이다(RULES_CONFIRMED=False, 문구에도 적는다).
+  - 경고만 한다(차단 없음). 표현 목록은 2026-11-22 사용자 확정(RULES_CONFIRMED=True).
   - 상품명의 기존 의료·효능 단어는 기존 경고(PRODUCT_NAME_CLAIM_WORDS)와 겹쳐 세지 않는다.
   - 상세 설명의 두 자리 이상 숫자 중 공급처 자료(상품명·옵션·SKU·고시)에 없는 것만 '근거 확인'으로 알린다.
   - 사전검사 화면은 문구 자리({words}·{numbers})에 서버 값을 넣는다(이전에는 자리 표시가 그대로 보였다).
@@ -80,11 +80,13 @@ class RuleTests(unittest.TestCase):
         self.assertEqual((r.words, r.unsourced_numbers), ({}, []))
         self.assertEqual(check_listing_text(123, "항균", ["최고"]).words, {"MEDICAL": ["항균"], "ABSOLUTE": ["최고"]})
 
-    def test_the_list_is_marked_as_an_unconfirmed_draft(self):
-        self.assertFalse(RULES_CONFIRMED)
-        self.assertIn("draft", RULES_VERSION)
+    def test_the_list_is_marked_as_confirmed_by_the_user(self):
+        # 2026-11-22 사용자 결정("나머지는 권장사항으로 진행" — 지금 목록 그대로 확정, 경고만). 확정 표시와 버전이 결과에 그대로 실린다.
+        self.assertTrue(RULES_CONFIRMED)
+        self.assertNotIn("draft", RULES_VERSION)
+        self.assertEqual(RULES_VERSION, "listing_claims.20261122")
         out = check_listing_text("", [], "최고").to_dict()
-        self.assertEqual((out["rules_confirmed"], out["rules_version"]), (False, RULES_VERSION))
+        self.assertEqual((out["rules_confirmed"], out["rules_version"]), (True, RULES_VERSION))
 
 
 class PrecheckTests(unittest.TestCase):
@@ -155,7 +157,7 @@ class PrecheckTests(unittest.TestCase):
 
 class TextAndScreenTests(unittest.TestCase):
 
-    def test_messages_exist_in_both_languages_with_the_same_placeholders_and_say_draft(self):
+    def test_messages_exist_in_both_languages_with_the_same_placeholders_and_no_longer_say_draft(self):
         for key in KEYS:
             full = f'"listing_wizard.precheck.{key}"'
             ko = re.search(re.escape(full) + r': "((?:[^"\\]|\\.)*)"', KO).group(1)
@@ -163,7 +165,9 @@ class TextAndScreenTests(unittest.TestCase):
             self.assertEqual(sorted(re.findall(r"\{(\w+)\}", ko)), sorted(re.findall(r"\{(\w+)\}", en)), key)
             self.assertIn("차단하지 않습니다", ko, key)
             if key.startswith("listing_claim_"):
-                self.assertIn("사용자 확정 전 초안", ko, key)
+                # 2026-11-22 표현 목록 확정 — 더는 '확정 전 초안'이라고 말하지 않는다(경고만이라는 말은 남는다).
+                self.assertNotIn("확정 전 초안", ko, key)
+                self.assertNotIn("draft", en, key)
 
     def test_both_precheck_renderers_fill_the_placeholders(self):
         self.assertEqual(CONSOLE.count("HomezI18n.t(issue.localized_message_key, issue.params || undefined)"), 2)

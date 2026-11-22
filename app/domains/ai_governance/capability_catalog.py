@@ -222,7 +222,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         unimplemented_dependencies=(
             "[해소됨 2026-09-07] Client ID/Secret 등록과 첫 실제 호출(위 ③) — 2026-11-15에 '아직 등록되지 않음'이던 옛 문장을 고침",
             "관심 키워드(D3) 경로와 계절 보정의 2년 기간 조회는 실제 호출 검증이 없다(2026-11-15 기준 0회)",
-            "계절 판정 기준 숫자(오름 30%·작년의 1.5배·0.67배)는 사용자 확정 전 초안이다",
+            "계절 판정 기준 숫자(오름 30%·작년의 1.5배·0.67배)는 2026-11-22 사용자 확정(권장안 그대로) — 실제 자료로 판정한 적은 아직 없다",
             "후보 상품명이 길거나 자료가 적으면 검색어 추이를 얻지 못한다 — 그 후보는 '모름'으로 남는다",
         ),
         implementation_reference=(
@@ -494,7 +494,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "후보 파이프라인 경로에는 실 LLM Provider가 연결돼 있지 않다(위저드 AI 초안 경로에만 있음)",
             "허위 효능/인증/원산지 방지는 run_content_policy_checklist()"
             "가 별도 담당 — 이 capability 자체는 문구 생성만 수행",
-            "2026-11-09 주장 점검기(listing_claim_check, 사전검사 경고만)의 표현 목록은 사용자 확정 전 초안이다(RULES_CONFIRMED=False)",
+            "2026-11-09 주장 점검기(listing_claim_check)는 사전검사 경고만 하고 차단하지 않는다 — 표현 목록은 2026-11-22 사용자 확정(RULES_CONFIRMED=True)",
             "상세 이미지 속 글자는 읽지 못한다 — 속성 뽑기는 사람이 옮겨 붙인 글만 본다(2026-11-14)",
             "속성 비교(product_attribute_match)의 공급처 값은 뽑은 속성으로 자동 채우지 않는다 — 근거 확인 절차를 바꾸는 일이라 보류",
         ),

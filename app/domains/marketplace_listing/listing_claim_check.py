@@ -10,7 +10,7 @@ AI가 쓴 글이든 사람이 쓴 글이든 **위저드에 저장된 상품명·
 기준:
   - **경고만 한다(차단하지 않는다).** 표시광고법은 AI를 써도 거짓·과장·기만 기준이 같다(조사 1-10). 단어가 있다고 곧 위반은 아니므로
     사람이 근거(시험 성적서·인증서·공급처 자료)를 확인하게 알려 줄 뿐이다.
-  - **표현 목록은 초안이다**(`RULES_CONFIRMED = False`). 사용자가 확정하면 이 값과 목록을 함께 바꾼다. 확정 전이라는 점을 화면 문구에도 적는다.
+  - **표현 목록은 2026-11-22 사용자가 확정했다**("나머지는 권장사항으로 진행" — 권장안: 지금 목록 그대로·경고만). 목록을 바꾸면 버전도 함께 바꾼다.
   - 상품명의 의료·효능 단어는 기존 검사(`listing_wizard_precheck.CLAIM_WORDS` → `PRODUCT_NAME_CLAIM_WORDS`)가 이미 경고하므로 여기서 다시 세지 않는다.
   - 상세 설명의 숫자 중 공급처 자료(상품명·옵션·고시·공급처 고시 근거)에 없는 것은 '근거 확인'으로 알린다. 한 자리 숫자는 세지 않는다
     ("2가지 색"처럼 흔해 경고가 너무 많아진다 — 한계로 기록).
@@ -27,8 +27,8 @@ from typing import Any
 
 from app.domains.marketplace_listing.listing_wizard_precheck import CLAIM_WORDS
 
-RULES_VERSION = "listing_claims.draft-20261109"
-RULES_CONFIRMED = False
+RULES_VERSION = "listing_claims.20261122"
+RULES_CONFIRMED = True
 
 # 의료·효능 — 기존 CLAIM_WORDS(쿠팡 반려 사례 기반)에 위생·건강 표현을 더했다. 위생용품(생리팬티 등)은 항균·살균 표현의 근거가 특히 필요하다.
 MEDICAL_WORDS: tuple[str, ...] = CLAIM_WORDS + (
