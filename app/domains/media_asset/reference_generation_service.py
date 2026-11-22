@@ -118,7 +118,7 @@ class ReferenceGenerationService:
         return round(FakeImageGenerationProvider.FAKE_COST_PER_ITEM * items, 6)
 
     # ------------------------------------------------------------
-    # 실행(FAKE 제공자만)
+    # 실행(FAKE, 2026-11-22부터 GEMINI)
     # ------------------------------------------------------------
 
     def generate(
@@ -133,7 +133,7 @@ class ReferenceGenerationService:
                 "대표 이미지에 AI 생성 사진을 쓰려면 사용자 최종 확인이 필요합니다. "
                 "쿠팡 대표 이미지 규격·AI 생성 이미지 정책을 확인하지 못해 반려될 수 있습니다.",
             )
-        # 실제 제공자는 요청 변환 단계에서 거절된다(FAKE만 허용).
+        # 허용 목록에 없거나 보류된 제공자는 요청 변환 단계에서 거절된다.
         try:
             request = rg.to_provider_request(plan, reference, company_id, self._candidate_id(asset), provider_code)
         except rg.ReferenceGenerationError:
@@ -149,7 +149,8 @@ class ReferenceGenerationService:
         if real:
             if self.image_ai is None:
                 raise BadRequestException("실제 AI 이미지 생성 설정을 불러오지 못했습니다.")
-            provider_obj = self.image_ai.provider(company_id, requested_by, target=f"REF{asset.id}")   # 설정·키가 없으면 여기서 막힌다(작업 행 없음)
+            # 설정·키가 없거나 월 크레딧이 이번 장수에 모자라면 여기서 막힌다(작업 행 없음, 호출 0).
+            provider_obj = self.image_ai.provider(company_id, requested_by, target=f"REF{asset.id}", planned_images=len(plan.variants))
 
         job = self._start_job(company_id, requested_by, asset, plan, provider_code)
         try:
@@ -169,7 +170,9 @@ class ReferenceGenerationService:
             # 사용자 결정(10-24): 대표 사진을 임의로 정하지 않고, 만든 뒤 알린다.
             self.image_ai.notify_done(company_id, requested_by, created=len(assets), failed=len(plan.variants) - succeeded)
         if not assets:
-            raise BadRequestException("생성된 사진이 없습니다(제공자가 모든 항목을 실패 처리했습니다).")
+            # 실제 AI는 왜 못 만들었는지(허용 필요·월 크레딧·Google 오류)를 첫 실패 사유로 함께 알린다. 키·이미지는 사유에 없다.
+            reason = next((i.error_reason for i in provider_result.items if getattr(i, "error_reason", None)), None) if real else None
+            raise BadRequestException("생성된 사진이 없습니다(제공자가 모든 항목을 실패 처리했습니다)." + (f" 사유: {reason}" if reason else ""))
         return ReferenceGenerationOutcome(
             plan=plan, assets=tuple(assets), job_id=job.id, demo=not real, provider_cost=provider_result.provider_cost,
         )

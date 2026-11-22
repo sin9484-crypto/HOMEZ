@@ -16,11 +16,13 @@ import json
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Header
 from fastapi import Response
 from sqlalchemy.orm import Session
 
 from app.core.dependency import get_db
 from app.core.exceptions import BadRequestException
+from app.core.guard import SuperAdminGuard
 from app.core.guard import admin_guard
 from app.domains.marketplace_listing.listing_wizard_permission_guard import (
     ListingWizardPermissionGuard,
@@ -438,28 +440,42 @@ def image_ai_settings(
     db: Session = Depends(get_db),
     credential_store: CredentialStore = Depends(get_image_ai_credential_store),
 ):
-    """AI 이미지(Gemini) 설정 상태(키는 저장 여부만, 값은 돌려주지 않는다)."""
+    """AI 이미지(Gemini) 설정 상태·최근 31일 사용액·사용 기록(키는 저장 여부만, 값은 돌려주지 않는다). 바깥 호출 없음."""
 
     from app.domains.media_asset.image_ai_service import ImageAiService
 
-    return ImageAiService(db, credential_store).status(current_user.id, current_user.company_id)
+    service = ImageAiService(db, credential_store)
+    return {**service.status(current_user.id, current_user.company_id), "records": service.window_records()}
 
 
 @router.put("/image-ai/settings")
 def image_ai_save_settings(
     data: schema.ImageAiSettingsSchema,
-    current_user: User = Depends(admin_guard),
+    current_user: User = Depends(SuperAdminGuard),
+    recent_auth_token: str | None = Header(default=None, alias="X-Recent-Auth-Token"),
     db: Session = Depends(get_db),
     credential_store: CredentialStore = Depends(get_image_ai_credential_store),
 ):
-    """AI 이미지(Gemini) 설정 저장. 키는 Windows 자격증명 저장소에만 둔다(빈 값이면 기존 키 유지)."""
+    """AI 이미지(Gemini) 설정 저장. 키는 Windows 자격증명 저장소에만 둔다(빈 값이면 기존 키 유지).
+    2026-11-22 비용과 비밀값을 다루므로 다른 AI 설정처럼 최고 관리자 + 비밀번호 재확인이 먼저다(이전에는 확인 없이 저장됐다)."""
 
+    from app.core.audit_db import write_audit_log
+    from app.core.exceptions import ForbiddenException
+    from app.core.recent_auth import consume_recent_auth_token
     from app.domains.media_asset.image_ai_service import ImageAiService
 
-    return ImageAiService(db, credential_store).save_settings(
+    if not consume_recent_auth_token(recent_auth_token, current_user.id):
+        raise ForbiddenException("현재 비밀번호 재확인이 필요합니다.")
+    result = ImageAiService(db, credential_store).save_settings(
         current_user.id, current_user.company_id, model=data.model, image_size=data.image_size,
-        price_per_image_krw=data.price_per_image_krw, api_key=data.api_key,
+        monthly_credit_usd=data.monthly_credit_usd, price_per_image_usd=data.price_per_image_usd, api_key=data.api_key,
     )
+    write_audit_log(
+        db, user_id=current_user.id, company_id=current_user.company_id, action="IMAGE_AI_SETTINGS_SAVED", entity="image_ai", entity_id="SETTINGS",
+        description=f"AI 이미지 설정 저장(모델 {result['model']}, 크기 {result['image_size']}, 월 크레딧 ${result['monthly_credit_usd']:g}, 키 {'교체' if data.api_key else '유지'})",
+    )
+    db.commit()
+    return result
 
 
 @router.post("/reference-generation", response_model=schema.ReferenceGenerationResponseSchema)

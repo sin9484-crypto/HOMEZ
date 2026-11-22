@@ -9,7 +9,7 @@ File : app/domains/media_asset/reference_generation.py
 영상의 흐름: 공급처의 모델 착용 사진 한 장을 넣고 → 배경(카페·산책로·도로변·바다 …)과 포즈(팔 내림·몸 틀기 …)를 고르면 → 같은 옷을 입은 여러 장의
 썸네일을 만든다. 이 모듈은 그 앞부분만 한다: **무엇을 몇 장 어떻게 만들지 검증하고, 같은 요청이면 같은 지문이 나오게 정리해 제공자 요청으로 바꾼다.**
 
-  - 외부 호출 없음·DB 없음·파일 없음(순수 데이터·계산). 실제 이미지 생성 API는 연결하지 않았다 — 제공자는 FAKE만 허용한다(`ALLOWED_PROVIDER_CODES`).
+  - 외부 호출 없음·DB 없음·파일 없음(순수 데이터·계산). 허용 제공자는 `ALLOWED_PROVIDER_CODES`(FAKE, 2026-11-22부터 GEMINI)다.
     실제 제공자 연결은 가드 허용·비용 승인·정책 조사(I0)가 끝난 별도 단계다.
   - 이 기능은 I1 명세로 보면 **L2(생성 배경·생성 인물)** 다. 결과에는 "AI 생성" 표기가 항상 필요하며, 상품이 참고 사진과 다르게 나오지 않았는지 사람이 확인하는
     검수 항목이 따라붙는다.
@@ -49,11 +49,12 @@ MAX_VARIANTS_PER_REQUEST = 6
 MAX_BACKGROUNDS = 3
 MAX_POSES = 3
 
-# 실제 제공자는 아직 없다. 늘리려면 별도 승인 + 이 값과 시험을 함께 바꾼다.
-ALLOWED_PROVIDER_CODES = ("FAKE",)
-# 2026-10-25 실제 AI 이미지(Gemini) 연결 코드는 만들어 두었지만(`gemini_image_client.py`·`image_ai_service.py`) 사용자 결정으로
-# **비용 때문에 보류**한다 — 여기 있는 제공자는 거절하고(실제 호출·비용 0), 보류를 풀 때 ALLOWED_PROVIDER_CODES로 옮긴다.
-HELD_PROVIDER_CODES = ("GEMINI",)
+# 제공자를 늘리려면 별도 승인 + 이 값과 시험을 함께 바꾼다.
+# 2026-10-25 실제 AI 이미지(Gemini)는 비용 때문에 보류했다가, 2026-11-22 사용자 결정("가 나 다 진행해라", Google AI Pro 결제)으로 보류를 풀었다.
+# 실제 호출은 여전히 설정·키·월 크레딧 한도(`image_ai_service`)와 장마다 승인 센터 허용을 거친다.
+ALLOWED_PROVIDER_CODES = ("FAKE", "GEMINI")
+# 여기 있는 제공자는 거절한다(실제 호출·비용 0). 다시 보류하려면 ALLOWED_PROVIDER_CODES에서 빼고 여기에 넣는다.
+HELD_PROVIDER_CODES: tuple[str, ...] = ()
 HELD_PROVIDER_MESSAGE_KO = "실제 AI 이미지 생성(Gemini)은 비용 때문에 보류 중입니다(2026-10-25 사용자 결정). 지금은 시연용만 쓸 수 있습니다."
 
 ALLOWED_PURPOSES = (PURPOSE_MAIN, PURPOSE_ADDITIONAL, PURPOSE_DETAIL)
@@ -283,7 +284,7 @@ def to_provider_request(
     product_candidate_id: int,
     provider_code: str = "FAKE",
 ) -> ImageGenerationRequest:
-    """계획을 제공자 요청으로 바꾼다. 실제 제공자(FAKE 외)는 이 단계에서 거절한다."""
+    """계획을 제공자 요청으로 바꾼다. 허용 목록에 없거나 보류된 제공자는 이 단계에서 거절한다."""
 
     if provider_code in HELD_PROVIDER_CODES and provider_code not in ALLOWED_PROVIDER_CODES:
         raise ReferenceGenerationError(HELD_PROVIDER_MESSAGE_KO)

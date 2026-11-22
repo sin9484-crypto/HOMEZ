@@ -11,6 +11,8 @@ File : tests/test_reference_generation_ui.py
   - 실행 전 막기: 사용 금지 사진, 배경·포즈 없음, 장수 초과, 사용권 미확인(경고 확인 전), 대표(최종 확인 전). 서버도 같은 규칙으로 다시 막는다.
   - 요청 본문: 대표만 최종 확인이 True로 나가고, 미리보기에서는 대표 최종 확인을 보내지 않는다.
   - 문구: 쓰는 모든 문구가 한국어·영어로 짝을 이루고 자리표시자가 맞다. 서버가 준 글은 이스케이프한다. 이미지에 워터마크·글자를 넣지 않는다는 안내와 시연용 안내가 항상 보인다.
+  - 2026-11-22 실제 AI(Gemini): 설정이 끝났을 때만 고를 수 있고, 고르면 제공자·요청 글이 본문에 실린다(시연용 본문은 그대로).
+    실행 전 장수·추정 비용 확인 창을 거치고, 장당 비용·남은 장수는 서버 설정 응답 값을 그대로 보여 준다.
 =========================================================
 """
 
@@ -98,7 +100,7 @@ __SOURCES__
 console.log(JSON.stringify(__EXPR__));
 """
 
-FUNCTIONS = ("lwRefDefaults", "lwRefToggle", "lwRefMaxCount", "lwRefProblem", "lwRefBody", "lwRefNoticeHtml", "lwRefPreviewHtml")
+FUNCTIONS = ("lwRefDefaults", "lwRefToggle", "lwRefMaxCount", "lwRefProblem", "lwRefBody", "lwRefNoticeHtml", "lwRefPreviewHtml", "lwRefAiNote")
 
 
 @unittest.skipUnless(NODE, "node가 없어 화면 함수를 실행해 볼 수 없다")
@@ -177,6 +179,29 @@ class BehaviourTests(unittest.TestCase):
             pre_main = self.run_js('lwRefBody({"purpose": "MAIN", "backgrounds": ["S"], "poses": ["K"], "count": 1, "confirmMain": ' + value + "}, 5)")
             self.assertIs(pre_main["confirmed_main"], False, value)
 
+    def test_real_ai_adds_the_provider_and_the_trimmed_request_only_when_chosen(self):
+        base = '"purpose": "DETAIL", "backgrounds": ["CAFE"], "poses": ["ARMS_DOWN"], "count": 1'
+        fake = self.run_js("lwRefBody({" + base + ', "provider": "FAKE", "instruction": "밝게"}, 3)')
+        self.assertNotIn("provider_code", fake)
+        self.assertNotIn("instruction", fake)
+        real = self.run_js("lwRefBody({" + base + ', "provider": "GEMINI", "instruction": "  창가 햇살  "}, 3)')
+        self.assertEqual((real["provider_code"], real["instruction"]), ("GEMINI", "창가 햇살"))
+        self.assertNotIn("instruction", self.run_js("lwRefBody({" + base + ', "provider": "GEMINI", "instruction": "   "}, 3)'))
+        self.assertEqual(len(self.run_js("lwRefBody({" + base + ', "provider": "GEMINI", "instruction": "' + "가" * 600 + '"}, 3)')["instruction"]), 500)
+
+    def test_the_ai_note_uses_the_server_numbers_or_points_to_the_settings(self):
+        ready = {"configured": True, "estimated_cost_per_image_usd": 0.0554, "window_used_usd": 1.2, "monthly_credit_usd": 10, "window_days": 31, "images_left": 158}
+        note = self.run_js(f"lwRefAiNote({json.dumps(ready)})")
+        for part in ("$0.0554", "$1.20", "$10.00", "최근 31일", "158장"):
+            self.assertIn(part, note)
+        for value in ("null", '{"configured": false}', "undefined"):
+            self.assertIn("AI 이미지 설정 (Gemini)", self.run_js(f"lwRefAiNote({value})"), value)
+
+    def test_the_real_ai_notice_does_not_say_demo(self):
+        shown = self.run_js("(lwRefNotice = { count: 2, ai: true }, lwRefNoticeHtml())")
+        self.assertIn("실제 AI로 2장을 만들었습니다", shown)
+        self.assertNotIn("시연용", shown)
+
     def test_request_body_is_a_copy_not_the_live_lists(self):
         self.assertEqual(self.run_js('(() => { const s = {purpose: "DETAIL", backgrounds: ["A"], poses: ["B"], count: 1}; const b = lwRefBody(s, 1); b.backgrounds.push("Z"); return s.backgrounds; })()'), ["A"])
 
@@ -221,7 +246,9 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(paths, {
             "/media-assets/reference-generation/presets", "/media-assets/reference-generation/preview", "/media-assets/reference-generation",
             "/media-assets/rights-acknowledgements",
+            "/media-assets/image-ai/settings",                                         # 2026-11-22 실제 AI 설정 상태 읽기(바깥 호출 없음)
         })
+        self.assertNotIn('"/media-assets/image-ai/settings", {', self.PANEL)          # 읽기만 한다(저장은 쉬운 보기 설정에서)
         self.assertIn('workflow_stage: "GENERATE_OR_EDIT_OR_EXPORT"', self.PANEL)
         self.assertIn('user_action: "CONTINUE"', self.PANEL)
 
@@ -229,6 +256,18 @@ class WiringTests(unittest.TestCase):
         run = self.PANEL[self.PANEL.index("lw-ref-run-btn-${assetId}`).addEventListener"):]
         self.assertLess(run.index("lwRefProblem(state, rightsStatus)"), run.index('apiFetch("/media-assets/reference-generation"'))
         self.assertIn("withButtonGuard", run)
+
+    def test_real_ai_is_only_selectable_when_configured_and_is_confirmed_before_sending(self):
+        self.assertIn('${value === "GEMINI" && !aiReady ? "disabled" : ""}', self.PANEL)
+        self.assertIn('state.provider = radio.value === "GEMINI" && ai && ai.configured === true ? "GEMINI" : "FAKE";', self.PANEL)
+        self.assertIn('provider: "FAKE"', self.PANEL)                                  # 처음에는 시연용
+        run = self.PANEL[self.PANEL.index("lw-ref-run-btn-${assetId}`).addEventListener"):]
+        self.assertLess(run.index("lwRefProblem(state, rightsStatus)"), run.index("await confirmDialog("))
+        self.assertLess(run.index("await confirmDialog("), run.index('apiFetch("/media-assets/reference-generation"'))
+        self.assertIn("if (!confirmed) return;", run)
+        self.assertIn("lwRefNotice = { count: (result.assets || []).length, ai: real };", run)
+        self.assertIn('escapeHtml(state.instruction)', self.PANEL)
+        self.assertIn('maxlength="500"', self.PANEL)
 
     def test_the_preview_never_sends_the_main_confirmation(self):
         preview = self.PANEL[self.PANEL.index("lw-ref-preview-btn-${assetId}`).addEventListener"): self.PANEL.index("lw-ref-run-btn-${assetId}`).addEventListener")]
@@ -243,6 +282,7 @@ class WiringTests(unittest.TestCase):
     def test_the_always_visible_notes_are_present(self):
         for key in ("ref_demo_note", "ref_no_watermark_note", "ref_wing_note"):
             self.assertIn(f't("{key}")', self.PANEL)
+        self.assertIn("escapeHtml(lwRefAiNote(ai))", self.PANEL)          # 실제 AI를 고르면 데모 안내 대신 비용·남은 장수 안내
 
     def test_no_hidden_attribute_buttons(self):
         # .btn이 hidden 속성을 이긴다(기존 결함) — 이 화면은 hidden으로 버튼을 숨기지 않는다.
@@ -271,6 +311,9 @@ class TextTests(unittest.TestCase):
     def test_the_main_warning_and_notes_say_what_matters(self):
         ko = table(KO)
         self.assertIn("시연용", ko["lw.ref_demo_note"])
+        self.assertNotIn("시연용 생성기만 연결", ko["lw.ref_demo_note"])          # 2026-11-22 이제 실제 AI도 고를 수 있다
+        self.assertIn("허용", ko["lw.ref_ai_confirm_body"])
+        self.assertIn("월 크레딧", ko["lw.ref_ai_confirm_body"])
         self.assertIn("워터마크", ko["lw.ref_no_watermark_note"])
         self.assertIn("이미지 자동 수정 동의", ko["lw.ref_wing_note"])
         self.assertIn("반려", ko["lw.ref_purpose_main"])

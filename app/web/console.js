@@ -13372,17 +13372,34 @@
   }
 
   function lwRefBody(state, assetId) {
-    return {
+    const body = {
       reference_asset_id: Number(assetId), purpose: state.purpose, backgrounds: state.backgrounds.slice(), poses: state.poses.slice(),
       count: Number(state.count), confirmed_main: state.purpose === "MAIN" && state.confirmMain === true,
     };
+    // 2026-11-22 실제 AI(Gemini)를 고른 경우에만 제공자와 요청 글(선택, 500자)을 보낸다. 시연용 본문은 예전 그대로다.
+    if (state.provider === "GEMINI") {
+      body.provider_code = "GEMINI";
+      const instruction = String(state.instruction || "").trim().slice(0, 500);
+      if (instruction) body.instruction = instruction;
+    }
+    return body;
+  }
+
+  // 2026-11-22 실제 AI 안내 한 줄: 장당 추정 비용·최근 31일 사용·남은 장수(서버 설정 응답 그대로, 계산은 서버가 한 값).
+  function lwRefAiNote(ai) {
+    if (!ai || ai.configured !== true) return HomezI18n.t("lw.ref_ai_setup_note");
+    const usd = (v, d) => (Number(v) || 0).toFixed(d);
+    return HomezI18n.t("lw.ref_ai_note", {
+      cost: usd(ai.estimated_cost_per_image_usd, 4), used: usd(ai.window_used_usd, 2), credit: usd(ai.monthly_credit_usd, 2),
+      days: ai.window_days || 31, n: ai.images_left || 0,
+    });
   }
 
   function lwRefNoticeHtml() {
     if (!lwRefNotice) return "";
     const notice = lwRefNotice;
     lwRefNotice = null;
-    return `<div class="banner banner-success" role="status" id="lw-ref-created-banner">${escapeHtml(HomezI18n.t("lw.ref_created", { count: notice.count }))}</div>`;
+    return `<div class="banner banner-success" role="status" id="lw-ref-created-banner">${escapeHtml(HomezI18n.t(notice.ai ? "lw.ref_created_ai" : "lw.ref_created", { count: notice.count }))}</div>`;
   }
 
   function lwRefPreviewHtml(plan) {
@@ -13421,7 +13438,13 @@
       panel.innerHTML = `<p class="field-error">${escapeHtml(err.message || HomezI18n.t("common.load_error"))}</p>`;
       return;
     }
-    const state = { purpose: "ADDITIONAL", ...lwRefDefaults("ADDITIONAL"), rightsAck: false, confirmMain: false, plan: null };
+    let ai = null;
+    try {
+      ai = await apiFetch("/media-assets/image-ai/settings");   // 바깥 호출 없음. 읽지 못하면 시연용만 보인다.
+    } catch (_) {
+      ai = null;
+    }
+    const state = { purpose: "ADDITIONAL", ...lwRefDefaults("ADDITIONAL"), rightsAck: false, confirmMain: false, plan: null, provider: "FAKE", instruction: "" };
 
     function pickList(name, items, selected) {
       return items.map((item) => `<label class="lw-ref-pick"><input type="checkbox" data-ref-${name}="${escapeHtml(item.code)}" ${selected.includes(item.code) ? "checked" : ""}> ${escapeHtml(item.label_ko)}</label>`).join(" ");
@@ -13443,11 +13466,19 @@
              <label><input type="checkbox" id="lw-ref-main-confirm-${assetId}" ${state.confirmMain ? "checked" : ""}> ${escapeHtml(t("ref_main_confirm_label"))}</label></div>`
         : "";
       const problem = errorKey ? t(errorKey) : (errorText || "");
+      const aiReady = Boolean(ai && ai.configured === true);
+      const providers = [["FAKE", "ref_provider_fake"], ["GEMINI", "ref_provider_gemini"]]
+        .map(([value, key]) => `<label><input type="radio" name="lw-ref-provider-${assetId}" value="${value}" ${state.provider === value ? "checked" : ""} ${value === "GEMINI" && !aiReady ? "disabled" : ""}> ${escapeHtml(t(key))}</label>`).join(" ");
+      const providerNote = state.provider === "GEMINI"
+        ? `<p class="stat-sub"><strong>${escapeHtml(lwRefAiNote(ai))}</strong></p>
+           <p><label>${escapeHtml(t("ref_instruction"))}<br><input type="text" id="lw-ref-instruction-${assetId}" maxlength="500" style="width:100%" value="${escapeHtml(state.instruction)}" placeholder="${escapeHtml(t("ref_instruction_placeholder"))}"></label></p>`
+        : `<p class="stat-sub">${escapeHtml(t("ref_demo_note"))}</p>${aiReady ? "" : `<p class="stat-sub">${escapeHtml(lwRefAiNote(ai))}</p>`}`;
       panel.innerHTML = `
         <div class="detail-panel lw-ref-panel-box">
           <h3>${escapeHtml(t("ref_panel_title"))}</h3>
           <p class="stat-sub">${escapeHtml(t("ref_panel_hint"))}</p>
-          <p class="stat-sub">${escapeHtml(t("ref_demo_note"))}</p>
+          <div class="lw-bg-controls"><strong>${escapeHtml(t("ref_provider"))}</strong> ${providers}</div>
+          ${providerNote}
           <p class="stat-sub">${escapeHtml(t("ref_no_watermark_note"))}</p>
           <p class="stat-sub">${escapeHtml(t("ref_wing_note"))}</p>
           ${rights}
@@ -13467,6 +13498,15 @@
     }
 
     function wire() {
+      panel.querySelectorAll(`input[name="lw-ref-provider-${assetId}"]`).forEach((radio) => {
+        radio.addEventListener("change", () => {
+          state.provider = radio.value === "GEMINI" && ai && ai.configured === true ? "GEMINI" : "FAKE";
+          state.plan = null;
+          render();
+        });
+      });
+      const instructionEl = el(`lw-ref-instruction-${assetId}`);
+      if (instructionEl) instructionEl.addEventListener("input", () => { state.instruction = instructionEl.value; });
       panel.querySelectorAll(`input[name="lw-ref-purpose-${assetId}"]`).forEach((radio) => {
         radio.addEventListener("change", () => {
           state.purpose = radio.value;
@@ -13515,7 +13555,9 @@
         const key = lwRefProblem({ ...state, confirmMain: true }, rightsStatus);  // 미리보기는 대표 최종 확인 없이도 볼 수 있다
         if (key) { render(key); return; }
         try {
-          state.plan = await apiFetch("/media-assets/reference-generation/preview", { method: "POST", body: JSON.stringify(lwRefBody({ ...state, confirmMain: false }, assetId)) });
+          const plan = await apiFetch("/media-assets/reference-generation/preview", { method: "POST", body: JSON.stringify(lwRefBody({ ...state, confirmMain: false }, assetId)) });
+          state.plan = state.provider === "GEMINI" && ai && ai.estimated_cost_per_image_usd
+            ? { ...plan, estimated_cost: `$${(Number(plan.count || 0) * Number(ai.estimated_cost_per_image_usd)).toFixed(2)}` } : plan;
           render();
         } catch (err) {
           render(null, err.message || HomezI18n.t("common.load_error"));
@@ -13524,10 +13566,19 @@
       el(`lw-ref-run-btn-${assetId}`).addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
         const key = lwRefProblem(state, rightsStatus);
         if (key) { render(key); return; }
+        const real = state.provider === "GEMINI";
+        if (real) {
+          const count = Number(state.count) || 0;
+          const { confirmed } = await confirmDialog({
+            title: t("ref_ai_confirm_title"),
+            body: t("ref_ai_confirm_body", { count, cost: (count * Number(ai && ai.estimated_cost_per_image_usd || 0)).toFixed(2), n: (ai && ai.images_left) || 0 }),
+          });
+          if (!confirmed) return;
+        }
         try {
           const result = await apiFetch("/media-assets/reference-generation", { method: "POST", body: JSON.stringify(lwRefBody(state, assetId)) });
           // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 만든 장수를 알린다.
-          lwRefNotice = { count: (result.assets || []).length };
+          lwRefNotice = { count: (result.assets || []).length, ai: real };
           await lwRenderMediaStep(content);
           window.scrollTo({ top: 0, behavior: "smooth" });
         } catch (err) {

@@ -155,12 +155,16 @@ class ReferenceGenerationRequestSchema(BaseModel):
 
 
 class ImageAiSettingsSchema(BaseModel):
-    """2026-10-25 AI 이미지(Gemini) 설정. API 키는 저장할 때만 보내고 응답에는 실리지 않는다(빈 값이면 기존 키 유지)."""
+    """2026-10-25 AI 이미지(Gemini) 설정. API 키는 저장할 때만 보내고 응답에는 실리지 않는다(빈 값이면 기존 키 유지).
+    2026-11-22 월 크레딧(달러, 기본 $10 — Google AI Pro)과 장당 가격(달러, 비우면 공식 가격표). 원화 장당 비용 칸은 없앴다."""
 
     model: str = Field(min_length=3, max_length=80)
     image_size: Literal["1K", "2K", "4K"] = "2K"
-    price_per_image_krw: float = Field(default=0, ge=0, le=100_000)
+    monthly_credit_usd: float = Field(default=10.0, gt=0, le=100)
+    price_per_image_usd: float | None = Field(default=None, gt=0, le=1)
     api_key: str | None = Field(default=None, max_length=300)
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
 
 class ReferenceGenerationResponseSchema(BaseModel):

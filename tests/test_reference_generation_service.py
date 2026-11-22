@@ -315,6 +315,10 @@ class GenerationTests(Base_):
             with self.assertRaises(rg.ReferenceGenerationError, msg=code):
                 self.generate(provider_code=code)
         self.assertEqual(self.counts(), before)
+        # 2026-11-22 GEMINI는 허용 목록에 있지만, 설정·키·크레딧을 보는 ImageAiService 없이는 아무것도 쓰지 않고 막힌다.
+        with self.assertRaises(BadRequestException):
+            self.generate(provider_code="GEMINI")
+        self.assertEqual(self.counts(), before)
 
     def test_invalid_selections_are_refused_before_anything_is_written(self):
         before = self.counts()
@@ -439,8 +443,8 @@ class RouteTests(Base_):
     def test_presets_route_states_the_rules(self):
         result = self.route("reference_generation_presets")(current_user=self.user())
         self.assertEqual(result["purposes"], ["MAIN", "ADDITIONAL", "DETAIL"])
-        self.assertEqual(result["provider_codes"], ["FAKE"])
-        self.assertEqual(result["held_provider_codes"], ["GEMINI"])          # 2026-10-25 실제 AI 이미지는 비용 때문에 보류
+        self.assertEqual(result["provider_codes"], ["FAKE", "GEMINI"])      # 2026-11-22 사용자 결정으로 Gemini 보류 해제(10-25 보류)
+        self.assertEqual(result["held_provider_codes"], [])
         self.assertTrue(result["no_watermark"])
         self.assertEqual(result["label_placement"], "OUTSIDE_IMAGE")
         self.assertEqual(result["generated_label"], "AI 생성 이미지")

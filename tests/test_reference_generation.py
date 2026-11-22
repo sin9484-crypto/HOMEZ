@@ -8,7 +8,7 @@ File : tests/test_reference_generation.py
 
   - 참고 사진 검사: 형식·크기·실제 내용(매직 바이트)·권리. 권리 거부는 항상 막고, 확인 안 된 사진은 사용자 확인이 있을 때만, 모르는 상태는 막는다.
   - 계획: 대표 이미지 금지, 배경·포즈·장수 한도, 같은 입력은 같은 계획·같은 지문, 입력이 바뀌면 지문이 바뀐다.
-  - 제공자 요청: FAKE 외 제공자는 거절, 검수 항목·AI 생성 표기·제품 보존 요구가 실린다.
+  - 제공자 요청: FAKE·GEMINI(2026-11-22 보류 해제) 외 제공자는 거절, 검수 항목·AI 생성 표기·제품 보존 요구가 실린다.
   - 가짜 제공자: 참고 사진이 다르면 결과가 다르고, 참고 사진이 없는 기존 요청의 결과는 그대로다.
 =========================================================
 """
@@ -73,8 +73,8 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(rg.MAX_VARIANTS_PER_REQUEST, 6)
         self.assertEqual(rg.MAX_BACKGROUNDS, 3)
         self.assertEqual(rg.MAX_POSES, 3)
-        self.assertEqual(rg.ALLOWED_PROVIDER_CODES, ("FAKE",))
-        self.assertEqual(rg.HELD_PROVIDER_CODES, ("GEMINI",))          # 2026-10-25 실제 AI 이미지는 비용 때문에 보류(사용자 결정)
+        self.assertEqual(rg.ALLOWED_PROVIDER_CODES, ("FAKE", "GEMINI"))  # 2026-11-22 사용자 결정으로 Gemini 보류 해제(10-25 보류)
+        self.assertEqual(rg.HELD_PROVIDER_CODES, ())
         self.assertEqual(rg.ALLOWED_PURPOSES, ("MAIN", "ADDITIONAL", "DETAIL"))
         self.assertEqual(rg.MAIN_EXTRA_CHECKS, ("MAIN_IMAGE_SPEC",))
         self.assertEqual(rg.GENERATED_LABEL_KO, "AI 생성 이미지")
@@ -315,9 +315,10 @@ class ProviderRequestTests(unittest.TestCase):
             for word in ("text", "watermark", "logo", "caption", "sign", "brand", "label", "stamp"):
                 self.assertNotIn(word, preset.hint.lower(), preset.code)
 
-    def test_only_fake_provider_is_allowed(self):
+    def test_only_fake_and_gemini_providers_are_allowed(self):
         plan, reference, _ = self.build()
-        for code in ("DISABLED", "OPENAI", "REAL", "", "fake"):
+        self.assertEqual(rg.to_provider_request(plan, reference, 1, 1, provider_code="GEMINI").items, rg.to_provider_request(plan, reference, 1, 1).items)
+        for code in ("DISABLED", "OPENAI", "REAL", "", "fake", "gemini"):
             with self.assertRaises(ReferenceGenerationError, msg=code):
                 rg.to_provider_request(plan, reference, 1, 1, provider_code=code)
 

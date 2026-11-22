@@ -69,7 +69,7 @@ CAPABILITY_CATALOG_VERSION = "2.5.0"
 # IMAGE_PROCESSING(참고 사진 생성 R1·R3a, 일괄 보정 R2, 컨셉별 독립 작업·장면 배경·추천 I2·I3), SUPPLIER_RECOMMENDATION(공급 조건 평가 S3),
 # PRICING_INVENTORY(주문 마진 점검 P2), ORDER_SHIPMENT_RETURN(고객 응대 답변 초안 P3·반품 손익 계산). 실제 AI·실제 이미지 생성 API 호출은 한 번도 하지 않았다.
 # 2.5.0(2026-11-15, 작업 계획서 I6·S5·T6): 10-23 이후에 만든 기능을 기존 역량에 **기록만** 했다 — 새 역량 코드·새 호출 문턱·유형 변경 없음(13개 그대로).
-# IMAGE_PROCESSING(Gemini 연결 코드 — 비용 때문에 보류, Cloudflare AI 배경, 샘플 보고 고르기, 이미지 편집 기록), PRODUCT_DISCOVERY(상품 발굴 자동 실행·검색어 규칙·계절 보정),
+# IMAGE_PROCESSING(Gemini 참고 사진 생성 — 2026-11-22 보류 해제·월 크레딧 한도, Cloudflare AI 배경, 샘플 보고 고르기, 이미지 편집 기록), PRODUCT_DISCOVERY(상품 발굴 자동 실행·검색어 규칙·계절 보정),
 # PRODUCT_SELECTION(판매 판단 평가 기준·미리 보기·평가 입력 제안), CONTENT_GENERATION(상세 글 속성 뽑기·주장 점검기), OPERATIONS_COORDINATION(아침 브리핑·기능별 자율 단계 표·AI 월 한도 알림),
 # PRICING_INVENTORY(쿠팡 재고·판매가 쓰기는 이 역량 밖의 사람 실행 경로라는 구분). 시간이 지나 틀린 문장이 된 두 곳을 사실대로 고쳤다:
 # IMAGE_PROCESSING의 '실제 이미지 생성 API 없음'(이제 연결 코드는 있고 실제 호출이 0회다), PRODUCT_DISCOVERY의 '키 아직 등록 안 됨'(2026-09-07에 첫 실제 호출 성공).
@@ -570,7 +570,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "FAIL이면 저장하지 않는다. 정책 적합 검사(POLICY_FLAGS)는 하지 못하므로 NOT_CHECKED로 그대로 보인다. "
             "쿠팡의 AI 생성 이미지·대표 이미지 정책 확인은 아직 못 했다(🔴 미확인). "
             "2026-11-15 등록(v2.5.0) — 실제 이미지 생성 API 연결 코드가 두 개 생겼지만 둘 다 실제 호출은 0회다(운영 DB 바깥 호출 기록에 GEMINI·CLOUDFLARE 없음): "
-            "④Gemini(2026-10-25) 참고 사진 이미지 생성 연결 코드는 비용 때문에 보류다 — 요청하면 거절하고 화면에 연결하지 않았다(사용자 결정). "
+            "④Gemini(2026-10-25) 참고 사진 이미지 생성은 비용 때문에 보류했다가 2026-11-22 사용자 결정으로 풀었다 — 쉬운 보기 설정에서 키·월 크레딧을 저장하고, 위저드 '참고 사진으로 만들기'에서 실제 AI를 고른다. 최근 31일 추정액이 월 크레딧을 넘으면 만들지 않는다. "
             "⑤Cloudflare Workers AI 'AI 배경'(2026-11-10, 사용자 결정)은 상품 없는 배경 장면만 그리게 하고 실제 누끼는 PC에서 붙인다(상품을 다시 그리지 않음). "
             "보내는 것은 코드가 정한 장면 글뿐이고 상품 사진·상품명·회사 정보는 보내지 않는다. 새 배경 한 장마다 승인 센터 허용(CLOUDFLARE/AI_BACKGROUND, 횟수형) 1회, "
             "긴급 중지·무료 한도(하루 10,000 뉴런)면 멈추고, 그린 배경은 회사별로 다시 쓴다(호출 0). 대표(MAIN)에는 쓰지 않고 글자 섞임·정책 적합은 NOT_CHECKED로 보인다. "
@@ -581,18 +581,18 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
         actual_entry_points=(
             "app/domains/media_asset/job_queue_service.py::"
             "ImageGenerationJobQueueService.submit_job()",
-            "app/domains/media_asset/reference_generation_service.py::ReferenceGenerationService.generate() (POST /media-assets/reference-generation — Fake 제공자만)",
+            "app/domains/media_asset/reference_generation_service.py::ReferenceGenerationService.generate() (POST /media-assets/reference-generation — Fake·Gemini(2026-11-22부터))",
             "app/domains/media_asset/batch_adjust_service.py::BatchAdjustService.adjust() (POST /media-assets/batch-adjust — AI 없음)",
             "app/domains/media_asset/concept_run_service.py::ConceptRunService.run() (POST /media-assets/concept-runs — 로컬 합성·검사, AI 없음)",
             "app/domains/media_asset/concept_recommendation.py::recommend() (GET /media-assets/concept-recommendations — 규칙, AI 없음)",
             "app/domains/media_asset/ai_background_service.py::AiBackgroundService.run() (/ai-background — Cloudflare 배경만, 허용 1회씩, 실제 호출 0회)",
             "app/domains/media_asset/cloudflare_image_client.py::CloudflareImageClient (Cloudflare Workers AI 호출 계약)",
-            "app/domains/media_asset/image_ai_service.py::GeminiImageProvider (Gemini 연결 코드 — 비용 때문에 보류, 요청 거절)",
+            "app/domains/media_asset/image_ai_service.py::GeminiImageProvider (Gemini 참고 사진 생성 — 2026-11-22 보류 해제, 최근 31일 추정액이 월 크레딧($10)을 넘지 않게 막음, 장마다 허용 1회)",
             "app/domains/media_asset/concept_preview_service.py::ConceptPreviewService.previews() (샘플 보고 고르기 — PC 합성, 저장 없음)",
             "app/domains/media_asset/image_edit_record.py::ImageEditRecordService.records() (GET /media-assets/owners/{type}/{id}/edit-records — 편집 기록, 읽기 전용)",
         ),
         unimplemented_dependencies=(
-            "실제 이미지 생성 API 호출 검증 없음 — Cloudflare(AI 배경)·Gemini(비용 보류) 연결 코드는 있으나 2026-11-15 기준 실제 호출 0회",
+            "실제 이미지 생성 API 호출 검증 없음 — Cloudflare(AI 배경)·Gemini(2026-11-22 보류 해제) 연결 코드는 있으나 2026-11-22 기준 Gemini 실제 호출 0회 — 응답 모양·청구액은 첫 실제 호출 때 확인한다",
             "생성형(L2) 컨셉 6종(AI 배경)은 코드만 있고 실제로 그린 배경은 0장이다 — 결과 크기·형식·오류 코드는 첫 실제 호출 때 처음 확인한다",
             "정책 적합(쿠팡 이미지 규정) 자동 검사 불가 — 사람이 확인해야 한다",
         ),
@@ -600,7 +600,7 @@ AI_CAPABILITY_CATALOG: list[CapabilityContract] = [
             "app/domains/media_asset/providers.py::FakeImageGenerationProvider / "
             "DisabledImageGenerationProvider(실제 Provider 미연결 시 fail-closed); "
             "app/domains/media_asset/ai_background_service.py + cloudflare_image_client.py(AI 배경, 실제 호출 0회); "
-            "app/domains/media_asset/image_ai_service.py + gemini_image_client.py(비용 보류 — reference_generation.HELD_PROVIDER_CODES)"
+            "app/domains/media_asset/image_ai_service.py + gemini_image_client.py(월 크레딧 한도 — image_ai_service.CREDIT_WINDOW_DAYS·DEFAULT_MONTHLY_CREDIT_USD)"
         ),
     ),
     CapabilityContract(

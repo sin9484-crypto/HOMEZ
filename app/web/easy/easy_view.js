@@ -2662,6 +2662,7 @@
       <div class="ez-switch"><div style="flex:1"><b>${esc(T("easy.more.switch_title"))}</b><div class="ez-muted" style="font-size:14px">${esc(T("easy.more.switch_sub"))}</div></div>
         <button type="button" class="ez-btn line" id="ez-more-off">${esc(T("easy.more.switch_off"))}</button></div>
       <div class="ez-block" id="ez-ai-box" style="margin-top:16px">${loadingHtml()}</div>
+      <div class="ez-block" id="ez-imgai-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-block" id="ez-aibg-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-block" id="ez-mail-box" style="margin-top:16px">${loadingHtml()}</div>
       <div class="ez-groups">${sections.map((s) => `<div class="ez-group"><h3>${esc(T(s.labelKey))}</h3>${s.tabs.map((tab) => `<button type="button" data-ez-go="${esc(tab.view)}">${esc(T(tab.labelKey))}</button>`).join("")}</div>`).join("")}</div>
@@ -2669,6 +2670,7 @@
     root.querySelectorAll("[data-ez-go]").forEach((btn) => btn.addEventListener("click", () => B.navigateTo(btn.dataset.ezGo)));
     $("ez-more-off").addEventListener("click", () => setEasyEnabled(false, true));
     aiSettingsLoad();
+    imageAiSettingsLoad();
     aiBgSettingsLoad();
     mailSettingsLoad();
   }
@@ -2748,6 +2750,91 @@
       B.toast((err && err.message) || T("easy.error"), "error");
     }
     aiSettingsLoad();
+  }
+
+  // 2026-11-22 AI 이미지 설정(Gemini, 사용자 결정 "가 나 다 진행해라" — Google AI Pro 결제, "매월 제공하는 크레딧 100%까지만").
+  // 보기는 바깥 호출이 없다. 저장은 확인 창 → 비밀번호 재확인을 거친다. 키는 입력만 하고 화면·응답에 다시 나오지 않는다.
+  // 한도는 서버가 막는다(최근 31일 추정액 ≤ 월 크레딧). 이 화면은 남은 장수와 기록을 보여 줄 뿐이다.
+  function imageAiSettingsHtml(s) {
+    const kv = (k, v) => `<div class="ez-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+    const usd = (v, digits) => (Number(v) || 0).toFixed(digits === undefined ? 2 : digits);
+    const days = s.window_days || 31;
+    const alertKey = { 80: "easy.imgai.alert_80", 100: "easy.imgai.alert_100" }[s.credit_alert_pct];
+    const alert = alertKey ? `<div class="ez-c-orange" style="font-size:12.5px;margin-top:4px">${esc(T(alertKey, { days }))}</div>` : "";
+    const records = s.records || [];
+    const when = (at) => { const d = at ? new Date(`${at}Z`) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; };
+    const result = (ok) => (ok === true ? chip("ok", T("easy.imgai.ok")) : (ok === false ? chip("wait", T("easy.imgai.failed")) : chip("gray", T("easy.ai.unknown"))));
+    const table = records.length
+      ? `<div style="overflow-x:auto"><table class="ez-table"><thead><tr><th>${esc(T("easy.imgai.c_when"))}</th><th>${esc(T("easy.imgai.c_what"))}</th><th>${esc(T("easy.imgai.c_cost"))}</th><th>${esc(T("easy.imgai.c_result"))}</th></tr></thead><tbody>`
+        + records.map((r) => `<tr><td>${esc(when(r.at))}</td><td>${esc(r.ref || "—")} <span class="ez-faint">${esc(r.image_size || "")}</span></td>`
+          + `<td class="ez-num">${esc(`$${usd(r.cost_usd, 4)}`)}</td><td>${result(r.ok)}</td></tr>`).join("")
+        + "</tbody></table></div>"
+      : `<div class="ez-muted" style="font-size:14px">${esc(T("easy.imgai.rec_none"))}</div>`;
+    return `<h3>${esc(T("easy.imgai.title"))} ${s.configured ? chip("ok", T("easy.ai.ready")) : chip("wait", T("easy.ai.not_ready"))}</h3>
+      <p class="ez-muted" style="font-size:14px">${esc(T("easy.imgai.lead"))}</p>
+      <p class="ez-faint" style="font-size:13px">${esc(T("easy.imgai.limit_rule", { days }))}</p>
+      ${kv(T("easy.imgai.key"), s.key_saved ? T("easy.ai.key_saved") : T("easy.ai.key_none"))}
+      ${kv(T("easy.imgai.model"), s.model ? `${s.model} · ${s.image_size || "—"}` : "—")}
+      ${kv(T("easy.imgai.credit"), s.monthly_credit_usd ? T("easy.imgai.credit_v", { credit: usd(s.monthly_credit_usd) }) : "—")}
+      ${kv(T("easy.imgai.per_image"), s.estimated_cost_per_image_usd ? T("easy.imgai.per_image_v", { cost: usd(s.estimated_cost_per_image_usd, 4) }) : "—")}
+      ${kv(T("easy.imgai.used", { days }), T("easy.imgai.used_v", { used: usd(s.window_used_usd), calls: s.window_calls || 0 }))}
+      ${kv(T("easy.imgai.left"), s.configured ? T("easy.imgai.left_v", { n: s.images_left || 0, remaining: usd(s.window_remaining_usd) }) : "—")}${alert}
+      <p class="ez-faint" style="font-size:12.5px;margin-top:6px">${esc(T("easy.imgai.estimate_note"))}</p>
+      <button type="button" class="ez-btn line sm" id="ez-imgai-edit" style="margin-top:10px">${esc(T("easy.imgai.edit"))}</button>
+      <div class="ez-sec" style="margin-top:16px">${esc(T("easy.imgai.records", { days }))}</div>${table}`;
+  }
+
+  async function imageAiSettingsLoad() {
+    const box = $("ez-imgai-box");
+    if (!box) return;
+    let s;
+    try { s = await api("/media-assets/image-ai/settings"); } catch (err) { box.innerHTML = `<div class="ez-note bad"><div>${esc((err && err.message) || T("easy.error"))}</div></div>`; return; }
+    box.innerHTML = imageAiSettingsHtml(s);
+    $("ez-imgai-edit").addEventListener("click", () => imageAiSettingsEdit(s));
+  }
+
+  // 화면 쪽 모양 검사(서버가 같은 검사를 다시 한다). 고쳐 쓰지 않고 문제 열쇠만 돌려준다.
+  function imageAiSettingsForm(get, s) {
+    const model = String(get("model") || "").trim() || (s && s.default_model) || "gemini-nano-banana-2.1";
+    if (!/^[A-Za-z0-9._-]{3,80}$/.test(model)) return { error: "easy.imgai.err_model" };
+    const size = String(get("image_size") || "").trim().toUpperCase();
+    if (!["1K", "2K", "4K"].includes(size)) return { error: "easy.imgai.err_size" };
+    const creditText = String(get("credit") || "").trim();
+    const credit = Number(creditText);
+    if (!creditText || !(credit > 0 && credit <= 100)) return { error: "easy.imgai.err_credit" };
+    const priceText = String(get("price") || "").trim();
+    const price = priceText ? Number(priceText) : null;
+    if (priceText && !(price > 0 && price <= 1)) return { error: "easy.imgai.err_price" };
+    const key = String(get("api_key") || "").trim();
+    if (!key && !(s && s.key_saved)) return { error: "easy.imgai.err_key" };
+    const body = { model, image_size: size, monthly_credit_usd: credit, price_per_image_usd: price };
+    if (key) body.api_key = key;
+    return { body };
+  }
+
+  async function imageAiSettingsEdit(s) {
+    const field = (name, label, value, attrs) => `<label style="display:block;margin-top:10px">${esc(T(label))}<br><input name="${name}" value="${esc(value === null || value === undefined ? "" : value)}" style="width:100%" ${attrs || ""}></label>`;
+    const picked = await ezDialog({
+      title: T("easy.imgai.edit"), okLabel: T("easy.ai.save"),
+      bodyHtml: field("api_key", s.key_saved ? "easy.imgai.f_key_keep" : "easy.imgai.f_key", "", `type="password" autocomplete="new-password"`)
+        + field("model", "easy.imgai.f_model", s.model, `autocomplete="off" spellcheck="false" placeholder="${esc(s.default_model || "")}"`)
+        + `<div class="ez-faint" style="font-size:12px">${esc(T("easy.imgai.f_model_hint"))}</div>`
+        + field("image_size", "easy.imgai.f_size", s.image_size || "2K", `autocomplete="off"`)
+        + field("credit", "easy.imgai.f_credit", s.monthly_credit_usd || s.default_monthly_credit_usd || 10, `inputmode="decimal"`)
+        + field("price", "easy.imgai.f_price", s.price_per_image_usd, `inputmode="decimal"`),
+    });
+    if (!picked) return;
+    const form = imageAiSettingsForm(picked.get, s);
+    if (form.error) { B.toast(T(form.error), "error"); return; }
+    const token = await B.promptRecentAuthToken();
+    if (token === null) return;
+    try {
+      await api("/media-assets/image-ai/settings", { method: "PUT", headers: { "X-Recent-Auth-Token": token }, body: JSON.stringify(form.body) });
+      B.toast(T("easy.imgai.saved"), "success");
+    } catch (err) {
+      B.toast((err && err.message) || T("easy.error"), "error");
+    }
+    imageAiSettingsLoad();
   }
 
   // 2026-11-10 AI 배경 설정(Cloudflare, 사용자 결정 "cloudflare로 진행해라"). 위저드 이미지 단계의 'AI 배경으로 만들기'가 쓰는 계정 ID·API 토큰.

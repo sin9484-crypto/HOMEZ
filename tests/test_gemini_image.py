@@ -12,6 +12,8 @@ File : tests/test_gemini_image.py
   - 응답: completed + 이미지 블록일 때만 성공. 실패·이미지 없음·해석 불가는 실패. 키는 오류 문구에 없다.
   - 관문: 설정·키가 없으면 작업 행 없이 막고, 장마다 승인 센터 허용(GEMINI·IMAGE_GENERATION)을 확인한다. 허용이 없으면 그 장은 실패로 남고 호출하지 않는다.
   - 결과: 파생 사진으로 저장되고 안전 검사는 통과로 쓰지 않으며(UNKNOWN), 대표 사진은 정하지 않고 앱 알림을 남긴다. 사용 기록에 키·이미지가 없다.
+  - 2026-11-22 보류 해제 + "매월 제공하는 크레딧 100%까지만": 최근 31일 추정 사용액 + 이번 장 ≤ 월 크레딧일 때만 부른다(시작 전 전체 장수, 장마다 한 번 더).
+    Google까지 간 호출은 실패해도 비용으로 세고, 읽을 수 없는 기록은 넉넉히 센다. 80%·100%를 넘는 순간 알림 한 번. 설정 저장은 비밀번호 재확인.
 =========================================================
 """
 
@@ -36,6 +38,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.exceptions import BadRequestException
+from app.core.exceptions import ForbiddenException
+from app.core.recent_auth import issue_recent_auth_token
+from app.core.recent_auth import reset_recent_auth_state_for_tests
 from app.core.windows_credential_store import InMemoryCredentialStore
 from app.database.base import Base
 from app.domains.automation_safety.model import EmergencyStop
@@ -51,8 +56,11 @@ from app.domains.external_call.service import ExternalCallPolicyService
 from app.domains.media_asset import gemini_image_client as gic
 from app.domains.media_asset import schema
 from app.domains.media_asset.constants import MediaAssetOwnerType
+from app.domains.media_asset import image_ai_service as ias
 from app.domains.media_asset.image_ai_service import CREDENTIAL_TARGET
 from app.domains.media_asset.image_ai_service import ImageAiService
+from app.domains.media_asset.providers import ImageGenerationRequest
+from app.domains.media_asset.providers import ImageGenerationRequestItem
 from app.domains.media_asset.job_queue_service import ImageGenerationJobQueueService
 from app.domains.media_asset.model import ImageGenerationDailyUsage
 from app.domains.media_asset.model import ImageGenerationJob
@@ -229,12 +237,24 @@ class Base_(unittest.TestCase):
         self.engine.dispose()
         os.remove(self.db_path)
 
+    NOW = datetime(2026, 10, 25, 9, 0, 0)
+
     def ai(self):
         return ImageAiService(self.db, self.store, client_factory=lambda api_key, model: gic.GeminiImageClient(api_key, model, transport=self.transport),
-                              now_factory=lambda: datetime(2026, 10, 25, 9, 0, 0))
+                              now_factory=lambda: self.NOW)
 
-    def configure(self, key=KEY, size="2K", price=70):
-        return self.ai().save_settings(7, self.company_id, model="gemini-nano-banana-2.1", image_size=size, price_per_image_krw=price, api_key=key)
+    def configure(self, key=KEY, size="2K", credit=10.0, price=None):
+        return self.ai().save_settings(7, self.company_id, model="gemini-nano-banana-2.1", image_size=size, monthly_credit_usd=credit,
+                                       price_per_image_usd=price, api_key=key)
+
+    def usage_rows(self):
+        return [json.loads(r[0]) for r in self.db.execute(text("SELECT description FROM audit_logs WHERE action='IMAGE_AI_USAGE' ORDER BY id")).fetchall()]
+
+    def add_usage(self, at, cost, month=None):
+        month = month or f"{at.year:04d}{at.month:02d}"
+        self.db.execute(text("INSERT INTO audit_logs (company_id, user_id, action, entity, entity_id, description) VALUES (:c, 7, 'IMAGE_AI_USAGE', 'image_ai', :e, :d)"),
+                        {"c": self.company_id, "e": f"{month}:OLD", "d": json.dumps({"model": "gemini-nano-banana-2.1", "image_size": "2K", "ok": True, "cost_usd": cost, "at": at.isoformat()})})
+        self.db.commit()
 
     def grant(self, count=6):
         ExternalCallPolicyService(self.db).grant(self.company_id, system=ExternalSystem.GEMINI, kind=CallKind.WRITE, purpose=CallPurpose.IMAGE_GENERATION,
@@ -261,6 +281,8 @@ class SettingsTests(Base_):
         status = self.configure()
         self.assertEqual((status["configured"], status["key_saved"], status["model"], status["image_size"], status["store_on_google"]),
                          (True, True, "gemini-nano-banana-2.1", "2K", False))
+        self.assertEqual((status["monthly_credit_usd"], status["estimated_cost_per_image_usd"], status["window_used_usd"], status["images_left"], status["window_days"]),
+                         (10.0, 0.0554, 0.0, 180, 31))                                # $10 / ($0.0504 + 입력 여유 $0.005) = 180장
         self.assertNotIn(KEY, json.dumps(status))
         self.assertEqual(self.store.read(CREDENTIAL_TARGET), {"api_key": KEY})
         stored = self.db.query(UserSetting).one().setting_value
@@ -269,29 +291,50 @@ class SettingsTests(Base_):
 
     def test_an_empty_key_keeps_the_saved_key(self):
         self.configure()
-        self.ai().save_settings(7, self.company_id, model="gemini-3-pro-image", image_size="4K", price_per_image_krw=0, api_key="")
+        self.ai().save_settings(7, self.company_id, model="gemini-3-pro-image", image_size="4K", monthly_credit_usd=10, price_per_image_usd=0.24, api_key="")
         self.assertEqual(self.store.read(CREDENTIAL_TARGET), {"api_key": KEY})
-        self.assertEqual(self.ai().status(7, self.company_id)["model"], "gemini-3-pro-image")
+        status = self.ai().status(7, self.company_id)
+        self.assertEqual((status["model"], status["estimated_cost_per_image_usd"]), ("gemini-3-pro-image", 0.245))
 
     def test_bad_settings_are_refused(self):
-        for kwargs in (dict(model="x"), dict(model="bad model!"), dict(image_size="3K"), dict(price_per_image_krw=-1), dict(price_per_image_krw=100_001),
-                       dict(price_per_image_krw=True), dict(api_key="short"), dict(api_key="has space " * 3)):
-            base = dict(model="gemini-nano-banana-2.1", image_size="2K", price_per_image_krw=0, api_key=None)
+        for kwargs in (dict(model="x"), dict(model="bad model!"), dict(image_size="3K"), dict(monthly_credit_usd=0), dict(monthly_credit_usd=-1),
+                       dict(monthly_credit_usd=100.01), dict(monthly_credit_usd=True), dict(monthly_credit_usd="10"), dict(price_per_image_usd=0),
+                       dict(price_per_image_usd=1.01), dict(price_per_image_usd=True), dict(api_key="short"), dict(api_key="has space " * 3)):
+            base = dict(model="gemini-nano-banana-2.1", image_size="2K", monthly_credit_usd=10, price_per_image_usd=None, api_key=None)
             base.update(kwargs)
             with self.assertRaises(BadRequestException, msg=str(kwargs)):
                 self.ai().save_settings(7, self.company_id, **base)
+        self.assertEqual(self.db.query(UserSetting).count(), 0)
+
+    def test_a_model_outside_the_price_list_needs_a_price(self):
+        with self.assertRaises(BadRequestException) as caught:
+            self.ai().save_settings(7, self.company_id, model="gemini-9-image", image_size="2K", monthly_credit_usd=10, price_per_image_usd=None, api_key=KEY)
+        self.assertIn("장당 가격", str(caught.exception.detail))
+        self.assertFalse(self.store.exists(CREDENTIAL_TARGET))                        # 막히면 키도 저장하지 않는다
+        status = self.ai().save_settings(7, self.company_id, model="gemini-9-image", image_size="2K", monthly_credit_usd=10, price_per_image_usd=0.1, api_key=KEY)
+        self.assertEqual((status["configured"], status["estimated_cost_per_image_usd"], status["images_left"]), (True, 0.105, 95))
 
     def test_unconfigured_status(self):
         status = self.ai().status(7, self.company_id)
-        self.assertEqual((status["configured"], status["key_saved"], status["default_model"]), (False, False, "gemini-nano-banana-2.1"))
+        self.assertEqual((status["configured"], status["key_saved"], status["default_model"], status["default_monthly_credit_usd"], status["images_left"]),
+                         (False, False, "gemini-nano-banana-2.1", 10.0, 0))
 
 
 class HoldTests(Base_):
-    """2026-10-25 사용자 결정: 실제 AI 이미지는 비용 때문에 보류 — 설정·키·허용이 다 있어도 GEMINI는 거절되고 아무것도 부르거나 남기지 않는다."""
+    """2026-10-25 비용 때문에 보류 → 2026-11-22 사용자 결정으로 해제. 보류 장치는 그대로 남아 있어, 다시 보류하면 아무것도 부르거나 남기지 않는다."""
 
-    def test_gemini_is_refused_while_on_hold_even_when_fully_configured(self):
+    def test_the_hold_is_lifted(self):
         from app.domains.media_asset import reference_generation as rg
 
+        self.assertEqual((rg.ALLOWED_PROVIDER_CODES, rg.HELD_PROVIDER_CODES), (("FAKE", "GEMINI"), ()))
+
+    def test_gemini_is_refused_when_put_back_on_hold_even_when_fully_configured(self):
+        from app.domains.media_asset import reference_generation as rg
+
+        for name, value in (("ALLOWED_PROVIDER_CODES", ("FAKE",)), ("HELD_PROVIDER_CODES", ("GEMINI",))):
+            patcher = mock.patch.object(rg, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.configure()
         self.grant(6)
         asset = self.upload()
@@ -307,15 +350,7 @@ class HoldTests(Base_):
 
 
 class GenerationTests(Base_):
-    """보류를 풀었을 때의 동작(코드는 유지) — 이 시험 안에서만 보류를 풀어 확인한다."""
-
-    def setUp(self):
-        super().setUp()
-        from app.domains.media_asset import reference_generation as rg
-
-        patcher = mock.patch.object(rg, "ALLOWED_PROVIDER_CODES", ("FAKE", "GEMINI"))
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    """보류를 푼 뒤(2026-11-22)의 동작."""
 
     def counts(self):
         return tuple(self.db.query(func.count(m.id)).scalar() for m in (ImageGenerationJob, MediaAsset, Notification))
@@ -331,9 +366,11 @@ class GenerationTests(Base_):
     def test_without_an_allowance_the_image_is_not_requested_and_a_request_is_left(self):
         self.configure()
         asset = self.upload()
-        with self.assertRaises(BadRequestException):                                   # 만든 사진이 없다
+        with self.assertRaises(BadRequestException) as caught:                         # 만든 사진이 없다
             self.make(asset=asset)
+        self.assertIn("사유:", str(caught.exception.detail))                           # 왜 못 만들었는지 함께 알린다
         self.assertEqual(self.transport.calls, [])
+        self.assertEqual(self.usage_rows(), [])                                        # 부르지 않았으니 비용도 없다
         pending = self.db.query(ExternalCallAllowance).filter_by(system="GEMINI", purpose="IMAGE_GENERATION").all()
         self.assertTrue(pending)                                                      # 승인 센터에 허용 요청이 남는다
         failed = self.db.query(ImageGenerationResult).one()
@@ -362,7 +399,7 @@ class GenerationTests(Base_):
         usage = self.db.execute(text("SELECT description FROM audit_logs WHERE action='IMAGE_AI_USAGE'")).fetchall()
         self.assertEqual(len(usage), 2)
         record = json.loads(usage[0][0])
-        self.assertEqual(record, {"model": "gemini-nano-banana-2.1", "image_size": "2K", "ok": True, "cost_krw": 70.0})
+        self.assertEqual(record, {"model": "gemini-nano-banana-2.1", "image_size": "2K", "ok": True, "cost_usd": 0.0554, "at": "2026-10-25T09:00:00"})
         self.assertNotIn(KEY, " ".join(u[0] for u in usage))
         used = self.db.query(ExternalCallAllowance).filter_by(status="EXHAUSTED").count() + self.db.query(ExternalCallAllowance).filter_by(status="ACTIVE").count()
         self.assertEqual(used, 1)
@@ -403,6 +440,134 @@ class GenerationTests(Base_):
         self.assertEqual(self.db.query(Notification).count(), 0)
 
 
+class CreditLimitTests(Base_):
+    """2026-11-22 "매월 제공하는 크레딧 100%까지만 사용" — 최근 31일 추정 사용액 + 이번 장 ≤ 월 크레딧."""
+
+    def request(self, n):
+        return ImageGenerationRequest(company_id=self.company_id, product_candidate_id=5, prompt_fingerprint="fp", style_params={"purpose": "ADDITIONAL", "variants": []},
+                                      items=tuple(ImageGenerationRequestItem(purpose="ADDITIONAL", sequence_index=i + 1) for i in range(n)),
+                                      reference_image_bytes=png(), reference_mime_type="image/png")
+
+    def test_the_estimate_is_the_official_price_plus_the_input_allowance(self):
+        self.assertEqual([ias.per_image_usd("gemini-nano-banana-2.1", size) for size in ("1K", "2K", "4K")], [0.0386, 0.0554, 0.118])
+        self.assertIsNone(ias.per_image_usd("gemini-9-image", "2K"))
+        self.assertIsNone(ias.per_image_usd("gemini-nano-banana-2.1", "3K"))
+        self.assertEqual(ias.per_image_usd("gemini-9-image", "2K", 0.2), 0.205)
+        for bad in (0, -1, True, "0.2", None):
+            self.assertEqual(ias.per_image_usd("gemini-nano-banana-2.1", "2K", bad), 0.0554, bad)
+
+    def test_only_refusals_before_sending_are_free(self):
+        for status in (400, 401, 403, 404, 429):
+            self.assertEqual(ias.billed_usd(gic.GeminiImageResult(False, http_status=status), 0.05), 0.0, status)
+        for result in (gic.GeminiImageResult(True, http_status=200), gic.GeminiImageResult(False, http_status=200), gic.GeminiImageResult(False, http_status=500),
+                       gic.GeminiImageResult(False, detail="응답 시간이 초과됐다")):
+            self.assertEqual(ias.billed_usd(result, 0.05), 0.05, result)
+
+    def test_stage(self):
+        self.assertEqual([ias.credit_stage(u, 10) for u in (0, 7.99, 8, 9.99, 10, 12)], [None, None, 80, 80, 100, 100])
+        self.assertIsNone(ias.credit_stage(5, 0))
+
+    def test_a_run_that_would_pass_the_credit_is_refused_before_anything_happens(self):
+        self.configure(credit=0.11)                                                    # 2장이면 $0.1108 > $0.11
+        self.grant(6)
+        asset = self.upload()
+        before = tuple(self.db.query(func.count(m.id)).scalar() for m in (ImageGenerationJob, ImageGenerationResult, Notification))
+        with self.assertRaises(BadRequestException) as caught:
+            self.make(asset=asset, backgrounds=["CAFE", "STREET"], count=2)
+        detail = str(caught.exception.detail)
+        self.assertIn("월 크레딧", detail)
+        self.assertIn("지금 만들 수 있는 장수는 1장", detail)
+        self.assertEqual(self.transport.calls, [])
+        self.assertEqual(tuple(self.db.query(func.count(m.id)).scalar() for m in (ImageGenerationJob, ImageGenerationResult, Notification)), before)
+        self.assertEqual(self.db.query(ExternalCallAllowance).filter_by(status="ACTIVE").one().remaining_count, 6)   # 허용도 쓰지 않았다
+        outcome = self.make(asset=asset, count=1)                                      # 1장은 된다
+        self.assertEqual((len(outcome.assets), len(self.transport.calls)), (1, 1))
+
+    def test_each_image_is_checked_again_and_the_run_stops_at_the_credit(self):
+        self.configure(credit=0.12)                                                    # 2장($0.1108)까지
+        self.grant(6)
+        provider = self.ai().provider(self.company_id, 7, target="REF1", planned_images=1)   # 시작 전 확인은 1장으로 통과
+        result = provider.generate(self.request(3))
+        self.assertEqual([i.status for i in result.items], ["SUCCEEDED", "SUCCEEDED", "FAILED"])
+        self.assertIn("월 크레딧", result.items[2].error_reason)
+        self.assertEqual(len(self.transport.calls), 2)
+        self.assertEqual(sum(r["cost_usd"] for r in self.usage_rows()), 0.1108)
+        self.assertEqual(self.db.query(ExternalCallAllowance).filter_by(status="ACTIVE").one().remaining_count, 4)   # 막힌 장은 허용을 쓰지 않는다
+
+    def test_failed_calls_that_reached_google_still_count(self):
+        self.configure(credit=0.12)
+        self.grant(6)
+        self.transport.outcomes = [FakeResponse(500, {}), FakeResponse(429, {}), FakeResponse(200, {"status": "failed", "errors": [{"message": "blocked"}]})]
+        result = self.ai().provider(self.company_id, 7, target="REF1").generate(self.request(3))
+        self.assertEqual([i.status for i in result.items], ["FAILED"] * 3)
+        self.assertEqual([r["cost_usd"] for r in self.usage_rows()], [0.0554, 0.0, 0.0554])
+        self.assertEqual([r["ok"] for r in self.usage_rows()], [False, False, False])
+        with self.assertRaises(BadRequestException):                                   # 남은 크레딧 $0.0092 < 한 장
+            self.ai().provider(self.company_id, 7, target="REF1")
+
+    def test_only_the_last_31_days_count(self):
+        self.configure(credit=0.1)
+        self.add_usage(datetime(2026, 9, 23, 8, 59, 0), 0.09)                          # 32일 전 — 창 밖
+        self.add_usage(datetime(2026, 8, 1), 5.0)                                     # 두 달 전 — 창 밖
+        self.assertEqual(self.ai().status(7, self.company_id)["window_used_usd"], 0.0)
+        self.assertEqual(self.ai().window_records(), [])
+        self.add_usage(datetime(2026, 9, 24, 9, 0, 0), 0.05)                           # 정확히 31일 전 — 창 안
+        status = self.ai().status(7, self.company_id)
+        self.assertEqual((status["window_used_usd"], status["window_calls"], status["images_left"]), (0.05, 1, 0))
+        self.grant(6)
+        with self.assertRaises(BadRequestException):
+            self.make(count=1)
+        self.assertEqual(self.transport.calls, [])
+
+    def test_unreadable_records_are_counted_generously(self):
+        self.configure(credit=10)
+        for description in ("not json", json.dumps({"ok": True}), json.dumps({"cost_usd": "x", "at": "2026-10-20T00:00:00"}), json.dumps([1])):
+            self.db.execute(text("INSERT INTO audit_logs (company_id, user_id, action, entity, entity_id, description) VALUES (:c, 7, 'IMAGE_AI_USAGE', 'image_ai', '202610:X', :d)"),
+                            {"c": self.company_id, "d": description})
+        self.db.commit()
+        status = self.ai().status(7, self.company_id)
+        self.assertEqual((status["window_used_usd"], status["window_calls"]), (4.0, 4))   # 모르는 기록은 장당 상한 $1로 센다
+
+    def test_crossing_80_and_100_percent_leaves_one_notice_each(self):
+        # 한 장 $0.0625(2진수로 딱 떨어짐) — 정확히 16장. 13장째에 80%, 14·15장째는 같은 80%(알림 없음), 16장째에 100%.
+        self.configure(credit=1.0, price=0.0575)
+        self.grant(20)
+        self.ai().provider(self.company_id, 7, target="REF1").generate(self.request(16))
+        notes = self.db.query(Notification).order_by(Notification.id).all()
+        self.assertEqual([n.title for n in notes], ["AI 이미지 월 크레딧의 80%를 썼습니다", "AI 이미지 월 크레딧의 100%를 썼습니다"])
+        self.assertTrue(all(n.category == "IMAGE_AI" and n.level == "warning" and n.user_id == 7 for n in notes))
+        self.assertIn("더 만들지 않습니다", notes[1].message)
+        status = self.ai().status(7, self.company_id)
+        self.assertEqual((status["credit_alert_pct"], status["images_left"]), (100, 0))
+        with self.assertRaises(BadRequestException):
+            self.ai().provider(self.company_id, 7, target="REF1")
+        self.assertEqual(len(self.transport.calls), 16)
+
+    def test_calls_run_one_at_a_time(self):
+        self.configure()
+        self.grant(6)
+        seen = []
+        original = self.transport.post
+
+        def post(url, **kw):
+            seen.append(ias._CALL_LOCK.locked())
+            return original(url, **kw)
+
+        self.transport.post = post
+        self.ai().provider(self.company_id, 7, target="REF1").generate(self.request(2))
+        self.assertEqual(seen, [True, True])
+        self.assertFalse(ias._CALL_LOCK.locked())
+
+    def test_records_show_the_window_newest_first_without_keys(self):
+        self.configure()
+        self.grant(6)
+        self.ai().provider(self.company_id, 7, target="REF9").generate(self.request(2))
+        records = self.ai().window_records()
+        self.assertEqual([(r["ref"], r["ok"], r["cost_usd"], r["at"]) for r in records], [("REF9", True, 0.0554, "2026-10-25T09:00:00")] * 2)
+        self.assertGreater(records[0]["id"], records[1]["id"])
+        self.assertNotIn(KEY, json.dumps(records))
+
+
 class WiringTests(Base_):
 
     def module(self):
@@ -413,10 +578,35 @@ class WiringTests(Base_):
     def test_settings_routes_and_the_generation_route_accept_gemini(self):
         module = self.module()
         user = SimpleNamespace(id=7, company_id=self.company_id)
-        with mock.patch("app.domains.media_asset.image_ai_service.gic.GeminiImageClient", side_effect=lambda key, model: gic.GeminiImageClient(key, model, transport=self.transport)):
-            saved = module.image_ai_save_settings(data=schema.ImageAiSettingsSchema(model="gemini-nano-banana-2.1", api_key=KEY), current_user=user, db=self.db, credential_store=self.store)
-            self.assertTrue(saved["configured"])
-            self.assertNotIn(KEY, json.dumps(module.image_ai_settings(current_user=user, db=self.db, credential_store=self.store)))
+        reset_recent_auth_state_for_tests()
+        self.addCleanup(reset_recent_auth_state_for_tests)
+        data = schema.ImageAiSettingsSchema(model="gemini-nano-banana-2.1", api_key=KEY)
+        for token in (None, "wrong"):                                                  # 2026-11-22 비밀번호 재확인 없이는 저장하지 않는다
+            with self.assertRaises(ForbiddenException):
+                module.image_ai_save_settings(data=data, current_user=user, recent_auth_token=token, db=self.db, credential_store=self.store)
+        self.assertFalse(self.store.exists(CREDENTIAL_TARGET))
+        token, _ = issue_recent_auth_token(7)
+        saved = module.image_ai_save_settings(data=data, current_user=user, recent_auth_token=token, db=self.db, credential_store=self.store)
+        self.assertEqual((saved["configured"], saved["monthly_credit_usd"]), (True, 10.0))
+        with self.assertRaises(ForbiddenException):                                    # 1회용
+            module.image_ai_save_settings(data=data, current_user=user, recent_auth_token=token, db=self.db, credential_store=self.store)
+        audit = self.db.execute(text("SELECT description FROM audit_logs WHERE action='IMAGE_AI_SETTINGS_SAVED'")).fetchall()
+        self.assertEqual(len(audit), 1)
+        self.assertIn("월 크레딧 $10", audit[0][0])
+        self.assertNotIn(KEY, audit[0][0])
+        shown = module.image_ai_settings(current_user=user, db=self.db, credential_store=self.store)
+        self.assertEqual(shown["records"], [])
+        self.assertNotIn(KEY, json.dumps(shown))
+
+    def test_saving_needs_the_super_admin_guard_and_reading_the_admin_guard(self):
+        import inspect
+
+        from app.core.guard import SuperAdminGuard
+        from app.core.guard import admin_guard
+
+        module = self.module()
+        self.assertIs(inspect.signature(module.image_ai_save_settings).parameters["current_user"].default.dependency, SuperAdminGuard)
+        self.assertIs(inspect.signature(module.image_ai_settings).parameters["current_user"].default.dependency, admin_guard)
 
     def test_schema_limits(self):
         ok = dict(reference_asset_id=1, backgrounds=["CAFE"], poses=["ARMS_DOWN"])
@@ -425,8 +615,11 @@ class WiringTests(Base_):
         for bad in (dict(provider_code="OPENAI"), dict(instruction="가" * 501)):
             with self.assertRaises(ValidationError):
                 schema.ReferenceGenerationRequestSchema(**ok, **bad)
-        with self.assertRaises(ValidationError):
-            schema.ImageAiSettingsSchema(model="gemini-nano-banana-2.1", image_size="3K")
+        for bad in (dict(image_size="3K"), dict(monthly_credit_usd=0), dict(monthly_credit_usd=101), dict(price_per_image_usd=0), dict(price_per_image_usd=1.5),
+                    dict(price_per_image_krw=70)):                                    # 원화 장당 비용 칸은 없앴다(모르는 칸은 거절)
+            with self.assertRaises(ValidationError, msg=str(bad)):
+                schema.ImageAiSettingsSchema(model="gemini-nano-banana-2.1", **bad)
+        self.assertEqual(schema.ImageAiSettingsSchema(model="gemini-nano-banana-2.1").monthly_credit_usd, 10.0)
 
     def test_the_new_system_and_purpose_are_registered(self):
         self.assertIn(ExternalSystem.GEMINI, ExternalSystem.ALL)
