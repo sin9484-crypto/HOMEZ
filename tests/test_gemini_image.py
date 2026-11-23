@@ -131,11 +131,17 @@ class ClientTests(unittest.TestCase):
         body = call["body"]
         self.assertEqual(body["model"], "gemini-nano-banana-2.1")
         self.assertIs(body["store"], False)                                            # 구글 서버에 남기지 않는다
-        self.assertEqual(body["response_format"], {"type": "image", "mime_type": "image/png", "aspect_ratio": "1:1", "image_size": "2K"})
+        # 2026-11-23 첫 실제 호출: PNG 결과 요청은 400("Supported values: 'image/jpeg'") — 결과는 JPEG로 요청한다.
+        self.assertEqual(body["response_format"], {"type": "image", "mime_type": "image/jpeg", "aspect_ratio": "1:1", "image_size": "2K"})
         self.assertEqual(body["input"][0], {"type": "text", "text": "prompt"})
         self.assertEqual((body["input"][1]["type"], body["input"][1]["mime_type"]), ("image", "image/png"))
         self.assertEqual(base64.b64decode(body["input"][1]["data"]), png())
         self.assertEqual(call["timeout"], gic.TIMEOUT_SECONDS)
+
+    def test_a_result_without_a_type_is_taken_as_jpeg(self):
+        body = completed(png((1, 2, 3), (64, 64)))
+        del body["steps"][0]["content"][1]["mime_type"]
+        self.assertEqual(gic.parse_response(body).mime_type, "image/jpeg")
 
     def test_the_result_carries_the_last_image(self):
         first, last = png((1, 2, 3), (64, 64)), png((9, 9, 9), (64, 64))
@@ -403,6 +409,19 @@ class GenerationTests(Base_):
         self.assertNotIn(KEY, " ".join(u[0] for u in usage))
         used = self.db.query(ExternalCallAllowance).filter_by(status="EXHAUSTED").count() + self.db.query(ExternalCallAllowance).filter_by(status="ACTIVE").count()
         self.assertEqual(used, 1)
+
+    def test_a_jpeg_result_is_stored_as_jpeg_with_a_jpg_name(self):
+        buffer = io.BytesIO()
+        Image.new("RGB", (512, 512), (30, 140, 90)).save(buffer, format="JPEG")
+        body = completed(buffer.getvalue())
+        body["steps"][0]["content"][1]["mime_type"] = "image/jpeg"
+        self.transport.outcomes = [FakeResponse(200, body)]
+        self.configure()
+        self.grant(6)
+        outcome = self.make()
+        generated = outcome.assets[0]
+        self.assertEqual(generated.mime_type, "image/jpeg")
+        self.assertTrue(generated.original_filename.endswith(".jpg"), generated.original_filename)
 
     def test_one_failed_image_does_not_stop_the_others_and_the_notice_says_so(self):
         self.configure()

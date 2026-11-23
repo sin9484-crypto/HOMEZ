@@ -9,7 +9,8 @@ File : app/domains/media_asset/gemini_image_client.py
 
   POST https://generativelanguage.googleapis.com/v1beta/interactions   헤더 x-goog-api-key, Content-Type: application/json
   본문 {"model": "...", "input": [{"type": "text", "text": ...}, {"type": "image", "mime_type": "image/png", "data": <base64>}, ...],
-        "response_format": {"type": "image", "mime_type": "image/png", "aspect_ratio": "1:1", "image_size": "2K"}, "store": false}
+        "response_format": {"type": "image", "mime_type": "image/jpeg", "aspect_ratio": "1:1", "image_size": "2K"}, "store": false}
+  2026-11-23 첫 실제 호출에서 확인: 결과 형식(response_format.mime_type)은 'image/jpeg'만 받는다(PNG를 요청하면 400 — "Supported values: 'image/jpeg'").
   응답 {"id", "status": in_progress|requires_action|completed|failed|cancelled|incomplete, "steps": [{"type": "model_output",
         "content": [{"type": "image", "data": <base64>, "mime_type": ...}, {"type": "text", ...}]}], "errors": [{"code", "message"}], "usage": {...}}
   모델: 기본 `gemini-nano-banana-2.1`(생성·편집 주력, 참고 이미지 최대 14장). 이미지 크기 1K/2K/4K(대문자 K).
@@ -39,6 +40,7 @@ ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
 DEFAULT_MODEL = "gemini-nano-banana-2.1"
 IMAGE_SIZES = ("1K", "2K", "4K")
 DEFAULT_IMAGE_SIZE = "2K"
+RESPONSE_MIME_TYPE = "image/jpeg"   # 2026-11-23 실제 응답으로 확인 — 결과는 JPEG로만 받을 수 있다
 ASPECT_RATIOS = ("1:1", "4:3", "3:4", "16:9", "9:16")
 MAX_INPUT_IMAGES = 14
 MAX_INSTRUCTION_CHARS = 500
@@ -139,7 +141,7 @@ def build_body(model: str, prompt: str, images: list[tuple[bytes, str]], *, imag
         content.append({"type": "image", "mime_type": mime, "data": base64.b64encode(data).decode("ascii")})
     return {
         "model": model, "input": content, "store": False,
-        "response_format": {"type": "image", "mime_type": "image/png", "aspect_ratio": aspect_ratio, "image_size": image_size},
+        "response_format": {"type": "image", "mime_type": RESPONSE_MIME_TYPE, "aspect_ratio": aspect_ratio, "image_size": image_size},
     }
 
 
@@ -170,7 +172,7 @@ def parse_response(body: Any) -> GeminiImageResult:
         return GeminiImageResult(False, interaction_id=interaction_id, status=status, detail="이미지 데이터를 해석할 수 없다", usage=usage)
     if not data:
         return GeminiImageResult(False, interaction_id=interaction_id, status=status, detail="빈 이미지", usage=usage)
-    mime = image.get("mime_type") if isinstance(image.get("mime_type"), str) else "image/png"
+    mime = image.get("mime_type") if isinstance(image.get("mime_type"), str) else RESPONSE_MIME_TYPE
     return GeminiImageResult(True, data, mime, interaction_id, status, "", 200, usage)
 
 
@@ -221,6 +223,6 @@ def safe_dump(body: dict) -> str:
 
 
 __all__ = [
-    "ENDPOINT", "DEFAULT_MODEL", "IMAGE_SIZES", "DEFAULT_IMAGE_SIZE", "ASPECT_RATIOS", "MAX_INPUT_IMAGES", "MAX_INSTRUCTION_CHARS", "BASE_RULES",
+    "ENDPOINT", "DEFAULT_MODEL", "IMAGE_SIZES", "DEFAULT_IMAGE_SIZE", "RESPONSE_MIME_TYPE", "ASPECT_RATIOS", "MAX_INPUT_IMAGES", "MAX_INSTRUCTION_CHARS", "BASE_RULES",
     "GeminiImageError", "GeminiImageResult", "GeminiImageClient", "RequestsTransport", "clean_instruction", "build_prompt", "build_body", "parse_response", "safe_dump",
 ]

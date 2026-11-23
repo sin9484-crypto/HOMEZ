@@ -221,7 +221,9 @@ class ReferenceGenerationService:
                 self_reported_mime_type=item.mime_type or "image/png",
             )
             # 출처·권리 상태 승계·파일 이름은 새로 만든 자산에만 한 번 쓴다 — 같은 바이트의 다른 출처 자산이 이미 있으면 덮어쓰지 않는다(권리 격상 방지, derived_assets.py).
-            adopt_derived(generated, reference_asset, f"{FILE_PREFIX}-{plan.purpose}-{variant.background}-{variant.pose}-{variant.sequence_index}.png".lower())
+            # 파일 이름의 확장자는 실제 저장된 형식을 따른다(2026-11-23 실제 AI 결과는 JPEG).
+            ext = {"image/jpeg": "jpg", "image/webp": "webp"}.get(generated.mime_type, "png")
+            adopt_derived(generated, reference_asset, f"{FILE_PREFIX}-{plan.purpose}-{variant.background}-{variant.pose}-{variant.sequence_index}.{ext}".lower())
             self.queue.repository.add_result_no_commit(ImageGenerationResult(
                 company_id=company_id, job_id=job_id, media_asset_id=generated.id, sequence_index=item.sequence_index, purpose=item.purpose,
                 status=ImageResultStatus.SUCCEEDED, safety_check_status=ImageSafetyCheckStatus.UNKNOWN,  # 사람 검수 전이라 "통과"라고 하지 않는다
