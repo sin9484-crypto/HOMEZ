@@ -246,6 +246,7 @@ class GrantTargetTests(unittest.TestCase):
         ("COUPANG", "WRITE", "PRICE_UPDATE"), ("COUPANG", "WRITE", "PRODUCT_NAME_UPDATE"), ("COUPANG", "WRITE", "INQUIRY_REPLY"), ("COUPANG", "WRITE", "RETURN_PROCESS"),
         ("NAVER", "READ", "TREND_LOOKUP"), ("ONCH", "READ", "ORDER_DETECTION"), ("ONCH", "READ", "SUPPLIER_RELEASE_DATE"),
         ("LLM", "WRITE", "AI_DRAFT"), ("LLM", "WRITE", "AI_ANALYSIS"), ("LLM", "WRITE", "AI_ADVICE"), ("GEMINI", "WRITE", "IMAGE_GENERATION"), ("EMAIL", "WRITE", "BRIEF_EMAIL"),
+        ("GEMINI", "WRITE", "GEMINI_QUESTION"),                                    # 2026-11-23 클로드 연결 장치의 제미나이 글 질문
     )
 
     def test_the_table_covers_every_purpose_and_every_real_combination(self):
@@ -257,7 +258,7 @@ class GrantTargetTests(unittest.TestCase):
 
     def test_mismatched_combinations_are_not_valid(self):
         for combo in (("COUPANG", "WRITE", "AI_BACKGROUND"), ("CLOUDFLARE", "READ", "AI_BACKGROUND"), ("ONCH", "READ", "TREND_LOOKUP"),
-                      ("COUPANG", "WRITE", "ORDER_DETECTION"), ("LLM", "READ", "AI_DRAFT"), ("NOWHERE", "READ", "ANY"), ("COUPANG", "READ", "UNKNOWN")):
+                      ("COUPANG", "WRITE", "ORDER_DETECTION"), ("LLM", "READ", "AI_DRAFT"), ("LLM", "WRITE", "GEMINI_QUESTION"), ("GEMINI", "READ", "GEMINI_QUESTION"), ("NOWHERE", "READ", "ANY"), ("COUPANG", "READ", "UNKNOWN")):
             self.assertFalse(ec.valid_target(*combo), combo)
 
     def test_the_screen_table_matches_the_server_table(self):

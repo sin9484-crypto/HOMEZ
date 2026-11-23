@@ -22,6 +22,10 @@ File : app/domains/media_asset/image_ai_service.py
     Google까지 간 호출은 실패해도 비용으로 센다. 보내기 전에 거절된 응답(400·401·403·404·429)만 0으로 센다.
   - 한 번에 여러 장을 만들면 시작 전에 전체 장수로 한 번, 장마다 한 번 더 확인한다(장 사이에 다른 요청이 쓰더라도 넘지 않게, 호출은 한 번에 하나씩).
   - 80%·100%를 넘는 순간 앱 알림을 한 번 남긴다.
+
+2026-11-23 — 첫 실제 호출이 402(결제 필요 — 선결제 잔액 0)로 거절됐다. 일을 하지 않고 거절한 것이라 0으로 센다.
+클로드 연결 장치(`tools/claude_gemini_link`)가 같은 크레딧을 쓰므로: 제미나이 글 질문 기록(`GEMINI_TEXT_USAGE`)도 같은 31일 합계에 들어가고,
+'확인 → 호출 → 기록'은 앱과 연결 장치 사이에서도 한 번에 하나씩 한다(같은 PC의 잠금 파일).
 =========================================================
 """
 
@@ -32,11 +36,14 @@ import logging
 import math
 import re
 import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Callable
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -67,6 +74,8 @@ CREDENTIAL_TARGET = "HOMEZ/IMAGE_AI/GEMINI"
 SETTINGS_KEY = "listing_defaults"
 SETTINGS_SUBKEY = "image_ai"
 USAGE_ACTION = "IMAGE_AI_USAGE"
+TEXT_USAGE_ACTION = "GEMINI_TEXT_USAGE"           # 2026-11-23 제미나이 글 질문(같은 월 크레딧을 쓴다)
+USAGE_ACTIONS = (USAGE_ACTION, TEXT_USAGE_ACTION)
 PROVIDER_CODE = "GEMINI"
 _KEY_PATTERN = re.compile(r"^[\x21-\x7e]{20,300}$")
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,80}$")
@@ -79,12 +88,56 @@ MAX_PRICE_PER_IMAGE_USD = 1.0
 INPUT_ALLOWANCE_USD = 0.005             # 입력(규칙 글 + 참고 사진 1장) 여유분: $1.50/100만 토큰 × 약 3,300토큰
 # 공식 가격표(ai.google.dev, 2026-10-25 확인) 장당 출력 가격. 여기 없는 모델은 장당 가격을 직접 적어야 쓸 수 있다.
 OFFICIAL_PRICE_PER_IMAGE_USD = {"gemini-nano-banana-2.1": {"1K": 0.0336, "2K": 0.0504, "4K": 0.113}}
-NOT_BILLED_HTTP = (400, 401, 403, 404, 429)
+NOT_BILLED_HTTP = (400, 401, 402, 403, 404, 429)   # 402: 결제 필요(2026-11-23 실제 응답) — 일을 하지 않고 거절
 CREDIT_ALERT_STAGES = (100, 80)
 CREDIT_NOTICE_CATEGORY = "IMAGE_AI"
 
-# 장마다 '확인 → 호출 → 기록'을 한 번에 하나씩 한다. 두 요청이 같은 남은 크레딧을 동시에 보고 함께 넘기지 않게 한다(데스크톱 단일 프로세스).
+# 장마다 '확인 → 호출 → 기록'을 한 번에 하나씩 한다. 두 요청이 같은 남은 크레딧을 동시에 보고 함께 넘기지 않게 한다.
+# 프로세스 안에서는 _CALL_LOCK, 앱과 클로드 연결 장치 사이에서는 잠금 파일(같은 PC)로 막는다.
 _CALL_LOCK = threading.Lock()
+LOCK_FILE = Path(__file__).resolve().parents[3] / "storage" / "locks" / "gemini_calls.lock"
+LOCK_WAIT_SECONDS = 600
+
+
+@contextmanager
+def _file_lock(path: Path = None, wait_seconds: float = None):
+    """다른 프로세스와 함께 쓰는 잠금. 윈도우가 아니면(시험 환경 등) 프로세스 안 잠금만 쓴다. 기다려도 못 잡으면 호출하지 않는다."""
+
+    path = path or LOCK_FILE
+    try:
+        import msvcrt
+    except ImportError:  # pragma: no cover — 윈도우 전용
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    deadline = time.monotonic() + (LOCK_WAIT_SECONDS if wait_seconds is None else wait_seconds)
+    try:
+        while True:
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise CreditLimitReached("다른 제미나이 호출이 끝나지 않아 이번 호출은 하지 않았습니다. 잠시 뒤 다시 해 주세요.") from None
+                time.sleep(0.2)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        handle.close()
+
+
+@contextmanager
+def call_slot():
+    """'확인 → 호출 → 기록' 한 번. 같은 프로세스·다른 프로세스(앱·클로드 연결 장치) 모두 한 번에 하나."""
+
+    with _CALL_LOCK:
+        with _file_lock():
+            yield
 
 
 class CreditLimitReached(Exception):
@@ -137,7 +190,7 @@ class GeminiImageProvider(ImageGenerationProvider):
         if not request.reference_image_bytes or not request.reference_mime_type:
             raise gic.GeminiImageError("참고 이미지가 없다")
         for item in request.items:
-            with _CALL_LOCK:
+            with call_slot():
                 try:
                     ticket = self._before(item.sequence_index)
                 except ExternalCallNotAllowed as exc:
@@ -268,11 +321,12 @@ class ImageAiService:
         start = now - timedelta(days=CREDIT_WINDOW_DAYS)
         months = sorted({f"{d.year:04d}{d.month:02d}" for d in (start, now)})
         rows: list = []
-        for month in months:
-            rows += self.db.execute(
-                text("SELECT id, entity_id, description FROM audit_logs WHERE action = :a AND entity_id LIKE :p"),
-                {"a": USAGE_ACTION, "p": f"{month}:%"},
-            ).fetchall()
+        for action in USAGE_ACTIONS:
+            for month in months:
+                rows += self.db.execute(
+                    text("SELECT id, entity_id, description FROM audit_logs WHERE action = :a AND entity_id LIKE :p"),
+                    {"a": action, "p": f"{month}:%"},
+                ).fetchall()
         return [tuple(r) for r in rows]
 
     def _row_in_window(self, payload: Any) -> tuple[bool, float]:
@@ -322,6 +376,39 @@ class ImageAiService:
             if len(records) >= max(1, min(int(limit), 200)):
                 break
         return records
+
+    def credit_usd(self, user_id: int, company_id: int) -> float:
+        """저장된 월 크레딧(달러). 없으면 0 — 0이면 아무 제미나이 호출도 하지 않는다."""
+
+        return self._credit(self._settings(user_id, company_id))
+
+    def read_key(self) -> str | None:
+        """제미나이 키(같은 키를 글 질문에도 쓴다). 값은 화면·기록에 싣지 않는다."""
+
+        return self._read_key()
+
+    def ensure_room(self, credit: float, need_usd: float) -> None:
+        """최근 31일 사용액 + 이번 최대 비용이 월 크레딧을 넘으면 CreditLimitReached. 반드시 call_slot() 안에서 부른다."""
+
+        used, _calls = self.window_usage()
+        if credit <= 0 or used + need_usd > credit + 1e-9:
+            raise CreditLimitReached(
+                f"월 크레딧 한도 때문에 부르지 않았습니다(최근 {CREDIT_WINDOW_DAYS}일 사용 약 ${used:.2f} + 이번 최대 약 ${need_usd:.4f} > 월 크레딧 ${credit:.2f})."
+            )
+
+    def record_text_usage(self, company_id: int, user_id: int, ref: str, model: str, ok: bool, cost_usd: float, input_tokens: Any, output_tokens: Any) -> None:
+        now = self._now()
+        try:
+            write_audit_log(
+                self.db, user_id=user_id, action=TEXT_USAGE_ACTION, entity="gemini_text", entity_id=f"{now.year:04d}{now.month:02d}:{ref}"[:100],
+                description=json.dumps({"model": model, "kind": "TEXT", "ok": ok, "cost_usd": round(float(cost_usd), 6), "i": input_tokens, "o": output_tokens,
+                                        "at": now.replace(microsecond=0).isoformat()}, ensure_ascii=False),
+                company_id=company_id,
+            )
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+            logger.warning("제미나이 글 질문 사용 기록 실패")
 
     def _check_credit(self, credit: float, estimate: float, images: int) -> None:
         used, _calls = self.window_usage()
@@ -423,7 +510,7 @@ class ImageAiService:
 
 
 __all__ = [
-    "ImageAiService", "GeminiImageProvider", "CreditLimitReached", "credit_stage", "per_image_usd", "billed_usd",
+    "ImageAiService", "GeminiImageProvider", "CreditLimitReached", "credit_stage", "per_image_usd", "billed_usd", "call_slot", "TEXT_USAGE_ACTION", "USAGE_ACTIONS",
     "CREDENTIAL_TARGET", "USAGE_ACTION", "PROVIDER_CODE", "CREDIT_WINDOW_DAYS", "DEFAULT_MONTHLY_CREDIT_USD", "MAX_MONTHLY_CREDIT_USD",
     "MAX_PRICE_PER_IMAGE_USD", "INPUT_ALLOWANCE_USD", "OFFICIAL_PRICE_PER_IMAGE_USD", "NOT_BILLED_HTTP",
 ]

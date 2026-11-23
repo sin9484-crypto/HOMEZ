@@ -199,7 +199,8 @@ class RecheckTests(StaleBase):
         self.assertEqual(summary["rechecked_windows"], 0)
         self.assertEqual(summary["failures"], [])
         self.assertEqual(self.window_calls(), [])
-        self.assertEqual({c[2] for c in self.transport.calls} - {now_kst.date().isoformat(), now_kst.strftime("%Y-%m-%d")}, set())
+        # 평소 읽기의 끝 날짜는 제공자 시계(PROVIDER_NOW, 한국 11-22)로 정해진다 — 실제 오늘 날짜와 비교하면 11-23부터 틀린다(2026-11-23 고침).
+        self.assertEqual({c[2] for c in self.transport.calls}, {PROVIDER_NOW.astimezone(KST).date().isoformat()})
 
     def test_windows_are_capped_per_run_oldest_first(self):
         for i in range(MAX_RECHECK_WINDOWS + 2):

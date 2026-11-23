@@ -94,6 +94,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature(CallPurpose.AI_ADVICE, CallKind.WRITE, SUGGEST, ON_PRESS, AI_SUGGEST_ONLY),
     Feature(CallPurpose.IMAGE_GENERATION, CallKind.WRITE, SUGGEST, ON_PRESS, AI_SUGGEST_ONLY),
     Feature(CallPurpose.AI_BACKGROUND, CallKind.WRITE, SUGGEST, ON_PRESS, AI_SUGGEST_ONLY),
+    Feature(CallPurpose.GEMINI_QUESTION, CallKind.WRITE, SUGGEST, ON_PRESS, AI_SUGGEST_ONLY),
 )
 
 # 내리기·올리기 판정 결과

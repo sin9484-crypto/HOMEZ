@@ -97,6 +97,8 @@ _DEFAULT_REQUEST = {
     (CallPurpose.BRIEF_EMAIL, CallKind.WRITE): (AllowanceMode.COUNTED, 30, None),  # 하루 한 통 — 시간이 지나도 끝나지 않게 횟수로 약 한 달
     # 2026-11-10 AI 배경(Cloudflare): 배경 한 장마다 1회. 한 번에 최대 3개 컨셉이고 만든 배경은 저장해 다시 쓰므로 6회를 제안한다(횟수로만).
     (CallPurpose.AI_BACKGROUND, CallKind.WRITE): (AllowanceMode.COUNTED, 6, None),
+    # 2026-11-23 제미나이 글 질문(클로드 연결 장치): 질문 한 번에 1회. 사용료가 들어 횟수로만, 10회를 제안한다.
+    (CallPurpose.GEMINI_QUESTION, CallKind.WRITE): (AllowanceMode.COUNTED, 10, None),
 }
 
 

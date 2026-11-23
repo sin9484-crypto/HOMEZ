@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "homez-gemini": {
+      "type": "stdio",
+      "command": "C:/Users/Daum pc/Homez-OS/venv/Scripts/python.exe",
+      "args": ["C:/Users/Daum pc/Homez-OS/tools/claude_gemini_link/server.py"]
+    }
+  }
+}

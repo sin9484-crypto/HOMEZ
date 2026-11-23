@@ -206,7 +206,7 @@ class GeminiImageClient:
                 err = parsed.get("error")
                 if isinstance(err, dict):
                     message = str(err.get("message") or "")[:200]
-            label = {400: "요청 오류", 401: "API 키 오류", 403: "권한 없음", 429: "호출 한도 초과"}.get(status, "서버 오류" if status >= 500 else "요청 실패")
+            label = {400: "요청 오류", 401: "API 키 오류", 402: "결제 필요 — 구글 AI 스튜디오 선결제 잔액 없음", 403: "권한 없음", 429: "호출 한도 초과"}.get(status, "서버 오류" if status >= 500 else "요청 실패")
             return GeminiImageResult(False, detail=f"{label}({status}) {message}".strip(), http_status=status)
         result = parse_response(parsed)
         return GeminiImageResult(result.ok, result.image_bytes, result.mime_type, result.interaction_id, result.status, result.detail, 200, result.usage)
