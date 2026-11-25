@@ -117,10 +117,27 @@ class RembgBackgroundRemovalProvider(BackgroundRemovalProvider):
 
     code = "REMBG"
     MODEL_VERSION = "u2netp"
+    # 2026-11-25: 순백 배경 사진은 먼저 `white_background_cutout`(PC 안 Pillow 연산)으로 자른다 — 그때 model_version은 "white-background-v1".
 
     def remove_background(
         self, request: BackgroundRemovalRequest,
     ) -> BackgroundRemovalResult:
+
+        # 2026-11-25: 흰 배경 상품 사진이면 학습 모델 대신 흰 배경 전용 누끼를 쓴다(흰·투명 용기의 머리·밑부분을 지우던 문제).
+        # 흰 배경이 아니거나 결과가 이상하면 None → 아래 학습 모델로 넘어간다. 어느 방법을 썼는지는 model_version에 남는다.
+        from app.domains.media_asset import white_background_cutout as wbc
+
+        try:
+            white_cut = wbc.cut_white_background(request.source_image_bytes)
+        except Exception:  # noqa: BLE001 — 이 방법이 실패해도 원래 방법으로 계속한다
+            white_cut = None
+        if white_cut is not None:
+            return BackgroundRemovalResult(
+                status="SUCCEEDED",
+                image_bytes=white_cut,
+                provider_code=self.code,
+                model_version=wbc.MODEL_VERSION,
+            )
 
         try:
             from rembg import new_session

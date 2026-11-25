@@ -30,6 +30,7 @@ import unittest
 from pathlib import Path
 
 from PIL import Image
+from PIL import ImageDraw
 
 from app.core.exceptions import BadRequestException
 from app.domains.external_call import constants as ec
@@ -225,8 +226,14 @@ class AiRunTests(tab.Base_):
 
 class PromptTests(unittest.TestCase):
 
-    def test_every_scene_asks_for_an_empty_floor_in_the_bottom_third(self):
-        self.assertIn("fills the entire bottom third of the image", abc.PROMPT_RULES)
+    def test_every_scene_asks_for_a_close_eye_level_table_whose_front_edge_is_out_of_frame(self):
+        # 2026-11-25 사용자 "상품에 구도나 모든것이 부적합함 다시 만들어라" — 정면에서 찍은 상품에 맞춰 탁자 높이에서 거의 정면으로 본 가까운 탁자,
+        # 앞모서리는 화면 밖(상품이 허공에 서지 않게), 뒤쪽은 멀고 아주 흐리게(소파·침대가 가까이 선명해 상품이 거대해 보이지 않게).
+        for phrase in ("close-up tabletop shot", "looking almost straight ahead", "fills the whole bottom 40% of the image",
+                       "its front edge is not visible", "far away, small and very strongly blurred"):
+            self.assertIn(phrase, abc.PROMPT_RULES)
+        self.assertNotIn("seen from slightly above", abc.PROMPT_RULES)
+        self.assertNotIn("bottom third", abc.PROMPT_RULES)
         self.assertIn("completely clear so a product can be placed there later", abc.PROMPT_RULES)
         for code, concept in abc.AI_CONCEPTS.items():
             self.assertIn("in the foreground", concept.generation_prompt, code)
@@ -313,6 +320,133 @@ class GrantServiceTests(tab.Base_):
         self.assertEqual(request.requested_count, 6)
         approved = policy.approve(self.company_id, request.id, user_id=7)
         self.assertEqual((approved.status, approved.remaining_count), ("ACTIVE", 6))
+
+
+def stepped_bottles():
+    """앞줄(왼쪽, 밑면이 더 낮다)·뒷줄(오른쪽, 밑면이 더 높다) 두 용기 — #137처럼 밑면 높이가 다른 묶음 상품."""
+    image = Image.new("RGBA", (400, 400), (0, 0, 0, 0))
+    image.paste(Image.new("RGBA", (90, 300), (30, 90, 200, 255)), (100, 60))     # 밑면 y=360
+    image.paste(Image.new("RGBA", (90, 240), (200, 60, 40, 255)), (200, 80))     # 밑면 y=320
+    return image
+
+
+class ShadowFollowsTheRealBottomTests(unittest.TestCase):
+    # 2026-11-25 사용자 "상품에 구도나 모든것이 부적합함 다시 만들어라" — 예전 그림자는 상자 밑 타원 하나라 뒷줄 용기가 떠 보였다.
+
+    def compose(self, cutout):
+        return Image.open(io.BytesIO(comp.compose_with_background(
+            png_bytes(cutout), BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=scene()), placement=Placement.GROUNDED))).convert("RGB")
+
+    def test_each_container_gets_a_shadow_where_its_own_bottom_touches(self):
+        cutout = stepped_bottles()
+        image = self.compose(cutout)
+        plan = comp.plan_placement(comp.prepare_cutout(cutout, Placement.GROUNDED), comp.CANVAS_SIZE, Placement.GROUNDED)
+        box = plan.crop_box
+        right_x = plan.offset[0] + (245 - box[0])                    # 뒷줄 용기의 가운데
+        right_bottom = plan.offset[1] + (320 - box[1])               # 뒷줄 용기의 실제 밑면(바닥선보다 40픽셀 위)
+        self.assertEqual(image.getpixel((right_x, right_bottom - 3)), (200, 60, 40))   # 제품 픽셀은 그대로
+        just_under = image.getpixel((right_x, right_bottom + 2))
+        self.assertLess(sum(just_under), sum((200, 190, 175)) - 60)  # 뒷줄 용기 바로 밑이 짙다(바닥에 닿아 보인다)
+        self.assertEqual(image.getpixel((40, 1180)), (200, 190, 175))  # 먼 구석은 그대로
+
+    def test_the_soft_shadow_falls_away_from_the_light_on_the_left(self):
+        image = self.compose(bottle())
+        plan = comp.plan_placement(comp.prepare_cutout(bottle(), Placement.GROUNDED), comp.CANVAS_SIZE, Placement.GROUNDED)
+        base_y = plan.offset[1] + plan.size[1] - 4
+        gap = 14
+        left = image.getpixel((plan.offset[0] - gap, base_y))
+        right = image.getpixel((plan.offset[0] + plan.size[0] + gap, base_y))
+        self.assertLess(sum(right), sum(left) - 6)                    # 오른쪽(빛 반대쪽)이 더 어둡다
+
+    def test_faint_haze_is_dropped_but_edges_and_colours_stay(self):
+        source = Image.new("RGBA", (5, 1))
+        source.putdata([(250, 250, 250, 20), (250, 250, 250, 63), (10, 20, 30, 64), (10, 20, 30, 200), (10, 20, 30, 251)])
+        self.assertEqual(list(comp.prepare_cutout(source, Placement.GROUNDED).getdata()),
+                         [(250, 250, 250, 0), (250, 250, 250, 0), (10, 20, 30, 64), (10, 20, 30, 200), (10, 20, 30, 255)])
+        self.assertEqual(list(comp.prepare_cutout(source, Placement.CENTER).getdata()), list(source.getdata()))   # 로컬 컨셉은 그대로
+
+
+def white_photo(*, border=(255, 255, 255), fade=True, floor=False, side_shadow=False):
+    """흰 배경 상품 사진: 흰 몸통(윤곽선만 회색)·윤곽선 틈이 있는 흰 뚜껑·파란 라벨, 아래 20줄은 바닥 그림자가 흰색까지 옅어진다."""
+    image = Image.new("RGB", (300, 300), border)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((100, 80, 200, 260), fill=(253, 253, 253), outline=(200, 200, 200), width=2)    # 흰 몸통
+    draw.rectangle((125, 50, 175, 80), fill=(255, 255, 255), outline=(205, 205, 205), width=2)     # 흰 뚜껑
+    draw.rectangle((150, 50, 154, 51), fill=(255, 255, 255))                                       # 뚜껑 윤곽선을 끝까지 끊는 틈(순백)
+    draw.rectangle((120, 140, 180, 200), fill=(40, 110, 220))                                      # 라벨
+    if side_shadow:            # 몸통 왼쪽에 붙은 옅은 띠: "long"은 몸통 밑선보다 아래로 내려가는 그림자 띠, "short"는 밑선 위에서 끝나는 옅은 몸통 가장자리
+        for i, x in enumerate(range(92, 100)):
+            draw.line((x, 120, x, 285 if side_shadow == "long" else 255), fill=(250 - i,) * 3)
+    if floor:
+        draw.rectangle((0, 290, 299, 299), fill=(225, 222, 218))                                   # 바닥 그림자가 테두리에 걸린 사진
+    if fade:
+        for i, y in enumerate(range(261, 281)):                                                    # 밑에 붙은 바닥 그림자가 흰색까지 옅어진다(진하기 20→1)
+            draw.line((100, y, 200, y), fill=(235 + i,) * 3)
+    return image
+
+
+class WhiteBackgroundCutoutTests(unittest.TestCase):
+    # 2026-11-25 — 흰 배경 사진 전용 누끼(#137은 학습 모델이 흰 용기 머리·밑을 지웠다).
+
+    def cut(self, image):
+        from app.domains.media_asset import white_background_cutout as wbc
+        out = wbc.cut_white_background(png_bytes(image))
+        return None if out is None else Image.open(io.BytesIO(out)).convert("RGBA")
+
+    def test_white_body_white_cap_and_label_stay_and_the_background_goes(self):
+        source = white_photo()
+        cut = self.cut(source)
+        self.assertIsNotNone(cut)
+        alpha = cut.getchannel("A")
+        self.assertEqual(alpha.getpixel((5, 5)), 0)                                  # 배경
+        self.assertEqual(alpha.getpixel((150, 110)), 255)                            # 흰 몸통 안쪽(순백에 가깝다)
+        self.assertEqual(alpha.getpixel((150, 65)), 255)                             # 윤곽선에 틈이 있는 흰 뚜껑 안쪽
+        self.assertEqual(alpha.getpixel((150, 170)), 255)                            # 라벨
+        for xy in ((150, 110), (150, 65), (150, 170)):
+            self.assertEqual(cut.getpixel(xy)[:3], source.getpixel(xy))              # 색은 원본 그대로
+        self.assertEqual(alpha.getpixel((150, 266)), 0)                              # 밑에 붙은 바닥 그림자 꼬리는 잘라 낸다
+        self.assertLessEqual(alpha.getbbox()[3], 264)
+
+    def test_a_faint_side_shadow_strip_goes_but_the_body_edge_stays(self):
+        alpha = self.cut(white_photo(side_shadow="long")).getchannel("A")
+        self.assertEqual(alpha.getpixel((95, 200)), 0)                               # 옆 그림자 띠
+        self.assertEqual(alpha.getpixel((95, 282)), 0)
+        self.assertEqual(alpha.getpixel((103, 200)), 255)                            # 몸통 왼쪽 가장자리 바로 안
+        short = self.cut(white_photo(side_shadow="short")).getchannel("A")
+        self.assertEqual(short.getpixel((95, 200)), 255)                             # 밑선 위에서 끝나는 옅은 가장자리는 몸통일 수 있어 남긴다
+
+    def test_photos_without_a_pure_white_border_are_left_to_the_model(self):
+        self.assertIsNone(self.cut(white_photo(border=(240, 238, 236))))
+        self.assertIsNone(self.cut(white_photo(floor=True)))                         # 테두리의 순백이 98%보다 적다
+        self.assertIsNone(self.cut(Image.new("RGB", (200, 200), (255, 255, 255))))  # 상품이 없다
+
+    def test_the_cutout_button_uses_it_first_and_records_which_method(self):
+        import sys
+        import types
+        from app.domains.media_asset import image_processing_providers as ipp
+        from app.domains.media_asset import white_background_cutout as wbc
+
+        provider = ipp.get_background_removal_provider("REMBG")
+        request = ipp.BackgroundRemovalRequest(company_id=1, source_image_bytes=png_bytes(white_photo()), source_mime_type="image/png")
+        fake = types.ModuleType("rembg")
+        calls = []
+        fake.new_session = lambda name: calls.append(name) or name
+        fake.remove = lambda data, session=None: png_bytes(Image.new("RGBA", (4, 4), (1, 2, 3, 255)))
+        saved = sys.modules.get("rembg")
+        sys.modules["rembg"] = fake
+        try:
+            result = provider.remove_background(request)
+            self.assertEqual((result.status, result.model_version), ("SUCCEEDED", wbc.MODEL_VERSION))
+            self.assertEqual(calls, [])                                               # 학습 모델은 부르지 않았다
+            other = ipp.BackgroundRemovalRequest(company_id=1, source_image_bytes=png_bytes(white_photo(border=(240, 238, 236))), source_mime_type="image/png")
+            result = provider.remove_background(other)
+            self.assertEqual((result.status, result.model_version), ("SUCCEEDED", "u2netp"))
+            self.assertEqual(calls, ["u2netp"])                                       # 흰 배경이 아니면 원래 방법
+        finally:
+            if saved is None:
+                sys.modules.pop("rembg", None)
+            else:
+                sys.modules["rembg"] = saved
 
 
 if __name__ == "__main__":

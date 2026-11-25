@@ -26,19 +26,24 @@ PURPOSES = (ic.PURPOSE_ADDITIONAL, ic.PURPOSE_DETAIL)
 # 2026-11-15: 합성이 제품 밑면을 화면 높이 86% 바닥선에 세운다(composition.Placement.GROUNDED) — 그 자리가 늘 빈 평면이 되도록 구도를 정해 준다.
 # 2026-11-25: 사용자 "새로 생성한 이미지랑 알맞게 배경 사진도 수정해라" — 11-25 제미나이 시험 사진(밝은 창가 아침 햇빛·원목 결·베이지/크림 톤·
 #   아늑한 생활 사진)과 같은 느낌으로 여섯 장면의 빛·색을 맞춘다(LOOK). 장면 글 한도(1,000자) 안에 들도록 구도 규칙 문장을 줄였다(뜻은 같다).
+# 2026-11-25(이어서): 사용자 "상품에 구도나 모든것이 부적합함 다시 만들어라" — 위에서 내려다본 탁자에 정면에서 찍은 상품을 세워 시점이 어긋났고,
+#   선반 앞모서리가 바닥선(86%)보다 위에 그려지면 상품이 허공에 섰으며, 소파·침대가 가까이 선명해 상품이 거대해 보였다.
+#   → 탁자 높이 바로 위에서 거의 정면으로 찍은 가까운 탁자 사진, 앞모서리는 화면 밖, 뒤쪽은 멀고 아주 흐리게.
 LOOK = (
     " Look: bright, airy, cozy home lifestyle photo; warm morning sunlight from the left; soft shadows;"
     " warm beige, cream and light oak palette; warm white balance."
 )
 PROMPT_RULES = (
-    " Empty background scene only for an e-commerce product photo."
-    " Composition: a wide, empty, flat horizontal surface fills the entire bottom third of the image from edge to edge, seen from slightly above at table height;"
-    " its back edge is at about two thirds of the image height;"
-    " the middle of this empty surface is completely clear so a product can be placed there later; everything behind it is softly out of focus."
+    " Empty background for a product photo."
+    " Composition: close-up tabletop shot, camera just above the table, looking almost straight ahead;"
+    " the empty flat surface fills the whole bottom 40% of the image edge to edge and runs past the bottom edge, so its front edge is not visible;"
+    " its far edge is a straight horizontal line at about 60% of the image height;"
+    " the middle of this empty surface is completely clear so a product can be placed there later;"
+    " everything behind the surface is far away, small and very strongly blurred."
     + LOOK +
-    " No products, no bottles, no packages, no people, no hands, no animals."
-    " No text, no letters, no numbers, no logos, no labels, no signs, no watermarks."
-    " Photorealistic, shallow depth of field, square composition."
+    " No products, no people, no hands, no animals."
+    " No text, no letters, no logos, no labels, no watermarks."
+    " Photorealistic, square composition."
 )
 
 
@@ -55,19 +60,19 @@ def _ai_concept(code: str, label: str, description: str, scene: str, scene_kind:
 
 AI_CONCEPTS: dict[str, ic.ImageConcept] = {c.code: c for c in (
     _ai_concept("AI_BATHROOM_SHELF", "욕실 선반", "밝은 타일 욕실의 선반 위. 바디워시·위생용품·욕실용품에 어울립니다.",
-                "A clean bright bathroom in warm tones: a light beige stone vanity countertop in the foreground, cream tiles behind, a folded white towel and a small green plant softly blurred far in the back.",
+                "A clean bright bathroom in warm tones: a light beige stone vanity countertop in the foreground, cream tiles, a folded white towel and a small green plant far behind.",
                 ic.SCENE_LIFESTYLE, mood="청결·산뜻", good_for=("욕실", "위생용품", "뷰티", "생활용품")),
     _ai_concept("AI_KITCHEN_COUNTER", "주방 조리대", "햇빛이 드는 주방 조리대. 생수·식품·주방용품에 어울립니다.",
-                "A sunny cozy kitchen: a light oak countertop with visible wood grain in the foreground, a window with a sheer white curtain, a ceramic mug and a few green leaves softly blurred far in the back.",
+                "A sunny cozy kitchen: a light oak countertop with visible wood grain in the foreground, a window with a sheer white curtain and a few green leaves far behind.",
                 ic.SCENE_LIFESTYLE, mood="상쾌·일상", good_for=("식품", "주방", "생수", "음료")),
     _ai_concept("AI_LIVING_TABLE", "거실 원목 테이블", "아늑한 거실의 원목 테이블. 생활용품·인테리어 소품에 어울립니다.",
-                "A cosy bright living room: a light oak table top with visible wood grain in the foreground, a sheer white curtain, a beige sofa and a small plant blurred in the background.",
+                "A cosy bright living room: a light oak table top with visible wood grain in the foreground, a sheer white curtain, a beige sofa and a small plant far in the background.",
                 ic.SCENE_LIFESTYLE, mood="아늑·따뜻", good_for=("생활용품", "인테리어", "문구", "선물")),
     _ai_concept("AI_OUTDOOR_TRACK", "야외 산책로", "아침 햇살의 공원 산책로 옆 벤치 위. 운동·레저·보호대 상품에 어울립니다.",
-                "An outdoor park in warm early morning sunlight: the flat top of a light wooden bench seat beside a running path in the foreground, green trees, grass and the path blurred behind.",
+                "An outdoor park in warm early morning sunlight: the flat top of a light wooden bench seat beside a running path in the foreground, green trees, grass and the path far behind.",
                 ic.SCENE_LIFESTYLE, mood="활동·건강", good_for=("스포츠", "레저", "보호대", "기능성")),
     _ai_concept("AI_BEDROOM_SOFT", "포근한 침실", "부드러운 이불이 있는 밝은 침실. 여성용품·의류·아동 상품에 어울립니다.",
-                "A soft bright bedroom: a smooth light oak bedside table top in the foreground, cream bedding and a sheer curtain glowing with morning light blurred in the background.",
+                "A soft bright bedroom: a smooth light oak bedside table top in the foreground, cream bedding and a sheer curtain glowing with morning light far behind.",
                 ic.SCENE_LIFESTYLE, mood="포근·편안", good_for=("여성용품", "패션", "아동", "침구")),
     _ai_concept("AI_STUDIO_MARBLE", "대리석 스튜디오", "크림색 대리석 테이블과 은은한 햇빛. 뷰티·선물·소형 가전에 어울립니다.",
                 "A minimal warm photo studio: a wide cream marble table top in the foreground, a smooth warm beige backdrop and soft sunlight from the left.",

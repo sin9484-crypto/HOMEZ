@@ -46,18 +46,20 @@ GROUNDED_MAX_HEIGHT = 0.62  # GROUNDED: 제품 높이 상한(캔버스 높이 �
 GROUNDED_MAX_WIDTH = 0.80   # GROUNDED: 제품 너비 상한(캔버스 너비 대비)
 SHADOW_CONTACT_ALPHA = 120  # 바닥에 닿는 짙은 그림자(0~255)
 SHADOW_SOFT_ALPHA = 46      # 제품 모양을 따라 뒤로 퍼지는 옅은 그림자(0~255)
+SHADOW_SHIFT = 0.10         # 옅은 그림자를 오른쪽으로 미는 정도(제품 너비 대비) — 장면 글의 빛은 왼쪽에서 온다
+HAZE_ALPHA_MAX = 64         # GROUNDED: 이보다 옅은 누끼 픽셀은 지운다(배경 지우기가 남긴 흰 안개 — 장면 위에서 흰 테두리로 보였다, 2026-11-25)
 SOLID_ALPHA_MIN = 250       # GROUNDED: 이 이상 불투명한 누끼 픽셀은 완전 불투명으로 본다(배경 지우기 결과는 제품 안쪽이 250~254로 남아 배경이 비친다)
 
 
 def prepare_cutout(cutout: Image.Image, placement: str = Placement.CENTER) -> Image.Image:
-    """놓기 전에 누끼를 다듬는다(합성과 검사가 함께 쓴다). CENTER는 그대로. GROUNDED는 거의 불투명한 픽셀의 알파만 255로 올린다 —
+    """놓기 전에 누끼를 다듬는다(합성과 검사가 함께 쓴다). CENTER는 그대로. GROUNDED는 거의 불투명한 픽셀의 알파만 255로 올리고, 아주 옅은(HAZE_ALPHA_MAX 미만) 안개 픽셀은 지운다 —
     제품 색(RGB)은 바꾸지 않으므로 '다시 그리지 않음' 원칙 그대로이고, 제품 보존 검사가 재는 픽셀도 그만큼 많아진다."""
 
     rgba = cutout.convert("RGBA")
     if placement != Placement.GROUNDED:
         return rgba
     red, green, blue, alpha = rgba.split()
-    alpha = alpha.point(lambda a: 255 if a >= SOLID_ALPHA_MIN else a)
+    alpha = alpha.point(lambda a: 255 if a >= SOLID_ALPHA_MIN else (0 if a < HAZE_ALPHA_MAX else a))
     return Image.merge("RGBA", (red, green, blue, alpha))
 
 
@@ -91,25 +93,35 @@ def plan_placement(cutout: Image.Image, canvas_size: tuple[int, int], placement:
 
 
 def _ground_shadow(canvas_size: tuple[int, int], product: Image.Image, offset: tuple[int, int]) -> Image.Image:
-    """제품 아래 바닥 그림자(RGBA 층). 제품이 놓일 자리 밑에만 그린다 — 제품 위에는 제품이 덮는다."""
+    """제품 아래 바닥 그림자(RGBA 층). 제품이 놓일 자리 밑에만 그린다 — 제품 위에는 제품이 덮는다.
+
+    2026-11-25(사용자 "상품에 구도나 모든것이 부적합함 다시 만들어라"): 예전에는 제품 상자 밑에 타원 하나를 깔아, 밑면 높이가 다른
+    여러 용기(앞줄·뒷줄)가 떠 보였다. 이제 **열마다 제품의 실제 밑면**을 찾아 그 자리에 닿는 짙은 그림자를 그리고(용기마다 따로 닿는다),
+    장면 글의 빛 방향(왼쪽 햇빛)에 맞춰 옅은 그림자를 오른쪽 뒤로 눕힌다."""
 
     width, height = product.size
     layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    base_y = offset[1] + height
-    # 1) 바닥에 닿는 짙고 납작한 타원
+    solid = product.getchannel("A").point(lambda a: 255 if a >= 128 else 0)
+    # 1) 열마다 실제 밑면에 닿는 짙고 얇은 그림자
     contact = Image.new("L", canvas_size, 0)
-    rx, ry = max(2, int(width * 0.47)), max(2, int(height * 0.035))
-    cx = offset[0] + width // 2
-    ImageDraw.Draw(contact).ellipse((cx - rx, base_y - ry, cx + rx, base_y + ry), fill=SHADOW_CONTACT_ALPHA)
-    contact = contact.filter(ImageFilter.GaussianBlur(max(2, int(height * 0.02))))
-    # 2) 제품 모양을 납작하게 눌러 뒤쪽으로 눕힌 옅은 그림자
-    silhouette = product.getchannel("A").point(lambda a: SHADOW_SOFT_ALPHA if a > 0 else 0)
-    flat_h = max(2, int(height * 0.22))
-    flat = silhouette.resize((width, flat_h), Image.LANCZOS)
+    draw = ImageDraw.Draw(contact)
+    band = max(2, int(height * 0.012))
+    for x in range(width):
+        column = solid.crop((x, 0, x + 1, height)).getbbox()
+        if column is None:
+            continue
+        bottom = offset[1] + column[3]
+        draw.line((offset[0] + x, bottom - band, offset[0] + x, bottom + max(1, band // 2)), fill=SHADOW_CONTACT_ALPHA)
+    contact = contact.filter(ImageFilter.GaussianBlur(max(2, int(height * 0.008))))
+    # 2) 밑면 둘레의 넓고 옅은 그림자(바닥에 놓인 느낌)
+    ambient = contact.filter(ImageFilter.GaussianBlur(max(4, int(height * 0.03)))).point(lambda v: min(255, v * 2))
+    # 3) 제품 모양을 납작하게 눌러 빛 반대쪽(오른쪽)으로 눕힌 옅은 그림자
+    flat_h = max(2, int(height * 0.10))
+    flat = solid.point(lambda a: SHADOW_SOFT_ALPHA if a else 0).resize((width, flat_h), Image.LANCZOS)
     soft = Image.new("L", canvas_size, 0)
-    soft.paste(flat, (offset[0] + int(width * 0.04), base_y - flat_h))
-    soft = soft.filter(ImageFilter.GaussianBlur(max(3, int(height * 0.05))))
-    layer.putalpha(ImageChops.lighter(contact, soft))   # 두 그림자 중 짙은 쪽
+    soft.paste(flat, (offset[0] + int(width * SHADOW_SHIFT), offset[1] + height - flat_h + int(height * 0.01)))
+    soft = soft.filter(ImageFilter.GaussianBlur(max(3, int(height * 0.025))))
+    layer.putalpha(ImageChops.lighter(ImageChops.lighter(contact, ambient), soft))   # 세 그림자 중 짙은 쪽
     return layer
 
 
@@ -241,4 +253,6 @@ __all__ = [
     "prepare_cutout",
     "GROUND_LINE",
     "SOLID_ALPHA_MIN",
+    "HAZE_ALPHA_MAX",
+    "SHADOW_SHIFT",
 ]
