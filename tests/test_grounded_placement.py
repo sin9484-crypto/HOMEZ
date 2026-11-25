@@ -236,6 +236,20 @@ class PromptTests(unittest.TestCase):
         self.assertIn("bench seat", abc.AI_CONCEPTS["AI_OUTDOOR_TRACK"].generation_prompt)
         self.assertNotIn("plinth", abc.AI_CONCEPTS["AI_STUDIO_MARBLE"].generation_prompt)
 
+    def test_every_scene_shares_the_warm_morning_look(self):
+        # 2026-11-25 사용자 "새로 생성한 이미지랑 알맞게 배경 사진도 수정해라" — 여섯 장면이 같은 빛·색(창가 아침 햇빛·베이지/크림/원목)을 쓴다.
+        for phrase in ("warm morning sunlight from the left", "warm beige, cream and light oak palette", "warm white balance"):
+            self.assertIn(phrase, abc.LOOK)
+        self.assertIn(abc.LOOK, abc.PROMPT_RULES)
+        for code, concept in abc.AI_CONCEPTS.items():
+            self.assertIn(abc.LOOK, concept.generation_prompt, code)
+            self.assertLessEqual(len(concept.generation_prompt), 1000, code)
+        for code in ("AI_BATHROOM_SHELF", "AI_BEDROOM_SOFT", "AI_STUDIO_MARBLE"):   # 차가운 회색·흰색 장면을 따뜻한 톤으로 바꿨다
+            prompt = abc.AI_CONCEPTS[code].generation_prompt
+            self.assertNotIn("light grey", prompt, code)
+            self.assertNotIn("warm grey", prompt, code)
+        self.assertNotIn("spotlight", abc.AI_CONCEPTS["AI_STUDIO_MARBLE"].generation_prompt)
+
 
 class GrantTargetTests(unittest.TestCase):
 
