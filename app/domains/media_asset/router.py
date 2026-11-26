@@ -40,6 +40,7 @@ from app.domains.media_asset.schema import ImageGenerationJobSubmitRequest
 from app.domains.media_asset.schema import ImageGenerationResultResponse
 from app.domains.media_asset.schema import MediaAssetResponse
 from app.domains.media_asset.schema import ItemIsolationRequestSchema
+from app.domains.media_asset.schema import SeeThroughRequestSchema
 from app.domains.media_asset.composition import BackgroundSpec
 from app.domains.media_asset.detail_page_generator import DETAIL_SECTION_KEYS
 from app.domains.media_asset.detail_page_generator import DETAIL_SECTION_LABELS_KO
@@ -355,6 +356,20 @@ def isolate_item(
         x_to=data.x_to,
         requested_by=current_user.id,
         company_id=current_user.company_id,
+    )
+
+
+@router.post("/see-through", response_model=MediaAssetResponse)
+def see_through(
+    data: SeeThroughRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-11-26 — 투명 용기 누끼의 고른 높이 범위(몸통)가 장면을 비추는 새 누끼를 만든다(PC 안, 원본 그대로)."""
+
+    return ImageGenerationJobQueueService(db).see_through(
+        source_asset_id=data.source_asset_id, y_from=data.y_from, y_to=data.y_to,
+        requested_by=current_user.id, company_id=current_user.company_id,
     )
 
 

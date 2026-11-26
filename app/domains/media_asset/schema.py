@@ -63,6 +63,14 @@ class ItemIsolationRequestSchema(BaseModel):
     x_to: float = Field(ge=0.0, le=1.0)
 
 
+class SeeThroughRequestSchema(BaseModel):
+    """2026-11-26 — 투명 용기 누끼의 몸통이 장면을 비추게. 높이 범위는 상품 높이 대비(0~1, 0=맨 위)."""
+
+    source_asset_id: int
+    y_from: float = Field(ge=0.0, le=1.0)
+    y_to: float = Field(ge=0.0, le=1.0)
+
+
 class ManualImageEditSaveRequest(BaseModel):
     """
     2026-08-29 Phase 5(Fabric.js 수동 편집기 MVP) — 브라우저 캔버스에서

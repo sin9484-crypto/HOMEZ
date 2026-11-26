@@ -120,7 +120,7 @@ def classify_job(job: ImageGenerationJob) -> tuple[str, str | None, str | None]:
     payload = _payload(job)
     operation = payload.get("operation") if isinstance(payload.get("operation"), str) else None
     model = job.model_name
-    if operation in ("BACKGROUND_REMOVAL", "ITEM_ISOLATION"):     # 2026-11-26: 묶음 사진에서 한 상품만 떼어 내기도 누끼(PC 안)
+    if operation in ("BACKGROUND_REMOVAL", "ITEM_ISOLATION", "SEE_THROUGH"):   # 2026-11-26: 한 상품 떼어 내기·투명 몸통 비치게도 누끼 다듬기(PC 안)
         return CUTOUT, operation, None
     if operation == "MANUAL_EDIT":
         return MANUAL_EDIT, operation, None
@@ -145,7 +145,7 @@ def classify_job(job: ImageGenerationJob) -> tuple[str, str | None, str | None]:
         return AI_GENERATED, operation, job.provider_code
     if operation in ("DETAIL_PAGE_GENERATION", "STORY_PAGE"):     # 2026-11-26: 상황 장면 스토리 사진도 상세 이미지 만들기
         return DETAIL_PAGE, operation, None
-    if operation is None and job.provider_code not in ("PILLOW_LOCAL", "REMBG", "LOCAL_MANUAL_EDIT", "LOCAL_ITEM_ISOLATION"):
+    if operation is None and job.provider_code not in ("PILLOW_LOCAL", "REMBG", "LOCAL_MANUAL_EDIT", "LOCAL_ITEM_ISOLATION", "LOCAL_SEE_THROUGH"):
         return AI_GENERATED, None, job.provider_code       # 이미지 생성 작업(submit_job) — 작업 이름 없이 생성 제공자만 남는다
     return UNKNOWN, operation, model
 

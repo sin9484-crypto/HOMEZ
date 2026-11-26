@@ -48,13 +48,16 @@ class Placement:
 
 
 GROUND_LINE = 0.86          # GROUNDED: 제품 밑면이 놓이는 높이(캔버스 높이 대비) — AI 배경 장면 글이 아래쪽 30%를 빈 바닥으로 그리게 한다
-GROUNDED_MAX_HEIGHT = 0.62  # GROUNDED: 제품 높이 상한(캔버스 높이 대비)
+GROUNDED_MAX_HEIGHT = 0.50  # GROUNDED: 제품 높이 상한(캔버스 높이 대비) — 2026-11-26 0.62→0.50: 한 병이 1.4배로 커져 옆 수건·뒤 침대보다 거대해 보였다
 GROUNDED_MAX_WIDTH = 0.80   # GROUNDED: 제품 너비 상한(캔버스 너비 대비)
 MAIN_FILL = 0.85            # FILL: 제품이 채우는 정도(캔버스 대비, 긴 쪽) — 판매자 정리 글의 "대표 이미지 상품 85%"(I0 🟡, 쿠팡 공식 미확인)
 GROUNDED_MAX_UPSCALE = 1.4  # GROUNDED: 원본보다 키우는 한도(2026-11-26 제미나이 협의 "1.3~1.4배까지") — 크기 상한이 먼저 걸리면 그만큼만
 SHADOW_CONTACT_ALPHA = 120  # 바닥에 닿는 짙은 그림자(0~255)
 SHADOW_SOFT_ALPHA = 46      # 제품 모양을 따라 뒤로 퍼지는 옅은 그림자(0~255)
 SHADOW_SHIFT = 0.10         # 옅은 그림자를 오른쪽으로 미는 정도(제품 너비 대비) — 장면 글의 빛은 왼쪽에서 온다
+LIGHT_TINT = 0.5            # GROUNDED: 장면의 밝은 빛 색을 상품에 입히는 정도(0=그대로, 1=장면 빛 색 그대로) — 2026-11-26 "부 자연스럽다"
+LIGHT_FALLOFF = 0.10        # GROUNDED: 빛이 왼쪽에서 오므로 상품 오른쪽 끝을 이만큼 어둡게(왼쪽 끝은 그대로)
+LIGHT_GAIN_MIN = 0.85       # 빛 색 맞춤에서 한 채널을 줄이는 한도(상품 색이 크게 바뀌지 않게)
 HAZE_ALPHA_MAX = 64         # GROUNDED: 이보다 옅은 누끼 픽셀은 지운다(배경 지우기가 남긴 흰 안개 — 장면 위에서 흰 테두리로 보였다, 2026-11-25)
 SOLID_ALPHA_MIN = 250       # GROUNDED: 이 이상 불투명한 누끼 픽셀은 완전 불투명으로 본다(배경 지우기 결과는 제품 안쪽이 250~254로 남아 배경이 비친다)
 
@@ -102,6 +105,39 @@ def plan_placement(cutout: Image.Image, canvas_size: tuple[int, int], placement:
     base_y = int(canvas_h * GROUND_LINE)
     offset = ((canvas_w - size[0]) // 2, max(0, base_y - size[1]))
     return PlacementPlan(box, size, offset)
+
+
+def scene_light_gains(scene: Image.Image, product_top: int) -> tuple[float, float, float]:
+    """장면의 빛 색(채널별 곱). 상품 위쪽(그림자·상품이 닿지 않는 곳)에서 하얗게 날아간 픽셀(세 채널 모두 248 이상 — 창·하늘)을 빼고
+    남은 것 중 밝은 30%의 평균색을 재고, 가장 큰 채널을 1로 둔 비율을 LIGHT_TINT만큼만 입힌다. 합성(배경)과 검사(합성 결과)가 같은 자리를
+    재므로 언제나 같은 값이 나온다."""
+
+    width, height = scene.size
+    top = product_top - int(height * 0.04)
+    if top < 16:
+        return (1.0, 1.0, 1.0)
+    region = scene.convert("RGB").crop((0, 0, width, top)).resize((max(1, width // 8), max(1, top // 8)), Image.BOX)
+    pixels = sorted((p for p in region.getdata() if min(p) < 248), key=lambda p: (p[0] + p[1] + p[2], p), reverse=True)
+    if not pixels:
+        return (1.0, 1.0, 1.0)
+    count = max(1, len(pixels) * 3 // 10)
+    average = [sum(p[c] for p in pixels[:count]) / count for c in range(3)]
+    peak = max(average) or 1.0
+    return tuple(round(1.0 - LIGHT_TINT * (1.0 - max(LIGHT_GAIN_MIN, a / peak)), 4) for a in average)  # type: ignore[return-value]
+
+
+def match_scene_light(product: Image.Image, gains: tuple[float, float, float]) -> Image.Image:
+    """상품(RGBA, 놓을 크기)에 장면 빛 색과 왼쪽→오른쪽 밝기 기울기를 입힌다. 모양·글씨는 그대로(채널별 곱만), 알파는 그대로.
+    결과 = 원래 값 × 채널 곱 × (1 − LIGHT_FALLOFF × x/너비) — 정해진 계산이라 검사가 같은 값을 다시 만든다."""
+
+    width, height = product.size
+    red, green, blue, alpha = product.convert("RGBA").split()
+    out = []
+    for channel, gain in zip((red, green, blue), gains):
+        row = Image.new("L", (width, 1))
+        row.putdata([max(0, min(255, int(round(255 * gain * (1.0 - LIGHT_FALLOFF * (x / max(1, width - 1))))))) for x in range(width)])
+        out.append(ImageChops.multiply(channel, row.resize((width, height), Image.NEAREST)))
+    return Image.merge("RGBA", (*out, alpha))
 
 
 def _ground_shadow(canvas_size: tuple[int, int], product: Image.Image, offset: tuple[int, int]) -> Image.Image:
@@ -245,6 +281,7 @@ def compose_with_background(
     plan = plan_placement(cutout, canvas_size, placement)
     resized = cutout.crop(plan.crop_box).resize(plan.size, Image.LANCZOS)
     if placement == Placement.GROUNDED:
+        resized = match_scene_light(resized, scene_light_gains(background, plan.offset[1]))   # 2026-11-26: 장면 빛 색·방향에 맞춘다
         background.alpha_composite(_ground_shadow(canvas_size, resized, plan.offset))
     background.alpha_composite(resized, dest=plan.offset)
 
@@ -268,5 +305,9 @@ __all__ = [
     "MAIN_FILL",
     "SOLID_ALPHA_MIN",
     "HAZE_ALPHA_MAX",
+    "LIGHT_TINT",
+    "LIGHT_FALLOFF",
+    "scene_light_gains",
+    "match_scene_light",
     "SHADOW_SHIFT",
 ]

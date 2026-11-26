@@ -789,6 +789,40 @@ class ImageGenerationJobQueueService:
         )
         return asset
 
+    def see_through(
+        self, source_asset_id: int, y_from: float, y_to: float,
+        requested_by: int, company_id: int,
+    ) -> MediaAsset:
+        """2026-11-26 — 투명 용기 누끼의 고른 높이 범위(몸통)가 장면을 비추게 한 새 누끼(GENERATED)를 만든다. PC 안 처리, 원본 누끼는 그대로."""
+
+        from app.domains.media_asset import clear_container as cc
+
+        source = self.repository.get_media_asset_for_company(source_asset_id, company_id)
+        if source is None:
+            raise NotFoundException("누끼 이미지를 찾을 수 없습니다.")
+        if source.rights_status == "RIGHTS_DENIED":
+            raise BadRequestException("사용이 금지된 사진은 쓸 수 없습니다.")
+        source_bytes = read_media_file(self.media_root, source.storage_path)
+        job = self._record_processing_job(
+            operation="SEE_THROUGH", provider_code="LOCAL_SEE_THROUGH", model_name=None, source_asset_id=source.id,
+            requested_by=requested_by, company_id=company_id,
+            product_candidate_id=source.owner_id if source.owner_type == MediaAssetOwnerType.PRODUCT_CANDIDATE else 0,
+        )
+        try:
+            png = cc.see_through(source_bytes, float(y_from), float(y_to))
+        except cc.SeeThroughError as exc:
+            self._finish_processing_job(job.id, company_id, success=False, error_reason=str(exc))
+            raise BadRequestException(f"{exc}(원본은 그대로입니다.)") from exc
+        asset = self._persist_generated_asset(
+            company_id=company_id, owner_type=source.owner_type, owner_id=source.owner_id, purpose=source.purpose,
+            display_order=source.display_order, image_bytes=png, self_reported_mime_type="image/png",
+        )
+        asset.source_asset_id = source.id
+        asset.rights_status = source.rights_status
+        self.db.commit()
+        self._finish_processing_job(job.id, company_id, success=True, model_version=cc.MODEL_VERSION, media_asset_id=asset.id)
+        return asset
+
     def save_manual_edit(
         self, source_asset_id: int, image_bytes: bytes,
         requested_by: int, company_id: int,

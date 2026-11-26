@@ -1358,6 +1358,8 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .lw-iso-band { position: absolute; top: 0; bottom: 0; border: 2px solid var(--primary, #2563eb); background: rgba(37, 99, 235, 0.12); pointer-events: none; }
 .lw-iso-range { display: flex; align-items: center; gap: 8px; max-width: 360px; font-size: 13px; }
 .lw-iso-range input { flex: 1; }
+.lw-clear-stage { max-width: 240px; background: repeating-conic-gradient(#d9dde3 0% 25%, #f3f4f6 0% 50%) 50% / 16px 16px; border-radius: 6px; }
+.lw-clear-band { position: absolute; left: 0; right: 0; border: 2px solid var(--primary, #2563eb); background: rgba(37, 99, 235, 0.12); pointer-events: none; }
 /* 2026-11-26 상황 장면 스토리 */
 .lw-story-box { margin: 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); }
 .lw-story-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin: 8px 0; }

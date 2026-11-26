@@ -32,6 +32,8 @@ from PIL import Image
 
 from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.composition import plan_placement
+from app.domains.media_asset.composition import match_scene_light
+from app.domains.media_asset.composition import scene_light_gains
 from app.domains.media_asset.composition import prepare_cutout
 
 PRESERVATION_MIN = 0.99
@@ -79,6 +81,10 @@ def product_preservation(cutout_png: bytes, composed_png: bytes, *, placement: s
     plan = plan_placement(cutout, composed.size, placement)
     size, offset = plan.size, plan.offset
     resized = cutout.crop(plan.crop_box).resize(size, Image.LANCZOS)
+    if placement == Placement.GROUNDED:
+        # 2026-11-26: 바닥 세우기 합성은 장면 빛 색·방향을 입힌다(채널별 곱과 좌우 기울기만). 같은 계산을 다시 해서 그대로인지 잰다 —
+        # 빛 맞춤 말고 다른 변화(다시 그리기·글씨 뭉개짐)가 있으면 여전히 비율이 떨어진다.
+        resized = match_scene_light(resized, scene_light_gains(composed, offset[1]))
     region = composed.crop((offset[0], offset[1], offset[0] + size[0], offset[1] + size[1]))
     original_pixels, composed_pixels, alpha_pixels = resized.convert("RGB").getdata(), region.getdata(), resized.getchannel("A").getdata()
     same = total = 0

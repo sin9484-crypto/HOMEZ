@@ -13904,6 +13904,31 @@
     return { source_asset_id: Number(assetId), x_from: Number(iso.from) / 100, x_to: Number(iso.to) / 100 };
   }
 
+  // 2026-11-26 — 투명 용기의 몸통이 장면을 비추게(서버 /media-assets/see-through, PC 안 처리). 범위는 상품 높이 대비 %(0 = 맨 위).
+  function lwClearProblem(clear) {
+    const from = Number(clear && clear.from);
+    const to = Number(clear && clear.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to > 100 || to - from < 5) return "clear_err_range";
+    return null;
+  }
+
+  function lwClearBody(cutoutId, clear) {
+    return { source_asset_id: Number(cutoutId), y_from: Number(clear.from) / 100, y_to: Number(clear.to) / 100 };
+  }
+
+  function lwClearHtml(assetId, clear) {
+    const t = (key) => HomezI18n.t(`lw.${key}`);
+    return `<details class="lw-iso-box" id="lw-clear-${assetId}" ${clear.open ? "open" : ""}>
+        <summary>${escapeHtml(t("clear_title"))}</summary>
+        <p class="stat-sub">${escapeHtml(t("clear_note"))}</p>
+        <div class="lw-iso-stage lw-clear-stage">${clear.url ? `<img src="${clear.url}" alt="">` : `<p class="loading-text">${escapeHtml(t("iso_loading"))}</p>`}
+          <span class="lw-clear-band" id="lw-clear-band-${assetId}" style="top:${Number(clear.from)}%;height:${Math.max(0, Number(clear.to) - Number(clear.from))}%"></span></div>
+        <label class="lw-iso-range">${escapeHtml(t("clear_from"))} <input type="range" min="0" max="100" step="0.5" id="lw-clear-from-${assetId}" value="${Number(clear.from)}"></label>
+        <label class="lw-iso-range">${escapeHtml(t("clear_to"))} <input type="range" min="0" max="100" step="0.5" id="lw-clear-to-${assetId}" value="${Number(clear.to)}"></label>
+        <div class="dialog-actions"><button type="button" class="btn btn-secondary btn-sm" id="lw-clear-btn-${assetId}">${escapeHtml(t("clear_btn"))}</button></div>
+      </details>`;
+  }
+
   // 2026-11-26 — 상황 장면 스토리(서버 /ai-background/story-runs). 고른 장면은 서버가 정한 이야기 순서로 만들고 문구를 넣은 스토리 사진을 붙인다.
   const LW_STORY_TITLE_MAX = 24;
   const LW_STORY_LINE_MAX = 48;
@@ -14006,7 +14031,8 @@
     if (card) card.style.gridColumn = "1 / -1";
     const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
     const state = { purpose: "ADDITIONAL", data: null, local: [], ai: [], newBg: false, aiSettings: null, iso: { open: false, from: 40, to: 60, url: null },
-      story: { scenes: null, codes: [], captions: {}, header: "" } };
+      story: { scenes: null, codes: [], captions: {}, header: "" },
+      clear: { open: false, from: 25, to: 100, url: null, forId: null } };
 
     async function load(errorText) {
       panel.innerHTML = `<p class="loading-text">${escapeHtml(t("sample_loading"))}</p>`;
@@ -14052,6 +14078,7 @@
         const hintNote = data.product_hint ? `<p class="stat-sub">${escapeHtml(t("sample_hint_note", { hint: data.product_hint }))}</p>` : "";
         body = `${usedCutout}
           ${lwIsoHtml(assetId, state.iso)}
+          ${lwClearHtml(assetId, state.clear)}
           ${hintNote}
           <h4>${escapeHtml(t("sample_local_title"))}</h4>
           <p class="stat-sub">${escapeHtml(t("sample_local_note"))}</p>
@@ -14120,6 +14147,37 @@
         lwConceptNotice = { parts: [part] };
         await lwRenderMediaStep(content);
         window.scrollTo({ top: 0, behavior: "smooth" });
+      }));
+      const clearBox = el(`lw-clear-${assetId}`);
+      if (clearBox) clearBox.addEventListener("toggle", async () => {
+        state.clear.open = clearBox.open;
+        const cutoutId = state.data && state.data.cutout_asset_id;
+        if (!clearBox.open || !cutoutId || (state.clear.url && state.clear.forId === cutoutId)) return;
+        try { state.clear.url = await lwLoadThumbUrl(cutoutId); state.clear.forId = cutoutId; } catch (err) { render(null, err.message || HomezI18n.t("common.load_error")); return; }
+        render();
+      });
+      ["from", "to"].forEach((side) => {
+        const input = el(`lw-clear-${side}-${assetId}`);
+        if (!input) return;
+        input.addEventListener("input", () => {
+          state.clear[side] = Number(input.value);
+          const band = el(`lw-clear-band-${assetId}`);
+          if (band) { band.style.top = `${state.clear.from}%`; band.style.height = `${Math.max(0, state.clear.to - state.clear.from)}%`; }
+        });
+      });
+      const clearBtn = el(`lw-clear-btn-${assetId}`);
+      if (clearBtn) clearBtn.addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwClearProblem(state.clear);
+        if (key) { render(key); return; }
+        try {
+          await apiFetch("/media-assets/see-through", { method: "POST", body: JSON.stringify(lwClearBody(state.data.cutout_asset_id, state.clear)) });
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+          return;
+        }
+        state.clear.open = false;
+        state.clear.url = null;
+        await load();     // 샘플은 방금 만든 비치는 누끼로 다시 만든다
       }));
       const isoBox = el(`lw-iso-${assetId}`);
       if (isoBox) isoBox.addEventListener("toggle", async () => {

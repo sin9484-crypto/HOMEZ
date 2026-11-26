@@ -106,10 +106,12 @@ class ConceptPreviewService:
         read = self._read_rgba(asset)
         if read is not None and _has_transparency(read[1]):
             return asset, read[0]
+        # 2026-11-26: 누끼를 다시 다듬은 사진(투명 몸통 비치게)은 누끼의 파생이라, 이 사진의 파생과 그 파생의 파생까지 본다(가장 최근 것이 먼저).
+        children = [row[0] for row in self.db.query(MediaAsset.id).filter(MediaAsset.company_id == company_id, MediaAsset.source_asset_id == asset.id).all()]
         derived = (
             self.db.query(MediaAsset)
             .filter(MediaAsset.company_id == company_id)
-            .filter(MediaAsset.source_asset_id == asset.id)
+            .filter(MediaAsset.source_asset_id.in_([asset.id] + children))
             .filter(MediaAsset.asset_role == "GENERATED")
             .filter(MediaAsset.status == "ACTIVE")
             .filter(MediaAsset.rights_status != "RIGHTS_DENIED")

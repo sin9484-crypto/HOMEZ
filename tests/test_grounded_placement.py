@@ -129,6 +129,15 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(list(comp.prepare_cutout(source, Placement.CENTER).getdata()), list(source.getdata()))
 
 
+def lit_colour(colour, cutout, image, x):
+    """2026-11-26: 바닥 세우기 합성은 장면 빛 색·방향을 입힌다 — 같은 계산(composition.match_scene_light)을 한 제품 색."""
+
+    plan = comp.plan_placement(comp.prepare_cutout(cutout, Placement.GROUNDED), image.size, Placement.GROUNDED)
+    gains = comp.scene_light_gains(image, plan.offset[1])
+    row = comp.match_scene_light(Image.new("RGBA", (plan.size[0], 1), tuple(colour) + (255,)), gains)
+    return row.getpixel((x - plan.offset[0], 0))[:3]
+
+
 class ComposeTests(unittest.TestCase):
 
     def compose(self, placement):
@@ -140,7 +149,7 @@ class ComposeTests(unittest.TestCase):
         measured = ci.product_preservation(cutout, composed, placement=Placement.GROUNDED)
         self.assertEqual(measured, {"ratio": 1.0, "pixels": 140 * 392})          # 알파 252 제품이 모두 재는 대상이 된다(1.4배로 놓인 크기, 2026-11-26)
         image = Image.open(io.BytesIO(composed)).convert("RGB")
-        self.assertEqual(image.getpixel((600, 1032 - 10)), (30, 90, 200))          # 제품 밑부분은 원래 색 그대로(배경이 비치지 않는다)
+        self.assertEqual(image.getpixel((600, 1032 - 10)), lit_colour((30, 90, 200), bottle(), image, 600))   # 제품 밑부분은 빛 맞춤만 한 원래 색(배경이 비치지 않는다)
 
     def test_a_soft_shadow_lies_under_the_product_and_nowhere_else(self):
         image = Image.open(io.BytesIO(self.compose(Placement.GROUNDED))).convert("RGB")
@@ -191,8 +200,9 @@ class AiRunTests(tab.Base_):
         self.assertEqual(checks["PRODUCT_PRESERVATION"]["detail"]["pixels"], 140 * 392)
         saved = Image.open(self.media_root / outcome.outcome.asset.storage_path).convert("RGB")
         base_y = int(1200 * comp.GROUND_LINE)
-        self.assertEqual(saved.getpixel((600, base_y - 10)), (30, 90, 200))       # 바닥선 바로 위에 제품
-        self.assertNotEqual(saved.getpixel((600, 600 - 280)), (30, 90, 200))      # 예전 가운데 자리의 위쪽은 제품이 아니다
+        product = lit_colour((30, 90, 200), Image.open(self.media_root / cutout.storage_path), saved, 600)
+        self.assertEqual(saved.getpixel((600, base_y - 10)), product)             # 바닥선 바로 위에 제품(빛 맞춤만)
+        self.assertNotEqual(saved.getpixel((600, 600 - 280)), product)            # 예전 가운데 자리의 위쪽은 제품이 아니다
 
     def test_local_concepts_still_follow_the_cutout_purpose_and_the_centre(self):
         from app.domains.media_asset.concept_run_service import ConceptRunService
@@ -345,7 +355,7 @@ class ShadowFollowsTheRealBottomTests(unittest.TestCase):
         box = plan.crop_box
         right_x = plan.offset[0] + (245 - box[0])                    # 뒷줄 용기의 가운데
         right_bottom = plan.offset[1] + (320 - box[1])               # 뒷줄 용기의 실제 밑면(바닥선보다 40픽셀 위)
-        self.assertEqual(image.getpixel((right_x, right_bottom - 3)), (200, 60, 40))   # 제품 픽셀은 그대로
+        self.assertEqual(image.getpixel((right_x, right_bottom - 3)), lit_colour((200, 60, 40), cutout, image, right_x))   # 제품 픽셀은 빛 맞춤만
         just_under = image.getpixel((right_x, right_bottom + 2))
         self.assertLess(sum(just_under), sum((200, 190, 175)) - 60)  # 뒷줄 용기 바로 밑이 짙다(바닥에 닿아 보인다)
         self.assertEqual(image.getpixel((40, 1180)), (200, 190, 175))  # 먼 구석은 그대로
