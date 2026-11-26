@@ -1549,6 +1549,7 @@ window.HOMEZ_I18N_CATALOG_EN_US = {
   "lw.sample_run_btn": "Make the picked samples",
   "lw.sample_not_drawn": "Background not drawn yet",
   "lw.sample_no_preview": "Sample could not be made",
+  "lw.story_prompt": "Drawing instructions sent to the AI",
   "lw.clear_title": "Clear bottle? Let the body show the scene",
   "lw.clear_note": "A clear bottle shot on white keeps that white inside its body, so it looks solid white on a scene. Leave out opaque parts such as the cap and set the top and bottom of the clear body; a new cutout is made where that part shows the scene behind it (text, patterns and outlines stay). Processed on this PC; the original cutout stays as it is.",
   "lw.clear_from": "Top of the clear part",

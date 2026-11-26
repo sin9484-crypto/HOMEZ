@@ -86,6 +86,28 @@ class PlanTests(unittest.TestCase):
             ss.clean_header("완벽한 바디워시")
 
 
+class PromptSheetTests(unittest.TestCase):
+    """2026-11-26 "프롬프트로 정리해서 이미지 생성까지 맞춰라" — 장면 목록·화면·정리 문서가 AI에 보내는 글과 같다."""
+
+    def test_each_scene_carries_the_exact_prompt_sent_to_the_ai(self):
+        for row in ss.summaries():
+            self.assertEqual(row["prompt"], AI_CONCEPTS[row["code"]].generation_prompt)
+
+    def test_the_prompt_sheet_document_matches_the_code(self):
+        from pathlib import Path
+        from app.domains.media_asset.ai_background_concepts import PROMPT_RULES
+        doc = (Path(__file__).resolve().parents[1] / "docs" / "HOMEZ_STORY_PROMPTS_20261126.md").read_text(encoding="utf-8")
+        self.assertIn(PROMPT_RULES.strip(), doc)
+        for scene in ss.STORY_SCENES:
+            self.assertIn(AI_CONCEPTS[scene.code].generation_prompt.split(" Empty background")[0], doc, scene.code)
+            self.assertIn(f"{scene.title} / {scene.line}", doc, scene.code)
+
+    def test_the_screen_shows_the_prompt(self):
+        self.assertIn('"lw.story_prompt"', KO)
+        self.assertIn('"lw.story_prompt"', EN)
+        self.assertIn("scene.prompt", function_source("lwStoryHtml"))
+
+
 class RenderTests(unittest.TestCase):
 
     def test_five_scenes_fit_the_detail_page_limits(self):

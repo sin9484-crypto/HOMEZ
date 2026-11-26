@@ -1560,6 +1560,7 @@ window.HOMEZ_I18N_CATALOG_KO_KR = {
   "lw.sample_run_btn": "고른 샘플로 만들기",
   "lw.sample_not_drawn": "아직 그린 배경 없음",
   "lw.sample_no_preview": "샘플을 만들지 못함",
+  "lw.story_prompt": "AI에 보내는 그림 지시문",
   "lw.clear_title": "투명한 병이면: 몸통이 장면을 비추게",
   "lw.clear_note": "흰 배경에서 찍은 투명한 병은 몸통 안에 그 흰 배경이 들어 있어 장면 위에서 하얗게 막혀 보여요. 뚜껑처럼 불투명한 부분을 빼고 투명한 몸통의 위 끝·아래 끝을 고르면, 그 부분이 뒤의 장면을 비추는 새 누끼를 만듭니다(글씨·무늬·윤곽은 그대로). 이 PC에서 처리하고 원래 누끼는 그대로예요.",
   "lw.clear_from": "투명한 부분 위 끝",

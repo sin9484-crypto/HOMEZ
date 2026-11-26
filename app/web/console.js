@@ -13979,6 +13979,7 @@
           <span class="lw-sample-thumb">${image}</span>
           <label class="lw-story-field">${escapeHtml(t("story_field_title"))}<input type="text" maxlength="${LW_STORY_TITLE_MAX}" data-story-field="title" data-story-for="${escapeHtml(scene.code)}" value="${escapeHtml(lwStoryText(story, scene.code, "title"))}"></label>
           <label class="lw-story-field">${escapeHtml(t("story_field_line"))}<input type="text" maxlength="${LW_STORY_LINE_MAX}" data-story-field="line" data-story-for="${escapeHtml(scene.code)}" value="${escapeHtml(lwStoryText(story, scene.code, "line"))}"></label>
+          ${scene.prompt ? `<details><summary class="stat-sub">${escapeHtml(t("story_prompt"))}</summary><p class="stat-sub lw-story-prompt">${escapeHtml(scene.prompt)}</p></details>` : ""}
         </div>`;
     }).join("");
     return `<section class="lw-story-box" id="lw-story-${assetId}">

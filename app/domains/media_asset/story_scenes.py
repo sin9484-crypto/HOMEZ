@@ -172,7 +172,13 @@ def render_story_page(header: str, steps: list[StoryStep], scene_images: list[by
 
 
 def summaries() -> list[dict]:
-    return [{"order": i + 1, "code": s.code, "role_ko": s.role_ko, "title": s.title, "line": s.line} for i, s in enumerate(STORY_SCENES)]
+    """장면 목록. 2026-11-26(사용자 "프롬프트로 정리해서 이미지 생성까지 맞춰라"): 장면마다 AI에 보내는 그림 지시문(장면 글 + 공통 규칙)을
+    그대로 붙인다 — 화면에서 펼쳐 보고, 정리 문서(docs/HOMEZ_STORY_PROMPTS_20261126.md)와 같은 글인지 시험이 확인한다."""
+
+    from app.domains.media_asset import ai_background_concepts as abc
+
+    return [{"order": i + 1, "code": s.code, "role_ko": s.role_ko, "title": s.title, "line": s.line,
+             "prompt": abc.get_ai_concept(s.code).generation_prompt} for i, s in enumerate(STORY_SCENES)]
 
 
 __all__ = ["STORY_SCENES", "STORY_CODES", "StoryScene", "StoryStep", "StoryError", "plan_story", "clean_header", "render_story_page", "summaries",

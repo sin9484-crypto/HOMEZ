@@ -1367,6 +1367,7 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .lw-story-card.is-picked { border-color: var(--primary, #2563eb); }
 .lw-story-pick { display: flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
 .lw-story-field { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-muted, #6b7280); }
+.lw-story-prompt { overflow-wrap: anywhere; font-size: 11px; }
 .lw-story-field input { font-size: 13px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
 
 /* 2026-11-13 이미지 AI 편집 기록 — 사진 카드의 한 줄 기록과 표시 */
