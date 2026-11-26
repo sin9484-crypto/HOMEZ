@@ -175,8 +175,11 @@ class MainFillTests(Base_):
         self.assertEqual(outcome.status, "CREATED")
         self.assertTrue(all(c["status"] == "PASS" for c in outcome.checks if c["code"] in ("PRODUCT_PRESERVATION", "MAIN_IMAGE_SPEC")))
         image = Image.open(self.media_root / outcome.asset.storage_path).convert("RGB")
-        self.assertEqual(image.getpixel((600, 600)), (30, 90, 160))             # 가운데에 제품
-        self.assertEqual(image.getpixel((900, 600)), (255, 255, 255))           # 원래 자리(오른쪽)는 흰 배경
+        self.assertEqual(image.size, (1000, 1000))                               # 2026-11-26: 대표는 1000 캔버스(같은 1.4배로 더 크게 보인다)
+        self.assertEqual(image.getpixel((500, 500)), (30, 90, 160))             # 가운데에 제품
+        self.assertEqual(image.getpixel((800, 500)), (255, 255, 255))           # 원래 자리(오른쪽)는 흰 배경
+        self.assertLess(sum(image.getpixel((500, 500 + 280 + 3))), 3 * 250)     # 밑면 바로 아래 옅은 그림자(제품 높이 560, 가운데 정렬)
+        self.assertEqual(image.getpixel((5, 995)), (255, 255, 255))             # 가장자리는 흰색 그대로(대표 규격)
 
 
 class ProductSceneTests(unittest.TestCase):

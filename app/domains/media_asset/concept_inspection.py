@@ -32,8 +32,9 @@ from PIL import Image
 
 from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.composition import plan_placement
-from app.domains.media_asset.composition import match_scene_light
-from app.domains.media_asset.composition import scene_light_gains
+from app.domains.media_asset.composition import scaled_product
+from app.domains.media_asset.composition import light_product
+from app.domains.media_asset.composition import scene_light
 from app.domains.media_asset.composition import prepare_cutout
 
 PRESERVATION_MIN = 0.99
@@ -71,20 +72,21 @@ def contrast_between(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-def product_preservation(cutout_png: bytes, composed_png: bytes, *, placement: str = Placement.CENTER) -> dict[str, Any]:
+def product_preservation(cutout_png: bytes, composed_png: bytes, *, placement: str = Placement.CENTER,
+                         ground_line: float | None = None, max_height: float | None = None) -> dict[str, Any]:
     """제품의 불투명 픽셀이 합성 결과에서 같은 값으로 남은 비율. 반환: {"ratio": 0~1, "pixels": 불투명 픽셀 수}.
 
     놓는 자리는 합성과 같은 `composition.plan_placement()`로 계산한다(2026-11-15 — GROUNDED도 실제로 붙인 자리를 잰다)."""
 
     cutout = prepare_cutout(Image.open(io.BytesIO(cutout_png)), placement)
     composed = Image.open(io.BytesIO(composed_png)).convert("RGB")
-    plan = plan_placement(cutout, composed.size, placement)
+    plan = plan_placement(cutout, composed.size, placement, ground_line=ground_line, max_height=max_height)
     size, offset = plan.size, plan.offset
-    resized = cutout.crop(plan.crop_box).resize(size, Image.LANCZOS)
+    resized = scaled_product(cutout, plan)            # 2026-11-26: 합성과 같은 크기 바꾸기(키웠으면 같은 선명 처리)
     if placement == Placement.GROUNDED:
         # 2026-11-26: 바닥 세우기 합성은 장면 빛 색·방향을 입힌다(채널별 곱과 좌우 기울기만). 같은 계산을 다시 해서 그대로인지 잰다 —
         # 빛 맞춤 말고 다른 변화(다시 그리기·글씨 뭉개짐)가 있으면 여전히 비율이 떨어진다.
-        resized = match_scene_light(resized, scene_light_gains(composed, offset[1]))
+        resized = light_product(resized, scene_light(composed, offset[1]))
     region = composed.crop((offset[0], offset[1], offset[0] + size[0], offset[1] + size[1]))
     original_pixels, composed_pixels, alpha_pixels = resized.convert("RGB").getdata(), region.getdata(), resized.getchannel("A").getdata()
     same = total = 0
@@ -125,7 +127,7 @@ def _product_average(cutout_png: bytes, placement: str = Placement.CENTER) -> tu
 
 
 def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, ...], purpose: str, *, generated_background: bool = False,
-            placement: str = Placement.CENTER) -> list[CheckResult]:
+            placement: str = Placement.CENTER, ground_line: float | None = None, max_height: float | None = None) -> list[CheckResult]:
     """컨셉이 요구한 검사만 돌린다(요구한 순서 그대로). 알 수 없는 검사 코드는 NOT_CHECKED로 남긴다(조용히 빼지 않는다).
 
     `generated_background`(2026-11-10): 배경을 AI가 그렸으면 "글자 없음"을 코드가 보장하지 못한다 — NO_TEXT_OVERLAY를 BY_CONSTRUCTION이 아니라 NOT_CHECKED로 알린다."""
@@ -134,7 +136,7 @@ def inspect(cutout_png: bytes, composed_png: bytes, required_checks: tuple[str, 
     results: list[CheckResult] = []
     for code in required_checks:
         if code == "PRODUCT_PRESERVATION":
-            measured = product_preservation(cutout_png, composed_png, placement=placement)
+            measured = product_preservation(cutout_png, composed_png, placement=placement, ground_line=ground_line, max_height=max_height)
             ok = measured["pixels"] > 0 and measured["ratio"] >= PRESERVATION_MIN
             results.append(CheckResult(code, PASS if ok else FAIL, {"ratio": round(measured["ratio"], 4), "pixels": measured["pixels"], "min": PRESERVATION_MIN}))
         elif code == "BACKGROUND_CONTRAST":

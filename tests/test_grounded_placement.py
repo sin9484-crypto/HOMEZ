@@ -129,12 +129,18 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(list(comp.prepare_cutout(source, Placement.CENTER).getdata()), list(source.getdata()))
 
 
+def focused(colour, xy):
+    """2026-11-26: 바닥 세우기 합성은 배경만 살짝 흐리게·가장자리 어둡게(상품 부각) — 그림자가 없는 곳의 배경은 이 값이다."""
+
+    return comp.focus_background(Image.new("RGB", comp.CANVAS_SIZE, colour)).getpixel(xy)
+
+
 def lit_colour(colour, cutout, image, x):
     """2026-11-26: 바닥 세우기 합성은 장면 빛 색·방향을 입힌다 — 같은 계산(composition.match_scene_light)을 한 제품 색."""
 
     plan = comp.plan_placement(comp.prepare_cutout(cutout, Placement.GROUNDED), image.size, Placement.GROUNDED)
-    gains = comp.scene_light_gains(image, plan.offset[1])
-    row = comp.match_scene_light(Image.new("RGBA", (plan.size[0], 1), tuple(colour) + (255,)), gains)
+    light = comp.scene_light(image, plan.offset[1])          # 2026-11-26: 빛 색·방향·세기(그림자·명암)
+    row = comp.light_product(Image.new("RGBA", (plan.size[0], 1), tuple(colour) + (255,)), light)
     return row.getpixel((x - plan.offset[0], 0))[:3]
 
 
@@ -156,8 +162,8 @@ class ComposeTests(unittest.TestCase):
         base_y = int(1200 * comp.GROUND_LINE)
         under = image.getpixel((600 + 20, base_y + 3))                            # 제품 밑면 바로 아래 바닥(바닥 그림자 안)
         far = image.getpixel((40, 1180))                                          # 먼 구석
-        self.assertEqual(far, (200, 190, 175))
-        self.assertLess(sum(under), sum(far) - 20)
+        self.assertEqual(far, focused((200, 190, 175), (40, 1180)))                # 그림자 없는 곳은 배경 초점 맞춤만
+        self.assertLess(sum(under), sum(focused((200, 190, 175), (620, base_y + 3))) - 20)
 
     def test_center_composition_is_unchanged(self):
         cutout = bottle()
@@ -269,13 +275,33 @@ class PromptTests(unittest.TestCase):
         self.assertNotIn("spotlight", abc.AI_CONCEPTS["AI_STUDIO_MARBLE"].generation_prompt)
 
 
+class SceneTweakTests(unittest.TestCase):
+    """2026-11-26 사용자 "#2#4 다시 만들어라" — 침대 곁 장면은 앞모서리에서 물러난 바닥선·원근에 맞는 높이. 합성과 검사가 같은 자리를 쓴다."""
+
+    def test_the_bedside_scene_has_its_own_ground_and_height(self):
+        options = abc.placement_options("AI_CARE_BEDSIDE")
+        self.assertEqual(options, {"ground_line": 0.80, "max_height": 0.50})
+        self.assertEqual(abc.placement_options("AI_GYM_BENCH"), {})
+        tall = Image.new("RGBA", (300, 1000), (0, 0, 0, 0))
+        tall.paste(Image.new("RGBA", (200, 900), (9, 9, 9, 255)), (50, 50))
+        plan = comp.plan_placement(tall, comp.CANVAS_SIZE, Placement.GROUNDED, **options)
+        self.assertEqual((plan.size[1], plan.offset[1] + plan.size[1]), (600, 960))
+
+    def test_the_check_uses_the_same_place_as_the_composition(self):
+        options = abc.placement_options("AI_CARE_BEDSIDE")
+        composed = comp.compose_with_background(png_bytes(bottle()), BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=scene()),
+                                                placement=Placement.GROUNDED, **options)
+        self.assertEqual(ci.product_preservation(png_bytes(bottle()), composed, placement=Placement.GROUNDED, **options)["ratio"], 1.0)
+        self.assertLess(ci.product_preservation(png_bytes(bottle()), composed, placement=Placement.GROUNDED)["ratio"], 0.9)   # 다른 자리를 재면 떨어진다
+
+
 class GrantTargetTests(unittest.TestCase):
 
     CODE_COMBOS = (   # 2026-11-15 운영 DB의 허용 조합 + 코드가 authorize하는 조합
         ("CLOUDFLARE", "WRITE", "AI_BACKGROUND"), ("COUPANG", "READ", "AFTER_SALES_CHECK"), ("COUPANG", "READ", "INVOICE_UPLOAD"), ("COUPANG", "WRITE", "INVOICE_UPLOAD"),
         ("COUPANG", "READ", "ORDER_DETECTION"), ("COUPANG", "READ", "ORDER_TRACKING"), ("COUPANG", "READ", "PRODUCT_OUTBOUND_DAYS"), ("COUPANG", "WRITE", "PRODUCT_OUTBOUND_DAYS"),
         ("COUPANG", "READ", "PRODUCT_STATUS_CHECK"), ("COUPANG", "READ", "RETURN_PROCESS"), ("COUPANG", "READ", "STOCK_UPDATE"), ("COUPANG", "WRITE", "STOCK_UPDATE"),
-        ("COUPANG", "WRITE", "PRICE_UPDATE"), ("COUPANG", "WRITE", "PRODUCT_NAME_UPDATE"), ("COUPANG", "WRITE", "INQUIRY_REPLY"), ("COUPANG", "WRITE", "RETURN_PROCESS"),
+        ("COUPANG", "WRITE", "PRICE_UPDATE"), ("COUPANG", "WRITE", "PRODUCT_NAME_UPDATE"), ("COUPANG", "READ", "PRODUCT_IMAGE_UPDATE"), ("COUPANG", "WRITE", "PRODUCT_IMAGE_UPDATE"), ("COUPANG", "WRITE", "INQUIRY_REPLY"), ("COUPANG", "WRITE", "RETURN_PROCESS"),
         ("NAVER", "READ", "TREND_LOOKUP"), ("ONCH", "READ", "ORDER_DETECTION"), ("ONCH", "READ", "SUPPLIER_RELEASE_DATE"),
         ("LLM", "WRITE", "AI_DRAFT"), ("LLM", "WRITE", "AI_ANALYSIS"), ("LLM", "WRITE", "AI_ADVICE"), ("GEMINI", "WRITE", "IMAGE_GENERATION"), ("EMAIL", "WRITE", "BRIEF_EMAIL"),
         ("GEMINI", "WRITE", "GEMINI_QUESTION"),                                    # 2026-11-23 클로드 연결 장치의 제미나이 글 질문
@@ -358,16 +384,42 @@ class ShadowFollowsTheRealBottomTests(unittest.TestCase):
         self.assertEqual(image.getpixel((right_x, right_bottom - 3)), lit_colour((200, 60, 40), cutout, image, right_x))   # 제품 픽셀은 빛 맞춤만
         just_under = image.getpixel((right_x, right_bottom + 2))
         self.assertLess(sum(just_under), sum((200, 190, 175)) - 60)  # 뒷줄 용기 바로 밑이 짙다(바닥에 닿아 보인다)
-        self.assertEqual(image.getpixel((40, 1180)), (200, 190, 175))  # 먼 구석은 그대로
+        self.assertEqual(image.getpixel((40, 1180)), focused((200, 190, 175), (40, 1180)))  # 먼 구석은 배경 초점 맞춤만
 
-    def test_the_soft_shadow_falls_away_from_the_light_on_the_left(self):
-        image = self.compose(bottle())
+    def lit_scene(self, window):
+        """위쪽에 밝은 창(왼쪽·오른쪽·없음)이 있는 장면 — 2026-11-26 그림자는 장면 빛 반대쪽 앞으로."""
+
+        image = Image.new("RGB", (1024, 1024), (200, 190, 175))
+        if window == "left":
+            image.paste(Image.new("RGB", (300, 300), (255, 250, 240)), (40, 60))
+        elif window == "right":
+            image.paste(Image.new("RGB", (300, 300), (255, 250, 240)), (684, 60))
+        return Image.open(io.BytesIO(comp.compose_with_background(
+            png_bytes(bottle()), BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=png_bytes(image)), placement=Placement.GROUNDED))).convert("RGB")
+
+    def shadow_sides(self, image):
         plan = comp.plan_placement(comp.prepare_cutout(bottle(), Placement.GROUNDED), comp.CANVAS_SIZE, Placement.GROUNDED)
-        base_y = plan.offset[1] + plan.size[1] - 4
-        gap = 14
-        left = image.getpixel((plan.offset[0] - gap, base_y))
-        right = image.getpixel((plan.offset[0] + plan.size[0] + gap, base_y))
-        self.assertLess(sum(right), sum(left) - 6)                    # 오른쪽(빛 반대쪽)이 더 어둡다
+        below = plan.offset[1] + plan.size[1] + int(plan.size[1] * 0.05)
+        reach = int(plan.size[1] * 0.12)
+        left = sum(image.getpixel((plan.offset[0] - reach, below)))
+        right = sum(image.getpixel((plan.offset[0] + plan.size[0] + reach, below)))
+        return left, right
+
+    def test_the_cast_shadow_falls_forward_away_from_the_light(self):
+        left, right = self.shadow_sides(self.lit_scene("left"))
+        self.assertLess(right, left - 6)                              # 왼쪽 빛 → 오른쪽 앞이 어둡다
+        left, right = self.shadow_sides(self.lit_scene("right"))
+        self.assertLess(left, right - 6)                              # 오른쪽 빛 → 왼쪽 앞이 어둡다
+        left, right = self.shadow_sides(self.lit_scene(None))
+        self.assertLessEqual(abs(left - right), 3)                    # 빛 방향이 없으면 한쪽으로 기울지 않는다
+
+    def test_scene_light_reads_side_and_strength(self):
+        self.assertEqual(comp.scene_light(Image.new("RGB", (400, 400), (200, 190, 175)), 300).side, 0)
+        bright = Image.new("RGB", (400, 400), (90, 80, 70))
+        bright.paste(Image.new("RGB", (120, 200), (255, 250, 240)), (260, 0))
+        light = comp.scene_light(bright, 300)
+        self.assertEqual(light.side, 1)
+        self.assertGreater(light.strength, comp.scene_light(Image.new("RGB", (400, 400), (200, 190, 175)), 300).strength)
 
     def test_faint_haze_is_dropped_but_edges_and_colours_stay(self):
         source = Image.new("RGBA", (5, 1))

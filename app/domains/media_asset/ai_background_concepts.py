@@ -103,6 +103,17 @@ AI_CONCEPTS: dict[str, ic.ImageConcept] = {c.code: c for c in (
 )}
 
 
+# 2026-11-26(사용자 "#2#4 다시 만들어라"): 그려진 배경에서 탁자 앞모서리가 화면 안(높이 약 86%)에 있는 장면은 기본 바닥선이면 상품이
+# 모서리 끝에 서서 떨어질 듯 보였고, 협탁·침대에 비해 너무 컸다 → 앞모서리에서 물러난 자리(바닥선)와 원근에 맞는 높이 한도.
+PLACEMENT_TWEAKS: dict[str, dict[str, float]] = {
+    "AI_CARE_BEDSIDE": {"ground_line": 0.80, "max_height": 0.50},
+}
+
+
+def placement_options(code: str) -> dict[str, float]:
+    return dict(PLACEMENT_TWEAKS.get(code, {}))
+
+
 def _assert_valid() -> None:
     problems = {code: ic.validate_spec(c) for code, c in AI_CONCEPTS.items()}
     problems = {code: items for code, items in problems.items() if items}
@@ -135,4 +146,4 @@ def to_summary(concept: ic.ImageConcept) -> dict:
 
 _assert_valid()
 
-__all__ = ["AI_CONCEPTS", "MAX_PICK", "PURPOSES", "LOOK", "PROMPT_RULES", "WATERLESS_TERMS", "list_ai_concepts", "get_ai_concept", "to_summary"]
+__all__ = ["AI_CONCEPTS", "MAX_PICK", "PURPOSES", "LOOK", "PROMPT_RULES", "WATERLESS_TERMS", "PLACEMENT_TWEAKS", "placement_options", "list_ai_concepts", "get_ai_concept", "to_summary"]

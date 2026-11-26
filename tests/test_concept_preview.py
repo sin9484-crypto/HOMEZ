@@ -227,7 +227,9 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(sample["needs_draw"])
         self.assertEqual(sample["background_version"], 2)      # 가장 최근 배경
         corner = decode(sample["preview"]).convert("RGB").getpixel((3, 3))
-        self.assertTrue(all(abs(a - b) <= 12 for a, b in zip(corner, (150, 10, 160))), corner)
+        from app.domains.media_asset.composition import focus_background
+        expected = focus_background(Image.new("RGB", (1200, 1200), (150, 10, 160))).getpixel((11, 11))   # 2026-11-26 배경 초점 맞춤(가장자리 어둡게)
+        self.assertTrue(all(abs(a - b) <= 12 for a, b in zip(corner, expected)), (corner, expected))
         other = next(s for s in out["samples"] if s["code"] == "AI_BATHROOM_SHELF")
         self.assertTrue(other["needs_draw"])
 

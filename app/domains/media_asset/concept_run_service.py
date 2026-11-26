@@ -35,6 +35,7 @@ from app.core.exceptions import BadRequestException
 from app.core.exceptions import NotFoundException
 from app.domains.media_asset import concept_inspection
 from app.domains.media_asset.composition import compose_with_background
+from app.domains.media_asset.composition import MAIN_CANVAS_SIZE
 from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.constants import MediaAssetOwnerType
 from app.domains.media_asset.derived_assets import adopt_derived
@@ -108,7 +109,8 @@ class ConceptRunService:
 
     def compose_and_save(self, company_id: int, requested_by: int, cutout: MediaAsset, cutout_bytes: bytes, code: str, purpose: str, spec, checks: tuple[str, ...], *,
                          operation: str = OPERATION, provider_code: str = "PILLOW_LOCAL", model_name: str | None = None, label: str | None = None,
-                         generated_background: bool = False, placement: str = Placement.CENTER) -> ConceptRunOutcome:
+                         generated_background: bool = False, placement: str = Placement.CENTER,
+                         placement_options: dict | None = None) -> ConceptRunOutcome:
         """배경 명세로 합성 → 검사 → (FAIL이 없을 때만) 저장. 2026-11-10 AI 배경(ai_background_service)도 같은 길을 쓴다(배경 바이트만 다르다).
 
         2026-11-15: `placement`(GROUNDED = 제품을 바닥선에 세우고 바닥 그림자)는 합성과 검사에 함께 넘긴다. AI 배경 사진은 새 사진의 용도를
@@ -122,7 +124,9 @@ class ConceptRunService:
         try:
             # 생성 배경·바닥 세우기일 때만 그 값을 넘긴다(기존 로컬 컨셉의 합성·검사 호출 모양은 그대로).
             extra = {"placement": placement} if placement != Placement.CENTER else {}
-            composed = compose_with_background(cutout_bytes, spec, **extra)
+            extra.update(placement_options or {})        # 2026-11-26: 장면별 바닥선·높이(AI 배경) — 합성과 검사에 같이
+            canvas = {"canvas_size": MAIN_CANVAS_SIZE} if placement == Placement.FILL else {}   # 2026-11-26: 대표는 1000 캔버스
+            composed = compose_with_background(cutout_bytes, spec, **extra, **canvas)
             results = (concept_inspection.inspect(cutout_bytes, composed, checks, purpose, generated_background=True, **extra) if generated_background
                        else concept_inspection.inspect(cutout_bytes, composed, checks, purpose, **extra))
         except Exception as exc:  # noqa: BLE001

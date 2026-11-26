@@ -83,6 +83,9 @@ _DEFAULT_REQUEST = {
     # 2026-10-25 상품명 수정: 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기 1회씩만.
     (CallPurpose.PRODUCT_NAME_UPDATE, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
     (CallPurpose.PRODUCT_NAME_UPDATE, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
+    # 2026-11-26 상품 사진 수정: 상품명 수정과 같이 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기 1회씩만.
+    (CallPurpose.PRODUCT_IMAGE_UPDATE, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
+    (CallPurpose.PRODUCT_IMAGE_UPDATE, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),
     # 2026-10-25 문의 답변: 읽기 3회(미리보기·전송 직전 재확인·전송 뒤 확인), 쓰기 1회씩만.
     (CallPurpose.INQUIRY_REPLY, CallKind.READ): (AllowanceMode.COUNTED, 3, None),
     (CallPurpose.INQUIRY_REPLY, CallKind.WRITE): (AllowanceMode.COUNTED, 1, None),

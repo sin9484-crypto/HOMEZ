@@ -1615,7 +1615,7 @@
     if (opts && opts.productId) { const anchor = $("ez-days-anchor"); if (anchor) anchor.scrollIntoView({ block: "start" }); }
   }
 
-  const GRANT_PURPOSES = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"],
+  const GRANT_PURPOSES = [["ORDER_DETECTION", "easy.purpose.order_detection"], ["ORDER_TRACKING", "easy.purpose.tracking"], ["AFTER_SALES_CHECK", "easy.purpose.after"], ["PRODUCT_STATUS_CHECK", "easy.purpose.pstatus"], ["INVOICE_UPLOAD", "easy.purpose.invoice"], ["PRODUCT_OUTBOUND_DAYS", "easy.purpose.days"], ["STOCK_UPDATE", "easy.purpose.stock"], ["PRICE_UPDATE", "easy.purpose.price"], ["PRODUCT_NAME_UPDATE", "easy.purpose.pname"], ["PRODUCT_IMAGE_UPDATE", "easy.purpose.pimage"], ["INQUIRY_REPLY", "easy.purpose.inq"], ["RETURN_PROCESS", "easy.purpose.ret"],
     ["SUPPLIER_RELEASE_DATE", "easy.purpose.release"], ["TREND_LOOKUP", "easy.purpose.trend"], ["AI_DRAFT", "easy.purpose.ai_draft"], ["AI_ANALYSIS", "easy.purpose.ai_analysis"], ["AI_ADVICE", "easy.purpose.ai_advice"], ["AI_BACKGROUND", "easy.purpose.ai_bg"], ["IMAGE_GENERATION", "easy.purpose.image"], ["GEMINI_QUESTION", "easy.purpose.gemini_q"], ["BRIEF_EMAIL", "easy.purpose.brief_email"], ["ANY", "easy.purpose.any"]];
   // 2026-11-15: 보내는 곳 7개 모두(예전에는 쿠팡·온채널만 있어 Cloudflare·네이버·Claude 등의 허용을 직접 만들 수 없었다).
   const GRANT_SYSTEMS = [["COUPANG", "easy.sys.coupang"], ["ONCH", "easy.sys.onch"], ["LLM", "easy.sys.llm"], ["NAVER", "easy.sys.naver"], ["CLOUDFLARE", "easy.sys.cloudflare"], ["GEMINI", "easy.sys.gemini"], ["EMAIL", "easy.sys.email"]];
@@ -1626,7 +1626,7 @@
     return {
       ORDER_DETECTION: [["COUPANG", "ONCH"], ["READ"]], ORDER_TRACKING: [["COUPANG"], ["READ"]], AFTER_SALES_CHECK: [["COUPANG"], ["READ"]], PRODUCT_STATUS_CHECK: [["COUPANG"], ["READ"]],
       INVOICE_UPLOAD: [["COUPANG"], both], PRODUCT_OUTBOUND_DAYS: [["COUPANG"], both], STOCK_UPDATE: [["COUPANG"], both], PRICE_UPDATE: [["COUPANG"], both],
-      PRODUCT_NAME_UPDATE: [["COUPANG"], both], INQUIRY_REPLY: [["COUPANG"], both], RETURN_PROCESS: [["COUPANG"], both],
+      PRODUCT_NAME_UPDATE: [["COUPANG"], both], PRODUCT_IMAGE_UPDATE: [["COUPANG"], both], INQUIRY_REPLY: [["COUPANG"], both], RETURN_PROCESS: [["COUPANG"], both],
       SUPPLIER_RELEASE_DATE: [["ONCH"], ["READ"]], AI_DRAFT: [["LLM"], ["WRITE"]], AI_ANALYSIS: [["LLM"], ["WRITE"]], AI_ADVICE: [["LLM"], ["WRITE"]],
       IMAGE_GENERATION: [["GEMINI"], ["WRITE"]], TREND_LOOKUP: [["NAVER"], ["READ"]], BRIEF_EMAIL: [["EMAIL"], ["WRITE"]], AI_BACKGROUND: [["CLOUDFLARE"], ["WRITE"]],
       GEMINI_QUESTION: [["GEMINI"], ["WRITE"]],

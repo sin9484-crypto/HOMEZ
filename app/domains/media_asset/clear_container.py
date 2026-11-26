@@ -22,9 +22,14 @@ from __future__ import annotations
 import io
 
 from PIL import Image
+from PIL import ImageChops
+from PIL import ImageFilter
 
-MODEL_VERSION = "see-through-v1"
-GLASS_ALPHA_MIN = 0.34      # 가장 투명한 곳도 이만큼은 보인다(투명 플라스틱·액체의 옅은 막). 장면 합성이 지우는 옅은 안개(알파 64 미만)보다 짙어야 한다
+MODEL_VERSION = "see-through-v2"
+GLASS_ALPHA_MIN = 0.52      # 가장 투명한 곳도 이만큼은 보인다(투명 플라스틱·액체의 옅은 막). 장면 합성이 지우는 옅은 안개(알파 64 미만)보다 짙어야 한다.
+                            # 2026-11-26 0.34→0.52: 사용자 "제품이 부각이 안된다" — 너무 비쳐 밝은 장면에 묻혔다
+RIM_ALPHA_MIN = 0.88        # 용기 가장자리 띠(RIM_SHARE)는 거의 불투명하게 — 윤곽이 살아야 상품이 도드라진다
+RIM_SHARE = 0.012           # 가장자리 띠 두께(누끼 짧은 변 대비, 최소 2픽셀)
 PRINT_DARKNESS = 70         # 이 진하기 이상(글씨·무늬·윤곽)은 그대로 불투명(110은 작은 글씨가 흐려졌다)
 MIN_BAND_SHARE = 0.05
 
@@ -49,6 +54,10 @@ def see_through(cutout_png: bytes, y_from: float, y_to: float) -> bytes:
     top = box[1] + int(round(y_from * height))
     bottom = box[1] + int(round(y_to * height))
 
+    solid = rgba.getchannel("A").point(lambda v: 255 if v >= 128 else 0)
+    rim_px = max(2, int(min(rgba.size) * RIM_SHARE))
+    inner = solid.filter(ImageFilter.MinFilter(2 * rim_px + 1))
+    rim = ImageChops.subtract(solid, inner).load()                    # 255 = 가장자리 띠
     pixels = rgba.load()
     changed = 0
     for y in range(top, bottom):
@@ -57,7 +66,8 @@ def see_through(cutout_png: bytes, y_from: float, y_to: float) -> bytes:
             if a0 == 0:
                 continue
             darkness = 255 - min(r, g, b)
-            glass = GLASS_ALPHA_MIN + (1.0 - GLASS_ALPHA_MIN) * min(1.0, darkness / PRINT_DARKNESS)
+            floor = RIM_ALPHA_MIN if rim[x, y] else GLASS_ALPHA_MIN
+            glass = floor + (1.0 - floor) * min(1.0, darkness / PRINT_DARKNESS)
             a = min(a0 / 255.0, glass)
             if a >= a0 / 255.0:
                 continue
@@ -71,4 +81,4 @@ def see_through(cutout_png: bytes, y_from: float, y_to: float) -> bytes:
     return out.getvalue()
 
 
-__all__ = ["see_through", "SeeThroughError", "MODEL_VERSION", "GLASS_ALPHA_MIN", "PRINT_DARKNESS"]
+__all__ = ["see_through", "SeeThroughError", "MODEL_VERSION", "GLASS_ALPHA_MIN", "PRINT_DARKNESS", "RIM_ALPHA_MIN", "RIM_SHARE"]

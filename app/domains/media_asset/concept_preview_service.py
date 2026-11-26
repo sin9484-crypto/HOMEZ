@@ -135,12 +135,12 @@ class ConceptPreviewService:
             latest = version
         return latest
 
-    def _ai_sample(self, cutout_bytes: bytes, background: bytes) -> str | None:
+    def _ai_sample(self, cutout_bytes: bytes, background: bytes, code: str | None = None) -> str | None:
         """AI 배경 샘플(2026-11-15): 실제 실행과 같은 크기·같은 놓는 방식(GROUNDED, 바닥 그림자)으로 합성한 뒤 줄인다 —
         작은 누끼를 작은 캔버스에 꽉 채우던 방식은 실제 결과보다 제품이 훨씬 크게 보여 샘플과 결과가 달랐다."""
         try:
             composed = compose_with_background(cutout_bytes, BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=background),
-                                               CANVAS_SIZE, placement=Placement.GROUNDED)
+                                               CANVAS_SIZE, placement=Placement.GROUNDED, **(abc.placement_options(code) if code else {}))
             image = Image.open(io.BytesIO(composed)).convert("RGB")
             image.thumbnail((PREVIEW_SIDE, PREVIEW_SIDE), Image.LANCZOS)
             out = io.BytesIO()
@@ -221,7 +221,7 @@ class ConceptPreviewService:
                 if version:
                     try:
                         background = read_media_file(self.queue.media_root, _background_path(company_id, concept.code, version))
-                        preview = self._ai_sample(cutout_bytes, background)
+                        preview = self._ai_sample(cutout_bytes, background, concept.code)
                     except Exception:  # noqa: BLE001
                         logger.warning("저장된 AI 배경을 읽지 못함", exc_info=True)
                 ai_samples.append({

@@ -84,8 +84,15 @@ class SeeThroughTests(unittest.TestCase):
         for xy in ((50, 300), (100, 150), (100, 220), (100, 50)):
             self.assertTrue(all(abs(a - b) <= 2 for a, b in zip(original.getpixel(xy), made.getpixel(xy))), xy)
         dark = on((90, 60, 30), self.made).getpixel((50, 300))
-        self.assertLess(dark[0], BODY[0] - 60)                          # 몸통 너머 어두운 장면이 비친다
+        self.assertLess(dark[0], BODY[0] - 40)                          # 몸통 너머 어두운 장면이 비친다
         self.assertEqual(on((90, 60, 30), self.made).getpixel((100, 220)), PRINT)
+
+    def test_the_outline_band_stays_almost_opaque_so_the_bottle_stands_out(self):
+        image = rgba(self.made)
+        rim = image.getpixel((41, 300))[3]                               # 몸통 왼쪽 가장자리 띠 안
+        body = image.getpixel((90, 300))[3]                              # 몸통 가운데
+        self.assertGreaterEqual(rim, int(cc.RIM_ALPHA_MIN * 255) - 1)
+        self.assertLess(body, rim)
 
     def test_the_glass_is_never_erased_by_the_grounded_haze_rule(self):
         self.assertGreaterEqual(int(cc.GLASS_ALPHA_MIN * 255), comp.HAZE_ALPHA_MAX)
@@ -147,11 +154,56 @@ class SceneLightTests(unittest.TestCase):
         broken.save(out, format="PNG")
         self.assertLess(product_preservation(cutout, out.getvalue(), placement=Placement.GROUNDED)["ratio"], 0.9)
 
-    def test_grounded_products_stay_at_most_half_the_height(self):
-        self.assertEqual(comp.GROUNDED_MAX_HEIGHT, 0.50)
+    def test_preservation_measures_the_light_from_the_same_place_as_the_composition(self):
+        """빛 방향·세기는 상품 위쪽 전체에서 잰다 — 창이 상품 바로 위쪽에만 있어도 합성과 검사가 같은 값을 낸다(다른 자리를 재면 비율이 떨어진다)."""
+
+        scene = Image.new("RGB", (1200, 1200), (120, 105, 90))
+        scene.paste(Image.new("RGB", (260, 140), (255, 252, 245)), (60, 330))          # 상품 위쪽 아래편 왼쪽 창
+        buffer = io.BytesIO()
+        scene.save(buffer, format="PNG")
+        cutout = cc.see_through(clear_bottle_png(), 0.25, 1.0)
+        composed = comp.compose_with_background(cutout, BackgroundSpec(kind=BackgroundKind.EXISTING_ASSET, existing_asset_bytes=buffer.getvalue()),
+                                                placement=Placement.GROUNDED)
+        self.assertEqual(comp.scene_light(scene, comp.plan_placement(comp.prepare_cutout(rgba(cutout), Placement.GROUNDED), scene.size, Placement.GROUNDED).offset[1]).side, -1)
+        self.assertEqual(product_preservation(cutout, composed, placement=Placement.GROUNDED)["ratio"], 1.0)
+
+    def test_grounded_products_stay_at_most_56_percent_of_the_height(self):
+        self.assertEqual(comp.GROUNDED_MAX_HEIGHT, 0.56)
         tall = Image.new("RGBA", (300, 1000), (0, 0, 0, 0))
         tall.paste(Image.new("RGBA", (200, 900), (9, 9, 9, 255)), (50, 50))
-        self.assertEqual(comp.plan_placement(tall, comp.CANVAS_SIZE, Placement.GROUNDED).size[1], 600)
+        self.assertEqual(comp.plan_placement(tall, comp.CANVAS_SIZE, Placement.GROUNDED).size[1], 672)
+
+
+class SharpenTests(unittest.TestCase):
+    """2026-11-26 "평균 90점" — 원본보다 키운 상품만 아주 약하게 선명하게(라벨 글씨). 줄이거나 그대로면 손대지 않는다."""
+
+    @staticmethod
+    def label(size=(200, 300)):
+        image = Image.new("RGBA", size, (240, 240, 240, 255))
+        ImageDraw.Draw(image).rectangle((60, 100, 140, 110), fill=(20, 20, 20, 255))      # 가는 글씨 줄
+        return image
+
+    def test_only_an_enlarged_product_is_sharpened(self):
+        image = self.label()
+        bigger = comp.PlacementPlan((0, 0, 200, 300), (280, 420), (0, 0))
+        plain = image.resize((280, 420), Image.LANCZOS)
+        sharp = comp.scaled_product(image, bigger)
+        edge = lambda im: max(abs(im.getpixel((140, y))[0] - im.getpixel((140, y + 1))[0]) for y in range(130, 170))   # noqa: E731
+        self.assertGreater(edge(sharp), edge(plain))
+        self.assertEqual(sharp.getchannel("A").getextrema(), (255, 255))
+        same = comp.PlacementPlan((0, 0, 200, 300), (200, 300), (0, 0))
+        self.assertEqual(list(comp.scaled_product(image, same).getdata()), list(image.getdata()))
+
+
+class FocusTests(unittest.TestCase):
+
+    def test_only_the_background_is_softened_and_the_edges_darkened(self):
+        flat = Image.new("RGB", (1200, 1200), (200, 180, 160))
+        out = comp.focus_background(flat)
+        centre, corner = out.getpixel((600, 600)), out.getpixel((5, 5))
+        self.assertTrue(all(abs(a - b) <= 2 for a, b in zip(centre, (200, 180, 160))), centre)
+        self.assertLess(sum(corner), sum(centre) * (1 - comp.FOCUS_VIGNETTE / 2))
+        self.assertEqual(out.size, flat.size)
 
 
 class ServiceTests(Base_):

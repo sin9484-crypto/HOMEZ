@@ -371,6 +371,7 @@ class CoupangChannelActions:
         ChannelActionType.STOCK_UPDATE: (ExtPurpose.STOCK_UPDATE, "PUT"),
         ChannelActionType.PRICE_UPDATE: (ExtPurpose.PRICE_UPDATE, "PUT"),
         ChannelActionType.PRODUCT_NAME_UPDATE: (ExtPurpose.PRODUCT_NAME_UPDATE, "PUT"),
+        ChannelActionType.PRODUCT_IMAGE_UPDATE: (ExtPurpose.PRODUCT_IMAGE_UPDATE, "PUT"),
         ChannelActionType.INQUIRY_REPLY: (ExtPurpose.INQUIRY_REPLY, "POST"),
         ChannelActionType.RETURN_RECEIVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
         ChannelActionType.RETURN_APPROVE: (ExtPurpose.RETURN_PROCESS, "PATCH"),
@@ -838,13 +839,14 @@ class CoupangChannelActions:
         digest = hashlib.sha256(str(display_name).encode("utf-8")).hexdigest()[:16]
         return f"sp:{str(seller_product_id).strip()}:name:{digest}:req:{request_ref}"
 
-    def read_product(self, *, company_id: int, store_connection_id: int, seller_product_id: str):
-        """상품 전체 읽기(GET 1회). 허용은 상품명 수정 목적으로 센다. 장부를 쓰지 않는다."""
+    def read_product(self, *, company_id: int, store_connection_id: int, seller_product_id: str,
+                     action_type: str = ChannelActionType.PRODUCT_NAME_UPDATE):
+        """상품 전체 읽기(GET 1회). 허용은 그 작업의 목적(기본 상품명 수정, 2026-11-26부터 사진 수정도)으로 센다. 장부를 쓰지 않는다."""
 
         provider, failure = self._provider(company_id, store_connection_id)
         if failure is not None:
             return None, failure
-        ticket, denied = self._external_authorize(company_id, ExtKind.READ, ChannelActionType.PRODUCT_NAME_UPDATE)
+        ticket, denied = self._external_authorize(company_id, ExtKind.READ, action_type)
         if denied is not None:
             return None, denied
         try:
@@ -878,6 +880,27 @@ class CoupangChannelActions:
             target_key=self.product_name_key(seller_product_id, display_name, request_ref),
             read=lambda p: p.read_product_name_applied(seller_product_id, display_name),
             applied_when=True,  # 노출상품명이 요청한 값이면 적용된 것(다르면 판단하지 않는다)
+        )
+
+    # ---- 상품 사진(2026-11-26) ----
+
+    @staticmethod
+    def product_images_key(seller_product_id: str, fingerprint: str, request_ref: str) -> str:
+        """사진 묶음(대표·추가·상세의 사진 번호와 순서) 지문을 키에 넣는다. 사용자 요청마다 참조값을 붙인다."""
+
+        return f"sp:{str(seller_product_id).strip()}:img:{str(fingerprint)[:16]}:req:{request_ref}"
+
+    def set_product_images(
+        self, *, company_id: int, store_connection_id: int, seller_product_id: str, fingerprint: str, body: dict,
+        request_ref: str, triggered_by: int | None = None, retry_action_required: bool = False,
+    ) -> ActionResult:
+        return self._execute(
+            company_id=company_id, store_connection_id=store_connection_id,
+            action_type=ChannelActionType.PRODUCT_IMAGE_UPDATE,
+            target_key=self.product_images_key(seller_product_id, fingerprint, request_ref),
+            triggered_by=triggered_by, retry_action_required=retry_action_required,
+            call=lambda p: p.update_product(seller_product_id, body),
+            validate=lambda p: p.validate_product_update(seller_product_id, body),
         )
 
     # ---- 상품 문의 답변(2026-10-25) ----

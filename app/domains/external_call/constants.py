@@ -46,6 +46,7 @@ class CallPurpose:
     STOCK_UPDATE = "STOCK_UPDATE"                  # 2026-10-24 쿠팡 옵션 재고 수량 변경(재고 조회·수정)
     PRICE_UPDATE = "PRICE_UPDATE"                  # 2026-10-25 쿠팡 옵션 판매가 변경(재고 조회의 판매가 읽기·가격 수정)
     PRODUCT_NAME_UPDATE = "PRODUCT_NAME_UPDATE"    # 2026-10-25 쿠팡 등록 상품의 상품명 수정(상품 조회·상품 수정 — 쿠팡 승인 뒤 반영)
+    PRODUCT_IMAGE_UPDATE = "PRODUCT_IMAGE_UPDATE"  # 2026-11-26 쿠팡 등록 상품의 대표·추가 이미지·상세설명 교체(상품 조회·상품 수정 — 쿠팡 승인 뒤 반영)
     INQUIRY_REPLY = "INQUIRY_REPLY"                # 2026-10-25 쿠팡 상품 문의 답변(문의 조회·답변 등록 — 고객에게 바로 보인다)
     RETURN_PROCESS = "RETURN_PROCESS"              # 2026-10-26 쿠팡 반품 입고 확인·승인(반품 단건 조회·처리 — 고객 환불로 이어진다)
     IMAGE_GENERATION = "IMAGE_GENERATION"          # 2026-10-25 AI 이미지 생성·편집(상품 사진을 Gemini에 보내 새 사진을 받는다 — 장마다 사용료)
@@ -56,7 +57,7 @@ class CallPurpose:
     TREND_LOOKUP = "TREND_LOOKUP"                  # 2026-10-31 네이버 검색어 트렌드 조회(후보 검색어 하나당 1회 — 사람이 누를 때·매일 자동 실행 때)
     ANY = "ANY"                                    # 모든 목적(조회·변경 구분은 유지)
 
-    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, AI_BACKGROUND, GEMINI_QUESTION, ANY)
+    ALL = (ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, PRODUCT_IMAGE_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, AI_BACKGROUND, GEMINI_QUESTION, ANY)
     LABELS = {
         ORDER_DETECTION: "신규 주문 자동 감지",
         ORDER_TRACKING: "주문·배송 상태 확인",
@@ -70,6 +71,7 @@ class CallPurpose:
         STOCK_UPDATE: "쿠팡 재고 수량 변경",
         PRICE_UPDATE: "쿠팡 판매가 변경",
         PRODUCT_NAME_UPDATE: "쿠팡 상품명 수정",
+        PRODUCT_IMAGE_UPDATE: "쿠팡 상품 사진 수정",
         INQUIRY_REPLY: "쿠팡 문의 답변",
         RETURN_PROCESS: "쿠팡 반품 처리",
         IMAGE_GENERATION: "AI 이미지 생성",
@@ -81,7 +83,7 @@ class CallPurpose:
         ANY: "모든 목적",
     }
     # 허용이 없으면 **막는** 목적(나머지는 기록만 한다 — 판매중지·주문 취소 같은 안전 장치는 허용을 기다리면 안 된다).
-    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, AI_BACKGROUND, GEMINI_QUESTION})
+    ENFORCED = frozenset({ORDER_DETECTION, ORDER_TRACKING, AFTER_SALES_CHECK, PRODUCT_STATUS_CHECK, AI_DRAFT, AI_ANALYSIS, AI_ADVICE, INVOICE_UPLOAD, PRODUCT_OUTBOUND_DAYS, STOCK_UPDATE, PRICE_UPDATE, PRODUCT_NAME_UPDATE, PRODUCT_IMAGE_UPDATE, INQUIRY_REPLY, RETURN_PROCESS, IMAGE_GENERATION, TREND_LOOKUP, SUPPLIER_RELEASE_DATE, BRIEF_EMAIL, AI_BACKGROUND, GEMINI_QUESTION})
 
 
 class AllowanceMode:
@@ -135,6 +137,7 @@ PURPOSE_TARGETS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     CallPurpose.STOCK_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
     CallPurpose.PRICE_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
     CallPurpose.PRODUCT_NAME_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
+    CallPurpose.PRODUCT_IMAGE_UPDATE: ((ExternalSystem.COUPANG,), _BOTH),
     CallPurpose.INQUIRY_REPLY: ((ExternalSystem.COUPANG,), _BOTH),
     CallPurpose.RETURN_PROCESS: ((ExternalSystem.COUPANG,), _BOTH),
     CallPurpose.SUPPLIER_RELEASE_DATE: ((ExternalSystem.ONCH,), (CallKind.READ,)),
