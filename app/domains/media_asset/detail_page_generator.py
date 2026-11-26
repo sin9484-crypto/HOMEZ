@@ -122,20 +122,25 @@ def _wrap_text(
 ) -> list[str]:
     """한글은 공백 단위 word-wrap만으로는 긴 조사·복합어에서 폭을
     넘기기 쉬워, 문자 단위로 누적 폭을 확인하며 줄바꿈한다(단순하지만
-    항상 max_width를 넘기지 않는다는 것을 보장)."""
+    항상 max_width를 넘기지 않는다는 것을 보장).
+
+    2026-11-26: 사람이 넣은 줄바꿈(사용법 1·2·3 등)은 그 자리에서 줄을 나눈다 — 예전에는 줄바꿈 글자의 폭을 재다가
+    "can't measure length of multiline text"(ValueError)로 상세이미지 만들기 전체가 실패했다."""
 
     lines: list[str] = []
-    current = ""
-    for ch in text:
-        candidate = current + ch
-        width = draw.textlength(candidate, font=font)
-        if width > max_width and current:
-            lines.append(current)
-            current = ch
-        else:
-            current = candidate
-    if current:
+    for paragraph in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        current = ""
+        for ch in paragraph:
+            candidate = current + ch
+            width = draw.textlength(candidate, font=font)
+            if width > max_width and current:
+                lines.append(current)
+                current = ch
+            else:
+                current = candidate
         lines.append(current)
+    while lines and not lines[-1]:
+        lines.pop()
 
     return lines or [""]
 

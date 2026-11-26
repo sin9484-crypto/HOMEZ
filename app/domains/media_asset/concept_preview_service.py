@@ -15,6 +15,8 @@ File : app/domains/media_asset/concept_preview_service.py
   - 상품은 다시 그리지 않는다 — 기존 합성(`compose_with_background`)을 작은 캔버스로 쓴다. 실제 결과의 검사는 실행 때 그대로 한다.
   - 누끼(투명 배경)가 필요하다. 고른 사진이 누끼가 아니면 그 사진에서 만든 누끼를 찾고, 없으면 `needs_cutout`으로 알린다(자동으로 누끼를 따지 않는다).
   - 회사 범위(다른 회사 사진은 "없음"), 사용 금지(RIGHTS_DENIED) 사진은 거절한다.
+  - 2026-11-26(사용자 "컨셉별로 선택할수있는 기능 포함해서"): 사진의 상품(후보)의 분류·상품명으로 **이 상품에 맞는 장면**을 규칙 추천
+    (`concept_recommendation.recommend`)해, 견본마다 추천 여부·이유를 붙이고 추천 → 보통 → 피할 장면 순으로 놓는다. 권고일 뿐 모두 고를 수 있다.
 =========================================================
 """
 
@@ -26,6 +28,8 @@ import logging
 from typing import Any
 
 from PIL import Image
+from sqlalchemy import inspect
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestException
@@ -38,6 +42,7 @@ from app.domains.media_asset.composition import BackgroundSpec
 from app.domains.media_asset.composition import CANVAS_SIZE
 from app.domains.media_asset.composition import Placement
 from app.domains.media_asset.composition import compose_with_background
+from app.domains.media_asset.concept_recommendation import recommend
 from app.domains.media_asset.image_concepts import PURPOSES
 from app.domains.media_asset.image_concepts import list_concepts
 from app.domains.media_asset.job_queue_service import ImageGenerationJobQueueService
@@ -151,6 +156,32 @@ class ConceptPreviewService:
             logger.warning("샘플 합성 실패", exc_info=True)
             return None
 
+    def _product_hint(self, company_id: int, asset: MediaAsset) -> str:
+        """사진 주인 상품의 분류·상품명(추천 기준 글). 상품 사진이 아니거나 다른 회사 상품이면 빈 글."""
+
+        if asset.owner_type != "PRODUCT_CANDIDATE" or not inspect(self.db.get_bind()).has_table("product_candidates"):
+            return ""                                   # 상품 표가 없는 DB(시험·일부 설치)에서는 추천 없이 모두 보통으로
+        row = self.db.execute(
+            text("SELECT category_hint, product_name FROM product_candidates WHERE id = :i AND (owner_company_id = :c OR owner_company_id IS NULL)"),
+            {"i": asset.owner_id, "c": company_id},
+        ).fetchone()
+        if row is None:
+            return ""
+        return " ".join(str(v) for v in row if v).strip()
+
+    @staticmethod
+    def _rank(samples: list[dict[str, Any]], concepts: list, hint: str, purpose: str) -> list[dict[str, Any]]:
+        """견본에 추천 여부·이유를 붙이고 추천 → 보통 → 피할 장면 순으로 놓는다(같은 무리 안에서는 원래 순서)."""
+
+        result = recommend(hint, purpose, concepts)
+        info = {row["code"]: (row["score"], row["reasons"], False) for row in result["recommended"]}
+        info.update({row["code"]: (0, row["reasons"], True) for row in result["excluded"]})
+        for sample in samples:
+            score, reasons, avoid = info.get(sample["code"], (0, [], False))
+            sample.update({"recommended": score > 0, "avoid": avoid, "reasons": list(reasons)})
+        order = {id(s): i for i, s in enumerate(samples)}
+        return sorted(samples, key=lambda s: (s["avoid"], not s["recommended"], order[id(s)]))
+
     def previews(self, company_id: int, asset_id: int, purpose: str) -> dict[str, Any]:
         if purpose not in PURPOSES:
             raise BadRequestException("알 수 없는 이미지 용도입니다.")
@@ -170,14 +201,18 @@ class ConceptPreviewService:
         except Exception as exc:  # noqa: BLE001
             raise BadRequestException("누끼 이미지 파일을 읽을 수 없습니다.") from exc
 
+        hint = self._product_hint(company_id, asset)
         samples: list[dict[str, Any]] = []
-        for concept in list_concepts(purpose):
+        local_concepts = list_concepts(purpose)
+        for concept in local_concepts:
             samples.append({
                 "code": concept.code, "kind": LOCAL, "label_ko": concept.label_ko, "description": concept.description,
                 "processing_level": concept.processing_level, "preview": self._sample(small, concept.background_spec()),
                 "needs_draw": False, "background_version": None,
             })
+        samples = self._rank(samples, local_concepts, hint, purpose)
         if purpose in abc.PURPOSES:
+            ai_samples: list[dict[str, Any]] = []
             for concept in abc.list_ai_concepts():
                 version = self._latest_ai_version(company_id, concept.code)
                 preview = None
@@ -187,12 +222,13 @@ class ConceptPreviewService:
                         preview = self._ai_sample(cutout_bytes, background)
                     except Exception:  # noqa: BLE001
                         logger.warning("저장된 AI 배경을 읽지 못함", exc_info=True)
-                samples.append({
+                ai_samples.append({
                     "code": concept.code, "kind": AI, "label_ko": concept.label_ko, "description": concept.description,
                     "processing_level": concept.processing_level, "preview": preview, "needs_draw": version == 0,
                     "background_version": version or None, "prompt": concept.generation_prompt,
                 })
-        return {**base, "needs_cutout": False, "cutout_asset_id": cutout.id, "samples": samples}
+            samples += self._rank(ai_samples, abc.list_ai_concepts(), hint, purpose)
+        return {**base, "needs_cutout": False, "cutout_asset_id": cutout.id, "product_hint": hint, "samples": samples}
 
 
 __all__ = ["ConceptPreviewService", "PREVIEW_SIDE", "LOCAL", "AI"]

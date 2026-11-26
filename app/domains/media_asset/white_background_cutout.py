@@ -66,14 +66,48 @@ def _border_white_share(dark: Image.Image) -> float:
     return white / total if total else 0.0
 
 
+def flood_region(mask: Image.Image, seed: tuple[int, int]) -> Image.Image:
+    """mask(L)에서 seed와 같은 값으로 상하좌우 이어진 영역 → 255, 나머지 0. `ImageDraw.floodfill(thresh=0)`과 같은 결과를
+    줄 단위로 빠르게 낸다(2026-11-26: 그 함수는 픽셀마다 파이썬으로 색 차이를 재서 600×600 한 번에 2초 걸렸다)."""
+
+    w, h = mask.size
+    src = mask.tobytes()
+    target = src[seed[1] * w + seed[0]]
+    out = bytearray(w * h)
+    stack = [seed]
+    while stack:
+        x, y = stack.pop()
+        row = y * w
+        if out[row + x] or src[row + x] != target:
+            continue
+        a = x
+        while a > 0 and src[row + a - 1] == target and not out[row + a - 1]:
+            a -= 1
+        b = x
+        while b < w - 1 and src[row + b + 1] == target and not out[row + b + 1]:
+            b += 1
+        out[row + a: row + b + 1] = b"\xff" * (b - a + 1)
+        for ny in (y - 1, y + 1):
+            if 0 <= ny < h:
+                nrow = ny * w
+                inside = False
+                for nx in range(a, b + 1):
+                    if src[nrow + nx] == target and not out[nrow + nx]:
+                        if not inside:
+                            stack.append((nx, ny))
+                            inside = True
+                    else:
+                        inside = False
+    return Image.frombytes("L", (w, h), bytes(out))
+
+
 def _outside(mask: Image.Image) -> Image.Image:
     """mask(255=막힘, 0=열림)에서 바깥 테두리와 이어진 열린 영역 → 255. 1픽셀 여백을 두고 모서리에서 채운다."""
 
     w, h = mask.size
     padded = Image.new("L", (w + 2, h + 2), 0)
-    padded.paste(mask, (1, 1))
-    ImageDraw.floodfill(padded, (0, 0), 128, thresh=0)
-    return padded.crop((1, 1, w + 1, h + 1)).point(lambda v: 255 if v == 128 else 0)
+    padded.paste(mask.point(lambda v: 255 if v else 0), (1, 1))
+    return flood_region(padded, (0, 0)).crop((1, 1, w + 1, h + 1))
 
 
 def _pad_filter(mask: Image.Image, size: int, *, close: bool) -> Image.Image:

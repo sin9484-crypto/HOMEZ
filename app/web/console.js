@@ -13879,10 +13879,41 @@
     const image = typeof sample.preview === "string" && LW_SAMPLE_DATA_URI.test(sample.preview)
       ? `<img src="${sample.preview}" alt="${escapeHtml(sample.label_ko || sample.code)}">`
       : `<span class="lw-sample-empty">${escapeHtml(t(kind === "AI" && sample.needs_draw ? "sample_not_drawn" : "sample_no_preview"))}</span>`;
-    return `<button type="button" class="lw-sample-card${picked ? " is-picked" : ""}" data-sample-code="${escapeHtml(sample.code)}" data-sample-kind="${kind}" aria-pressed="${picked ? "true" : "false"}" title="${escapeHtml(sample.description || "")}">
+    // 2026-11-26 — 이 상품에 맞는 장면(서버 규칙 추천)에 표시와 이유를 단다. 권고일 뿐 모두 고를 수 있다.
+    const reasons = Array.isArray(sample.reasons) ? sample.reasons.join(" · ") : "";
+    const badge = sample.avoid === true ? `<span class="lw-sample-badge is-avoid">${escapeHtml(t("sample_badge_avoid"))}</span>`
+      : (sample.recommended === true ? `<span class="lw-sample-badge is-good">${escapeHtml(t("sample_badge_good"))}</span>` : "");
+    const title = [sample.description || "", reasons].filter(Boolean).join(" — ");
+    return `<button type="button" class="lw-sample-card${picked ? " is-picked" : ""}${sample.avoid === true ? " is-avoid" : ""}" data-sample-code="${escapeHtml(sample.code)}" data-sample-kind="${kind}" aria-pressed="${picked ? "true" : "false"}" title="${escapeHtml(title)}">
         <span class="lw-sample-thumb">${image}</span>
-        <span class="lw-sample-label">${picked ? "✓ " : ""}${escapeHtml(sample.label_ko || sample.code)}</span>
+        <span class="lw-sample-label">${picked ? "✓ " : ""}${escapeHtml(sample.label_ko || sample.code)} ${badge}</span>
+        ${reasons ? `<span class="lw-sample-reason">${escapeHtml(reasons)}</span>` : ""}
       </button>`;
+  }
+
+  // 2026-11-26 — 묶음 사진에서 파는 상품 하나만 떼어 내기(서버 /media-assets/item-isolation, PC 안 처리). 범위는 사진 너비 대비 %.
+  function lwIsoProblem(iso) {
+    const from = Number(iso && iso.from);
+    const to = Number(iso && iso.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to > 100 || to - from < 5) return "iso_err_range";
+    return null;
+  }
+
+  function lwIsoBody(assetId, iso) {
+    return { source_asset_id: Number(assetId), x_from: Number(iso.from) / 100, x_to: Number(iso.to) / 100 };
+  }
+
+  function lwIsoHtml(assetId, iso) {
+    const t = (key) => HomezI18n.t(`lw.${key}`);
+    return `<details class="lw-iso-box" id="lw-iso-${assetId}" ${iso.open ? "open" : ""}>
+        <summary>${escapeHtml(t("iso_title"))}</summary>
+        <p class="stat-sub">${escapeHtml(t("iso_note"))}</p>
+        <div class="lw-iso-stage">${iso.url ? `<img src="${iso.url}" alt="">` : `<p class="loading-text">${escapeHtml(t("iso_loading"))}</p>`}
+          <span class="lw-iso-band" id="lw-iso-band-${assetId}" style="left:${Number(iso.from)}%;width:${Math.max(0, Number(iso.to) - Number(iso.from))}%"></span></div>
+        <label class="lw-iso-range">${escapeHtml(t("iso_from"))} <input type="range" min="0" max="100" step="0.5" id="lw-iso-from-${assetId}" value="${Number(iso.from)}"></label>
+        <label class="lw-iso-range">${escapeHtml(t("iso_to"))} <input type="range" min="0" max="100" step="0.5" id="lw-iso-to-${assetId}" value="${Number(iso.to)}"></label>
+        <div class="dialog-actions"><button type="button" class="btn btn-secondary btn-sm" id="lw-iso-btn-${assetId}">${escapeHtml(t("iso_btn"))}</button></div>
+      </details>`;
   }
 
   async function lwOpenSamplePanel(assetId, content) {
@@ -13898,7 +13929,7 @@
     panel.dataset.open = "1";
     if (card) card.style.gridColumn = "1 / -1";
     const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
-    const state = { purpose: "ADDITIONAL", data: null, local: [], ai: [], newBg: false, aiSettings: null };
+    const state = { purpose: "ADDITIONAL", data: null, local: [], ai: [], newBg: false, aiSettings: null, iso: { open: false, from: 40, to: 60, url: null } };
 
     async function load(errorText) {
       panel.innerHTML = `<p class="loading-text">${escapeHtml(t("sample_loading"))}</p>`;
@@ -13938,7 +13969,10 @@
           <div class="lw-sample-grid">${ai.map((s) => lwSampleCardHtml(s, state.ai.includes(s.code))).join("")}</div>
           <p class="stat-sub">${escapeHtml(t("sample_pick_count", { count: state.ai.length, max: LW_AIBG_MAX_PICK }))}</p>
           ${state.ai.length ? `<label class="lw-ref-pick"><input type="checkbox" id="lw-sample-newbg-${assetId}" ${state.newBg ? "checked" : ""}> ${escapeHtml(t("sample_new_bg"))}</label>` : ""}` : "";
+        const hintNote = data.product_hint ? `<p class="stat-sub">${escapeHtml(t("sample_hint_note", { hint: data.product_hint }))}</p>` : "";
         body = `${usedCutout}
+          ${lwIsoHtml(assetId, state.iso)}
+          ${hintNote}
           <h4>${escapeHtml(t("sample_local_title"))}</h4>
           <p class="stat-sub">${escapeHtml(t("sample_local_note"))}</p>
           <div class="lw-sample-grid">${local.map((s) => lwSampleCardHtml(s, state.local.includes(s.code))).join("") || `<p class="empty-text">${escapeHtml(t("sample_none"))}</p>`}</div>
@@ -13973,6 +14007,35 @@
       }));
       const newBg = el(`lw-sample-newbg-${assetId}`);
       if (newBg) newBg.addEventListener("change", () => { state.newBg = newBg.checked; });
+      const isoBox = el(`lw-iso-${assetId}`);
+      if (isoBox) isoBox.addEventListener("toggle", async () => {
+        state.iso.open = isoBox.open;
+        if (!isoBox.open || state.iso.url) return;
+        try { state.iso.url = await lwLoadThumbUrl(assetId); } catch (err) { render(null, err.message || HomezI18n.t("common.load_error")); return; }
+        render();
+      });
+      ["from", "to"].forEach((side) => {
+        const input = el(`lw-iso-${side}-${assetId}`);
+        if (!input) return;
+        input.addEventListener("input", () => {
+          state.iso[side] = Number(input.value);
+          const band = el(`lw-iso-band-${assetId}`);
+          if (band) { band.style.left = `${state.iso.from}%`; band.style.width = `${Math.max(0, state.iso.to - state.iso.from)}%`; }
+        });
+      });
+      const isoBtn = el(`lw-iso-btn-${assetId}`);
+      if (isoBtn) isoBtn.addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwIsoProblem(state.iso);
+        if (key) { render(key); return; }
+        try {
+          await apiFetch("/media-assets/item-isolation", { method: "POST", body: JSON.stringify(lwIsoBody(assetId, state.iso)) });
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+          return;
+        }
+        state.iso.open = false;
+        await load();     // 샘플은 이 사진에서 가장 최근에 만든 누끼(방금 떼어 낸 상품)로 다시 만든다
+      }));
       const cutoutBtn = el(`lw-sample-cutout-btn-${assetId}`);
       if (cutoutBtn) cutoutBtn.addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
         try {

@@ -735,6 +735,60 @@ class ImageGenerationJobQueueService:
 
         return asset
 
+    def isolate_item(
+        self, source_asset_id: int, x_from: float, x_to: float,
+        requested_by: int, company_id: int,
+    ) -> MediaAsset:
+        """2026-11-26 — 흰 배경 묶음 사진(여러 상품이 함께 찍힘)에서 고른 가로 범위의 상품 하나만 남긴 누끼(GENERATED)를 만든다.
+        PC 안 처리(바깥 호출 없음), 원본은 그대로. 고객이 받는 것과 같은 사진을 만들려는 것(예: 네 병 사진에서 파는 한 병만)."""
+
+        from app.domains.media_asset import item_isolation as iso
+
+        source = self.repository.get_media_asset_for_company(source_asset_id, company_id)
+        if source is None:
+            raise NotFoundException("원본 이미지를 찾을 수 없습니다.")
+        if source.rights_status == "RIGHTS_DENIED":
+            raise BadRequestException("사용이 금지된 사진은 쓸 수 없습니다.")
+        source_bytes = read_media_file(self.media_root, source.storage_path)
+
+        job = self._record_processing_job(
+            operation="ITEM_ISOLATION",
+            provider_code="LOCAL_ITEM_ISOLATION",
+            model_name=None,
+            source_asset_id=source.id,
+            requested_by=requested_by,
+            company_id=company_id,
+            product_candidate_id=(
+                source.owner_id
+                if source.owner_type == MediaAssetOwnerType.PRODUCT_CANDIDATE
+                else 0
+            ),
+        )
+        try:
+            result = iso.isolate_item(source_bytes, float(x_from), float(x_to))
+        except iso.ItemIsolationError as exc:
+            self._finish_processing_job(job.id, company_id, success=False, error_reason=str(exc))
+            raise BadRequestException(f"{exc}(원본은 그대로입니다.)") from exc
+
+        asset = self._persist_generated_asset(
+            company_id=company_id,
+            owner_type=source.owner_type,
+            owner_id=source.owner_id,
+            purpose=source.purpose,
+            display_order=source.display_order,
+            image_bytes=result.png_bytes,
+            self_reported_mime_type="image/png",
+        )
+        asset.source_asset_id = source.id
+        asset.rights_status = source.rights_status
+        self.db.commit()
+
+        self._finish_processing_job(
+            job.id, company_id, success=True,
+            model_version=iso.MODEL_VERSION, media_asset_id=asset.id,
+        )
+        return asset
+
     def save_manual_edit(
         self, source_asset_id: int, image_bytes: bytes,
         requested_by: int, company_id: int,

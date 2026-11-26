@@ -8,7 +8,7 @@ File : tests/test_grounded_placement.py
 
   1번(합성):
     - 놓는 자리는 `composition.plan_placement()` 하나로 계산하고 합성과 검사가 함께 쓴다. CENTER는 예전 계산과 같다.
-    - GROUNDED(AI 배경용): 누끼의 투명 여백을 잘라 낸 제품을 가운데에 세우고 밑면을 바닥선(GROUND_LINE)에 맞춘다. 확대하지 않는다. 크기 상한이 있다.
+    - GROUNDED(AI 배경용): 누끼의 투명 여백을 잘라 낸 제품을 가운데에 세우고 밑면을 바닥선(GROUND_LINE)에 맞춘다. 최대 1.4배까지만 키운다(2026-11-26). 크기 상한이 있다.
       제품 아래에 바닥 그림자를 먼저 그리고 제품을 붙인다 — 제품 픽셀은 그대로(보존 검사 1.0).
     - 거의 불투명한(알파 250 이상) 누끼 픽셀은 GROUNDED에서 완전 불투명으로 본다(색은 그대로) — 배경이 비치지 않고 보존 검사가 재는 픽셀이 늘어난다.
     - 검사가 실제로 붙인 자리를 잰다: GROUNDED 결과를 CENTER 자리로 재면 크게 어긋난다.
@@ -101,11 +101,11 @@ class PlacementTests(unittest.TestCase):
     def test_grounded_trims_the_margin_centres_and_stands_on_the_ground_line(self):
         plan = comp.plan_placement(bottle(), comp.CANVAS_SIZE, Placement.GROUNDED)
         self.assertEqual(plan.crop_box, (150, 60, 250, 340))
-        self.assertEqual(plan.size, (100, 280))                                   # 확대하지 않는다(원래 크기)
-        self.assertEqual(plan.offset[0], (1200 - 100) // 2)
+        self.assertEqual(plan.size, (140, 392))                                   # 2026-11-26: 1.4배까지 키운다(크기 상한 744보다 작다)
+        self.assertEqual(plan.offset[0], (1200 - 140) // 2)
         self.assertEqual(plan.offset[1] + plan.size[1], int(1200 * comp.GROUND_LINE))
 
-    def test_grounded_caps_the_size_and_never_enlarges(self):
+    def test_grounded_caps_the_size_and_enlarges_at_most_1_4_times(self):
         tall = Image.new("RGBA", (3000, 3000), (0, 0, 0, 0))
         tall.paste(Image.new("RGBA", (600, 2800), (9, 9, 9, 255)), (1200, 100))
         plan = comp.plan_placement(tall, comp.CANVAS_SIZE, Placement.GROUNDED)
@@ -114,7 +114,8 @@ class PlacementTests(unittest.TestCase):
         wide.paste(Image.new("RGBA", (3000, 300), (9, 9, 9, 255)), (0, 100))
         self.assertLessEqual(comp.plan_placement(wide, comp.CANVAS_SIZE, Placement.GROUNDED).size[0], int(1200 * comp.GROUNDED_MAX_WIDTH))
         small = bottle((80, 80), (30, 10, 50, 70))
-        self.assertEqual(comp.plan_placement(small, comp.CANVAS_SIZE, Placement.GROUNDED).size, (20, 60))
+        self.assertEqual(comp.plan_placement(small, comp.CANVAS_SIZE, Placement.GROUNDED).size, (28, 84))   # 아무리 작아도 1.4배까지만
+        self.assertEqual(comp.GROUNDED_MAX_UPSCALE, 1.4)
 
     def test_unknown_placement_is_refused(self):
         with self.assertRaises(BadRequestException):
@@ -137,7 +138,7 @@ class ComposeTests(unittest.TestCase):
         cutout = png_bytes(bottle())
         composed = self.compose(Placement.GROUNDED)
         measured = ci.product_preservation(cutout, composed, placement=Placement.GROUNDED)
-        self.assertEqual(measured, {"ratio": 1.0, "pixels": 100 * 280})          # 알파 252 제품이 모두 재는 대상이 된다
+        self.assertEqual(measured, {"ratio": 1.0, "pixels": 140 * 392})          # 알파 252 제품이 모두 재는 대상이 된다(1.4배로 놓인 크기, 2026-11-26)
         image = Image.open(io.BytesIO(composed)).convert("RGB")
         self.assertEqual(image.getpixel((600, 1032 - 10)), (30, 90, 200))          # 제품 밑부분은 원래 색 그대로(배경이 비치지 않는다)
 
@@ -187,7 +188,7 @@ class AiRunTests(tab.Base_):
         self.assertEqual(outcome.outcome.asset.purpose, "ADDITIONAL")             # 누끼는 MAIN이어도 AI 배경 사진은 대표로 저장하지 않는다
         checks = {c["code"]: c for c in outcome.outcome.checks}
         self.assertEqual(checks["PRODUCT_PRESERVATION"]["status"], "PASS")
-        self.assertEqual(checks["PRODUCT_PRESERVATION"]["detail"]["pixels"], 100 * 280)
+        self.assertEqual(checks["PRODUCT_PRESERVATION"]["detail"]["pixels"], 140 * 392)
         saved = Image.open(self.media_root / outcome.outcome.asset.storage_path).convert("RGB")
         base_y = int(1200 * comp.GROUND_LINE)
         self.assertEqual(saved.getpixel((600, base_y - 10)), (30, 90, 200))       # 바닥선 바로 위에 제품

@@ -39,6 +39,7 @@ from app.domains.media_asset.schema import ImageGenerationJobRetryRequest
 from app.domains.media_asset.schema import ImageGenerationJobSubmitRequest
 from app.domains.media_asset.schema import ImageGenerationResultResponse
 from app.domains.media_asset.schema import MediaAssetResponse
+from app.domains.media_asset.schema import ItemIsolationRequestSchema
 from app.domains.media_asset.composition import BackgroundSpec
 from app.domains.media_asset.detail_page_generator import DETAIL_SECTION_KEYS
 from app.domains.media_asset.detail_page_generator import DETAIL_SECTION_LABELS_KO
@@ -335,6 +336,23 @@ def remove_background(
     return service.remove_background(
         source_asset_id=data.source_asset_id,
         provider_code=data.provider_code,
+        requested_by=current_user.id,
+        company_id=current_user.company_id,
+    )
+
+
+@router.post("/item-isolation", response_model=MediaAssetResponse)
+def isolate_item(
+    data: ItemIsolationRequestSchema,
+    current_user: User = Depends(admin_guard),
+    db: Session = Depends(get_db),
+):
+    """2026-11-26 — 흰 배경 묶음 사진에서 고른 가로 범위의 상품 하나만 떼어 낸 누끼를 만든다(PC 안, 원본 그대로)."""
+
+    return ImageGenerationJobQueueService(db).isolate_item(
+        source_asset_id=data.source_asset_id,
+        x_from=data.x_from,
+        x_to=data.x_to,
         requested_by=current_user.id,
         company_id=current_user.company_id,
     )

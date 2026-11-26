@@ -34,16 +34,24 @@ class Placement:
       - CENTER    기존 동작 그대로: 누끼 전체(투명 여백 포함)를 확대 없이 맞춰 가운데에 놓는다. 단색·그라데이션·질감 배경용.
       - GROUNDED  장면 배경(AI가 그린 배경)용: 누끼의 투명 여백을 잘라 낸 제품을 가운데에 세우고, 제품 밑면을 화면 아래쪽 바닥선에
                   맞춘다. 그 아래에 부드러운 바닥 그림자를 먼저 그린 뒤 제품을 붙인다 — 제품 픽셀은 그대로다(다시 그리지 않음).
-                  확대는 여전히 하지 않는다(원본보다 크게 부풀리지 않는다)."""
+                  2026-11-26: 작은 원본(600px 묶음 사진에서 떼어 낸 한 병은 높이 약 480px)이 화면의 40%에 그쳐 판매성이 떨어졌다 —
+                  제미나이 협의(1.3~1.4배까지는 화질 저하가 눈에 띄지 않는다)에 따라 GROUNDED만 최대 GROUNDED_MAX_UPSCALE배까지 키운다.
+                  CENTER는 그대로 확대하지 않는다.
+      - FILL      대표(흰 배경)용(2026-11-26): 누끼의 투명 여백을 잘라 낸 제품을 정가운데에 놓고, 화면의 MAIN_FILL만큼 채우되 최대
+                  GROUNDED_MAX_UPSCALE배까지만 키운다. CENTER는 투명 여백까지 통째로 놓아, 묶음 사진에서 떼어 낸 한 병이 원래 자리(오른쪽)에
+                  화면 높이 40%로 작게 남았다."""
 
     CENTER = "CENTER"
     GROUNDED = "GROUNDED"
-    ALL = (CENTER, GROUNDED)
+    FILL = "FILL"
+    ALL = (CENTER, GROUNDED, FILL)
 
 
 GROUND_LINE = 0.86          # GROUNDED: 제품 밑면이 놓이는 높이(캔버스 높이 대비) — AI 배경 장면 글이 아래쪽 30%를 빈 바닥으로 그리게 한다
 GROUNDED_MAX_HEIGHT = 0.62  # GROUNDED: 제품 높이 상한(캔버스 높이 대비)
 GROUNDED_MAX_WIDTH = 0.80   # GROUNDED: 제품 너비 상한(캔버스 너비 대비)
+MAIN_FILL = 0.85            # FILL: 제품이 채우는 정도(캔버스 대비, 긴 쪽) — 판매자 정리 글의 "대표 이미지 상품 85%"(I0 🟡, 쿠팡 공식 미확인)
+GROUNDED_MAX_UPSCALE = 1.4  # GROUNDED: 원본보다 키우는 한도(2026-11-26 제미나이 협의 "1.3~1.4배까지") — 크기 상한이 먼저 걸리면 그만큼만
 SHADOW_CONTACT_ALPHA = 120  # 바닥에 닿는 짙은 그림자(0~255)
 SHADOW_SOFT_ALPHA = 46      # 제품 모양을 따라 뒤로 퍼지는 옅은 그림자(0~255)
 SHADOW_SHIFT = 0.10         # 옅은 그림자를 오른쪽으로 미는 정도(제품 너비 대비) — 장면 글의 빛은 왼쪽에서 온다
@@ -85,7 +93,11 @@ def plan_placement(cutout: Image.Image, canvas_size: tuple[int, int], placement:
     alpha = cutout.convert("RGBA").getchannel("A")
     box = alpha.getbbox() or (0, 0, cutout.width, cutout.height)
     trimmed_w, trimmed_h = box[2] - box[0], box[3] - box[1]
-    scale = min(GROUNDED_MAX_WIDTH * canvas_w / trimmed_w, GROUNDED_MAX_HEIGHT * canvas_h / trimmed_h, 1.0)
+    if placement == Placement.FILL:
+        scale = min(MAIN_FILL * canvas_w / trimmed_w, MAIN_FILL * canvas_h / trimmed_h, GROUNDED_MAX_UPSCALE)
+        size = (max(1, int(trimmed_w * scale)), max(1, int(trimmed_h * scale)))
+        return PlacementPlan(box, size, ((canvas_w - size[0]) // 2, (canvas_h - size[1]) // 2))
+    scale = min(GROUNDED_MAX_WIDTH * canvas_w / trimmed_w, GROUNDED_MAX_HEIGHT * canvas_h / trimmed_h, GROUNDED_MAX_UPSCALE)
     size = (max(1, int(trimmed_w * scale)), max(1, int(trimmed_h * scale)))
     base_y = int(canvas_h * GROUND_LINE)
     offset = ((canvas_w - size[0]) // 2, max(0, base_y - size[1]))
@@ -217,9 +229,9 @@ def compose_with_background(
     """
     투명 PNG(제품 누끼) + 배경 → 합성된 PNG 바이트.
 
-    누끼 이미지는 원본 비율을 유지한 채 캔버스 안에 맞춰 축소만
-    한다(확대하지 않음 — 원본보다 큰 합성 이미지를 만들어 화질을
-    거짓으로 부풀리지 않기 위함). 기본(CENTER)은 중앙 정렬.
+    누끼 이미지는 원본 비율을 유지한 채 캔버스 안에 맞춘다. 기본(CENTER)은
+    축소만 하고(확대하지 않음 — 화질을 거짓으로 부풀리지 않기 위함) 중앙 정렬.
+    GROUNDED는 최대 GROUNDED_MAX_UPSCALE(1.4)배까지만 키운다(2026-11-26).
     GROUNDED(장면 배경용, 2026-11-15)는 투명 여백을 자른 제품을 바닥선에 세우고
     제품을 붙이기 **전에** 바닥 그림자를 그린다 — 제품 픽셀은 바뀌지 않는다.
     """
@@ -252,6 +264,8 @@ __all__ = [
     "plan_placement",
     "prepare_cutout",
     "GROUND_LINE",
+    "GROUNDED_MAX_UPSCALE",
+    "MAIN_FILL",
     "SOLID_ALPHA_MIN",
     "HAZE_ALPHA_MAX",
     "SHADOW_SHIFT",

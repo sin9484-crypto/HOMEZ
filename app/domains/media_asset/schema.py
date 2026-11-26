@@ -55,6 +55,14 @@ class BackgroundRemovalRequestSchema(BaseModel):
     provider_code: str = Field(default="REMBG", description="FAKE / REMBG")
 
 
+class ItemIsolationRequestSchema(BaseModel):
+    """2026-11-26 — 흰 배경 묶음 사진에서 상품 하나만 떼어 내기. 가로 범위는 사진 너비 대비(0~1)."""
+
+    source_asset_id: int
+    x_from: float = Field(ge=0.0, le=1.0)
+    x_to: float = Field(ge=0.0, le=1.0)
+
+
 class ManualImageEditSaveRequest(BaseModel):
     """
     2026-08-29 Phase 5(Fabric.js 수동 편집기 MVP) — 브라우저 캔버스에서

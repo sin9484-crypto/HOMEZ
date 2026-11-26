@@ -72,6 +72,21 @@ class GenerateDetailPageImageTestCase(unittest.TestCase):
 
         self.assertEqual(img.width, DETAIL_IMAGE_WIDTH)
 
+    def test_usage_text_with_line_breaks_renders_one_step_per_line(self):
+        """2026-11-26: 사용법에 줄바꿈(1·2·3 단계)이 있으면 예전에는 ValueError로 상세이미지 만들기 전체가 실패했다."""
+
+        from PIL import ImageDraw
+        from app.domains.media_asset.detail_page_generator import _load_font, _wrap_text, _FONT_REGULAR_CANDIDATES
+        draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+        font = _load_font(_FONT_REGULAR_CANDIDATES, 20)
+        self.assertEqual(_wrap_text(draw, "1. 뿌립니다.\n2. 닦습니다.\r\n3. 끝", font, 700), ["1. 뿌립니다.", "2. 닦습니다.", "3. 끝"])
+        self.assertEqual(_wrap_text(draw, "가\n\n나\n", font, 700), ["가", "", "나"])
+        content = DetailPageContent(brand_name="레이펄스", hero_image_bytes=_solid_jpeg_bytes(),
+                                    usage_text="1. 적당량을 피부에 뿌립니다.\n2. 수건으로 닦아 냅니다.")
+        one_line = DetailPageContent(brand_name="레이펄스", hero_image_bytes=_solid_jpeg_bytes(), usage_text="1. 적당량을 피부에 뿌립니다.")
+        self.assertGreater(Image.open(io.BytesIO(generate_detail_page_image(content))).height,
+                           Image.open(io.BytesIO(generate_detail_page_image(one_line))).height)
+
     def test_empty_brand_name_is_rejected(self):
 
         content = DetailPageContent(

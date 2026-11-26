@@ -197,8 +197,8 @@ class ClientTests(unittest.TestCase):
 
 class ConceptTests(unittest.TestCase):
 
-    def test_six_generated_concepts_pass_the_spec_and_never_serve_the_main_image(self):
-        self.assertEqual(len(abc.AI_CONCEPTS), 6)
+    def test_every_generated_concept_passes_the_spec_and_never_serves_the_main_image(self):
+        self.assertEqual(len(abc.AI_CONCEPTS), 11)                 # 2026-11-26: 6 + 상품이 쓰이는 상황 5(간병·캠핑·여행·운동 뒤·수건 스튜디오)
         for code, concept in abc.AI_CONCEPTS.items():
             self.assertEqual(ic.validate_spec(concept), [], code)
             self.assertEqual((concept.processing_level, concept.background_kind), (ic.LEVEL_L2, ic.BACKGROUND_GENERATED))

@@ -102,7 +102,9 @@ class ConceptRunService:
             return ConceptRunOutcome(code, SKIPPED, None, reason="UNKNOWN_CONCEPT")
         if purpose not in concept.usable_for:
             return ConceptRunOutcome(code, SKIPPED, None, reason="NOT_USABLE_FOR_PURPOSE")
-        return self.compose_and_save(company_id, requested_by, cutout, cutout_bytes, code, purpose, concept.background_spec(), concept.checks)
+        # 2026-11-26: 대표(MAIN)는 투명 여백을 잘라 제품을 정가운데에 크게(FILL) — 묶음 사진에서 떼어 낸 한 병이 한쪽에 작게 남던 문제.
+        placement = Placement.FILL if purpose == "MAIN" else Placement.CENTER
+        return self.compose_and_save(company_id, requested_by, cutout, cutout_bytes, code, purpose, concept.background_spec(), concept.checks, placement=placement)
 
     def compose_and_save(self, company_id: int, requested_by: int, cutout: MediaAsset, cutout_bytes: bytes, code: str, purpose: str, spec, checks: tuple[str, ...], *,
                          operation: str = OPERATION, provider_code: str = "PILLOW_LOCAL", model_name: str | None = None, label: str | None = None,

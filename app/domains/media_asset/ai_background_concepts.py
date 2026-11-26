@@ -47,6 +47,10 @@ PROMPT_RULES = (
 )
 
 
+# 2026-11-26: 물 없이 쓰는 상품을 알아보는 낱말(상품 분류·상품명에서 찾는다). 쓰는 상황 장면은 추천하고 욕실 장면은 빼는 데 쓴다.
+WATERLESS_TERMS = ("워터리스", "물없이", "노린스", "드라이샴푸")
+
+
 def _ai_concept(code: str, label: str, description: str, scene: str, scene_kind: str, *, mood: str, good_for: tuple[str, ...], avoid_for: tuple[str, ...] = ()) -> ic.ImageConcept:
     # 상세 페이지 섹션 색은 밝은 중립색(배경 사진의 평균색을 미리 알 수 없어 글자 대비가 확실한 값을 쓴다).
     return ic.ImageConcept(
@@ -61,7 +65,8 @@ def _ai_concept(code: str, label: str, description: str, scene: str, scene_kind:
 AI_CONCEPTS: dict[str, ic.ImageConcept] = {c.code: c for c in (
     _ai_concept("AI_BATHROOM_SHELF", "욕실 선반", "밝은 타일 욕실의 선반 위. 바디워시·위생용품·욕실용품에 어울립니다.",
                 "A clean bright bathroom in warm tones: a light beige stone vanity countertop in the foreground, cream tiles, a folded white towel and a small green plant far behind.",
-                ic.SCENE_LIFESTYLE, mood="청결·산뜻", good_for=("욕실", "위생용품", "뷰티", "생활용품")),
+                ic.SCENE_LIFESTYLE, mood="청결·산뜻", good_for=("욕실", "위생용품", "뷰티", "생활용품"),
+                avoid_for=WATERLESS_TERMS),   # 2026-11-26: 물 없이 쓰는 상품을 욕실에 두면 파는 이유와 반대다
     _ai_concept("AI_KITCHEN_COUNTER", "주방 조리대", "햇빛이 드는 주방 조리대. 생수·식품·주방용품에 어울립니다.",
                 "A sunny cozy kitchen: a light oak countertop with visible wood grain in the foreground, a window with a sheer white curtain and a few green leaves far behind.",
                 ic.SCENE_LIFESTYLE, mood="상쾌·일상", good_for=("식품", "주방", "생수", "음료")),
@@ -74,6 +79,24 @@ AI_CONCEPTS: dict[str, ic.ImageConcept] = {c.code: c for c in (
     _ai_concept("AI_BEDROOM_SOFT", "포근한 침실", "부드러운 이불이 있는 밝은 침실. 여성용품·의류·아동 상품에 어울립니다.",
                 "A soft bright bedroom: a smooth light oak bedside table top in the foreground, cream bedding and a sheer curtain glowing with morning light far behind.",
                 ic.SCENE_LIFESTYLE, mood="포근·편안", good_for=("여성용품", "패션", "아동", "침구")),
+    # 2026-11-26 — 상품이 실제로 쓰이는 상황(사용자 "상품판매성이 있는 것을 원하는것", 제미나이 협의 docs/HOMEZ_SALES_IMAGE_PLAN_20261126.md).
+    # 물 없이 쓰는 세정 상품의 구매 동기(간병·입원, 캠핑·차박, 여행, 운동 뒤)를 장면으로 보여 준다. 사용법(뿌리고 수건으로 닦기)을 알리는 접힌 수건을
+    # 빈 자리 왼쪽에 둔다 — 상품 자리(가운데)는 비운다. 수건은 사은품으로 오해되지 않게 상품과 떨어진 배경 소품으로만 둔다.
+    _ai_concept("AI_CARE_BEDSIDE", "간병·침대 곁", "침대 곁 협탁 위, 접힌 흰 손수건. 거동이 불편한 가족을 돌볼 때 쓰는 상품(물 없이 닦는 세정제 등)에 어울립니다.",
+                "A calm bright bedroom for home care: a light oak bedside table top in the foreground, a folded white washcloth on its left side, a bed with white linen far behind.",
+                ic.SCENE_LIFESTYLE, mood="돌봄·청결", good_for=WATERLESS_TERMS + ("간병", "요양", "환자", "어르신")),
+    _ai_concept("AI_CAMPING_TABLE", "캠핑 테이블", "숲속 캠핑장의 나무 테이블 위, 접힌 운동 수건. 캠핑·차박·야외에서 쓰는 상품에 어울립니다.",
+                "A sunny forest campsite: a light wooden camping table top in the foreground, a folded gray sports towel on its left side, a tent and green trees far behind.",
+                ic.SCENE_LIFESTYLE, mood="야외·자유", good_for=WATERLESS_TERMS + ("캠핑", "차박", "아웃도어", "등산")),
+    _ai_concept("AI_TRAVEL_DESK", "여행 숙소", "숙소 방의 나무 책상 위, 접힌 흰 수건. 여행·출장에 챙겨 가는 상품에 어울립니다.",
+                "A bright hotel room: a light wooden desk top in the foreground, a small folded white towel on its left side, an open suitcase and a window far behind.",
+                ic.SCENE_LIFESTYLE, mood="여행·간편", good_for=WATERLESS_TERMS + ("여행", "출장", "휴대용", "여행용")),
+    _ai_concept("AI_GYM_BENCH", "운동 뒤", "운동 시설 탈의실의 나무 벤치 위, 접힌 흰 운동 수건. 운동 뒤 빠르게 쓰는 상품에 어울립니다.",
+                "A clean bright gym locker room: a light wooden bench top in the foreground, a folded white sports towel on its left side, lockers far behind.",
+                ic.SCENE_LIFESTYLE, mood="활동·상쾌", good_for=WATERLESS_TERMS + ("운동", "헬스", "스포츠", "데오드란트")),
+    _ai_concept("AI_STUDIO_TOWEL", "수건 스튜디오", "밝은 회색 탁자와 접힌 흰 면 수건만 있는 깔끔한 촬영장. 사용법(뿌리고 닦기)을 보여 주는 사진에 어울립니다.",
+                "A minimal bright photo studio: a smooth light gray table top in the foreground, a neatly folded white cotton towel on its left side, a plain warm white backdrop.",
+                ic.SCENE_STUDIO_LIGHT, mood="깔끔·설명", good_for=WATERLESS_TERMS + ("바디워시", "클렌징", "스킨케어", "화장품")),
     _ai_concept("AI_STUDIO_MARBLE", "대리석 스튜디오", "크림색 대리석 테이블과 은은한 햇빛. 뷰티·선물·소형 가전에 어울립니다.",
                 "A minimal warm photo studio: a wide cream marble table top in the foreground, a smooth warm beige backdrop and soft sunlight from the left.",
                 ic.SCENE_STUDIO_LIGHT, mood="고급·정돈", good_for=("뷰티", "선물", "전자기기", "주얼리")),
@@ -112,4 +135,4 @@ def to_summary(concept: ic.ImageConcept) -> dict:
 
 _assert_valid()
 
-__all__ = ["AI_CONCEPTS", "MAX_PICK", "PURPOSES", "LOOK", "PROMPT_RULES", "list_ai_concepts", "get_ai_concept", "to_summary"]
+__all__ = ["AI_CONCEPTS", "MAX_PICK", "PURPOSES", "LOOK", "PROMPT_RULES", "WATERLESS_TERMS", "list_ai_concepts", "get_ai_concept", "to_summary"]
