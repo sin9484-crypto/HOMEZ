@@ -143,7 +143,7 @@ def classify_job(job: ImageGenerationJob) -> tuple[str, str | None, str | None]:
         return AI_BACKGROUND, operation, code if code in abc.AI_CONCEPTS else model
     if operation == "REFERENCE_GENERATION":
         return AI_GENERATED, operation, job.provider_code
-    if operation == "DETAIL_PAGE_GENERATION":
+    if operation in ("DETAIL_PAGE_GENERATION", "STORY_PAGE"):     # 2026-11-26: 상황 장면 스토리 사진도 상세 이미지 만들기
         return DETAIL_PAGE, operation, None
     if operation is None and job.provider_code not in ("PILLOW_LOCAL", "REMBG", "LOCAL_MANUAL_EDIT", "LOCAL_ITEM_ISOLATION"):
         return AI_GENERATED, None, job.provider_code       # 이미지 생성 작업(submit_job) — 작업 이름 없이 생성 제공자만 남는다

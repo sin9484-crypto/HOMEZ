@@ -10,6 +10,7 @@ File : app/domains/media_asset/ai_background_router.py
   - 설정 저장(PUT): 최고 관리자 + 비밀번호 재확인(AI 사용 설정과 같다). 토큰은 쓰기 전용 — 응답·감사 기록에 남기지 않는다.
   - 컨셉 목록(GET /ai-background/concepts): 관리자. 바깥에 보낼 장면 글까지 보여 준다.
   - 만들기(POST /ai-background/runs): 관리자. 새로 그릴 배경마다 승인 센터 허용 1회(저장된 배경을 다시 쓰면 0회).
+  - 상황 장면 스토리(GET /ai-background/story-scenes, POST /ai-background/story-runs, 2026-11-26): 고른 상황 장면을 이야기 순서로 만들고 스토리 사진을 붙인다.
 =========================================================
 """
 
@@ -69,6 +70,24 @@ class AiBackgroundRunRequest(BaseModel):
         if any(not isinstance(v, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{2,39}", v) for v in value):
             raise ValueError("컨셉 코드는 영문 대문자·숫자·밑줄 3~40자여야 합니다.")
         return value
+
+
+class StoryCaption(BaseModel):
+    title: str = Field(..., min_length=1, max_length=60)
+    line: str = Field(..., min_length=1, max_length=120)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class StoryRunRequest(BaseModel):
+    """2026-11-26 상황 장면 스토리 — 고른 장면(1~5개)을 이야기 순서로 만들고 스토리 사진을 붙인다. 글 길이·표현은 서버 규칙이 다시 본다."""
+
+    cutout_asset_id: int
+    concept_codes: list[str] = Field(..., min_length=1, max_length=5)
+    captions: dict[str, StoryCaption] = Field(default_factory=dict)
+    header: str | None = Field(default=None, max_length=80)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 def _service(db: Session, store: CredentialStore):
@@ -151,4 +170,49 @@ def run(
     }
 
 
-__all__ = ["router", "get_ai_background_credential_store", "AiBackgroundSettingsRequest", "AiBackgroundRunRequest"]
+@router.get("/story-scenes")
+def story_scenes(current_user: User = Depends(AdminGuard)):
+    """상황 장면 5개(이야기 순서·기본 문구). 읽기만, 바깥 호출 없음."""
+
+    from app.domains.media_asset import story_scenes as ss
+
+    return {"scenes": ss.summaries(), "title_max": ss.TITLE_MAX, "line_max": ss.LINE_MAX, "header_max": ss.HEADER_MAX}
+
+
+@router.post("/story-runs")
+def story_run(
+    data: StoryRunRequest,
+    current_user: User = Depends(AdminGuard),
+    db: Session = Depends(get_db),
+    credential_store: CredentialStore = Depends(get_ai_background_credential_store),
+):
+    """고른 상황 장면을 이야기 순서로 추가 이미지로 만들고(그려 둔 배경은 다시 씀, 없으면 허용 1회씩), 모두 만들어지면 스토리 사진(상세)을 하나 더 만든다."""
+
+    from app.domains.media_asset.ai_background_service import GENERATED_LABEL_KO
+    from app.domains.media_asset.schema import MediaAssetResponse
+    from app.domains.media_asset.story_service import StoryService
+
+    outcome = StoryService(db, _service(db, credential_store)).run(
+        current_user.company_id, current_user.id, data.cutout_asset_id, data.concept_codes,
+        captions={code: c.model_dump() for code, c in data.captions.items()}, header=data.header,
+    )
+    results = []
+    for step, o in zip(outcome.steps, outcome.scenes):
+        inner = o.outcome
+        results.append({
+            "order": step.order, "concept_code": o.concept_code, "title": step.title, "line": step.line, "status": o.status, "reason": o.reason,
+            "detail": o.detail, "usable": None if inner is None else inner.usable, "checks": [] if inner is None else list(inner.checks),
+            "asset": None if inner is None or inner.asset is None else MediaAssetResponse.model_validate(inner.asset).model_dump(mode="json"),
+            "background_version": o.background_version, "background_reused": o.background_reused,
+        })
+    count = lambda status: sum(1 for o in outcome.scenes if o.status == status)  # noqa: E731
+    return {
+        "results": results, "created": count("CREATED"), "reused": count("REUSED"), "check_failed": count("CHECK_FAILED"), "skipped": count("SKIPPED"),
+        "failed": count("FAILED"),
+        "drawn": sum(1 for o in outcome.scenes if o.background_version and not o.background_reused and o.status not in ("FAILED", "SKIPPED")),
+        "story_page": None if outcome.story_page is None else MediaAssetResponse.model_validate(outcome.story_page).model_dump(mode="json"),
+        "story_reason": outcome.reason, "generated_label": GENERATED_LABEL_KO,
+    }
+
+
+__all__ = ["router", "get_ai_background_credential_store", "AiBackgroundSettingsRequest", "AiBackgroundRunRequest", "StoryRunRequest", "StoryCaption"]

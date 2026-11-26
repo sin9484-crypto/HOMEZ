@@ -13642,7 +13642,8 @@
     const notice = lwConceptNotice;
     lwConceptNotice = null;
     const one = (part) => (part.error ? `<p class="field-error" role="alert">${escapeHtml(part.error)}</p>`
-      : (part.ai ? lwAiBgSummaryHtml(part.result, part.labels) : lwConceptSummaryHtml(part.result, part.labels)));
+      : (part.story ? lwStorySummaryHtml(part.result) + lwAiBgSummaryHtml(part.result, part.labels)
+        : (part.ai ? lwAiBgSummaryHtml(part.result, part.labels) : lwConceptSummaryHtml(part.result, part.labels))));
     return Array.isArray(notice.parts) ? notice.parts.map(one).join("") : one(notice);
   }
 
@@ -13903,6 +13904,81 @@
     return { source_asset_id: Number(assetId), x_from: Number(iso.from) / 100, x_to: Number(iso.to) / 100 };
   }
 
+  // 2026-11-26 — 상황 장면 스토리(서버 /ai-background/story-runs). 고른 장면은 서버가 정한 이야기 순서로 만들고 문구를 넣은 스토리 사진을 붙인다.
+  const LW_STORY_TITLE_MAX = 24;
+  const LW_STORY_LINE_MAX = 48;
+
+  function lwStoryText(story, code, field) {
+    const given = story && story.captions && story.captions[code] && story.captions[code][field];
+    if (typeof given === "string") return given;
+    const scene = ((story && story.scenes) || []).find((s) => s.code === code);
+    return scene ? String(scene[field] || "") : "";
+  }
+
+  function lwStoryProblem(story, aiSettings) {
+    if (!aiSettings || aiSettings.configured !== true) return "sample_err_ai_settings";
+    const codes = (story && story.codes) || [];
+    if (!codes.length) return "story_err_none";
+    for (const code of codes) {
+      const title = lwStoryText(story, code, "title").trim();
+      const line = lwStoryText(story, code, "line").trim();
+      if (!title || !line || title.length > LW_STORY_TITLE_MAX || line.length > LW_STORY_LINE_MAX) return "story_err_text";
+    }
+    return null;
+  }
+
+  function lwStoryBody(story, cutoutId) {
+    const order = ((story && story.scenes) || []).map((s) => s.code);
+    const codes = order.filter((code) => story.codes.includes(code));
+    const captions = {};
+    codes.forEach((code) => { captions[code] = { title: lwStoryText(story, code, "title").trim(), line: lwStoryText(story, code, "line").trim() }; });
+    const body = { cutout_asset_id: Number(cutoutId), concept_codes: codes, captions };
+    const header = String((story && story.header) || "").trim();
+    if (header) body.header = header;
+    return body;
+  }
+
+  function lwStoryHtml(assetId, story, samples) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    const scenes = (story && story.scenes) || [];
+    if (!scenes.length) return "";
+    const cards = scenes.map((scene) => {
+      const sample = (samples || []).find((s) => s.kind === "AI" && s.code === scene.code) || {};
+      const picked = story.codes.includes(scene.code);
+      const image = typeof sample.preview === "string" && LW_SAMPLE_DATA_URI.test(sample.preview)
+        ? `<img src="${sample.preview}" alt="${escapeHtml(sample.label_ko || scene.role_ko)}">`
+        : `<span class="lw-sample-empty">${escapeHtml(t("sample_not_drawn"))}</span>`;
+      return `<div class="lw-story-card${picked ? " is-picked" : ""}">
+          <label class="lw-story-pick"><input type="checkbox" data-story-code="${escapeHtml(scene.code)}" ${picked ? "checked" : ""}>
+            <strong>${escapeHtml(t("story_order", { n: scene.order }))} · ${escapeHtml(sample.label_ko || scene.role_ko)}</strong></label>
+          <span class="lw-sample-thumb">${image}</span>
+          <label class="lw-story-field">${escapeHtml(t("story_field_title"))}<input type="text" maxlength="${LW_STORY_TITLE_MAX}" data-story-field="title" data-story-for="${escapeHtml(scene.code)}" value="${escapeHtml(lwStoryText(story, scene.code, "title"))}"></label>
+          <label class="lw-story-field">${escapeHtml(t("story_field_line"))}<input type="text" maxlength="${LW_STORY_LINE_MAX}" data-story-field="line" data-story-for="${escapeHtml(scene.code)}" value="${escapeHtml(lwStoryText(story, scene.code, "line"))}"></label>
+        </div>`;
+    }).join("");
+    return `<section class="lw-story-box" id="lw-story-${assetId}">
+        <h4>${escapeHtml(t("story_title"))}</h4>
+        <p class="stat-sub">${escapeHtml(t("story_note"))}</p>
+        <div class="dialog-actions"><button type="button" class="btn btn-secondary btn-sm" id="lw-story-all-${assetId}">${escapeHtml(t("story_all"))}</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="lw-story-clear-${assetId}">${escapeHtml(t("story_clear"))}</button></div>
+        <div class="lw-story-grid">${cards}</div>
+        <label class="lw-story-field">${escapeHtml(t("story_header"))}<input type="text" maxlength="40" id="lw-story-header-${assetId}" value="${escapeHtml(story.header || "")}"></label>
+        <p class="stat-sub">${escapeHtml(t("story_pick_count", { count: story.codes.length }))}</p>
+        <div class="dialog-actions"><button type="button" class="btn btn-primary btn-sm" id="lw-story-run-${assetId}">${escapeHtml(t("story_run_btn"))}</button></div>
+      </section>`;
+  }
+
+  function lwStorySummaryHtml(result) {
+    const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
+    if (!result) return "";
+    const page = result.story_page;
+    const head = page && Number.isInteger(page.id)
+      ? t("story_made", { id: page.id, n: (result.results || []).length })
+      : t("story_not_made");
+    const order = (result.results || []).map((r) => `<li class="stat-sub">${escapeHtml(String(r.order))}. ${escapeHtml(r.title || r.concept_code)}</li>`).join("");
+    return `<div class="banner ${page ? "banner-info" : "banner-warn"}" role="status" id="lw-story-banner"><p>${escapeHtml(head)}</p>${order ? `<ol>${order}</ol>` : ""}</div>`;
+  }
+
   function lwIsoHtml(assetId, iso) {
     const t = (key) => HomezI18n.t(`lw.${key}`);
     return `<details class="lw-iso-box" id="lw-iso-${assetId}" ${iso.open ? "open" : ""}>
@@ -13929,7 +14005,8 @@
     panel.dataset.open = "1";
     if (card) card.style.gridColumn = "1 / -1";
     const t = (key, params) => HomezI18n.t(`lw.${key}`, params);
-    const state = { purpose: "ADDITIONAL", data: null, local: [], ai: [], newBg: false, aiSettings: null, iso: { open: false, from: 40, to: 60, url: null } };
+    const state = { purpose: "ADDITIONAL", data: null, local: [], ai: [], newBg: false, aiSettings: null, iso: { open: false, from: 40, to: 60, url: null },
+      story: { scenes: null, codes: [], captions: {}, header: "" } };
 
     async function load(errorText) {
       panel.innerHTML = `<p class="loading-text">${escapeHtml(t("sample_loading"))}</p>`;
@@ -13941,6 +14018,9 @@
       }
       if (state.purpose !== "MAIN" && state.aiSettings === null) {
         try { state.aiSettings = await apiFetch("/ai-background/settings"); } catch (err) { state.aiSettings = { configured: false }; }
+      }
+      if (state.purpose !== "MAIN" && state.story.scenes === null) {
+        try { const got = await apiFetch("/ai-background/story-scenes"); state.story.scenes = Array.isArray(got && got.scenes) ? got.scenes : []; } catch (err) { state.story.scenes = []; }
       }
       const known = new Set(((state.data && state.data.samples) || []).map((s) => `${s.kind}:${s.code}`));
       state.local = state.local.filter((code) => known.has(`LOCAL:${code}`));
@@ -13978,6 +14058,7 @@
           <div class="lw-sample-grid">${local.map((s) => lwSampleCardHtml(s, state.local.includes(s.code))).join("") || `<p class="empty-text">${escapeHtml(t("sample_none"))}</p>`}</div>
           <p class="stat-sub">${escapeHtml(t("sample_pick_count", { count: state.local.length, max: LW_CONCEPT_MAX_PICK }))}</p>
           ${aiBlock}
+          ${state.purpose === "MAIN" ? "" : lwStoryHtml(assetId, state.story, data.samples)}
           <p class="stat-sub">${escapeHtml(t("sample_policy_note"))}</p>
           <div class="dialog-actions"><button type="button" class="btn btn-primary btn-sm" id="lw-sample-run-btn-${assetId}">${escapeHtml(t("sample_run_btn"))}</button></div>`;
       }
@@ -14007,6 +14088,39 @@
       }));
       const newBg = el(`lw-sample-newbg-${assetId}`);
       if (newBg) newBg.addEventListener("change", () => { state.newBg = newBg.checked; });
+      panel.querySelectorAll("[data-story-code]").forEach((input) => input.addEventListener("change", () => {
+        const code = input.dataset.storyCode;
+        state.story.codes = input.checked ? state.story.codes.concat(state.story.codes.includes(code) ? [] : [code]) : state.story.codes.filter((c) => c !== code);
+        render();
+      }));
+      panel.querySelectorAll("[data-story-field]").forEach((input) => input.addEventListener("input", () => {
+        const code = input.dataset.storyFor;
+        state.story.captions[code] = Object.assign({}, state.story.captions[code] || {}, { [input.dataset.storyField]: input.value });
+      }));
+      const storyHeader = el(`lw-story-header-${assetId}`);
+      if (storyHeader) storyHeader.addEventListener("input", () => { state.story.header = storyHeader.value; });
+      const storyAll = el(`lw-story-all-${assetId}`);
+      if (storyAll) storyAll.addEventListener("click", () => { state.story.codes = (state.story.scenes || []).map((s) => s.code); render(); });
+      const storyClear = el(`lw-story-clear-${assetId}`);
+      if (storyClear) storyClear.addEventListener("click", () => { state.story.codes = []; render(); });
+      const storyRun = el(`lw-story-run-${assetId}`);
+      if (storyRun) storyRun.addEventListener("click", (ev) => withButtonGuard(ev.currentTarget, async () => {
+        const key = lwStoryProblem(state.story, state.aiSettings);
+        if (key) { render(key); return; }
+        const labels = {};
+        ((state.data && state.data.samples) || []).forEach((s) => { labels[s.code] = s.label_ko; });
+        let part;
+        try {
+          part = { result: await apiFetch("/ai-background/story-runs", { method: "POST", body: JSON.stringify(lwStoryBody(state.story, state.data.cutout_asset_id)) }), labels, story: true };
+        } catch (err) {
+          render(null, err.message || HomezI18n.t("common.load_error"));
+          return;
+        }
+        // 끝났다는 것이 화면에 남도록: 목록을 처음 상태로 다시 그리고 맨 위에 스토리 결과(순서·스토리 사진 번호)와 장면별 결과를 보여 준다.
+        lwConceptNotice = { parts: [part] };
+        await lwRenderMediaStep(content);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }));
       const isoBox = el(`lw-iso-${assetId}`);
       if (isoBox) isoBox.addEventListener("toggle", async () => {
         state.iso.open = isoBox.open;

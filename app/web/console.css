@@ -1358,6 +1358,14 @@ tbody tr.row-clickable:focus-visible { background: #F0F1F4; }
 .lw-iso-band { position: absolute; top: 0; bottom: 0; border: 2px solid var(--primary, #2563eb); background: rgba(37, 99, 235, 0.12); pointer-events: none; }
 .lw-iso-range { display: flex; align-items: center; gap: 8px; max-width: 360px; font-size: 13px; }
 .lw-iso-range input { flex: 1; }
+/* 2026-11-26 상황 장면 스토리 */
+.lw-story-box { margin: 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.lw-story-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin: 8px 0; }
+.lw-story-card { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 2px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.lw-story-card.is-picked { border-color: var(--primary, #2563eb); }
+.lw-story-pick { display: flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+.lw-story-field { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-muted, #6b7280); }
+.lw-story-field input { font-size: 13px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
 
 /* 2026-11-13 이미지 AI 편집 기록 — 사진 카드의 한 줄 기록과 표시 */
 .lw-edit-record { font-size: 12px; margin: 0; color: var(--text-muted, #6b7280); overflow-wrap: anywhere; }
